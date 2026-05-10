@@ -2,5 +2,6 @@ venv/
 __pycache__/
 
 *.parquet
-*.pyc
-.DS_Store
+*.npy
+*.pkl
+*.joblib

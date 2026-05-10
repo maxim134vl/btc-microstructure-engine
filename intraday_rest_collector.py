@@ -1,13 +1,45 @@
 import requests
 import pandas as pd
 import time
+import os
+
 from datetime import datetime
 
 # ---------------------------------
-# STORAGE
+# CONFIG
 # ---------------------------------
 
-history = []
+PARQUET_FILE = (
+    "intraday_flow.parquet"
+)
+
+SLEEP_INTERVAL = 5
+
+# ---------------------------------
+# LOAD EXISTING DATA
+# ---------------------------------
+
+if os.path.exists(
+    PARQUET_FILE
+):
+
+    history = pd.read_parquet(
+        PARQUET_FILE
+    )
+
+    history = history.to_dict(
+        'records'
+    )
+
+    print()
+    print(
+        "LOADED EXISTING HISTORY:",
+        len(history)
+    )
+
+else:
+
+    history = []
 
 # ---------------------------------
 # LAST TRADE ID
@@ -15,7 +47,10 @@ history = []
 
 last_trade_id = None
 
-print("STARTING INTRADAY COLLECTOR")
+print()
+print(
+    "STARTING INTRADAY COLLECTOR"
+)
 
 # ---------------------------------
 # LOOP
@@ -26,159 +61,245 @@ while True:
     try:
 
         # ---------------------------------
-        # BINANCE AGG TRADES
+        # API
         # ---------------------------------
 
         url = (
+
             "https://fapi.binance.com/"
             "fapi/v1/aggTrades"
         )
 
         params = {
+
             "symbol": "BTCUSDT",
+
             "limit": 1000
         }
 
         response = requests.get(
+
             url,
+
             params=params,
+
             timeout=10
         )
 
         trades = response.json()
 
-        if not isinstance(trades, list):
+        # ---------------------------------
+        # VALIDATION
+        # ---------------------------------
 
+        if not isinstance(
+            trades,
+            list
+        ):
+
+            print()
             print("API ERROR")
+
             print(trades)
 
-            time.sleep(5)
+            time.sleep(
+                SLEEP_INTERVAL
+            )
 
             continue
 
         # ---------------------------------
-        # FILTER NEW TRADES
+        # PROCESS
         # ---------------------------------
 
-        new_trades = []
+        new_rows = 0
 
-        for t in trades:
+        for trade in trades:
 
-            trade_id = t['a']
+            trade_id = trade['a']
 
-            if last_trade_id is None:
+            # SKIP OLD
 
-                new_trades.append(t)
+            if (
 
-            elif trade_id > last_trade_id:
+                last_trade_id
+                is not None
 
-                new_trades.append(t)
+                and
 
-        if len(new_trades) > 0:
+                trade_id
+                <=
+                last_trade_id
+            ):
 
-            last_trade_id = new_trades[-1]['a']
+                continue
 
-        # ---------------------------------
-        # BUILD DATAFRAME
-        # ---------------------------------
-
-        parsed = []
-
-        for t in new_trades:
-
-            parsed.append({
-
-                'timestamp': datetime.fromtimestamp(
-                    t['T'] / 1000
-                ),
-
-                'price': float(t['p']),
-
-                'qty': float(t['q']),
-
-                'side': (
-                    'sell'
-                    if t['m']
-                    else 'buy'
-                )
-            })
-
-        if len(parsed) > 0:
-
-            history.extend(parsed)
-
-        # ---------------------------------
-        # ANALYTICS
-        # ---------------------------------
-
-        df = pd.DataFrame(history)
-
-        if len(df) > 0:
-
-            recent = df.tail(5000)
-
-            buy_volume = (
-                recent[
-                    recent['side'] == 'buy'
-                ]['qty']
-                .sum()
+            price = float(
+                trade['p']
             )
 
-            sell_volume = (
-                recent[
-                    recent['side'] == 'sell'
-                ]['qty']
-                .sum()
+            qty = float(
+                trade['q']
+            )
+
+            side = (
+
+                -1
+                if trade['m']
+                else 1
             )
 
             delta = (
-                buy_volume - sell_volume
+                qty * side
             )
 
-            price_change = (
-                recent['price'].iloc[-1]
-                -
-                recent['price'].iloc[0]
+            # ---------------------------------
+            # STORE
+            # ---------------------------------
+
+            history.append({
+
+                'timestamp':
+                    datetime.utcnow(),
+
+                'price':
+                    price,
+
+                'qty':
+                    qty,
+
+                'side':
+                    side,
+
+                'delta':
+                    delta,
+
+                'avg_price':
+                    price,
+
+                'price_change':
+                    0,
+
+                'efficiency':
+                    0
+            })
+
+            new_rows += 1
+
+        # ---------------------------------
+        # UPDATE LAST ID
+        # ---------------------------------
+
+        if len(trades) > 0:
+
+            last_trade_id = (
+                trades[-1]['a']
             )
 
-            print()
-            print("================================")
+        # ---------------------------------
+        # DATAFRAME
+        # ---------------------------------
 
-            print(
-                "Trades:",
-                len(recent)
+        df = pd.DataFrame(
+            history
+        )
+
+        # ---------------------------------
+        # CALCULATIONS
+        # ---------------------------------
+
+        if len(df) > 2:
+
+            df['price_change'] = (
+
+                df['avg_price']
+                .diff()
             )
 
-            print(
-                "Buy Vol:",
-                round(buy_volume, 2)
+            rolling_delta = (
+
+                df['delta']
+                .rolling(20)
+                .sum()
             )
 
-            print(
-                "Sell Vol:",
-                round(sell_volume, 2)
+            rolling_move = (
+
+                df['price_change']
+                .rolling(20)
+                .sum()
             )
 
-            print(
-                "Delta:",
-                round(delta, 2)
+            df['efficiency'] = (
+
+                rolling_move
+                /
+                rolling_delta.abs()
             )
 
-            print(
-                "Price Change:",
-                round(price_change, 2)
+            df['efficiency'] = (
+
+                df['efficiency']
+                .fillna(0)
             )
+
+        # ---------------------------------
+        # REMOVE DUPLICATES
+        # ---------------------------------
+
+        df = df.drop_duplicates()
+
+        # ---------------------------------
+        # SAVE
+        # ---------------------------------
+
+        df.to_parquet(
+            PARQUET_FILE,
+            index=False
+        )
+
+        # ---------------------------------
+        # PRINT
+        # ---------------------------------
+
+        print()
+        print("================================")
+
+        print(
+            "TOTAL ROWS:",
+            len(df)
+        )
+
+        print(
+            "NEW ROWS:",
+            new_rows
+        )
+
+        print(
+            "LAST PRICE:",
+            round(
+                df.iloc[-1][
+                    'avg_price'
+                ],
+                2
+            )
+        )
 
         # ---------------------------------
         # SLEEP
         # ---------------------------------
 
-        time.sleep(5)
+        time.sleep(
+            SLEEP_INTERVAL
+        )
 
     except Exception as e:
 
         print()
         print("ERROR")
+
         print(e)
 
-        time.sleep(5)
+        time.sleep(
+            SLEEP_INTERVAL
+        )
