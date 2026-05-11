@@ -1,7 +1,7 @@
 venv/
 __pycache__/
-
+*.pyc
 *.parquet
-*.npy
-*.pkl
-*.joblib
+*.log
+.DS_Store
+.ipynb_checkpoints/

@@ -1,362 +1,186 @@
 import pandas as pd
-import numpy as np
 import time
-import os
 
 from datetime import datetime
 
-# ---------------------------------
-# CONFIG
-# ---------------------------------
-
-EVENT_FILE = (
-    "market_events.parquet"
-)
-
-SLEEP_INTERVAL = 10
-
-# ---------------------------------
-# LOAD EVENTS
-# ---------------------------------
-
-if os.path.exists(
-    EVENT_FILE
-):
-
-    events = pd.read_parquet(
-        EVENT_FILE
-    )
-
-    events = events.to_dict(
-        'records'
-    )
-
-    print()
-    print(
-        "LOADED EVENTS:",
-        len(events)
-    )
-
-else:
-
-    events = []
-
 print()
-print(
-    "EVENT LOGGER STARTED"
-)
+print("LIVE EVENT LOGGER")
+print()
 
-# ---------------------------------
-# LOOP
-# ---------------------------------
+# ====================================
+# SAFE PARQUET READER
+# ====================================
+
+def safe_read_parquet(path):
+
+    while True:
+
+        try:
+
+            df = pd.read_parquet(path)
+
+            return df
+
+        except Exception:
+
+            print(
+                f"PARQUET BUSY: {path}"
+            )
+
+            time.sleep(1)
+
+# ====================================
+# MAIN LOOP
+# ====================================
 
 while True:
 
     try:
 
-        # ---------------------------------
+        print("================================")
+        print(datetime.utcnow())
+        print("================================")
+        print()
+
+        # ====================================
         # LOAD DATA
-        # ---------------------------------
+        # ====================================
 
-        flow = pd.read_parquet(
-            "intraday_flow.parquet"
+        divergence = safe_read_parquet(
+            "divergence_signals.parquet"
         )
 
-        bybit = pd.read_parquet(
-            "bybit_flow.parquet"
+        narratives = safe_read_parquet(
+            "market_narratives.parquet"
         )
 
-        oi = pd.read_parquet(
-            "oi_history.parquet"
+        regimes = safe_read_parquet(
+            "regime_history.parquet"
         )
 
-        book = pd.read_parquet(
-            "orderbook.parquet"
+        inventory = safe_read_parquet(
+            "inventory_states.parquet"
         )
 
-        # ---------------------------------
-        # RECENT
-        # ---------------------------------
-
-        flow_last = flow.iloc[-1]
-
-        bybit_last = bybit.iloc[-1]
-
-        oi_recent = oi.tail(20)
-
-        book_last = book.iloc[-1]
-
-        # ---------------------------------
-        # FEATURES
-        # ---------------------------------
-
-        binance_delta = (
-            flow_last['delta']
+        reactions = safe_read_parquet(
+            "volume_reactions.parquet"
         )
 
-        bybit_delta = (
-            bybit_last['delta']
+        acceptance = safe_read_parquet(
+            "acceptance_states.parquet"
         )
 
-        efficiency = (
-            flow_last['efficiency']
+        vacuums = safe_read_parquet(
+            "liquidity_vacuums.parquet"
         )
 
-        imbalance = (
-            book_last['imbalance']
+        # ====================================
+        # LATEST SNAPSHOTS
+        # ====================================
+
+        latest_divergence = divergence.iloc[-1]
+
+        latest_narrative = narratives.iloc[-1]
+
+        latest_regime = regimes.iloc[-1]
+
+        latest_inventory = inventory.iloc[-1]
+
+        latest_reaction = reactions.iloc[-1]
+
+        latest_acceptance = acceptance.iloc[-1]
+
+        latest_vacuum = vacuums.iloc[-1]
+
+        # ====================================
+        # OUTPUT
+        # ====================================
+
+        print("CURRENT MARKET STATE")
+        print()
+
+        print(
+            "REGIME:",
+            latest_regime.get(
+                'regime'
+            )
         )
 
-        oi_change = (
-
-            oi_recent[
-                'open_interest'
-            ].iloc[-1]
-
-            -
-
-            oi_recent[
-                'open_interest'
-            ].iloc[0]
+        print(
+            "NARRATIVE:",
+            latest_narrative.get(
+                'narrative'
+            )
         )
 
-        # ---------------------------------
-        # VOL
-        # ---------------------------------
-
-        returns = (
-
-            flow.tail(100)[
-                'avg_price'
-            ]
-            .pct_change()
-            .dropna()
+        print(
+            "INVENTORY:",
+            latest_inventory.get(
+                'inventory_state'
+            )
         )
 
-        realized_vol = (
-            returns.std()
+        print(
+            "REACTION:",
+            latest_reaction.get(
+                'reaction'
+            )
         )
 
-        # ---------------------------------
-        # EVENT
-        # ---------------------------------
-
-        event = None
-
-        # BULL PRESSURE
-
-        if (
-
-            binance_delta > 100
-
-            and
-
-            bybit_delta > 100
-
-            and
-
-            oi_change > 5
-        ):
-
-            event = (
-                "BULLISH_PRESSURE"
+        print(
+            "ACCEPTANCE:",
+            latest_acceptance.get(
+                'state'
             )
-
-        # BEAR PRESSURE
-
-        elif (
-
-            binance_delta < -100
-
-            and
-
-            bybit_delta < -100
-
-            and
-
-            oi_change > 5
-        ):
-
-            event = (
-                "BEARISH_PRESSURE"
-            )
-
-        # ABSORPTION
-
-        elif (
-
-            abs(efficiency)
-            <
-            0.03
-
-            and
-
-            abs(binance_delta)
-            >
-            100
-        ):
-
-            event = (
-                "ABSORPTION"
-            )
-
-        # VOL EXPANSION
-
-        elif (
-
-            realized_vol
-            >
-            0.001
-        ):
-
-            event = (
-                "VOL_EXPANSION"
-            )
-
-        # IMBALANCE
-
-        elif (
-
-            abs(imbalance)
-            >
-            0.4
-        ):
-
-            event = (
-                "ORDERBOOK_IMBALANCE"
-            )
-
-        # ---------------------------------
-        # SAVE EVENT
-        # ---------------------------------
-
-        if event is not None:
-
-            row = {
-
-                'timestamp':
-                    datetime.utcnow(),
-
-                'event':
-                    event,
-
-                'binance_delta':
-                    binance_delta,
-
-                'bybit_delta':
-                    bybit_delta,
-
-                'oi_change':
-                    oi_change,
-
-                'efficiency':
-                    efficiency,
-
-                'imbalance':
-                    imbalance,
-
-                'realized_vol':
-                    realized_vol
-            }
-
-            events.append(
-                row
-            )
-
-            df = pd.DataFrame(
-                events
-            )
-
-            df = df.drop_duplicates()
-
-            df.to_parquet(
-
-                EVENT_FILE,
-
-                index=False
-            )
-
-            # ---------------------------------
-            # PRINT
-            # ---------------------------------
-
-            print()
-            print("================================")
-
-            print(
-                "EVENT:",
-                event
-            )
-
-            print()
-
-            print(
-                "TOTAL EVENTS:",
-                len(df)
-            )
-
-            print(
-                "Binance Delta:",
-                round(
-                    binance_delta,
-                    2
-                )
-            )
-
-            print(
-                "Bybit Delta:",
-                round(
-                    bybit_delta,
-                    2
-                )
-            )
-
-            print(
-                "OI Change:",
-                round(
-                    oi_change,
-                    2
-                )
-            )
-
-            print(
-                "Efficiency:",
-                round(
-                    efficiency,
-                    4
-                )
-            )
-
-            print(
-                "Imbalance:",
-                round(
-                    imbalance,
-                    4
-                )
-            )
-
-            print(
-                "Realized Vol:",
-                round(
-                    realized_vol,
-                    8
-                )
-            )
-
-        # ---------------------------------
-        # SLEEP
-        # ---------------------------------
-
-        time.sleep(
-            SLEEP_INTERVAL
         )
+
+        print(
+            "VACUUM:",
+            latest_vacuum.get(
+                'vacuum_state'
+            )
+        )
+
+        print(
+            "SYNC BULLISH:",
+            latest_divergence.get(
+                'sync_bullish'
+            )
+        )
+
+        print(
+            "SYNC BEARISH:",
+            latest_divergence.get(
+                'sync_bearish'
+            )
+        )
+
+        print(
+            "HYPER AGGRESSION:",
+            latest_divergence.get(
+                'hyper_aggression'
+            )
+        )
+
+        print()
+
+        print(
+            "EVENT LOGGER UPDATED"
+        )
+
+        print()
+
+        # ====================================
+        # WAIT
+        # ====================================
+
+        time.sleep(60)
 
     except Exception as e:
 
-        print()
         print("ERROR")
-
+        print(type(e).__name__)
         print(e)
+        print()
 
-        time.sleep(
-            SLEEP_INTERVAL
-        )
+        time.sleep(5)
