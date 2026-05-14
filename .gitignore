@@ -1,7 +1,13 @@
 venv/
 __pycache__/
 *.pyc
+
 *.parquet
-*.log
+
 .DS_Store
+
+.env
+
+.idea/
+
 .ipynb_checkpoints/

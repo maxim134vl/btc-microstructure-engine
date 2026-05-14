@@ -50,10 +50,6 @@ buying_climax = (
 
     (df["volume_zscore"] > 1.5)
 
-    &
-
-    (df["close_position"] < 0.5)
-
 )
 
 selling_climax = (
@@ -67,10 +63,6 @@ selling_climax = (
     &
 
     (df["volume_zscore"] > 1.5)
-
-    &
-
-    (df["close_position"] > 0.5)
 
 )
 

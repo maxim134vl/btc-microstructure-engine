@@ -205,7 +205,7 @@ ohlc["volume_mean_20"] = (
 
     ohlc["volume"]
 
-    .rolling(20)
+    .rolling(10)
 
     .mean()
 
@@ -215,7 +215,7 @@ ohlc["volume_std_20"] = (
 
     ohlc["volume"]
 
-    .rolling(20)
+    .rolling(10)
 
     .std()
 
