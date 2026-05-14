@@ -1,60 +1,43 @@
 import subprocess
 import time
-
 from datetime import datetime
 
-# =================================
-# LIVE PIPELINE
-# =================================
+print()
+print("BEHAVIORAL RUNTIME LOOP")
+print()
+
+# =====================================
+# PIPELINE
+# =====================================
 
 PIPELINE = [
 
-    # normalization
+    "behavioral_sequence_memory_v1.py",
 
-    "engines/volume_normalizer.py",
+    "behavioral_volume_observer_v1.py",
 
-    # divergence
+    "behavioral_execution_engine_v1.py",
 
-    "engines/divergence_engine.py",
-
-    "engines/divergence_aftermath_engine.py",
-
-    # state labeling
-
-    "engines/transition_labeling_engine.py",
-
-    # unified features
-
-    "engines/unified_feature_matrix.py",
-
-    # ML inference
-
-    "models/first_transition_model.py"
+    "behavioral_runtime_orchestrator_v1.py"
 ]
 
-# =================================
-# START
-# =================================
-
-print()
-print(
-    "LIVE ANALYTICS PIPELINE"
-)
-print()
-
-# =================================
+# =====================================
 # LOOP
-# =================================
+# =====================================
 
 while True:
 
-    print("================================")
+    print(
+        "================================"
+    )
 
     print(
         datetime.utcnow()
     )
 
-    print("================================")
+    print(
+        "================================"
+    )
 
     print()
 
