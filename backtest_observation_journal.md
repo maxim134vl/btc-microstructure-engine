@@ -1,0 +1,8 @@
+auction regime
+behavioral state
+conviction
+entropy
+unfinished auctions
+participation state
+volume classification
+probabilistic interpretation

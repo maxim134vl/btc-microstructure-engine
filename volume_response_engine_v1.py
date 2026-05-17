@@ -14,6 +14,14 @@ classification_memory = pd.read_parquet(
     "volume_classification_memory.parquet"
 )
 
+structure = pd.read_parquet(
+    "candle_structure_memory.parquet"
+)
+
+latest_structure = (
+    structure.iloc[-1]
+)
+
 geometry = pd.read_parquet(
     "candle_geometry_v2_memory.parquet"
 )
@@ -217,20 +225,22 @@ volume_concentration = (
 # =====================================
 
 delta = (
-    latest_reaction[
+    latest_structure[
         "delta"
     ]
 )
 
 delta_efficiency = (
-    latest_reaction[
-        "delta_efficiency"
+    delta / latest_localization[
+        "estimated_local_volume"
     ]
 )
 
 price_change = (
-    latest_reaction[
-        "price_change"
+    latest_structure[
+        "close"
+    ] - latest_structure[
+        "open"
     ]
 )
 
@@ -923,5 +933,5 @@ row = pd.DataFrame([{
 }])
 
 row.to_parquet(
-    "volume_response_state.parquet"
+    "volume_reactions.parquet"
 )

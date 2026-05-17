@@ -148,6 +148,8 @@ async def collect():
                                 snapshot
                             ])
 
+                        combined = combined.tail(50000)
+
                         except:
 
                             combined = snapshot

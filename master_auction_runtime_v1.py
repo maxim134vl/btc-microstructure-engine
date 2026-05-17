@@ -24,6 +24,10 @@ print()
 
 pipeline = [
 
+    "candle_structure_engine_v1.py",
+
+    "volume_classification_engine_v1.py",
+
     "schema_validation_engine_v1.py",
 
     "behavioral_sequence_memory_v1.py",
@@ -80,50 +84,33 @@ while True:
             engine
         )
 
-        if engine in ENGINES:
+        try:
 
-            ENGINES[engine]()
+            if engine in ENGINES:
 
-            result = 0
+                ENGINES[engine]()
 
-        else:
+            else:
 
-            result = os.system(
+                os.system(
+                    f"python3 {engine}"
+                )
 
-                f"python3 {engine}"
-
+            print(
+                "SUCCESS"
             )
 
-            result = os.system(
+        except Exception as e:
 
-                f"python3 {engine}"
-
+            print(
+                "FAILED"
             )
 
-        result = os.system(
+            print(e)
 
-            f"python3 {engine}"
+        print()
 
-        )
-    if result == 0:
-
-        print(
-            "SUCCESS"
-        )
-
-    else:
-
-        print(
-            "FAILED"
-        )
-
-    print()
-
-print(
-    "FULL AUCTION PIPELINE COMPLETE"
-)
-
-print()
+    time.sleep(5)
 
 # =================================
 # WAIT
