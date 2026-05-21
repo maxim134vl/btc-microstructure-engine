@@ -1,5 +1,10 @@
 import pandas as pd
 
+from parquet_utils import (
+    safe_read_parquet,
+    append_state_row
+)
+
 from datetime import datetime
 
 print()
@@ -11,11 +16,11 @@ print(
 # LOAD
 # =====================================
 
-convergence = pd.read_parquet(
+convergence = safe_read_parquet(
     "auction_convergence_memory.parquet"
 )
 
-reinforcement = pd.read_parquet(
+reinforcement = safe_read_parquet(
     "auction_reinforcement_memory.parquet"
 )
 
@@ -211,31 +216,16 @@ row = pd.DataFrame([{
 
 }])
 
-# -------------------------------------
+append_state_row(
 
-try:
-
-    old = pd.read_parquet(
-        "auction_decay_memory.parquet"
-    )
-
-    row = pd.concat([
-        old,
-        row
-    ])
-
-except:
-
-    pass
-
-# -------------------------------------
-
-row.to_parquet(
     "auction_decay_memory.parquet",
-    index=False
+
+    row
+
 )
 
 print()
+
 print(
     "MEMORY SAVED:"
 )

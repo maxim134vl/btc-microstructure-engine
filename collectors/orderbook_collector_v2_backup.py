@@ -2,52 +2,112 @@ import requests
 import pandas as pd
 import time
 import urllib3
-import sys
-
-sys.path.append(".")
-
-from parquet_writer_v2 import (
-    append_parquet
-)
+import os
 
 urllib3.disable_warnings()
-
-# =================================
-# CONFIG
-# =================================
-
-SAVE_INTERVAL = 5
-
-DATASET_PATH = (
-    "datasets/orderbook"
-)
-
-# =================================
-# SESSION
-# =================================
-
-session = requests.Session()
 
 print()
 print("ORDERBOOK COLLECTOR STARTED")
 
-# =================================
-# LOOP
-# =================================
+# ---------------------------------
+# CONFIG
+# ---------------------------------
+
+SAVE_INTERVAL = 5
+
+PARQUET_FILE = (
+    "orderbook.parquet"
+)
+
+MAX_ROWS = 100000
+
+# ---------------------------------
+# HTTP SESSION
+# ---------------------------------
+
+session = requests.Session()
+
+# ---------------------------------
+# SAFE SAVE
+# ---------------------------------
+
+def safe_append_snapshot(snapshot):
+
+    try:
+
+        existing = pd.read_parquet(
+            PARQUET_FILE
+        )
+
+    except Exception:
+
+        existing = pd.DataFrame()
+
+    new_row = pd.DataFrame(
+        [snapshot]
+    )
+
+    df = pd.concat(
+
+        [existing, new_row],
+
+        ignore_index=True
+
+    )
+
+    # ---------------------------------
+    # CLEANUP
+    # ---------------------------------
+
+    df = df.drop_duplicates(
+        subset=["timestamp"]
+    )
+
+    df = df.sort_values(
+        "timestamp"
+    )
+
+    # ---------------------------------
+    # LIMIT DATASET
+    # ---------------------------------
+
+    if len(df) > MAX_ROWS:
+
+        df = df.iloc[-MAX_ROWS:]
+
+    # ---------------------------------
+    # ATOMIC WRITE
+    # ---------------------------------
+
+    temp_file = (
+        PARQUET_FILE + ".tmp"
+    )
+
+    df.to_parquet(
+        temp_file,
+        index=False
+    )
+
+    os.replace(
+        temp_file,
+        PARQUET_FILE
+    )
+
+# ---------------------------------
+# MAIN LOOP
+# ---------------------------------
 
 while True:
 
     try:
 
-        # =================================
+        # ---------------------------------
         # API
-        # =================================
+        # ---------------------------------
 
         url = (
-
             "https://fapi.binance.com"
             "/fapi/v1/depth"
-
         )
 
         params = {
@@ -55,7 +115,6 @@ while True:
             "symbol": "BTCUSDT",
 
             "limit": 20
-
         }
 
         response = session.get(
@@ -64,17 +123,15 @@ while True:
 
             params=params,
 
-            timeout=30,
-
-            verify=False
+            timeout=30
 
         )
 
         data = response.json()
 
-        # =================================
+        # ---------------------------------
         # VALIDATION
-        # =================================
+        # ---------------------------------
 
         if "bids" not in data:
 
@@ -82,9 +139,7 @@ while True:
             print("INVALID RESPONSE")
             print(data)
 
-            time.sleep(
-                SAVE_INTERVAL
-            )
+            time.sleep(SAVE_INTERVAL)
 
             continue
 
@@ -92,9 +147,27 @@ while True:
 
         asks = data["asks"]
 
-        # =================================
+        if len(bids) == 0:
+
+            print()
+            print("EMPTY BIDS")
+
+            time.sleep(SAVE_INTERVAL)
+
+            continue
+
+        if len(asks) == 0:
+
+            print()
+            print("EMPTY ASKS")
+
+            time.sleep(SAVE_INTERVAL)
+
+            continue
+
+        # ---------------------------------
         # LIQUIDITY
-        # =================================
+        # ---------------------------------
 
         bid_liquidity = 0
 
@@ -105,9 +178,7 @@ while True:
             bid_liquidity += (
 
                 float(b[0])
-
                 *
-
                 float(b[1])
 
             )
@@ -117,9 +188,7 @@ while True:
             ask_liquidity += (
 
                 float(a[0])
-
                 *
-
                 float(a[1])
 
             )
@@ -127,9 +196,7 @@ while True:
         total = (
 
             bid_liquidity
-
             +
-
             ask_liquidity
 
         )
@@ -142,21 +209,18 @@ while True:
 
                 (
                     bid_liquidity
-
                     -
-
                     ask_liquidity
                 )
 
                 /
 
                 total
-
             )
 
-        # =================================
+        # ---------------------------------
         # MID PRICE
-        # =================================
+        # ---------------------------------
 
         best_bid = float(
             bids[0][0]
@@ -170,11 +234,11 @@ while True:
             best_bid + best_ask
         ) / 2
 
-        # =================================
-        # RECORD
-        # =================================
+        # ---------------------------------
+        # SNAPSHOT
+        # ---------------------------------
 
-        record = {
+        snapshot = {
 
             "timestamp":
                 pd.Timestamp.now().tz_localize(None),
@@ -190,22 +254,18 @@ while True:
 
             "mid_price":
                 mid_price
-
         }
 
-        # =================================
+        # ---------------------------------
         # VALIDATION
-        # =================================
+        # ---------------------------------
 
         values = [
 
-            record["bid_liquidity"],
-
-            record["ask_liquidity"],
-
-            record["imbalance"],
-
-            record["mid_price"]
+            bid_liquidity,
+            ask_liquidity,
+            imbalance,
+            mid_price
 
         ]
 
@@ -214,39 +274,24 @@ while True:
             print()
             print("NAN DETECTED")
 
-            time.sleep(
-                SAVE_INTERVAL
-            )
+            time.sleep(SAVE_INTERVAL)
 
             continue
 
-        # =================================
+        # ---------------------------------
         # SAVE
-        # =================================
+        # ---------------------------------
 
-        df = pd.DataFrame(
-            [record]
+        safe_append_snapshot(
+            snapshot
         )
 
-        file_path = append_parquet(
-
-            df,
-
-            DATASET_PATH
-
-        )
-
-        # =================================
-        # PRINT
-        # =================================
+        # ---------------------------------
+        # DEBUG
+        # ---------------------------------
 
         print()
         print("================================")
-
-        print(
-            "DATASET:",
-            file_path
-        )
 
         print(
             "Bid Liquidity:",
@@ -280,22 +325,16 @@ while True:
             )
         )
 
-        # =================================
+        # ---------------------------------
         # SLEEP
-        # =================================
+        # ---------------------------------
 
-        time.sleep(
-            SAVE_INTERVAL
-        )
+        time.sleep(SAVE_INTERVAL)
 
     except Exception as e:
 
         print()
         print("ERROR")
-
-        print(type(e).__name__)
         print(e)
 
-        time.sleep(
-            SAVE_INTERVAL
-        )
+        time.sleep(SAVE_INTERVAL)

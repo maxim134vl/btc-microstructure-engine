@@ -2,15 +2,8 @@ import requests
 import pandas as pd
 import numpy as np
 import time
-import os
 
-import sys
-
-sys.path.append(".")
-
-from parquet_writer_v2 import (
-    append_parquet
-)
+from datetime import datetime
 
 # =================================
 # START
@@ -21,84 +14,6 @@ print(
     "MULTI EXCHANGE COLLECTOR"
 )
 print()
-
-# =================================
-# CONFIG
-# =================================
-
-DATASET_PATH = (
-    "datasets/multi_exchange"
-)
-
-SAVE_INTERVAL = 5
-
-MAX_ROWS = 100000
-
-# =================================
-# HTTP SESSION
-# =================================
-
-session = requests.Session()
-
-# =================================
-# SAFE SAVE
-# =================================
-
-def safe_save(snapshot_df):
-
-    try:
-
-        old = pd.read_parquet(
-            PARQUET_FILE
-        )
-
-    except Exception:
-
-        old = pd.DataFrame()
-
-    combined = pd.concat(
-
-        [old, snapshot_df],
-
-        ignore_index=True
-
-    )
-
-    # =================================
-    # CLEANUP
-    # =================================
-
-    combined = combined.drop_duplicates()
-
-    combined = combined.sort_values(
-        "timestamp"
-    )
-
-    # =================================
-    # LIMIT DATASET
-    # =================================
-
-    if len(combined) > MAX_ROWS:
-
-        combined = combined.iloc[
-            -MAX_ROWS:
-        ]
-
-    # =================================
-    # ATOMIC WRITE
-    # =================================
-
-    df = combined.copy()
-
-    file_path = append_parquet(
-
-        df,
-
-        DATASET_PATH
-
-    )
-
-    return df
 
 # =================================
 # SNAPSHOT BUILDER
@@ -118,11 +33,11 @@ def build_snapshot(
     buy_volume = (
 
         df[
-            df["side"]
+            df['side']
             ==
-            "Buy"
+            'Buy'
         ][
-            "size"
+            'size'
         ]
         .sum()
     )
@@ -130,11 +45,11 @@ def build_snapshot(
     sell_volume = (
 
         df[
-            df["side"]
+            df['side']
             ==
-            "Sell"
+            'Sell'
         ][
-            "size"
+            'size'
         ]
         .sum()
     )
@@ -142,47 +57,49 @@ def build_snapshot(
     delta = (
 
         buy_volume
-        -
-        sell_volume
 
+        -
+
+        sell_volume
     )
 
     avg_price = (
 
         df[
-            "price"
+            'price'
         ]
         .mean()
-
     )
 
     price_change = (
 
         df[
-            "price"
+            'price'
         ]
         .iloc[-1]
 
         -
 
         df[
-            "price"
+            'price'
         ]
         .iloc[0]
-
     )
 
     total_volume = (
 
         buy_volume
-        +
-        sell_volume
 
+        +
+
+        sell_volume
     )
 
     efficiency = (
 
-        abs(price_change)
+        abs(
+            price_change
+        )
 
         /
 
@@ -191,38 +108,36 @@ def build_snapshot(
             +
             1
         )
-
     )
 
     snapshot = pd.DataFrame([{
 
-        "timestamp":
-            pd.Timestamp.now().tz_localize(None),
+        'timestamp':
+            datetime.utcnow(),
 
-        "exchange":
+        'exchange':
             exchange,
 
-        "buy_volume":
+        'buy_volume':
             buy_volume,
 
-        "sell_volume":
+        'sell_volume':
             sell_volume,
 
-        "delta":
+        'delta':
             delta,
 
-        "trade_count":
+        'trade_count':
             len(df),
 
-        "avg_price":
+        'avg_price':
             avg_price,
 
-        "price_change":
+        'price_change':
             price_change,
 
-        "efficiency":
+        'efficiency':
             efficiency
-
     }])
 
     return snapshot
@@ -241,10 +156,9 @@ def collect_binance():
             "/fapi/v1/trades"
             "?symbol=BTCUSDT"
             "&limit=1000"
-
         )
 
-        r = session.get(
+        r = requests.get(
             url,
             timeout=20
         )
@@ -255,38 +169,34 @@ def collect_binance():
 
         for t in trades:
 
-            side = "Buy"
+            side = 'Buy'
 
-            if t["isBuyerMaker"]:
+            if t['isBuyerMaker']:
 
-                side = "Sell"
+                side = 'Sell'
 
             rows.append({
 
-                "price":
+                'price':
                     float(
-                        t["price"]
+                        t['price']
                     ),
 
-                "size":
+                'size':
                     float(
-                        t["qty"]
+                        t['qty']
                     ),
 
-                "side":
+                'side':
                     side
             })
 
         return build_snapshot(
             rows,
-            "BINANCE"
+            'BINANCE'
         )
 
-    except Exception as e:
-
-        print()
-        print("BINANCE ERROR")
-        print(e)
+    except:
 
         return None
 
@@ -305,10 +215,9 @@ def collect_bybit():
             "?category=linear"
             "&symbol=BTCUSDT"
             "&limit=1000"
-
         )
 
-        r = session.get(
+        r = requests.get(
             url,
             timeout=20
         )
@@ -316,9 +225,9 @@ def collect_bybit():
         data = r.json()
 
         trades = data[
-            "result"
+            'result'
         ][
-            "list"
+            'list'
         ]
 
         rows = []
@@ -327,31 +236,26 @@ def collect_bybit():
 
             rows.append({
 
-                "price":
+                'price':
                     float(
-                        t["price"]
+                        t['price']
                     ),
 
-                "size":
+                'size':
                     float(
-                        t["size"]
+                        t['size']
                     ),
 
-                "side":
-                    t["side"]
-
+                'side':
+                    t['side']
             })
 
         return build_snapshot(
             rows,
-            "BYBIT"
+            'BYBIT'
         )
 
-    except Exception as e:
-
-        print()
-        print("BYBIT ERROR")
-        print(e)
+    except:
 
         return None
 
@@ -374,17 +278,15 @@ def collect_hyperliquid():
 
             "coin":
                 "BTC"
-
         }
 
-        r = session.post(
+        r = requests.post(
 
             url,
 
             json=payload,
 
             timeout=20
-
         )
 
         trades = r.json()
@@ -393,39 +295,34 @@ def collect_hyperliquid():
 
         for t in trades:
 
-            side = "Buy"
+            side = 'Buy'
 
-            if t.get("side") == "A":
+            if t.get('side') == 'A':
 
-                side = "Sell"
+                side = 'Sell'
 
             rows.append({
 
-                "price":
+                'price':
                     float(
-                        t["px"]
+                        t['px']
                     ),
 
-                "size":
+                'size':
                     float(
-                        t["sz"]
+                        t['sz']
                     ),
 
-                "side":
+                'side':
                     side
-
             })
 
         return build_snapshot(
             rows,
-            "HYPERLIQUID"
+            'HYPERLIQUID'
         )
 
-    except Exception as e:
-
-        print()
-        print("HYPERLIQUID ERROR")
-        print(e)
+    except:
 
         return None
 
@@ -443,72 +340,49 @@ def collect_huobi():
             "/swap-ex/market/history/trade"
             "?contract_code=BTC-USDT"
             "&size=50"
-
         )
 
-        r = session.get(
+        r = requests.get(
             url,
             timeout=20
         )
 
         data = r.json()
 
-        # =================================
-        # VALIDATION
-        # =================================
-
-        if "data" not in data:
-
-            print()
-            print("HUOBI INVALID RESPONSE")
-            print(data)
-
-            return None
-
         rows = []
 
-        for batch in data["data"]:
+        for batch in data['data']:
 
-            for t in batch["data"]:
+            for t in batch['data']:
 
                 rows.append({
 
-                    "price":
+                    'price':
                         float(
-                            t["price"]
+                            t['price']
                         ),
 
-                    "size":
+                    'size':
                         float(
-                            t["amount"]
+                            t['amount']
                         ),
 
-                    "side":
-
-                        "Buy"
-
+                    'side':
+                        'Buy'
                         if
-
-                        t["direction"]
+                        t['direction']
                         ==
-                        "buy"
-
+                        'buy'
                         else
-
-                        "Sell"
-
+                        'Sell'
                 })
 
         return build_snapshot(
             rows,
-            "HUOBI"
+            'HUOBI'
         )
 
-    except Exception as e:
-
-        print()
-        print("HUOBI ERROR")
-        print(e)
+    except:
 
         return None
 
@@ -530,6 +404,7 @@ while True:
 
             collect_hyperliquid,
 
+            collect_huobi
         ]:
 
             result = fn()
@@ -540,39 +415,37 @@ while True:
                     result
                 )
 
-        # =================================
-        # EMPTY PROTECTION
-        # =================================
-
-        if len(snapshots) == 0:
-
-            print()
-            print("NO SNAPSHOTS COLLECTED")
-
-            time.sleep(SAVE_INTERVAL)
-
-            continue
-
         combined_snapshot = pd.concat(
-            snapshots,
-            ignore_index=True
+            snapshots
         )
 
         # =================================
-        # NAN CLEANUP
+        # LOAD OLD
         # =================================
 
-        combined_snapshot = (
-            combined_snapshot
-            .dropna()
-        )
+        try:
+
+            old = pd.read_parquet(
+                "multi_exchange_flow.parquet"
+            )
+
+            combined = pd.concat([
+
+                old,
+
+                combined_snapshot
+            ])
+
+        except:
+
+            combined = combined_snapshot
 
         # =================================
         # SAVE
         # =================================
 
-        combined = safe_save(
-            combined_snapshot
+        combined.to_parquet(
+            "multi_exchange_flow.parquet"
         )
 
         # =================================
@@ -582,7 +455,7 @@ while True:
         print("================================")
 
         print(
-            pd.Timestamp.now()
+            datetime.utcnow()
         )
 
         print("================================")
@@ -592,28 +465,23 @@ while True:
         for _, row in combined_snapshot.iterrows():
 
             print(
-
-                row["exchange"],
-
+                row['exchange'],
                 "| DELTA:",
-
                 round(
-                    row["delta"],
+                    row['delta'],
                     2
                 ),
-
                 "| VOLUME:",
-
                 round(
-
-                    row["buy_volume"]
+                    row[
+                        'buy_volume'
+                    ]
                     +
-                    row["sell_volume"],
-
+                    row[
+                        'sell_volume'
+                    ],
                     2
-
                 )
-
             )
 
         print()
@@ -631,12 +499,12 @@ while True:
 
         print()
 
-        time.sleep(SAVE_INTERVAL)
+        time.sleep(5)
 
     except Exception as e:
 
         print()
-        print("RUNTIME ERROR")
+        print("ERROR")
         print(type(e).__name__)
         print(e)
         print()

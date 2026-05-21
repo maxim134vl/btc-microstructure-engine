@@ -1,21 +1,13 @@
 from runtime_cache import (
     load_parquet_cached
 )
-
 import pandas as pd
-import os
 
 from datetime import datetime
 
 print()
 print("BEHAVIORAL SEQUENCE MEMORY")
 print()
-
-MEMORY_FILE = (
-    "behavioral_sequence_memory.parquet"
-)
-
-MAX_ROWS = 50000
 
 # =====================================
 # LOAD DATA
@@ -99,6 +91,8 @@ sequence = (
     "NEUTRAL"
 )
 
+# -------------------------------------
+
 if (
 
     localized_behavior
@@ -114,6 +108,8 @@ if (
     sequence = (
         "FAILED_CONTINUATION_SEQUENCE"
     )
+
+# -------------------------------------
 
 if (
 
@@ -131,6 +127,8 @@ if (
         "EXHAUSTION_SEQUENCE"
     )
 
+# -------------------------------------
+
 if (
 
     localized_behavior
@@ -147,14 +145,10 @@ if (
         "ABSORPTION_SEQUENCE"
     )
 
-# =====================================
-# LOAD PREVIOUS STATE
-# =====================================
-
 try:
 
     old = load_parquet_cached(
-        MEMORY_FILE
+        "behavioral_sequence_memory.parquet"
     )
 
     previous_sequence = (
@@ -169,9 +163,7 @@ try:
         ]
     )
 
-except Exception:
-
-    old = pd.DataFrame()
+except:
 
     previous_sequence = (
         "NONE"
@@ -194,16 +186,16 @@ else:
     persistence = 1
 
 # =====================================
-# NEW ROW
+# MEMORY
 # =====================================
 
-new_row = pd.DataFrame([{
+row = pd.DataFrame([{
 
     "persistence":
         persistence,
 
     "timestamp":
-        pd.Timestamp.now().tz_localize(None),
+        datetime.utcnow(),
 
     "sequence":
         sequence,
@@ -223,51 +215,47 @@ new_row = pd.DataFrame([{
 }])
 
 # =====================================
-# APPEND ONLY
+# LOAD OLD MEMORY
 # =====================================
 
-combined = pd.concat(
+try:
 
-    [old, new_row],
+    old = load_parquet_cached(
+        "behavioral_sequence_memory.parquet"
+    )
 
-    ignore_index=True
+    previous_sequence = (
+        old.iloc[-1][
+            "sequence"
+        ]
+    )
 
-)
+    previous_persistence = (
+        old.iloc[-1][
+            "persistence"
+        ]
+    )
+
+    row = pd.concat(
+        [old, row]
+    )
+
+except:
+
+    pass
+
+    previous_sequence = (
+        "NONE"
+    )
+
+    previous_persistence = 0
 
 # =====================================
-# CLEANUP
+# SAVE
 # =====================================
 
-combined = combined.drop_duplicates(
-    subset=["timestamp"]
-)
-
-# =====================================
-# LIMIT
-# =====================================
-
-if len(combined) > MAX_ROWS:
-
-    combined = combined.iloc[
-        -MAX_ROWS:
-    ]
-
-# =====================================
-# ATOMIC WRITE
-# =====================================
-
-temp_file = (
-    MEMORY_FILE + ".tmp"
-)
-
-combined.to_parquet(
-    temp_file,
-    index=False
-)
-
-os.replace(
-    temp_file,
-    MEMORY_FILE
+row.to_parquet(
+    "behavioral_sequence_memory.parquet"
 )
 
 # =====================================
@@ -275,11 +263,17 @@ os.replace(
 # =====================================
 
 print(
-    "SEQUENCE:",
-    sequence
+    row.tail(10)
+)
+
+print()
+
+print(
+    "CURRENT SEQUENCE:"
 )
 
 print(
-    "PERSISTENCE:",
-    persistence
+    sequence
 )
+
+print()

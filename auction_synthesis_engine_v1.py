@@ -1,6 +1,15 @@
 from datetime import datetime
 import pandas as pd
 
+from parquet_utils import (
+    safe_read_parquet,
+    append_state_row
+)
+
+from state_guard import (
+    should_persist_state
+)
+
 print()
 print(
     "AUCTION SYNTHESIS ENGINE"
@@ -11,19 +20,19 @@ print()
 # LOAD
 # =====================================
 
-response = pd.read_parquet(
+response = safe_read_parquet(
     "volume_response_state.parquet"
 )
 
-convergence = pd.read_parquet(
+convergence = safe_read_parquet(
     "auction_convergence_memory.parquet"
 )
 
-htf = pd.read_parquet(
+htf = safe_read_parquet(
     "htf_structure_memory.parquet"
 )
 
-context = pd.read_parquet(
+context = safe_read_parquet(
     "htf_ltf_context_memory.parquet"
 )
 
@@ -255,6 +264,10 @@ print()
 # SAVE
 # =====================================
 
+# =====================================
+# SAVE
+# =====================================
+
 from datetime import datetime
 
 row = pd.DataFrame([{
@@ -270,36 +283,43 @@ row = pd.DataFrame([{
 
 }])
 
-# -------------------------------------
+state_payload = {
 
-try:
+    "auction_state":
+        auction_state
 
-    old = pd.read_parquet(
-        "auction_synthesis_memory.parquet"
+}
+
+if not should_persist_state(
+
+    "auction_synthesis_memory.parquet",
+
+    state_payload
+
+):
+
+    print()
+
+    print(
+        "NO STATE CHANGE"
     )
 
-    row = pd.concat([
-        old,
+else:
+
+    append_state_row(
+
+        "auction_synthesis_memory.parquet",
+
         row
-    ])
 
-except:
+    )
 
-    pass
+    print()
 
-# -------------------------------------
+    print(
+        "MEMORY SAVED:"
+    )
 
-row.to_parquet(
-    "auction_synthesis_memory.parquet",
-    index=False
-)
-
-print()
-
-print(
-    "MEMORY SAVED:"
-)
-
-print(
-    "auction_synthesis_memory.parquet"
-)
+    print(
+        "auction_synthesis_memory.parquet"
+    )

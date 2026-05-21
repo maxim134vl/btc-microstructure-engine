@@ -1,28 +1,15 @@
 import os
 import time
-import subprocess
 
 import adaptive_meta_cognition_engine_v1
 import probabilistic_auction_engine_v1
 import auction_reinforcement_engine_v1
-
 from datetime import datetime
 from engine_registry import ENGINES
 
+
 from state_manager_v1 import (
     refresh_state
-)
-
-from runtime_state_manager import (
-    update_runtime_state
-)
-
-from runtime_dependency_map import (
-    DEPENDENCIES
-)
-
-from runtime_dependency_guard import (
-    should_run_engine
 )
 
 print()
@@ -97,29 +84,6 @@ while True:
             engine
         )
 
-        if engine in DEPENDENCIES:
-
-            should_run = should_run_engine(
-
-                engine,
-
-                DEPENDENCIES[engine]
-
-            )
-
-            if not should_run:
-
-                print(
-                    "SKIPPED:",
-                    engine
-                )
-
-                print()
-
-                continue
-
-        start_time = time.time()
-
         try:
 
             if engine in ENGINES:
@@ -128,54 +92,18 @@ while True:
 
             else:
 
-                result = subprocess.run(
-
-                    [
-                        "python3",
-                        engine
-                    ],
-
-                    capture_output=False,
-                    text=True
-
+                os.system(
+                    f"python3 {engine}"
                 )
 
-                if result.returncode != 0:
-
-                    raise Exception(
-                        f"ENGINE FAILED: {engine}"
-                    )
-
-            duration = round(
-                time.time() - start_time,
-                2
-            )
-
             print(
-                f"SUCCESS ({duration}s)"
-            )
-
-            update_runtime_state(
-                engine,
-                "SUCCESS",
-                duration
+                "SUCCESS"
             )
 
         except Exception as e:
 
-            duration = round(
-                time.time() - start_time,
-                2
-            )
-
             print(
-                f"FAILED ({duration}s)"
-            )
-
-            update_runtime_state(
-                engine,
-                "FAILED",
-                duration
+                "FAILED"
             )
 
             print(e)
@@ -183,3 +111,9 @@ while True:
         print()
 
     time.sleep(5)
+
+# =================================
+# WAIT
+# =================================
+
+time.sleep(60)

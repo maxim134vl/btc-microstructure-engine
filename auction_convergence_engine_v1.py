@@ -1,5 +1,16 @@
 import pandas as pd
 
+from parquet_utils import (
+    safe_read_parquet,
+    append_state_row
+)
+
+from state_guard import (
+    should_persist_state
+)
+
+from datetime import datetime
+
 def run():
 
     print()
@@ -12,7 +23,7 @@ def run():
     # LOAD
     # =====================================
 
-    response = pd.read_parquet(
+    response = safe_read_parquet(
         "volume_response_state.parquet"
     )
 
@@ -24,7 +35,7 @@ def run():
 
     try:
 
-        memory = pd.read_parquet(
+        memory = safe_read_parquet(
             "auction_convergence_memory.parquet"
         )
 
@@ -250,12 +261,71 @@ def run():
     print()
 
     # =====================================
-    # SAVE MEMORY
+    # SAVE
     # =====================================
+ 
+    row = pd.DataFrame([{
 
-    memory.to_parquet(
-        "auction_convergence_memory.parquet"
-    )
-if __name__ == "__main__":
+        "timestamp":
+            datetime.utcnow(),
 
-    run()
+        "convergence_state":
+            convergence_state,
+
+        "unfinished_auctions":
+            unfinished_auctions,
+
+        "distribution_events":
+            distribution_events,
+
+        "localized_behavior":
+            localized_behavior
+
+    }])
+
+    state_payload = {
+
+        "convergence_state":
+            convergence_state,
+
+        "unfinished_auctions":
+            unfinished_auctions,
+
+        "distribution_events":
+            distribution_events
+
+    }
+
+    if not should_persist_state(
+
+        "auction_convergence_memory.parquet",
+
+        state_payload
+
+    ):
+
+        print()
+
+        print(
+            "NO CONVERGENCE CHANGE"
+        )
+
+    else:
+
+        append_state_row(
+
+            "auction_convergence_memory.parquet",
+
+            row
+
+        )
+
+        print()
+
+        print(
+            "MEMORY SAVED:"
+        )
+
+        print(
+            "auction_convergence_memory.parquet"
+        )

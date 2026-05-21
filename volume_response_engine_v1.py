@@ -1,5 +1,16 @@
 import pandas as pd
 
+from parquet_utils import (
+    safe_read_parquet,
+    append_state_row
+)
+
+from state_guard import (
+    should_persist_state
+)
+
+from datetime import datetime
+
 print()
 print(
     "VOLUME RESPONSE ENGINE"
@@ -10,11 +21,11 @@ print()
 # LOAD DATA
 # =====================================
 
-classification_memory = pd.read_parquet(
+classification_memory = safe_read_parquet(
     "volume_classification_memory.parquet"
 )
 
-structure = pd.read_parquet(
+structure = safe_read_parquet(
     "candle_structure_memory.parquet"
 )
 
@@ -22,19 +33,19 @@ latest_structure = (
     structure.iloc[-1]
 )
 
-geometry = pd.read_parquet(
+geometry = safe_read_parquet(
     "candle_geometry_v2_memory.parquet"
 )
 
-localization = pd.read_parquet(
+localization = safe_read_parquet(
     "volume_localization_v2_memory.parquet"
 )
 
-reactions = pd.read_parquet(
+reactions = safe_read_parquet(
     "volume_reactions.parquet"
 )
 
-micro = pd.read_parquet(
+micro = safe_read_parquet(
     "volume_localization_v2_memory.parquet"
 )
 
@@ -882,11 +893,41 @@ print()
 
 row = pd.DataFrame([{
 
+    "timestamp":
+        datetime.utcnow(),
+
     "volume_event":
         volume_event,
 
     "continuation_quality":
         continuation_quality,
+
+    "volume_class":
+        volume_class,
+
+    "participation_state":
+        participation_state,
+
+    "relative_volume":
+        relative_volume,
+
+    "relative_spread":
+        relative_spread,
+
+    "climax_state":
+        climax_state,
+
+    "effort_score":
+        effort_score,
+
+    "result_score":
+        result_score,
+
+    "normalized_result":
+        normalized_result,
+
+    "effort_result_state":
+        effort_result_state,
 
     "unfinished_auction":
         unfinished_auction,
@@ -895,43 +936,53 @@ row = pd.DataFrame([{
         unfinished_reason,
 
     "localized_behavior":
-        localized_behavior,
+        localized_behavior
 
-    "delta":
-        delta,
+}])
 
-    "delta_efficiency":
-        delta_efficiency,
-
-    "estimated_local_volume":
-        estimated_local_volume,
-
-    "effort_score":
-        effort_score,
-
-    "result_score":
-        result_score,
-
-    "effort_result_ratio":
-        effort_result_ratio,
-
-    "normalized_result":
-        normalized_result,
+state_payload = {
 
     "effort_result_state":
         effort_result_state,
 
-    "volume_class":
-        volume_class,
+    "unfinished_auction":
+        unfinished_auction,
 
-    "climax_state":
-        climax_state,
+    "localized_behavior":
+        localized_behavior
 
-    "participation_state":
-        participation_state,
+}
 
-}])
+if not should_persist_state(
 
-row.to_parquet(
-    "volume_reactions.parquet"
-)
+    "volume_response_state.parquet",
+
+    state_payload
+
+):
+
+    print()
+
+    print(
+        "NO RESPONSE STATE CHANGE"
+    )
+
+else:
+
+    append_state_row(
+
+        "volume_response_state.parquet",
+
+        row
+
+    )
+
+    print()
+
+    print(
+        "MEMORY SAVED:"
+    )
+
+    print(
+        "volume_response_state.parquet"
+    )

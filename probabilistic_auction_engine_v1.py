@@ -1,4 +1,14 @@
 import pandas as pd
+
+from parquet_utils import (
+    safe_read_parquet,
+    append_state_row
+)
+
+from state_guard import (
+    should_persist_state
+)
+
 from datetime import datetime
 from state_manager_v1 import STATE
 
@@ -267,57 +277,60 @@ def run():
 
     row = pd.DataFrame([{
 
-        "timestamp":
-            datetime.utcnow(),
+    "timestamp":
+        datetime.utcnow(),
 
-        "auction_regime":
-            auction_regime,
+    "auction_regime":
+        auction_regime,
 
-        "absorption_probability":
-            absorption_probability,
+    "absorption_probability":
+        absorption_probability,
 
-        "distribution_probability":
-            distribution_probability,
+    "distribution_probability":
+        distribution_probability,
 
-        "conviction_probability":
-            conviction_probability
+    "conviction_probability":
+        conviction_probability
 
     }])
 
-    # -------------------------------------
+    state_payload = {
 
-    try:
+        "auction_regime":
+            auction_regime
 
-        old = pd.read_parquet(
-            "probabilistic_auction_memory.parquet"
+    }
+
+    if not should_persist_state(
+
+        "probabilistic_auction_memory.parquet",
+
+        state_payload
+
+    ):
+
+        print()
+
+        print(
+            "NO REGIME CHANGE"
         )
 
-        row = pd.concat([
-            old,
+    else:
+
+        append_state_row(
+
+            "probabilistic_auction_memory.parquet",
+
             row
-        ])
 
-    except:
+        )
 
-        pass
+        print()
 
-    # -------------------------------------
+        print(
+            "MEMORY SAVED:"
+        )
 
-    row.to_parquet(
-        "probabilistic_auction_memory.parquet",
-        index=False
-    )
-
-    print()
-
-    print(
-        "MEMORY SAVED:"
-    )
-
-    print(
-        "probabilistic_auction_memory.parquet"
-    )
-
-if __name__ == "__main__":
-
-    run()
+        print(
+            "probabilistic_auction_memory.parquet"
+        )

@@ -1,50 +1,113 @@
 import requests
 import pandas as pd
 import time
+import os
 
-import sys
-sys.path.append(".")
-
-from parquet_writer_v2 import (
-    append_parquet
-)
-
-# =================================
+# ---------------------------------
 # CONFIG
-# =================================
+# ---------------------------------
 
-DATASET_PATH = (
-    "datasets/oi"
+PARQUET_FILE = (
+    "oi_history.parquet"
 )
 
 SLEEP_INTERVAL = 10
 
+MAX_ROWS = 100000
+
 print()
 print("STARTING OI COLLECTOR")
 
-# =================================
-# SESSION
-# =================================
+# ---------------------------------
+# HTTP SESSION
+# ---------------------------------
 
 session = requests.Session()
 
-# =================================
+# ---------------------------------
+# SAFE SAVE
+# ---------------------------------
+
+def safe_append_record(record):
+
+    try:
+
+        existing = pd.read_parquet(
+            PARQUET_FILE
+        )
+
+    except Exception:
+
+        existing = pd.DataFrame()
+
+    new_row = pd.DataFrame(
+        [record]
+    )
+
+    df = pd.concat(
+
+        [existing, new_row],
+
+        ignore_index=True
+
+    )
+
+    # ---------------------------------
+    # CLEANUP
+    # ---------------------------------
+
+    df = df.drop_duplicates()
+
+    df = df.sort_values(
+        "timestamp"
+    )
+
+    # ---------------------------------
+    # LIMIT DATASET
+    # ---------------------------------
+
+    if len(df) > MAX_ROWS:
+
+        df = df.iloc[-MAX_ROWS:]
+
+    # ---------------------------------
+    # ATOMIC WRITE
+    # ---------------------------------
+
+    temp_file = (
+        PARQUET_FILE + ".tmp"
+    )
+
+    df.to_parquet(
+
+        temp_file,
+
+        index=False
+    )
+
+    os.replace(
+        temp_file,
+        PARQUET_FILE
+    )
+
+    return df
+
+# ---------------------------------
 # LOOP
-# =================================
+# ---------------------------------
 
 while True:
 
     try:
 
-        # =================================
+        # ---------------------------------
         # API
-        # =================================
+        # ---------------------------------
 
         url = (
 
             "https://fapi.binance.com/"
             "futures/data/openInterestHist"
-
         )
 
         params = {
@@ -54,7 +117,6 @@ while True:
             "period": "5m",
 
             "limit": 1
-
         }
 
         response = session.get(
@@ -64,14 +126,13 @@ while True:
             params=params,
 
             timeout=10
-
         )
 
         data = response.json()
 
-        # =================================
+        # ---------------------------------
         # VALIDATION
-        # =================================
+        # ---------------------------------
 
         if not isinstance(
             data,
@@ -80,6 +141,7 @@ while True:
 
             print()
             print("API ERROR")
+
             print(data)
 
             time.sleep(
@@ -101,9 +163,9 @@ while True:
 
         row = data[0]
 
-        # =================================
+        # ---------------------------------
         # RECORD
-        # =================================
+        # ---------------------------------
 
         record = {
 
@@ -123,12 +185,11 @@ while True:
                         "sumOpenInterestValue"
                     ]
                 )
-
         }
 
-        # =================================
+        # ---------------------------------
         # VALIDATION
-        # =================================
+        # ---------------------------------
 
         values = [
 
@@ -149,32 +210,24 @@ while True:
 
             continue
 
-        # =================================
+        # ---------------------------------
         # SAVE
-        # =================================
+        # ---------------------------------
 
-        df = pd.DataFrame(
-            [record]
+        df = safe_append_record(
+            record
         )
 
-        file_path = append_parquet(
-
-            df,
-
-            DATASET_PATH
-
-        )
-
-        # =================================
+        # ---------------------------------
         # PRINT
-        # =================================
+        # ---------------------------------
 
         print()
         print("================================")
 
         print(
-            "DATASET:",
-            file_path
+            "TOTAL ROWS:",
+            len(df)
         )
 
         print(
@@ -197,9 +250,9 @@ while True:
             )
         )
 
-        # =================================
+        # ---------------------------------
         # SLEEP
-        # =================================
+        # ---------------------------------
 
         time.sleep(
             SLEEP_INTERVAL

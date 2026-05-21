@@ -4,13 +4,6 @@ import pandas as pd
 import time
 import ssl
 import os
-import sys
-
-sys.path.append(".")
-
-from parquet_writer_v2 import (
-    append_parquet
-)
 
 from datetime import datetime
 
@@ -24,13 +17,7 @@ symbol = "btcusdt"
 
 interval = "15m"
 
-DATASET_PATH = (
-    "datasets/live"
-)
-
-LATEST_FILE = (
-    "datasets/live/latest.parquet"
-)
+feed_file = "live_market_feed.parquet"
 
 MAX_ROWS = 50000
 
@@ -50,7 +37,7 @@ last_closed_timestamp = None
 try:
 
     existing = pd.read_parquet(
-        LATEST_FILE
+        feed_file
     )
 
     if len(existing) > 0:
@@ -80,7 +67,7 @@ def safe_append_candle(candle):
     try:
 
         existing = pd.read_parquet(
-            LATEST_FILE
+            feed_file
         )
 
     except Exception:
@@ -120,27 +107,21 @@ def safe_append_candle(candle):
         df = df.iloc[-MAX_ROWS:]
 
     # =====================================
-    # SAVE PARTITIONED DATASET
+    # ATOMIC WRITE
     # =====================================
 
-    append_parquet(
-
-        df,
-
-        DATASET_PATH
-
+    temp_file = (
+        feed_file + ".tmp"
     )
 
-    # =====================================
-    # SAVE LATEST SNAPSHOT
-    # =====================================
-
     df.to_parquet(
-
-        LATEST_FILE,
-
+        temp_file,
         index=False
+    )
 
+    os.replace(
+        temp_file,
+        feed_file
     )
 
 # =====================================

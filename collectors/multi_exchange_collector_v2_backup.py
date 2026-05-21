@@ -4,14 +4,6 @@ import numpy as np
 import time
 import os
 
-import sys
-
-sys.path.append(".")
-
-from parquet_writer_v2 import (
-    append_parquet
-)
-
 # =================================
 # START
 # =================================
@@ -26,8 +18,8 @@ print()
 # CONFIG
 # =================================
 
-DATASET_PATH = (
-    "datasets/multi_exchange"
+PARQUET_FILE = (
+    "multi_exchange_flow.parquet"
 )
 
 SAVE_INTERVAL = 5
@@ -88,17 +80,21 @@ def safe_save(snapshot_df):
     # ATOMIC WRITE
     # =================================
 
-    df = combined.copy()
-
-    file_path = append_parquet(
-
-        df,
-
-        DATASET_PATH
-
+    temp_file = (
+        PARQUET_FILE + ".tmp"
     )
 
-    return df
+    combined.to_parquet(
+        temp_file,
+        index=False
+    )
+
+    os.replace(
+        temp_file,
+        PARQUET_FILE
+    )
+
+    return combined
 
 # =================================
 # SNAPSHOT BUILDER
