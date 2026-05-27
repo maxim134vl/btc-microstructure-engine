@@ -1,70 +1,96 @@
 # TODO_REVIEW — Manual Review Required
 
-Items flagged during Stage 1 audit (`PROJECT_AUDIT.md`) that need **human decision** before automated refactor.
+**Updated:** 2026-05-26 (post architectural decisions)
 
 ---
 
-## P0 — Architecture decisions (block refactor)
+## ✅ RESOLVED — Architecture (2026-05-26)
 
-- [ ] **Canonical runtime:** Choose one — Docker `autonomous_runtime_v2`, `master_auction_runtime_v1`, or `run_canonical_pipeline`
-- [ ] **Canonical source tree:** Root vs `btc-microstructure-engine/` — recommend merge to `src/btc_ml/` and remove mirror
-- [ ] **Stage 2 scope:** Is auction cognition pipeline (climax + MTF synthesis + runtime cognition) the new production path?
-- [ ] **Mutation engine in Docker:** `live_mutation_runtime_engine_v1.py` lives in `archive/mutation_legacy/` but is in prod compose — remove or restore?
-
----
-
-## P0 — Diverged duplicate files (12) — pick canonical version
-
-| File | Action needed |
-|------|---------------|
-| `state_manager_v1.py` | Root has `candle_structure`; engine copy differs (74 vs 96 lines) |
-| `master_auction_runtime_v1.py` | Root has cognition step + dependency guard |
-| `probabilistic_auction_engine_v1.py` | Root 497 lines vs engine 323 lines |
-| `auction_reinforcement_engine_v1.py` | Diff review |
-| `auction_convergence_engine_v1.py` | Diff review |
-| `volume_response_engine_v1.py` | Diff review |
-| `auction_decay_engine_v1.py` | Diff review |
-| `auction_synthesis_engine_v1.py` | Diff review |
-| `behavioral_sequence_memory_v1.py` | Diff review |
-| `candle_structure_engine_v1.py` | Diff review |
-| `live_binance_feed_v2.py` | Diff review |
-| `state_transition_engine_v1.py` | Diff review |
+- [x] **Canonical runtime:** `master_auction_runtime_v1.py`
+- [x] **Canonical source tree:** Repository root; `btc-microstructure-engine/` → deprecated mirror
+- [x] **Stage 2 scope:** Primary production direction (climax → MTF → cognition → reinforcement → probabilistic → meta)
+- [x] **Diverged duplicates (12):** Root versions canonical — archive mirror copies
 
 ---
 
-## P1 — Domain logic (defer until after full audit)
+## P0 — Block Stage 2 Production Wiring (orchestration only)
 
-- [ ] **Climax separation:** SELLING_CLIMAX vs STOPPING_VOLUME merge in same cluster — redesign effort/result discriminators
-- [ ] **`process_auction_climax(dataset, timeframe)`** ignores `dataset` — use passed dataset or remove param
-- [ ] **`future_return_3`** in stopping volume — research-only or replace with live-safe signals
-- [ ] **`conviction_probability`** can exceed 1.0 in probabilistic engine — verify intentional
+These are **boundary/wiring** fixes — not behavioral threshold changes.
+
+- [ ] **V-002 Feed path:** Root `live_binance_feed_v2.py` writes `datasets/live/latest.parquet` but pipeline expects `live_market_feed.parquet` — align config path
+- [ ] **V-001 Stage 2 batch:** Wire batch producer before `runtime_cognition_engine_v1.py` in master loop (or cron)
+- [ ] **V-011 Climax API:** `process_auction_climax(dataset, timeframe)` must use passed `dataset` for MTF — API fix only
+- [ ] **V-003 Cognition fallback:** Remove silent `alignment_score` default in production mode
+
+See: `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`
 
 ---
 
-## P1 — Security fixes (low risk, can automate)
+## P0 — Mirror Deprecation
+
+- [ ] Add `btc-microstructure-engine/DEPRECATED.md` ✅ (this commit)
+- [ ] Verify no active deploy scripts reference mirror path
+- [ ] Archive mirror to `archive_removed/` (after deploy audit)
+- [ ] **Mutation engine in Docker:** `live_mutation_runtime_engine_v1.py` in deprecated mirror compose — do not migrate; ignore
+
+---
+
+## P1 — Domain Logic (DEFERRED — user requested freeze)
+
+Do **not** change during repository refactor:
+
+- [ ] **Climax separation:** SELLING_CLIMAX vs STOPPING_VOLUME cluster merge
+- [ ] **`future_return_3`** in stopping volume — research-only gate or live-safe replacement
+- [ ] **`conviction_probability`** exceeds 1.0 — domain confirmation
+
+---
+
+## P1 — Security (can automate after migration Phase 2)
 
 - [ ] Replace `os.system()` with `subprocess.run([...])` in orchestrators
-- [ ] Re-enable SSL verification in collectors (`verify=False` patterns)
-- [ ] Fix CORS in `monitoring_api_v1.py` (`allow_origins=["*"]` + `allow_credentials=True`)
+- [ ] Re-enable SSL verification in collectors
+- [ ] Fix CORS in `monitoring_api_v1.py`
 
 ---
 
-## P2 — Cleanup candidates (verify imports first)
+## P2 — Cleanup (after mirror archive)
 
-- [ ] Move 12 `*_backup*.py` to `archive_removed/`
-- [ ] Move `archive/`, `legacy/` to `archive_removed/`
-- [ ] Remove inventory snapshot `.txt` files from repo root
-- [ ] Consolidate `initiative_memory_engine_v1–v9` — keep one canonical version
+- [ ] Move 12 `*_backup*.py` to `archive_removed/backups/`
+- [ ] Move inventory snapshot `.txt` to `archive_removed/snapshots/`
+- [ ] Consolidate `initiative_memory_engine_v1–v9`
 - [ ] Fix or remove broken `research_lab.py`
 
 ---
 
-## P2 — Documentation gaps
+## P2 — Documentation
 
-- [ ] Populate empty `docs/PARQUET_DEPENDENCY_MAP.md`
-- [ ] Reconcile `docs/SYSTEM_MAP.md` vs `README_RUNTIME.md` vs Docker compose
-- [ ] Add root `README.md` (only `README_RUNTIME.md` exists today)
+- [x] Populate `docs/PARQUET_DEPENDENCY_MAP.md`
+- [x] Create `docs/CANONICAL_RUNTIME_MAP.md`
+- [x] Create `docs/DUPLICATE_RESOLUTION_PLAN.md`
+- [x] Create `docs/MIGRATION_PLAN_SRC_BTC_ML.md`
+- [x] Create `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`
+- [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
+- [ ] Add root `README.md`
+- [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
 
 ---
 
-*Updated: 2026-05-26 — Stage 1 audit*
+## Migration Phase Tracker
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 0 | Documentation + audit | ✅ Done |
+| 1 | `src/btc_ml/` skeleton | Pending |
+| 2 | Infrastructure move | Pending |
+| 3 | Service engines move | Pending |
+| 4 | Orchestration extract | Pending |
+| 5 | Stage 2 wiring | Pending (after P0 fixes) |
+| 6 | Research scripts relocate | Pending |
+| 7 | Mirror archive | Pending |
+| 8 | DevOps (pyproject, Makefile) | Pending |
+
+See: `docs/MIGRATION_PLAN_SRC_BTC_ML.md`
+
+---
+
+*Behavioral calibration changes are explicitly out of scope until post-migration domain review.*

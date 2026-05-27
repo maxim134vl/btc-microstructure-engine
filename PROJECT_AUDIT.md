@@ -28,6 +28,31 @@ The repository is **not production-grade today** in structure, despite containin
 
 ---
 
+## Architectural Decisions (Approved 2026-05-26)
+
+The following decisions supersede conflicting notes elsewhere in this document:
+
+| Decision | Resolution |
+|----------|------------|
+| **Canonical runtime** | `master_auction_runtime_v1.py` |
+| **Canonical source tree** | Repository root — `btc-microstructure-engine/` is **deprecated mirror** |
+| **Production direction** | Stage 2 auction cognition: climax → MTF synthesis → runtime cognition → reinforcement → probabilistic → adaptive meta cognition |
+| **Diverged duplicates (12)** | **Root versions canonical** — no merge required |
+| **Behavioral logic** | **Frozen** during refactor — no threshold/calibration changes |
+| **Refactor scope** | Consolidation, duplicate planning, runtime canonicalization, dependency/parquet mapping only |
+
+**Deliverables from this decision set:**
+
+- `docs/PARQUET_DEPENDENCY_MAP.md`
+- `docs/CANONICAL_RUNTIME_MAP.md`
+- `docs/DUPLICATE_RESOLUTION_PLAN.md`
+- `docs/MIGRATION_PLAN_SRC_BTC_ML.md`
+- `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`
+
+**Deprecated (do not extend):** `autonomous_runtime_v2`, `run_canonical_pipeline`, `behavioral_runtime_loop_v1`, entire `btc-microstructure-engine/` mirror tree.
+
+---
+
 ## 1. Current Structure
 
 ### 1.1 Top-level layout (observed)
