@@ -1,12 +1,16 @@
 import pandas as pd
 import numpy as np
 
-from state_manager_v1 import STATE
 
 def process_auction_climax(
     dataset,
     timeframe
 ):
+    """Process climax detection on the provided dataset.
+
+    The ``dataset`` argument is authoritative. ``timeframe`` is metadata
+    for callers/logging and does not change detection thresholds.
+    """
 
     dataset = dataset.copy()
 
@@ -802,8 +806,8 @@ def process_auction_climax(
 # =====================================
 
 def run():
-    # For standalone runs: use preloaded candle structure from STATE.
-    # This avoids relying on a placeholder file name.
+    from state_manager_v1 import STATE
+
     dataset = STATE["candle_structure"].copy()
 
     result = process_auction_climax(

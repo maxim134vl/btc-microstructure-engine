@@ -12,6 +12,12 @@ from parquet_writer_v2 import (
     append_parquet
 )
 
+from live_feed_paths import (
+    read_live_feed,
+    write_live_feed_snapshot,
+    LEGACY_PARTITION_DIR,
+)
+
 from datetime import datetime
 
 print("\nLIVE BINANCE FEED V2 STARTED\n")
@@ -24,12 +30,10 @@ symbol = "btcusdt"
 
 interval = "15m"
 
-DATASET_PATH = (
-    "datasets/live"
-)
+DATASET_PATH = LEGACY_PARTITION_DIR
 
 LATEST_FILE = (
-    "datasets/live/latest.parquet"
+    "live_market_feed.parquet"
 )
 
 MAX_ROWS = 50000
@@ -49,9 +53,7 @@ last_closed_timestamp = None
 
 try:
 
-    existing = pd.read_parquet(
-        LATEST_FILE
-    )
+    existing = read_live_feed()
 
     if len(existing) > 0:
 
@@ -79,9 +81,7 @@ def safe_append_candle(candle):
 
     try:
 
-        existing = pd.read_parquet(
-            LATEST_FILE
-        )
+        existing = read_live_feed()
 
     except Exception:
 
@@ -135,13 +135,8 @@ def safe_append_candle(candle):
     # SAVE LATEST SNAPSHOT
     # =====================================
 
-    df.to_parquet(
-
-        LATEST_FILE,
-
-        index=False
-
-    )
+    # Canonical feed + legacy mirror snapshot.
+    write_live_feed_snapshot(df)
 
 # =====================================
 # ON MESSAGE

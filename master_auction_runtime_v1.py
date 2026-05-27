@@ -5,6 +5,7 @@ import subprocess
 import adaptive_meta_cognition_engine_v1
 import probabilistic_auction_engine_v1
 import auction_reinforcement_engine_v1
+import stage2_cognition_runtime_v1
 
 from datetime import datetime
 from engine_registry import ENGINES
@@ -56,6 +57,8 @@ pipeline = [
     "auction_convergence_engine_v1.py",
 
     "auction_synthesis_engine_v1.py",
+
+    "stage2_cognition_runtime_v1.py",
 
     "runtime_cognition_engine_v1.py",
 

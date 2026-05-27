@@ -18,35 +18,17 @@
 
 ---
 
-## CRITICAL
+## Resolved in Phase 0A (2026-05-26)
 
-### V-001 — Stage 2 batch not in master runtime loop
-
-| Field | Detail |
-|-------|--------|
-| **Location** | `master_auction_runtime_v1.py` pipeline steps 10→11 |
-| **Issue** | `runtime_cognition_engine_v1.py` (step 11) reads `runtime_cognition_memory.parquet`, but nothing in the loop writes it |
-| **Writer** | `research_dataset_builder_v1.py` (manual batch only) |
-| **Impact** | Runtime cognition stale or empty unless batch run separately |
-| **Fix (orchestration)** | Add Stage 2 batch step before step 11, or schedule cron |
-| **Fix (logic)** | None required — wiring only |
+| ID | Resolution |
+|----|------------|
+| **V-001** | `stage2_cognition_runtime_v1.py` added to master loop; writes `multi_timeframe_synthesis.parquet` + `runtime_cognition_memory.parquet` |
+| **V-002** | Canonical feed path `live_market_feed.parquet` via `live_feed_paths.py`; legacy mirror kept |
+| **V-011** | `process_auction_climax` uses passed `dataset`; STATE only in standalone `run()` |
 
 ---
 
-### V-002 — Feed path split: root vs expected
-
-| Field | Detail |
-|-------|--------|
-| **Location** | `live_binance_feed_v2.py` (root canonical) |
-| **Issue** | Root writes `datasets/live/latest.parquet`; research + microstructure expect `live_market_feed.parquet` |
-| **Mirror (deprecated)** | `btc-microstructure-engine/live_binance_feed_v2.py` writes `live_market_feed.parquet` |
-| **Impact** | `research_dataset_builder_v1.py` reads `live_market_feed.parquet` — may be stale/missing if only root feed runs |
-| **Fix** | Align `DATASET_PATH` in root feed to `live_market_feed.parquet` OR add symlink/copy step — **config only, no detection logic** |
-| **Flagged in** | `TODO_REVIEW.md` |
-
----
-
-### V-003 — `runtime_cognition_engine` fallback masks missing data
+## CRITICAL (open)
 
 | Field | Detail |
 |-------|--------|
@@ -71,19 +53,13 @@
 
 ---
 
-### V-011 — `process_auction_climax(dataset, timeframe)` ignores parameters
+### V-011 — RESOLVED (Phase 0A)
 
-| Field | Detail |
-|-------|--------|
-| **Location** | `auction_climax_engine_v1.py` |
-| **Issue** | Function accepts `dataset` and `timeframe` but reads `STATE["candle_structure"]` internally |
-| **Impact** | M30/H1/H4 passed from `multi_timeframe_dataset_builder` are ignored — all TF get M15 data |
-| **Fix** | Use passed `dataset` when provided — **API fix, not threshold change** |
-| **Status** | Flagged for post-migration fix |
+`process_auction_climax(dataset, timeframe)` now uses the passed dataset. Standalone `run()` still loads from `STATE` for dev entry.
 
 ---
 
-### V-012 — `research_dataset_builder_v1.py` runs at import scope
+### V-003 — `runtime_cognition_engine` fallback masks missing data
 
 | Field | Detail |
 |-------|--------|

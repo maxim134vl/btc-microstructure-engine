@@ -6,6 +6,14 @@ DEPENDENCIES = {
         "htf_ltf_context_memory.parquet"
     ],
 
+    "stage2_cognition_runtime_v1.py": [
+        "candle_structure_memory.parquet"
+    ],
+
+    "runtime_cognition_engine_v1.py": [
+        "runtime_cognition_memory.parquet"
+    ],
+
     "probabilistic_auction_engine_v1.py": [
         "auction_synthesis_memory.parquet",
         "auction_reinforcement_memory.parquet"

@@ -1,7 +1,7 @@
 # CANONICAL RUNTIME MAP
 
 **Status:** Approved architecture  
-**Updated:** 2026-05-26  
+**Updated:** 2026-05-26 (Phase 0A wiring applied)  
 **Canonical orchestrator:** `master_auction_runtime_v1.py`  
 **Canonical source tree:** Repository root  
 **Deprecated:** `btc-microstructure-engine/` (mirror only)
@@ -31,15 +31,15 @@ cd /Users/fontecrypto/btc-ml
 venv/bin/python3 master_auction_runtime_v1.py
 ```
 
-**Loop:** `while True` → 16 engines → `sleep(5)` → repeat
+**Loop:** `while True` → 17 engines → `sleep(5)` → repeat
 
 **Execution modes per engine:**
 
 | Mode | Engines |
 |------|---------|
-| In-process via `engine_registry.ENGINES` | `auction_reinforcement_engine_v1`, `probabilistic_auction_engine_v1`, `adaptive_meta_cognition_engine_v1`, `auction_convergence_engine_v1` |
-| Subprocess `python3 <engine>.py` | All others in pipeline |
-| Gated by `runtime_dependency_guard` | synthesis, probabilistic, state_transition, decay |
+| In-process via `engine_registry.ENGINES` | `auction_convergence_engine_v1`, `auction_reinforcement_engine_v1`, `probabilistic_auction_engine_v1`, `adaptive_meta_cognition_engine_v1`, **`stage2_cognition_runtime_v1`** |
+| Subprocess `python3 <engine>.py` | Remaining pipeline engines |
+| Gated by `runtime_dependency_guard` | synthesis, **stage2**, runtime_cognition, probabilistic, state_transition, decay |
 
 ---
 
@@ -60,19 +60,26 @@ PHASE 2 — AUCTION BEHAVIOR
   9. auction_convergence_engine_v1.py
   10. auction_synthesis_engine_v1.py
 
-PHASE 3 — STAGE 2 COGNITION (primary direction — partial wiring)
-  [GAP] auction_climax_engine_v1.py          ← not in loop yet
-  [GAP] multi_timeframe_synthesis_engine.py ← not in loop yet
-  [BATCH] research_dataset_builder_v1.py    ← produces MTF + cognition parquet
-  11. runtime_cognition_engine_v1.py        ← in loop; reads batch output
+PHASE 3 — STAGE 2 COGNITION (wired in runtime loop)
+  11. stage2_cognition_runtime_v1.py       ← writes MTF + cognition parquet
+      (uses auction_climax + multi_timeframe_synthesis in-process)
+  12. runtime_cognition_engine_v1.py        ← loads cognition → STATE
 
 PHASE 4 — REINFORCEMENT & PROBABILITY
-  12. auction_reinforcement_engine_v1.py
-  13. probabilistic_auction_engine_v1.py
-  14. auction_decay_engine_v1.py
-  15. state_transition_engine_v1.py
-  16. adaptive_meta_cognition_engine_v1.py
+  13. auction_reinforcement_engine_v1.py
+  14. probabilistic_auction_engine_v1.py
+  15. auction_decay_engine_v1.py
+  16. state_transition_engine_v1.py
+  17. adaptive_meta_cognition_engine_v1.py
 ```
+
+**Stage 2 runtime module:** `stage2_cognition_runtime_v1.py`
+
+- Input: `STATE["candle_structure"]` (from step 1)
+- Output: `multi_timeframe_synthesis.parquet`, `runtime_cognition_memory.parquet`
+- Verification: `venv/bin/python3 scripts/verify_phase0a_wiring.py`
+
+**Research batch still available:** `research_dataset_builder_v1.py` (offline master dataset builder — not required for live cognition updates)
 
 ---
 
@@ -80,16 +87,17 @@ PHASE 4 — REINFORCEMENT & PROBABILITY
 
 | Layer | Module | Role | In master loop? |
 |-------|--------|------|-----------------|
-| Climax detection | `auction_climax_engine_v1.py` | M15 climax events + execution distribution | **No** — manual/batch |
-| MTF aggregation | `multi_timeframe_dataset_builder.py` | Resample M30/H1/H4/D1 | **No** — via builder |
-| MTF synthesis | `multi_timeframe_synthesis_engine.py` | LOCAL_EXHAUSTION / INTERMEDIATE / STRUCTURAL | **No** — via builder |
-| Cognition export | `research_dataset_builder_v1.py` | Writes `runtime_cognition_memory.parquet` | **No** — batch only |
-| Runtime load | `runtime_cognition_engine_v1.py` | Loads cognition → `STATE` | **Yes** — step 11 |
-| Reinforcement | `auction_reinforcement_engine_v1.py` | Reads `STATE["runtime_cognition"]` | **Yes** — step 12 |
-| Probabilistic | `probabilistic_auction_engine_v1.py` | Regime probabilities | **Yes** — step 13 |
-| Meta cognition | `adaptive_meta_cognition_engine_v1.py` | Stability / meta layer | **Yes** — step 16 |
+| Stage 2 runtime | `stage2_cognition_runtime_v1.py` | Climax + MTF synthesis + cognition export | **Yes** — step 11 |
+| Climax detection | `auction_climax_engine_v1.py` | Called by stage2 runtime | **Yes** (in-process) |
+| MTF aggregation | `multi_timeframe_dataset_builder.py` | Called by stage2 runtime | **Yes** (in-process) |
+| MTF synthesis | `multi_timeframe_synthesis_engine.py` | Called by stage2 runtime | **Yes** (in-process) |
+| Cognition load | `runtime_cognition_engine_v1.py` | Loads cognition → `STATE` | **Yes** — step 12 |
+| Research batch | `research_dataset_builder_v1.py` | Offline master dataset builder | **No** — research only |
+| Reinforcement | `auction_reinforcement_engine_v1.py` | Reads `STATE["runtime_cognition"]` | **Yes** — step 13 |
+| Probabilistic | `probabilistic_auction_engine_v1.py` | Regime probabilities | **Yes** — step 14 |
+| Meta cognition | `adaptive_meta_cognition_engine_v1.py` | Stability / meta layer | **Yes** — step 17 |
 
-**Migration target:** Stage 2 batch chain runs automatically before step 11 (or as dedicated sub-orchestrator), without changing detection thresholds.
+**Operational note:** Live cognition now updates when `candle_structure_memory.parquet` changes (dependency guard on stage2 step).
 
 ---
 
@@ -113,7 +121,7 @@ These remain in repo until `archive_removed/` migration. **Do not extend.**
 | Collector | Output | Canonical? |
 |-----------|--------|------------|
 | `collectors/multi_exchange_collector.py` | `multi_exchange_flow.parquet` | Yes — feeds candle_structure |
-| `live_binance_feed_v2.py` (root) | `datasets/live/latest.parquet` | ⚠ path mismatch — see boundary doc |
+| `live_binance_feed_v2.py` (root) | **`live_market_feed.parquet`** (+ legacy mirror `datasets/live/latest.parquet`) | **Yes** — canonical feed path |
 | `collectors/orderbook_collector.py` | orderbook parquet | Supporting |
 | `collectors/oi_collector.py` | OI parquet | Supporting |
 | `collectors/liquidation_collector.py` | liquidation parquet | Supporting |

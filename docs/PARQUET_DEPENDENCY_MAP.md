@@ -1,8 +1,7 @@
 # PARQUET DEPENDENCY MAP
 
 **Status:** Canonical reference (root repository)  
-**Updated:** 2026-05-26  
-**Scope:** Production auction cognition pipeline + Stage 2 extensions  
+**Updated:** 2026-05-26 (Phase 0A wiring applied)  
 **Source tree:** Repository root (`/Users/fontecrypto/btc-ml`) — **canonical**  
 **Deprecated mirror:** `btc-microstructure-engine/` — do not use for lineage
 
@@ -17,6 +16,7 @@
 | `[BATCH]` | Written by batch/research job only |
 | `[STATE]` | Loaded into `state_manager_v1.STATE` at import/refresh |
 | `[GAP]` | Known wiring gap — not yet in canonical runtime loop |
+| `[MIRROR]` | Legacy compatibility path kept in sync |
 
 ---
 
@@ -43,7 +43,8 @@ flowchart TD
         AS[auction_synthesis_memory.parquet]
     end
 
-    subgraph stage2 [Stage 2 Cognition - GAP in runtime loop]
+    subgraph stage2 [Stage 2 Cognition - LIVE in runtime loop]
+        ST2[stage2_cognition_runtime_v1.py]
         MTF[multi_timeframe_synthesis.parquet]
         RC[runtime_cognition_memory.parquet]
     end
@@ -75,10 +76,10 @@ flowchart TD
     PA --> AM
     AR --> AM
 
-    CS -.->|climax reads STATE| CLX[auction_climax_engine_v1]
-    CLX -.-> MTF
-    MTF -.-> RC
-    RC -.->|runtime_cognition_engine| STATE2[STATE runtime_cognition]
+    CS --> ST2
+    ST2 --> MTF
+    ST2 --> RC
+    RC -->|runtime_cognition_engine| STATE2[STATE runtime_cognition]
 ```
 
 ---
@@ -99,27 +100,31 @@ Orchestrator: **`master_auction_runtime_v1.py`** (canonical)
 | 8 | `climactic_behavior_engine_v1.py` | `volume_response_state.parquet`, `climactic_behavior_memory.parquet` | `climactic_behavior_memory.parquet` | `[LIVE]` |
 | 9 | `auction_convergence_engine_v1.py` | `volume_response_state.parquet`, `auction_convergence_memory.parquet` | `auction_convergence_memory.parquet` | `[LIVE]` |
 | 10 | `auction_synthesis_engine_v1.py` | `volume_response_state.parquet`, `auction_convergence_memory.parquet`, `auction_synthesis_memory.parquet`, `htf_structure_memory.parquet`, `htf_ltf_context_memory.parquet` | `auction_synthesis_memory.parquet` | `[LIVE]` |
-| 11 | `runtime_cognition_engine_v1.py` | `runtime_cognition_memory.parquet`, `multi_timeframe_synthesis.parquet` | — (writes to `STATE["runtime_cognition"]`) | `[LIVE]` ⚠ needs upstream batch |
-| 12 | `auction_reinforcement_engine_v1.py` | `auction_reinforcement_memory.parquet`, `STATE` synthesis/convergence | `auction_reinforcement_memory.parquet` | `[LIVE]` |
-| 13 | `probabilistic_auction_engine_v1.py` | `STATE` reinforcement | `probabilistic_auction_memory.parquet` | `[LIVE]` |
-| 14 | `auction_decay_engine_v1.py` | `auction_convergence_memory.parquet`, `auction_reinforcement_memory.parquet`, `auction_decay_memory.parquet` | `auction_decay_memory.parquet` | `[LIVE]` |
-| 15 | `state_transition_engine_v1.py` | `auction_synthesis_memory.parquet`, `probabilistic_auction_memory.parquet`, `state_transition_memory.parquet` | `state_transition_memory.parquet`, `state_transition_engine_state.parquet` | `[LIVE]` |
-| 16 | `adaptive_meta_cognition_engine_v1.py` | `STATE` probabilistic + reinforcement | `adaptive_meta_cognition_state.parquet` | `[LIVE]` |
+| 11 | **`stage2_cognition_runtime_v1.py`** | `STATE["candle_structure"]` ← `candle_structure_memory.parquet` | **`multi_timeframe_synthesis.parquet`**, **`runtime_cognition_memory.parquet`** | **`[LIVE]`** |
+| 12 | `runtime_cognition_engine_v1.py` | `runtime_cognition_memory.parquet` | `STATE["runtime_cognition"]` (in-memory) | `[LIVE]` |
+| 13 | `auction_reinforcement_engine_v1.py` | `auction_reinforcement_memory.parquet`, `STATE` synthesis/convergence | `auction_reinforcement_memory.parquet` | `[LIVE]` |
+| 14 | `probabilistic_auction_engine_v1.py` | `STATE` reinforcement | `probabilistic_auction_memory.parquet` | `[LIVE]` |
+| 15 | `auction_decay_engine_v1.py` | `auction_convergence_memory.parquet`, `auction_reinforcement_memory.parquet`, `auction_decay_memory.parquet` | `auction_decay_memory.parquet` | `[LIVE]` |
+| 16 | `state_transition_engine_v1.py` | `auction_synthesis_memory.parquet`, `probabilistic_auction_memory.parquet`, `state_transition_memory.parquet` | `state_transition_memory.parquet`, `state_transition_engine_state.parquet` | `[LIVE]` |
+| 17 | `adaptive_meta_cognition_engine_v1.py` | `STATE` probabilistic + reinforcement | `adaptive_meta_cognition_state.parquet` | `[LIVE]` |
 
 ---
 
-## 3. Stage 2 Cognition — Batch Chain (Primary Production Direction)
+## 3. Stage 2 Cognition — Runtime + Research Paths
 
-These modules are **canonical at root** but currently run **outside** the master runtime loop (via `research_dataset_builder_v1.py` or manual invocation).
+### Live runtime (canonical)
+
+| Component | Reads | Writes | Mode |
+|-----------|-------|--------|------|
+| `stage2_cognition_runtime_v1.py` | `candle_structure_memory.parquet` via `STATE` | `multi_timeframe_synthesis.parquet`, `runtime_cognition_memory.parquet` | `[LIVE]` |
+| `auction_climax_engine_v1.py` | passed dataset (from stage2) | in-memory only | `[LIVE]` in-process |
+| `multi_timeframe_synthesis_engine.py` | in-memory climax states | in-memory → exported by stage2 | `[LIVE]` in-process |
+
+### Research batch (offline, optional)
 
 | Engine | Reads | Writes | Mode |
 |--------|-------|--------|------|
-| `auction_climax_engine_v1.py` | `STATE["candle_structure"]` ← `candle_structure_memory.parquet` | *(in-memory return only; no parquet write today)* | `[BATCH]` / `[GAP]` |
-| `multi_timeframe_dataset_builder.py` | `research_master_dataset.parquet` | — | `[BATCH]` |
-| `multi_timeframe_synthesis_engine.py` | climax outputs (in-memory), M15/M30/H1/H4 states | — (returns DataFrame) | `[BATCH]` |
-| `research_dataset_builder_v1.py` | `live_market_feed.parquet`, `candle_structure_memory.parquet`, `volume_response_state.parquet`, `auction_convergence_memory.parquet`, `auction_synthesis_memory.parquet`, `probabilistic_auction_memory.parquet`, `auction_reinforcement_memory.parquet` | `research_master_dataset.parquet`, `multi_timeframe_synthesis.parquet`, `runtime_cognition_memory.parquet` | `[BATCH]` |
-
-**Target wiring (migration — no logic change):** insert Stage 2 batch step between steps 10 and 11 in master runtime, or run as scheduled sub-process that refreshes `runtime_cognition_memory.parquet` before `runtime_cognition_engine_v1.py`.
+| `research_dataset_builder_v1.py` | multiple memory parquets + `live_market_feed.parquet` | `research_master_dataset.parquet`, `multi_timeframe_synthesis.parquet`, `runtime_cognition_memory.parquet` | `[BATCH]` |
 
 ---
 
@@ -148,6 +153,8 @@ Partial gate — only 4 engines have explicit parquet prerequisites:
 | Engine | Required files (must exist + be fresh) |
 |--------|----------------------------------------|
 | `auction_synthesis_engine_v1.py` | `volume_response_state.parquet`, `htf_structure_memory.parquet`, `htf_ltf_context_memory.parquet` |
+| **`stage2_cognition_runtime_v1.py`** | **`candle_structure_memory.parquet`** |
+| **`runtime_cognition_engine_v1.py`** | **`runtime_cognition_memory.parquet`** |
 | `probabilistic_auction_engine_v1.py` | `auction_synthesis_memory.parquet`, `auction_reinforcement_memory.parquet` |
 | `state_transition_engine_v1.py` | `auction_synthesis_memory.parquet`, `probabilistic_auction_memory.parquet` |
 | `auction_decay_engine_v1.py` | `auction_convergence_memory.parquet`, `auction_reinforcement_memory.parquet` |
@@ -190,8 +197,9 @@ multi_exchange_flow.parquet
 | `volume_localization_v2_memory.parquet` | behavioral engines | Cross-pipeline bleed |
 | `htf_structure_memory.parquet` | `auction_synthesis_engine_v1` | Required by dependency guard |
 | `htf_ltf_context_memory.parquet` | `auction_synthesis_engine_v1` | Required by dependency guard |
-| `datasets/live/latest.parquet` | `live_binance_feed_v2.py` (root) | ⚠ diverges from `live_market_feed.parquet` |
-| `live_market_feed.parquet` | `research_dataset_builder_v1`, deprecated mirror feed | Expected by research + microstructure |
+| `datasets/live/latest.parquet` | `live_binance_feed_v2.py` (root) | `[MIRROR]` legacy snapshot — kept in sync |
+| **`live_market_feed.parquet`** | **`live_binance_feed_v2.py` (root)** | **Canonical live feed path** |
+| `live_market_feed.parquet` | research + supporting engines | Expected canonical feed |
 
 ---
 
@@ -202,7 +210,7 @@ multi_exchange_flow.parquet
 | `append_state_row()` | probabilistic, decay, state_transition, convergence | Dedup via `state_guard` |
 | Direct `to_parquet()` overwrite | reinforcement, volume_response, candle_structure | Last-write-wins |
 | `append_parquet()` | live_binance_feed_v2 (root) | Append-safe |
-| In-memory only | auction_climax, multi_timeframe_synthesis | No persistence — `[GAP]` |
+| In-memory only | auction_climax (via stage2), multi_timeframe_synthesis | Exported by stage2 runtime module |
 | Batch merge + export | research_dataset_builder_v1 | Research boundary |
 
 ---

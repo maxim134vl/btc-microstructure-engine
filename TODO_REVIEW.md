@@ -15,11 +15,9 @@
 
 ## P0 — Block Stage 2 Production Wiring (orchestration only)
 
-These are **boundary/wiring** fixes — not behavioral threshold changes.
-
-- [ ] **V-002 Feed path:** Root `live_binance_feed_v2.py` writes `datasets/live/latest.parquet` but pipeline expects `live_market_feed.parquet` — align config path
-- [ ] **V-001 Stage 2 batch:** Wire batch producer before `runtime_cognition_engine_v1.py` in master loop (or cron)
-- [ ] **V-011 Climax API:** `process_auction_climax(dataset, timeframe)` must use passed `dataset` for MTF — API fix only
+- [x] **V-002 Feed path:** Canonical `live_market_feed.parquet` via `live_feed_paths.py` + legacy mirror
+- [x] **V-001 Stage 2 batch:** `stage2_cognition_runtime_v1.py` wired in master loop before cognition load
+- [x] **V-011 Climax API:** `process_auction_climax` uses passed `dataset` (STATE only in standalone `run()`)
 - [ ] **V-003 Cognition fallback:** Remove silent `alignment_score` default in production mode
 
 See: `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`
@@ -80,6 +78,7 @@ Do **not** change during repository refactor:
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Documentation + audit | ✅ Done |
+| 0A | Runtime wiring integrity | ✅ Done |
 | 1 | `src/btc_ml/` skeleton | Pending |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |

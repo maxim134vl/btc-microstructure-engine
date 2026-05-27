@@ -1,12 +1,21 @@
-import pandas as pd
 import os
 
+import pandas as pd
+
 from datetime import datetime
+
+from runtime_config import (
+    LEGACY_LIVE_FEED_PARQUET,
+    LIVE_MARKET_FEED_PARQUET,
+)
 
 DATASETS = {
 
     "live_feed":
-        "datasets/live/latest.parquet",
+        LIVE_MARKET_FEED_PARQUET,
+
+    "live_feed_legacy_mirror":
+        LEGACY_LIVE_FEED_PARQUET,
 
     "oi":
         "datasets/oi",
