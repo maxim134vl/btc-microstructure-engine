@@ -12,6 +12,12 @@ from calibration_discipline import (
     apply_probabilistic_discipline,
     resolve_runtime_conviction,
 )
+from calibration_drift_engine import (
+    compute_calibration_drift,
+    log_drift_warning,
+)
+from calibration_stability import compute_runtime_stability_exports
+from regime_segmentation import infer_regime_segmentation
 from parquet_utils import (
     safe_read_parquet,
     append_state_row
@@ -409,6 +415,38 @@ def run():
         calibration_settings,
     )
 
+    robustness_snapshot = {
+        **current_snapshot,
+        **diagnostic_exports,
+        **discipline_result,
+    }
+
+    candle_history = STATE.get("candle_structure")
+    regime_exports = infer_regime_segmentation(
+        robustness_snapshot,
+        runtime_cognition,
+        probabilistic_history=probabilistic_history,
+        candle_history=candle_history,
+    )
+    robustness_snapshot.update(regime_exports)
+
+    drift_exports = compute_calibration_drift(
+        probabilistic_history,
+        robustness_snapshot,
+    )
+    log_drift_warning(drift_exports)
+
+    stability_exports = compute_runtime_stability_exports(
+        probabilistic_history,
+        robustness_snapshot,
+        runtime_cognition,
+    )
+    robustness_exports = {
+        **regime_exports,
+        **drift_exports,
+        **stability_exports,
+    }
+
     print(
         "AUCTION REGIME:"
     )
@@ -416,6 +454,12 @@ def run():
     print(
         auction_regime
     )
+
+    print()
+    print("REGIME STATE:")
+    print(regime_exports.get("regime_state"))
+    print("REGIME CONFIDENCE:")
+    print(round(float(regime_exports.get("regime_confidence", 0.0)), 2))
 
     print()
 
@@ -527,6 +571,8 @@ def run():
 
     **discipline_result,
 
+    **robustness_exports,
+
     }])
 
     row = apply_lineage_metadata(
@@ -572,13 +618,19 @@ def run():
             reinforcement_component,
 
         **{
-            key: discipline_result.get(
+            key: robustness_exports.get(
                 key,
-                diagnostic_exports.get(key),
+                discipline_result.get(
+                    key,
+                    diagnostic_exports.get(key),
+                ),
             )
             for key in (
                 list(DIAGNOSTIC_EXPORT_COLUMNS)
                 + list(DISCIPLINE_EXPORT_COLUMNS)
+                + list(regime_exports.keys())
+                + list(drift_exports.keys())
+                + list(stability_exports.keys())
             )
         },
 

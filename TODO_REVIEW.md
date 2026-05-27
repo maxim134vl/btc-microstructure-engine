@@ -1,6 +1,6 @@
 # TODO_REVIEW — Manual Review Required
 
-**Updated:** 2026-05-27 (Phase 1B probabilistic discipline)
+**Updated:** 2026-05-27 (Phase 2A cross-regime robustness)
 
 ---
 
@@ -72,6 +72,9 @@ Do **not** change during repository refactor:
 - [x] Create `docs/PROBABILISTIC_RUNTIME_MODEL.md` (Phase 1A)
 - [x] Create `docs/CONVICTION_REALISM_AUDIT.md` (Phase 1A — generated)
 - [x] Create `docs/PHASE_1B_CALIBRATION_RESULTS.md` (Phase 1B — generated)
+- [x] Create `docs/CROSS_REGIME_CALIBRATION_ANALYSIS.md` (Phase 2A — generated)
+- [x] Create `docs/CALIBRATION_DRIFT_MODEL.md` (Phase 2A)
+- [x] Create `docs/REGIME_TRANSITION_MODEL.md` (Phase 2A)
 - [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
 - [ ] Add root `README.md`
 - [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
@@ -87,6 +90,7 @@ Do **not** change during repository refactor:
 | 0B | Runtime integrity hardening (lineage, alignment, decomposition, drift) | ✅ Done |
 | 1A | Probabilistic calibration diagnostics | ✅ Done |
 | 1B | Controlled probabilistic discipline | ✅ Done |
+| 2A | Cross-regime robustness & calibration stability | ✅ Done |
 | 1 | `src/btc_ml/` skeleton | Pending |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |
