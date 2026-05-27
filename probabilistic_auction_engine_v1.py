@@ -6,6 +6,12 @@ from calibration_diagnostics import (
     DIAGNOSTIC_EXPORT_COLUMNS,
     build_diagnostic_exports,
 )
+from calibration_config import get_calibration_settings
+from calibration_discipline import (
+    DISCIPLINE_EXPORT_COLUMNS,
+    apply_probabilistic_discipline,
+    resolve_runtime_conviction,
+)
 from parquet_utils import (
     safe_read_parquet,
     append_state_row
@@ -383,6 +389,26 @@ def run():
         current_row=current_snapshot,
     )
 
+    calibration_settings = get_calibration_settings()
+    discipline_result = apply_probabilistic_discipline(
+        raw_conviction=raw_conviction,
+        diagnostics=diagnostic_exports,
+        current_snapshot=current_snapshot,
+        runtime_cognition=runtime_cognition,
+        probabilistic_history=probabilistic_history,
+        settings=calibration_settings,
+    )
+
+    diagnostic_exports["calibrated_conviction"] = discipline_result[
+        "calibrated_conviction"
+    ]
+
+    runtime_conviction = resolve_runtime_conviction(
+        raw_conviction,
+        discipline_result,
+        calibration_settings,
+    )
+
     print(
         "AUCTION REGIME:"
     )
@@ -425,10 +451,17 @@ def run():
 
     print(
         round(
-            conviction_probability,
+            runtime_conviction,
             2
         )
     )
+
+    if calibration_settings.use_disciplined_conviction_at_runtime:
+        print()
+        print("RAW CONVICTION (diagnostic):")
+        print(round(raw_conviction, 2))
+        print("DISCIPLINED CONVICTION:")
+        print(round(discipline_result["disciplined_conviction"], 2))
 
     print()
 
@@ -446,6 +479,8 @@ def run():
         )
 
     print()
+
+    conviction_probability = min(runtime_conviction, 1.0)
 
     row = pd.DataFrame([{
 
@@ -489,6 +524,8 @@ def run():
         reinforcement_component,
 
     **diagnostic_exports,
+
+    **discipline_result,
 
     }])
 
@@ -535,8 +572,14 @@ def run():
             reinforcement_component,
 
         **{
-            key: diagnostic_exports[key]
-            for key in DIAGNOSTIC_EXPORT_COLUMNS
+            key: discipline_result.get(
+                key,
+                diagnostic_exports.get(key),
+            )
+            for key in (
+                list(DIAGNOSTIC_EXPORT_COLUMNS)
+                + list(DISCIPLINE_EXPORT_COLUMNS)
+            )
         },
 
     }

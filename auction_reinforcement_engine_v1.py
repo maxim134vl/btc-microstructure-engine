@@ -207,6 +207,18 @@ def run():
         location_component += 0.10
         belief_strength += 0.10
 
+    from calibration_discipline import apply_reinforcement_discipline
+
+    belief_strength, alignment_component, persistence_component, rein_discipline_exports = (
+        apply_reinforcement_discipline(
+            belief_strength,
+            alignment_component,
+            persistence_component,
+            memory,
+            runtime_cognition,
+        )
+    )
+
     conflict_score = 0
 
     if (
@@ -349,6 +361,8 @@ def run():
 
         "reinforcement_component":
             reinforcement_component,
+
+        **rein_discipline_exports,
 
     }])
 

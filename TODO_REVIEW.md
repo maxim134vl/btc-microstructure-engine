@@ -1,6 +1,6 @@
 # TODO_REVIEW — Manual Review Required
 
-**Updated:** 2026-05-27 (Phase 1A calibration diagnostics)
+**Updated:** 2026-05-27 (Phase 1B probabilistic discipline)
 
 ---
 
@@ -71,6 +71,7 @@ Do **not** change during repository refactor:
 - [x] Create `docs/CALIBRATION_FRAMEWORK.md` (Phase 1A)
 - [x] Create `docs/PROBABILISTIC_RUNTIME_MODEL.md` (Phase 1A)
 - [x] Create `docs/CONVICTION_REALISM_AUDIT.md` (Phase 1A — generated)
+- [x] Create `docs/PHASE_1B_CALIBRATION_RESULTS.md` (Phase 1B — generated)
 - [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
 - [ ] Add root `README.md`
 - [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
@@ -85,6 +86,7 @@ Do **not** change during repository refactor:
 | 0A | Runtime wiring integrity | ✅ Done |
 | 0B | Runtime integrity hardening (lineage, alignment, decomposition, drift) | ✅ Done |
 | 1A | Probabilistic calibration diagnostics | ✅ Done |
+| 1B | Controlled probabilistic discipline | ✅ Done |
 | 1 | `src/btc_ml/` skeleton | Pending |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |

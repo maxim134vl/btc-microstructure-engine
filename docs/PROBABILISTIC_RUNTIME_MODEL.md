@@ -1,6 +1,6 @@
 # PROBABILISTIC RUNTIME MODEL
 
-**Status:** Canonical reference (Phase 1A diagnostics)  
+**Status:** Canonical reference (Phase 1B discipline)  
 **Updated:** 2026-05-27  
 **Runtime engine:** `probabilistic_auction_engine_v1.py`
 
@@ -75,9 +75,10 @@ Final values clamped to `[0, 1]`.
 
 | Field | Used at runtime? | Description |
 |-------|------------------|-------------|
-| `conviction_probability` | **Yes** | Final runtime conviction |
-| `raw_conviction` | Mirror | Same as conviction_probability (Phase 1A export) |
-| `calibrated_conviction` | No | Passive sigmoid mapping |
+| `conviction_probability` | **Yes** (raw by default) | Runtime conviction — equals `raw_conviction` unless discipline flag enabled |
+| `raw_conviction` | Diagnostic | Pre-discipline conviction from frozen math |
+| `disciplined_conviction` | No | Post-discipline shaped conviction |
+| `calibrated_conviction` | Optional | Sigmoid of disciplined value when `CALIBRATION_MODE=sigmoid` |
 | `saturation_*` | No | Saturation diagnostics |
 | `persistence_duration` etc. | No | Survival tracking |
 | `conflict_density` etc. | No | Contradiction observability |
@@ -101,7 +102,31 @@ These fields explain **how** conviction was composed but do not alter the compos
 
 ---
 
-## 6. Phase 1A Diagnostic Envelope
+## 6. Phase 1B Discipline Pipeline
+
+When `ENABLE_PROBABILISTIC_DISCIPLINE=true`:
+
+```text
+raw_conviction (frozen math)
+    × reinforcement_damping_factor
+    × entropy_discipline_factor
+    × persistence_realism_factor
+    × contradiction_control_factor
+    → logistic_compress (optional)
+    → disciplined_conviction
+    → calibrated_conviction (sigmoid export)
+```
+
+Runtime output (`conviction_probability`) follows `CALIBRATION_MODE` only when
+`USE_DISCIPLINED_CONVICTION_AT_RUNTIME=true`.
+
+**Regime thresholds remain on raw path** — discipline does not alter threshold gates.
+
+Reinforcement engine applies `apply_reinforcement_discipline()` when discipline enabled.
+
+---
+
+## 7. Phase 1A Diagnostic Envelope
 
 Implemented in `calibration_diagnostics.build_diagnostic_exports()`:
 
@@ -123,7 +148,7 @@ calibrated_conviction = 1 / (1 + exp(-raw_conviction))
 
 ---
 
-## 7. Memory Contract
+## 8. Memory Contract
 
 **File:** `probabilistic_auction_memory.parquet`
 
@@ -135,7 +160,7 @@ calibrated_conviction = 1 / (1 + exp(-raw_conviction))
 
 ---
 
-## 8. Upstream / Downstream
+## 9. Upstream / Downstream
 
 ```text
 runtime_cognition_memory.parquet
@@ -149,7 +174,7 @@ runtime_cognition_memory.parquet
 
 ---
 
-## 9. Diagnostic Consumption
+## 10. Diagnostic Consumption
 
 | Tool | Purpose |
 |------|---------|
@@ -157,20 +182,22 @@ runtime_cognition_memory.parquet
 | `scripts/replay_validation/conviction_evolution.py` | Temporal conviction trace |
 | `scripts/replay_validation/saturation_progression.py` | Saturation timeline |
 | `scripts/replay_validation/contradiction_emergence.py` | Conflict density timeline |
-| `scripts/verify_phase1_calibration.py` | Phase gate verification |
+| `scripts/verify_phase1b_discipline.py` | Phase 1B discipline gate |
+| `scripts/replay_validation/discipline_comparison.py` | Before/after replay |
+| `phase_1b_calibration_results.py` | Results report generator |
 
 ---
 
-## 10. Frozen Boundaries
+## 11. Frozen Boundaries
 
-The following remain **unchanged** in Phase 1A:
+The following remain **unchanged** unless discipline flags explicitly enabled:
 
 - All regime thresholds (0.5, 0.6, 0.7)
 - All cognition multipliers (0.7, 1.25, 1.15, etc.)
-- Reinforcement belief_strength math
+- Base reinforcement belief_strength composition
 - Climax / synthesis ontology
 - Execution and portfolio layers
 
 ---
 
-*See also: `docs/CALIBRATION_FRAMEWORK.md`, `docs/CONVICTION_REALISM_AUDIT.md`, `docs/RUNTIME_LINEAGE_MAP.md`*
+*See also: `docs/CALIBRATION_FRAMEWORK.md`, `docs/CONVICTION_REALISM_AUDIT.md`, `docs/PHASE_1B_CALIBRATION_RESULTS.md`, `docs/RUNTIME_LINEAGE_MAP.md`*

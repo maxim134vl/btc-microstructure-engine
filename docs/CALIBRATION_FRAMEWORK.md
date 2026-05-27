@@ -1,8 +1,8 @@
 # CALIBRATION FRAMEWORK
 
 **Status:** Phase 1A — diagnostics and observability only  
-**Updated:** 2026-05-27  
-**Behavioral logic:** Frozen — no threshold, weight, or suppression changes
+**Updated:** 2026-05-27 (Phase 1B discipline applied)  
+**Behavioral logic:** Frozen — discipline gated behind feature flags (default OFF)
 
 ---
 
@@ -147,7 +147,51 @@ venv/bin/python3 scripts/replay_validation/replay_runner.py
 
 ---
 
-## 9. Explicit Non-Goals (Phase 1A)
+## 10. Phase 1B — Controlled Probabilistic Discipline
+
+**Modules:** `calibration_config.py`, `calibration_discipline.py`
+
+**Default:** All discipline flags **OFF** — runtime behavior identical to Phase 1A.
+
+### Feature flags (environment)
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `ENABLE_PROBABILISTIC_DISCIPLINE` | `false` | Master discipline gate |
+| `USE_DISCIPLINED_CONVICTION_AT_RUNTIME` | `false` | Use shaped conviction at runtime |
+| `CALIBRATION_MODE` | `raw` | `raw` \| `disciplined` \| `sigmoid` |
+
+### Discipline layers (gradual, multiplicative)
+
+| Layer | Factor export | Max reduction |
+|-------|---------------|---------------|
+| Reinforcement suppression | `reinforcement_damping_factor` | ~30% cumulative |
+| Entropy discipline | `entropy_discipline_factor` | gradual |
+| Persistence realism | `persistence_realism_factor` | short-duration suppression |
+| Contradiction control | `contradiction_control_factor` | conflict-density weighted |
+| Nonlinear compression | `nonlinear_compression_factor` | logistic diminishing returns |
+
+### Runtime comparison metrics
+
+| Metric | Purpose |
+|--------|---------|
+| `raw_vs_disciplined_divergence` | raw − disciplined |
+| `saturation_reduction` | saturation score delta |
+| `entropy_interaction` | entropy suppression observability |
+
+### Verification
+
+```bash
+venv/bin/python3 scripts/verify_phase1b_discipline.py
+venv/bin/python3 phase_1b_calibration_results.py
+venv/bin/python3 scripts/replay_validation/discipline_comparison.py
+```
+
+See: `docs/PHASE_1B_CALIBRATION_RESULTS.md`
+
+---
+
+## 11. Explicit Non-Goals (Phase 1A–1B)
 
 - No threshold tuning
 - No reinforcement math changes
@@ -160,12 +204,12 @@ venv/bin/python3 scripts/replay_validation/replay_runner.py
 
 ## 10. Next Phase (Planned)
 
-Phase 1B+ will use this diagnostic layer to:
+Phase 1C+ may promote discipline defaults after replay evidence:
 
-- evaluate sigmoid vs isotonic calibration candidates
-- validate persistence half-life against replay evidence
-- tune contradiction density before applying penalties
+- staged rollout of `USE_DISCIPLINED_CONVICTION_AT_RUNTIME`
+- isotonic calibration candidates
+- adaptive discipline strength from replay metrics
 
 ---
 
-*See also: `docs/PROBABILISTIC_RUNTIME_MODEL.md`, `docs/CONVICTION_REALISM_AUDIT.md`*
+*See also: `docs/PROBABILISTIC_RUNTIME_MODEL.md`, `docs/CONVICTION_REALISM_AUDIT.md`, `docs/PHASE_1B_CALIBRATION_RESULTS.md`*

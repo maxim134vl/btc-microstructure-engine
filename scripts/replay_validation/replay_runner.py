@@ -11,6 +11,7 @@ REPLAY_MODULES = [
     "scripts.replay_validation.alignment_stability",
     "scripts.replay_validation.saturation_progression",
     "scripts.replay_validation.contradiction_emergence",
+    "scripts.replay_validation.discipline_comparison",
 ]
 
 
