@@ -16,6 +16,10 @@ from adversarial_diagnostics import (
     ADVERSARIAL_EXPORT_COLUMNS,
     build_adversarial_exports,
 )
+from ontology_stabilization import (
+    STABILIZATION_EXPORT_COLUMNS,
+    build_ontology_stabilization_exports,
+)
 from calibration_drift_engine import (
     compute_calibration_drift,
     log_drift_warning,
@@ -457,6 +461,14 @@ def run():
         history=probabilistic_history,
     )
 
+    stabilization_exports = build_ontology_stabilization_exports(
+        robustness_snapshot,
+        runtime_cognition=runtime_cognition,
+        probabilistic_history=probabilistic_history,
+        reinforcement_history=reinforcement,
+        candle_history=candle_history,
+    )
+
     print(
         "AUCTION REGIME:"
     )
@@ -477,6 +489,13 @@ def run():
         print(adversarial_exports.get("failure_mode"))
         print("FRAGILITY SCORE:")
         print(round(float(adversarial_exports.get("probabilistic_fragility_score", 0.0)), 2))
+
+    if stabilization_exports.get("ontology_stabilization_active"):
+        print()
+        print("ONTOLOGY STABILITY:")
+        print(round(float(stabilization_exports.get("ontology_stability_score", 0.0)), 2))
+        print("SEMANTIC FRAGILITY:")
+        print(round(float(stabilization_exports.get("semantic_fragility_score", 0.0)), 2))
 
     print()
 
@@ -592,6 +611,8 @@ def run():
 
     **adversarial_exports,
 
+    **stabilization_exports,
+
     }])
 
     row = apply_lineage_metadata(
@@ -637,13 +658,16 @@ def run():
             reinforcement_component,
 
         **{
-            key: adversarial_exports.get(
+            key: stabilization_exports.get(
                 key,
-                robustness_exports.get(
+                adversarial_exports.get(
                     key,
-                    discipline_result.get(
+                    robustness_exports.get(
                         key,
-                        diagnostic_exports.get(key),
+                        discipline_result.get(
+                            key,
+                            diagnostic_exports.get(key),
+                        ),
                     ),
                 ),
             )
@@ -654,6 +678,7 @@ def run():
                 + list(drift_exports.keys())
                 + list(stability_exports.keys())
                 + list(ADVERSARIAL_EXPORT_COLUMNS)
+                + list(STABILIZATION_EXPORT_COLUMNS)
             )
         },
 

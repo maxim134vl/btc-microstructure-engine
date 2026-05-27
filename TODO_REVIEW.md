@@ -1,6 +1,6 @@
 # TODO_REVIEW — Manual Review Required
 
-**Updated:** 2026-05-27 (Phase 3A ontology refinement)
+**Updated:** 2026-05-27 (Phase 3B ontology stabilization)
 
 ---
 
@@ -83,6 +83,13 @@ Do **not** change during repository refactor:
 - [x] Create `docs/EFFORT_RESULT_SEMANTICS.md` (Phase 3A)
 - [x] Create `docs/ABSORPTION_VS_CAPITULATION.md` (Phase 3A)
 - [x] Create `docs/POST_EVENT_BEHAVIORAL_EVOLUTION.md` (Phase 3A)
+- [x] Create `docs/ONTOLOGY_STABILIZATION_MODEL.md` (Phase 3B)
+- [x] Create `docs/POST_SPLIT_REINFORCEMENT_ANALYSIS.md` (Phase 3B)
+- [x] Create `docs/SEMANTIC_ENTROPY_EVOLUTION.md` (Phase 3B)
+- [x] Create `docs/CONTRADICTION_REDISTRIBUTION.md` (Phase 3B)
+- [x] Create `docs/BUYING_CLIMAX_EXHAUSTION_MODEL.md` (Phase 3B)
+- [x] Create `docs/HAV_SEMANTIC_ANALYSIS.md` (Phase 3B)
+- [x] Create `docs/ONTOLOGY_OVERLAP_MATRIX.md` (Phase 3B)
 - [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
 - [ ] Add root `README.md`
 - [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
@@ -101,6 +108,7 @@ Do **not** change during repository refactor:
 | 2A | Cross-regime robustness & calibration stability | ✅ Done |
 | 2B | Adversarial robustness & failure-mode engineering | ✅ Done |
 | 3A | Behavioral ontology refinement & semantic separation | ✅ Done |
+| 3B | Ontology stabilization & post-separation validation | ✅ Done |
 | 1 | `src/btc_ml/` skeleton | Pending |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |
