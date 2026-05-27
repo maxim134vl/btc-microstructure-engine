@@ -11,3 +11,11 @@ __pycache__/
 .idea/
 
 .ipynb_checkpoints/
+
+# Generated artifact outputs (Phase 4A)
+artifacts/*
+!artifacts/.gitkeep
+reports/*
+!reports/.gitkeep
+replays/*
+!replays/.gitkeep

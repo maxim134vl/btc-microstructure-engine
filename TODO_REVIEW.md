@@ -1,6 +1,6 @@
 # TODO_REVIEW — Manual Review Required
 
-**Updated:** 2026-05-27 (Phase 3B ontology stabilization)
+**Updated:** 2026-05-27 (Phase 4A canonical consolidation)
 
 ---
 
@@ -90,6 +90,10 @@ Do **not** change during repository refactor:
 - [x] Create `docs/BUYING_CLIMAX_EXHAUSTION_MODEL.md` (Phase 3B)
 - [x] Create `docs/HAV_SEMANTIC_ANALYSIS.md` (Phase 3B)
 - [x] Create `docs/ONTOLOGY_OVERLAP_MATRIX.md` (Phase 3B)
+- [x] Create `docs/RUNTIME_FREEZE_CANDIDATE.md` (Phase 4A)
+- [x] Create `docs/CANONICAL_PLATFORM_ARCHITECTURE.md` (Phase 4A)
+- [x] Create `docs/REPO_NORMALIZATION_PLAN.md` (Phase 4A)
+- [x] Create `docs/FINAL_RUNTIME_TOPOLOGY.md` (Phase 4A)
 - [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
 - [ ] Add root `README.md`
 - [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
@@ -109,7 +113,8 @@ Do **not** change during repository refactor:
 | 2B | Adversarial robustness & failure-mode engineering | ✅ Done |
 | 3A | Behavioral ontology refinement & semantic separation | ✅ Done |
 | 3B | Ontology stabilization & post-separation validation | ✅ Done |
-| 1 | `src/btc_ml/` skeleton | Pending |
+| 4A | Canonical consolidation & runtime packaging | ✅ Done |
+| 1 | `src/btc_ml/` skeleton | ✅ Done (Phase 4A shims) |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |
 | 4 | Orchestration extract | Pending |

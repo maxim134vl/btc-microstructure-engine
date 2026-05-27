@@ -2,6 +2,8 @@ import os
 import time
 import subprocess
 
+# Phase 4A: prefer `./run.sh` or `python3 run.py` as canonical entrypoint.
+
 import adaptive_meta_cognition_engine_v1
 import probabilistic_auction_engine_v1
 import auction_reinforcement_engine_v1
