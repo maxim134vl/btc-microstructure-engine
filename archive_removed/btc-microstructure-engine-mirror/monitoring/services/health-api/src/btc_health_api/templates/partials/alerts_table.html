@@ -1,0 +1,32 @@
+{% set alerts = data.alerts %}
+{% if not alerts %}
+  <div class="empty p-3">
+    <p class="empty-title">no active alerts</p>
+    <p class="empty-subtitle text-secondary small">system is healthy</p>
+  </div>
+{% else %}
+<table class="table table-vcenter table-hover card-table">
+  <thead>
+    <tr>
+      <th class="w-1">sev</th>
+      <th>alertname</th>
+      <th>domain</th>
+      <th>summary</th>
+      <th class="text-end">started</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in alerts[:20] %}
+      {% set sev = a.severity %}
+      {% set color = {'critical':'danger','warning':'warning','info':'info'}.get(sev, 'secondary') %}
+      <tr>
+        <td><span class="badge bg-{{ color }}-lt">{{ sev }}</span></td>
+        <td class="font-monospace text-truncate" style="max-width: 220px">{{ a.alertname }}</td>
+        <td>{{ a.domain }}</td>
+        <td class="text-truncate" style="max-width: 360px">{{ a.summary or a.annotations.summary or '' }}</td>
+        <td class="text-end text-secondary small">{{ (a.startsAt or '')[11:19] }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

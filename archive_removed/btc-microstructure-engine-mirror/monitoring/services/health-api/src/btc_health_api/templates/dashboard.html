@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">observability</div>
+        <h2 class="page-title">Overview</h2>
+      </div>
+      <div class="col-auto ms-auto">
+        {% set s = view.overall %}
+        <span class="badge bg-{{ {'ok':'success','degraded':'warning','down':'danger'}.get(s, 'secondary') }}-lt fs-3">
+          <i class="ti ti-circle-filled me-1"></i>system: {{ s|upper }}
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<!-- stat cards: auto-refresh via HTMX -->
+<div id="stat-cards" hx-get="/partials/stat-cards" hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+  {% include "partials/stat_cards.html" %}
+</div>
+
+<!-- live-feed growth chart -->
+<div class="card mt-3">
+  <div class="card-header">
+    <h3 class="card-title">live feed growth (rows over time, last ~10 min)</h3>
+    <div class="card-actions text-secondary small">
+      values normalized per-series — one line per tracked producer
+    </div>
+  </div>
+  <div id="live-chart-wrap" hx-get="/partials/live-chart"
+       hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+    {% include "partials/live_chart.html" %}
+  </div>
+</div>
+
+<div class="row row-cards mt-2">
+  <div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">domain health</h3>
+      </div>
+      <div id="domains-overview" hx-get="/partials/domains-overview"
+           hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+        {% include "partials/domains_overview.html" %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">active alerts</h3>
+        <div class="card-actions">
+          <a href="/alerts" class="btn btn-sm btn-ghost-secondary">all →</a>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <div id="alerts-table" hx-get="/partials/alerts-table"
+             hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+          {% include "partials/alerts_table.html" %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row row-cards mt-2">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">services</h3>
+        <div class="card-actions">
+          <a href="/services" class="btn btn-sm btn-ghost-secondary">all →</a>
+        </div>
+      </div>
+      <div id="services-table" hx-get="/partials/services-table"
+           hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+        {% include "partials/services_table.html" %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,129 @@
+{% set host = data.host %}
+{% set rt = data.per_container_rt %}
+
+<div class="row row-cards">
+  <div class="col-md-4">
+    <div class="card card-md">
+      <div class="card-stamp">
+        <div class="card-stamp-icon bg-cyan"><i class="ti ti-cpu"></i></div>
+      </div>
+      <div class="card-body">
+        <h3 class="card-title">CPU</h3>
+        <div class="display-6">{{ host.cpu_busy_ratio|fmt_pct }}</div>
+        <div class="progress mt-2">
+          <div class="progress-bar bg-{{ 'danger' if (host.cpu_busy_ratio or 0) > 0.9 else 'warning' if (host.cpu_busy_ratio or 0) > 0.7 else 'success' }}"
+               style="width: {{ ((host.cpu_busy_ratio or 0) * 100)|round(1) }}%"></div>
+        </div>
+        <div class="text-secondary mt-2 small">
+          load1 <strong>{{ host.load1|fmt_n(2) }}</strong>
+          · load5 <strong>{{ host.load5|fmt_n(2) }}</strong>
+          · load15 <strong>{{ host.load15|fmt_n(2) }}</strong>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card card-md">
+      <div class="card-stamp">
+        <div class="card-stamp-icon bg-blue"><i class="ti ti-database-cog"></i></div>
+      </div>
+      <div class="card-body">
+        <h3 class="card-title">Memory</h3>
+        <div class="display-6">{{ host.memory_used_ratio|fmt_pct }}</div>
+        <div class="progress mt-2">
+          <div class="progress-bar bg-{{ 'danger' if (host.memory_used_ratio or 0) > 0.9 else 'warning' if (host.memory_used_ratio or 0) > 0.85 else 'success' }}"
+               style="width: {{ ((host.memory_used_ratio or 0) * 100)|round(1) }}%"></div>
+        </div>
+        <div class="text-secondary mt-2 small">
+          {{ (host.memory_total_bytes - host.memory_available_bytes)|fmt_bytes if host.memory_total_bytes and host.memory_available_bytes else '—' }} / {{ host.memory_total_bytes|fmt_bytes }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card card-md">
+      <div class="card-stamp">
+        <div class="card-stamp-icon bg-purple"><i class="ti ti-device-floppy"></i></div>
+      </div>
+      <div class="card-body">
+        <h3 class="card-title">Disk (/)</h3>
+        <div class="display-6">{{ host.disk_free_ratio|fmt_pct }} free</div>
+        <div class="progress mt-2">
+          {% set used = 1.0 - (host.disk_free_ratio or 1.0) %}
+          <div class="progress-bar bg-{{ 'danger' if used > 0.95 else 'warning' if used > 0.85 else 'success' }}"
+               style="width: {{ (used * 100)|round(1) }}%"></div>
+        </div>
+        <div class="text-secondary mt-2 small">
+          free <strong>{{ host.disk_free_bytes|fmt_bytes }}</strong>
+          / {{ host.disk_total_bytes|fmt_bytes }}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row row-cards mt-3">
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header"><h3 class="card-title">engine — per-container resource usage</h3></div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>container</th>
+              <th class="text-end">cpu (%)</th>
+              <th class="text-end">memory</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in data.engine_containers %}
+              {% set m = rt.get(c.name, {}) %}
+              <tr>
+                <td class="font-monospace">{{ c.name }}</td>
+                <td class="text-end font-monospace">
+                  {% set v = m.get('cpu_pct') %}{% if v is not none %}{{ v|fmt_n(1) }}{% else %}—{% endif %}
+                </td>
+                <td class="text-end font-monospace">
+                  {% set v = m.get('memory_bytes') %}{% if v is not none %}{{ v|fmt_bytes }}{% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header"><h3 class="card-title">observability — self-resource</h3></div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>container</th>
+              <th class="text-end">cpu (%)</th>
+              <th class="text-end">memory</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in data.obs_containers %}
+              {% set m = rt.get(c.name, {}) %}
+              <tr class="text-secondary">
+                <td class="font-monospace">{{ c.name }}</td>
+                <td class="text-end font-monospace">
+                  {% set v = m.get('cpu_pct') %}{% if v is not none %}{{ v|fmt_n(1) }}{% else %}—{% endif %}
+                </td>
+                <td class="text-end font-monospace">
+                  {% set v = m.get('memory_bytes') %}{% if v is not none %}{{ v|fmt_bytes }}{% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,6 +1,7 @@
 import pandas as pd
 
 from datetime import datetime
+from storage.path_registry import resolve_read, resolve_write
 
 print()
 print(
@@ -12,7 +13,7 @@ print(
 # =====================================
 
 response = pd.read_parquet(
-    "volume_response_state.parquet"
+    resolve_read("volume_response_state.parquet")
 )
 
 # =====================================
@@ -221,7 +222,7 @@ row = pd.DataFrame([{
 try:
 
     old = pd.read_parquet(
-        "climactic_behavior_memory.parquet"
+        resolve_read("climactic_behavior_memory.parquet")
     )
 
     row = pd.concat([
@@ -236,7 +237,7 @@ except:
 # -------------------------------------
 
 row.to_parquet(
-    "climactic_behavior_memory.parquet",
+    resolve_write("climactic_behavior_memory.parquet"),
     index=False
 )
 

@@ -1,0 +1,66 @@
+name: security-scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'monitoring/**'
+  pull_request:
+    paths:
+      - 'monitoring/**'
+  schedule:
+    # weekly scan of the main branch for newly-disclosed CVEs
+    - cron: "0 6 * * 1"
+
+jobs:
+
+  trivy-fs:
+    name: trivy fs (deps + config)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: trivy fs scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'monitoring/'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          format: 'table'
+          exit-code: '1'
+
+  trivy-images:
+    name: trivy image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [metrics-exporter, alert-engine, health-api, watchdog]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: monitoring/services/${{ matrix.service }}
+          push: false
+          load: true
+          tags: btc-${{ matrix.service }}:scan
+      - name: trivy image scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: btc-${{ matrix.service }}:scan
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          exit-code: '1'
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>{% block title %}BTC OBS{% endblock %} — observability</title>
+
+  <!-- Tabler.io 1.x — Bootstrap 5.3 admin theme -->
+  <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler-vendors.min.css" rel="stylesheet">
+
+  <!-- HTMX 1.9 — partial refreshes -->
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <!-- Chart.js 4 for inline sparklines -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="/static/css/admin.css">
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23206bc4'/></svg>">
+</head>
+<body class="d-flex flex-column">
+
+<div class="page">
+
+  <!-- ========== SIDEBAR ========== -->
+  <aside class="navbar navbar-vertical navbar-expand-lg">
+    <div class="container-fluid">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <h1 class="navbar-brand navbar-brand-autodark">
+        <a href="/" class="d-flex align-items-center">
+          <span class="brand-dot me-2"></span>
+          <span class="fw-bold tracking-wider">BTC&nbsp;OBS</span>
+        </a>
+      </h1>
+      <div class="collapse navbar-collapse" id="sidebar-menu">
+        <ul class="navbar-nav pt-lg-3">
+          {% set nav = [
+            ("dashboard", "/", "dashboard", "Overview"),
+            ("services",  "/services", "server-2", "Services"),
+            ("parquets",  "/parquets", "database", "Data Flow"),
+            ("state",     "/state",    "database-cog", "State Inspector"),
+            ("alerts",    "/alerts",   "alert-triangle", "Alerts"),
+            ("system",    "/system",   "cpu", "System"),
+            ("logs",      "/logs",     "file-text", "Logs"),
+          ] %}
+          {% for key, href, icon, label in nav %}
+          <li class="nav-item {% if page == key %}active{% endif %}">
+            <a class="nav-link" href="{{ href }}">
+              <span class="nav-link-icon d-md-none d-lg-inline-block">
+                <i class="ti ti-{{ icon }}"></i>
+              </span>
+              <span class="nav-link-title">{{ label }}</span>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ========== HEADER ========== -->
+  <header class="navbar navbar-expand-md d-none d-lg-flex d-print-none">
+    <div class="container-xl">
+      <div class="navbar-brand-autodark"></div>
+      <div class="navbar-nav flex-row order-md-last">
+        {% if data and data.obs_containers %}
+          {% set obs_running = data.obs_containers | selectattr('state', 'equalto', 'running') | list | length %}
+          {% set obs_total   = data.obs_containers | length %}
+          {% set obs_color   = 'success' if obs_running == obs_total else 'warning' if obs_running > 0 else 'danger' %}
+          <div class="nav-item d-flex align-items-center me-3"
+               title="observability self-status — distinct from the engine being monitored">
+            <span class="status-dot status-{{ 'green' if obs_color == 'success' else 'yellow' if obs_color == 'warning' else 'red' }} me-2"></span>
+            <span class="text-secondary small">obs {{ obs_running }}/{{ obs_total }}</span>
+          </div>
+        {% endif %}
+        <div class="nav-item d-flex align-items-center me-3">
+          <span id="refresh-indicator" class="status-indicator status-indicator-animated status-green me-2"
+                title="auto-refreshing every {{ refresh_s }}s">
+            <span class="status-indicator-circle"></span>
+            <span class="status-indicator-circle"></span>
+            <span class="status-indicator-circle"></span>
+          </span>
+          <span class="text-secondary small">refresh {{ refresh_s }}s</span>
+        </div>
+        <div class="nav-item d-flex align-items-center me-3">
+          <i class="ti ti-clock-hour-3 me-1"></i>
+          <span id="utc-clock" class="font-monospace">{{ now_utc }}</span>
+        </div>
+        <div class="nav-item d-flex align-items-center">
+          <span class="text-secondary small">v{{ service_version }}</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========== BODY ========== -->
+  <div class="page-wrapper">
+    {% block page_header %}{% endblock %}
+    <div class="page-body">
+      <div class="container-xl">
+        {% block content %}{% endblock %}
+      </div>
+    </div>
+
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer footer-transparent d-print-none">
+      <div class="container-xl">
+        <div class="row text-secondary small">
+          <div class="col">btc microstructure observability — auto-refresh {{ refresh_s }}s</div>
+          <div class="col-auto">
+            served by health-api {{ service_version }}
+          </div>
+        </div>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script>
+<script>
+  // tick UTC clock locally so the header doesn't go stale between refreshes
+  (function () {
+    const el = document.getElementById('utc-clock');
+    if (!el) return;
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function fmt() {
+      const d = new Date();
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+             `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
+    }
+    setInterval(() => { el.textContent = fmt(); }, 1000);
+  })();
+  // HTMX request indicator: blink the green dot on every swap
+  document.body.addEventListener('htmx:beforeRequest', () => {
+    document.getElementById('refresh-indicator')?.classList.add('status-yellow');
+    document.getElementById('refresh-indicator')?.classList.remove('status-green');
+  });
+  document.body.addEventListener('htmx:afterRequest', () => {
+    document.getElementById('refresh-indicator')?.classList.remove('status-yellow');
+    document.getElementById('refresh-indicator')?.classList.add('status-green');
+  });
+</script>
+</body>
+</html>

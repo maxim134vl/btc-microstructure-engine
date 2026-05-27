@@ -15,7 +15,7 @@ from parquet_utils import safe_read_parquet  # noqa: E402
 
 
 def load_candle_structure(path: str | None = None) -> pd.DataFrame:
-    file_path = path or os.path.join(ROOT, "candle_structure_memory.parquet")
+    file_path = path or "candle_structure_memory.parquet"
     frame = safe_read_parquet(file_path)
     if len(frame) == 0:
         return frame

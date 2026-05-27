@@ -1,3 +1,3 @@
-"""BTC-ML canonical platform package (Phase 4A skeleton)."""
+"""BTC-ML canonical platform package (Phase 4B)."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

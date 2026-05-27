@@ -1,19 +1,24 @@
-import pandas as pd
 import time
+
+import pandas as pd
+
+from storage.path_registry import resolve_read
 
 CACHE = {}
 
 CACHE_TTL = 5
 
+
 def load_parquet_cached(file_path):
 
     global CACHE
 
+    resolved = resolve_read(file_path)
     now = time.time()
 
-    if file_path in CACHE:
+    if resolved in CACHE:
 
-        cached = CACHE[file_path]
+        cached = CACHE[resolved]
 
         age = now - cached["timestamp"]
 
@@ -22,10 +27,10 @@ def load_parquet_cached(file_path):
             return cached["data"]
 
     df = pd.read_parquet(
-        file_path
+        resolved
     )
 
-    CACHE[file_path] = {
+    CACHE[resolved] = {
 
         "timestamp":
             now,

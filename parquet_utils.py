@@ -5,6 +5,18 @@ from runtime_config import (
     MAX_STATE_ROWS
 )
 
+
+def _coerce_path(file_path: str, *, for_write: bool = False) -> str:
+    try:
+        from storage.path_registry import is_registered, resolve_read, resolve_write
+
+        if is_registered(file_path):
+            return resolve_write(file_path) if for_write else resolve_read(file_path)
+    except ImportError:
+        pass
+    return file_path
+
+
 # =====================================
 # SAFE LOAD
 # =====================================
@@ -13,8 +25,10 @@ def safe_read_parquet(
     file_path
 ):
 
+    resolved = _coerce_path(file_path, for_write=False)
+
     if not os.path.exists(
-        file_path
+        resolved
     ):
 
         return pd.DataFrame()
@@ -22,7 +36,7 @@ def safe_read_parquet(
     try:
 
         return pd.read_parquet(
-            file_path
+            resolved
         )
 
     except Exception:
@@ -34,7 +48,7 @@ def safe_read_parquet(
         )
 
         print(
-            file_path
+            resolved
         )
 
         return pd.DataFrame()
@@ -50,8 +64,10 @@ def atomic_parquet_write(
 
 ):
 
+    resolved = _coerce_path(file_path, for_write=True)
+
     temp_file = (
-        file_path + ".tmp"
+        resolved + ".tmp"
     )
 
     df.to_parquet(
@@ -61,7 +77,7 @@ def atomic_parquet_write(
 
     os.replace(
         temp_file,
-        file_path
+        resolved
     )
 
 # =====================================
@@ -77,8 +93,10 @@ def append_state_row(
 
 ):
 
+    resolved = _coerce_path(file_path, for_write=False)
+
     old = safe_read_parquet(
-        file_path
+        resolved
     )
 
     combined = pd.concat(
@@ -103,7 +121,7 @@ def append_state_row(
 
     atomic_parquet_write(
         combined,
-        file_path
+        _coerce_path(file_path, for_write=True)
     )
 
     return combined

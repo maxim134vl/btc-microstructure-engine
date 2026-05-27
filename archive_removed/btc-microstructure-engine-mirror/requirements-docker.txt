@@ -1,0 +1,37 @@
+# =====================================================================
+# Runtime-only dependencies for the containerized services.
+# The full requirements.txt includes jupyter, torch, etc. that the
+# collectors/pipeline/dashboard don't need at runtime. Trimmed here
+# to keep image size and build time manageable.
+# Pinned loosely (>=) so the same file works for re-builds.
+# =====================================================================
+
+# data
+pandas>=2.2
+numpy>=1.26
+pyarrow>=16
+
+# http / websockets
+requests>=2.31
+aiohttp>=3.9
+httpx>=0.27
+websocket-client>=1.7
+websockets>=12
+
+# crypto exchange clients
+ccxt>=4.3
+
+# ML (used by models/, xgb scripts)
+scikit-learn>=1.4
+xgboost>=2.0
+
+# dashboard
+streamlit>=1.31
+plotly>=5.20
+matplotlib>=3.8
+mplfinance>=0.12.10b0
+
+# misc
+PyYAML>=6.0
+python-dateutil>=2.9
+tenacity>=8.2

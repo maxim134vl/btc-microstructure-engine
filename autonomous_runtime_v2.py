@@ -1,143 +1,24 @@
-import os
-import time
-from datetime import datetime
+#!/usr/bin/env python3
+"""Deprecated autonomous runtime — use ./run.sh or python run.py (Phase 4B)."""
 
-print("\nAUTONOMOUS RECURSIVE RUNTIME V2 STARTED\n")
+from __future__ import annotations
 
-# =====================================
-# PYTHON ENV
-# =====================================
+import sys
+import warnings
 
-PYTHON = "venv/bin/python3"
 
-# =====================================
-# ENGINE LIST
-# =====================================
-
-engines = [
-
-    "candle_geometry_incremental_v3.py",
-
-    "volume_localization_incremental_v3.py",
-
-    "test_recognition_engine_v1.py",
-
-    "defended_liquidity_engine_v1.py",
-
-    "live_volume_flow_engine_v1.py",
-
-    "flow_liquidity_interaction_engine_v3.py",
-
-    "intent_validation_engine_v1.py",
-
-    "live_mutation_runtime_engine_v1.py",
-
-    "cognitive_confidence_engine_v1.py",
-
-    "temporal_decay_engine_v2.py",
-
-    "volatility_adaptive_engine_v1.py",
-
-    "htf_structure_engine_v1.py",
-
-    "htf_ltf_context_engine_v1.py",
-
-    "fractal_memory_engine_v1.py",
-
-    "predictive_sequence_engine_v1.py"
-
-]
-
-# =====================================
-# LOOP
-# =====================================
-
-while True:
-
-    print("=" * 60)
-
-    print(
-        f"COGNITIVE CYCLE: {datetime.now()}"
+def main() -> int:
+    warnings.warn(
+        "autonomous_runtime_v2.py is deprecated; use ./run.sh or python run.py",
+        DeprecationWarning,
+        stacklevel=1,
     )
-
-    print("=" * 60)
-
     print()
-
-    # =====================================
-    # RUN ENGINES
-    # =====================================
-
-    for i, engine in enumerate(
-
-        engines,
-
-        start=1
-
-    ):
-
-        print(
-            f"STEP {i}: {engine}"
-        )
-
-        # =====================================
-        # EXISTS CHECK
-        # =====================================
-
-        if not os.path.exists(engine):
-
-            print(
-                f"ENGINE NOT FOUND: {engine}"
-            )
-
-            print()
-
-            continue
-
-        # =====================================
-        # RUN
-        # =====================================
-
-        exit_code = os.system(
-
-            f"{PYTHON} {engine}"
-
-        )
-
-        # =====================================
-        # RESULT
-        # =====================================
-
-        if exit_code == 0:
-
-            print(
-                f"SUCCESS: {engine}"
-            )
-
-        else:
-
-            print(
-                f"FAILED: {engine}"
-            )
-
-        print()
-
-    # =====================================
-    # COMPLETE
-    # =====================================
-
-    print("=" * 60)
-
-    print(
-        "COGNITIVE CYCLE COMPLETE"
-    )
-
-    print("=" * 60)
-
+    print("DEPRECATED: autonomous_runtime_v2.py")
+    print("Canonical runtime: ./run.sh  or  python run.py")
     print()
+    return 1
 
-    # =====================================
-    # WAIT
-    # =====================================
 
-    time.sleep(60)
+if __name__ == "__main__":
+    sys.exit(main())

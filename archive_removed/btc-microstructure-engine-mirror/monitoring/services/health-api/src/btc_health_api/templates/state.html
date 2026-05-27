@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block title %}State Inspector{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">observability</div>
+        <h2 class="page-title">State Inspector</h2>
+      </div>
+      <div class="col-auto text-secondary small">
+        bind-mounted from <span class="font-monospace">./data/</span>
+        (visible on the host)
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row row-cards">
+
+  <!-- ===== left: file list ===== -->
+  <div class="col-md-4">
+    {% set parquets = data.snapshot.parquets %}
+    {% set memory   = parquets | selectattr('kind', 'equalto', 'memory') | list %}
+    {% set tracked  = parquets | selectattr('kind', 'in', ['live', 'rest']) | list %}
+    {% set unknown  = parquets | selectattr('kind', 'equalto', 'unknown') | list %}
+
+    <div class="card">
+      <div class="card-header"><h3 class="card-title">memory (pipeline state)</h3></div>
+      <div class="list-group list-group-flush list-group-hoverable">
+        {% if not memory %}
+          <div class="list-group-item text-secondary small">no memory files yet</div>
+        {% endif %}
+        {% for p in memory %}
+          <a href="/state?file={{ p.file }}&rows={{ rows }}"
+             class="list-group-item list-group-item-action {% if p.file == file %}active{% endif %}">
+            <div class="d-flex justify-content-between">
+              <span class="font-monospace text-truncate">{{ p.file }}</span>
+              <span class="text-secondary small">{{ p.rows|fmt_n(0) }} rows</span>
+            </div>
+            <div class="text-secondary small">{{ p.age_seconds|fmt_age }} ago · {{ p.size_bytes|fmt_bytes }}</div>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header"><h3 class="card-title">tracked producers</h3></div>
+      <div class="list-group list-group-flush list-group-hoverable">
+        {% for p in tracked %}
+          <a href="/state?file={{ p.file }}&rows={{ rows }}"
+             class="list-group-item list-group-item-action {% if p.file == file %}active{% endif %}">
+            <div class="d-flex justify-content-between">
+              <span class="font-monospace text-truncate">{{ p.file }}</span>
+              <span class="badge bg-info-lt">{{ p.kind }}</span>
+            </div>
+            <div class="text-secondary small">{{ p.producer }} · {{ p.rows|fmt_n(0) }} rows · {{ p.age_seconds|fmt_age }}</div>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if unknown %}
+    <div class="card mt-3">
+      <div class="card-header"><h3 class="card-title text-secondary">unknown</h3></div>
+      <div class="list-group list-group-flush list-group-hoverable">
+        {% for p in unknown %}
+          <a href="/state?file={{ p.file }}&rows={{ rows }}"
+             class="list-group-item list-group-item-action {% if p.file == file %}active{% endif %}">
+            <span class="font-monospace text-truncate">{{ p.file }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ===== right: preview pane ===== -->
+  <div class="col-md-8">
+    {% if not file %}
+      <div class="card">
+        <div class="card-body empty">
+          <p class="empty-title">select a parquet on the left</p>
+          <p class="empty-subtitle text-secondary">
+            preview shows the schema, file metadata, and the last {{ rows }} rows
+          </p>
+        </div>
+      </div>
+    {% elif not preview %}
+      <div class="card">
+        <div class="card-body empty">
+          <p class="empty-title text-danger">could not read {{ file }}</p>
+          <p class="empty-subtitle text-secondary">upstream returned 404 or 5xx</p>
+        </div>
+      </div>
+    {% else %}
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">{{ preview.file }}</h3>
+          <div class="card-actions d-flex align-items-center gap-2">
+            <span class="text-secondary small">
+              {{ preview.rows_returned }} / {{ preview.rows_total|fmt_n(0) }} rows ·
+              {{ preview.size_bytes|fmt_bytes }} ·
+              {{ preview.columns|length }} cols
+            </span>
+            <a class="btn btn-sm btn-outline-primary"
+               href="/api/parquets/csv/{{ preview.file }}?rows={{ preview.rows_total }}"
+               title="download full file as CSV">
+              <i class="ti ti-download"></i> CSV
+            </a>
+            {# "compare with…" picker — pre-populates 'a' on the compare page #}
+            <div class="dropdown">
+              <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                      type="button" data-bs-toggle="dropdown">
+                <i class="ti ti-columns"></i> compare
+              </button>
+              <ul class="dropdown-menu dropdown-menu-end">
+                {% for p in data.snapshot.parquets %}
+                  {% if p.file != preview.file %}
+                    <li><a class="dropdown-item font-monospace small"
+                           href="/compare?a={{ preview.file }}&b={{ p.file }}">{{ p.file }}</a></li>
+                  {% endif %}
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="mb-3">
+            <h4 class="mb-2">schema</h4>
+            <div class="table-responsive">
+              <table class="table table-sm table-vcenter">
+                <thead><tr><th class="w-1">#</th><th>column</th><th>type</th></tr></thead>
+                <tbody>
+                  {% for col in preview.columns %}
+                    <tr>
+                      <td class="text-secondary">{{ loop.index }}</td>
+                      <td class="font-monospace">{{ col }}</td>
+                      <td class="font-monospace text-secondary small">{{ preview.types[loop.index0] }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {% if history.get(preview.file) %}
+            <div class="mb-3">
+              <h4 class="mb-2">rows over time</h4>
+              <canvas id="spark-state" height="80" data-history='{{ history[preview.file]|tojson }}'></canvas>
+            </div>
+          {% endif %}
+
+          <div>
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <h4 class="mb-0">last {{ preview.rows_returned }} rows</h4>
+              <div class="input-icon ms-3" style="max-width: 280px">
+                <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                <input id="rows-filter" type="text" class="form-control form-control-sm"
+                       placeholder="filter rows (substring match)…" autocomplete="off">
+              </div>
+              <span id="rows-filter-count" class="text-secondary small"></span>
+              <div class="ms-auto">
+                <a class="btn btn-sm btn-ghost-secondary" href="?file={{ file }}&rows=50">50</a>
+                <a class="btn btn-sm btn-ghost-secondary" href="?file={{ file }}&rows=100">100</a>
+                <a class="btn btn-sm btn-ghost-secondary" href="?file={{ file }}&rows=200">200</a>
+                <a class="btn btn-sm btn-ghost-secondary" href="?file={{ file }}&rows=500">500</a>
+              </div>
+            </div>
+            <div class="table-responsive" style="max-height: 60vh">
+              <table id="rows-table" class="table table-sm table-vcenter table-striped">
+                <thead>
+                  <tr>
+                    {% for col in preview.columns %}<th class="font-monospace small">{{ col }}</th>{% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in preview.rows %}
+                    <tr>
+                      {% for col in preview.columns %}
+                        <td class="font-monospace small">
+                          {%- set v = row[col] -%}
+                          {%- if v is none -%}<span class="text-secondary">—</span>
+                          {%- elif v is number -%}{{ v|fmt_n(4) if v is float else v }}
+                          {%- else -%}{{ v|string|truncate(60, True, '…') }}
+                          {%- endif -%}
+                        </td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+// Render history sparkline if the canvas + data exist.
+(function () {
+  const el = document.getElementById('spark-state');
+  if (!el || typeof Chart === 'undefined') return;
+  let pts;
+  try { pts = JSON.parse(el.dataset.history); } catch { return; }
+  if (!Array.isArray(pts) || pts.length < 2) return;
+
+  const labels = pts.map(p => new Date(p[0] * 1000).toISOString().slice(11, 19));
+  const values = pts.map(p => p[1]);
+  new Chart(el, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'rows',
+        data: values,
+        borderColor: '#206bc4',
+        backgroundColor: 'rgba(32, 107, 196, 0.10)',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.25,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: true, ticks: { maxTicksLimit: 6, font: { size: 10 } } },
+        y: { display: true, ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+})();
+
+// Client-side filter on the rows table — substring match, case-insensitive,
+// matches against the rendered cell text of every column.
+(function () {
+  const input = document.getElementById('rows-filter');
+  const tbody = document.querySelector('#rows-table tbody');
+  const counter = document.getElementById('rows-filter-count');
+  if (!input || !tbody) return;
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const total = rows.length;
+  function apply() {
+    const q = input.value.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(r => {
+      const ok = !q || r.textContent.toLowerCase().includes(q);
+      r.style.display = ok ? '' : 'none';
+      if (ok) shown++;
+    });
+    counter.textContent = q ? `${shown} / ${total}` : '';
+  }
+  input.addEventListener('input', apply);
+  apply();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,88 @@
+# =====================================================================
+# BTC microstructure engine — production compose
+# =====================================================================
+# Data layout:
+#   ./data/  bind mount — every parquet (live feeds + pipeline memory
+#            state) lands here. You can browse / copy / back it up
+#            without `docker volume` gymnastics.
+#   ./logs/  optional bind mount for the runtime log dir.
+#
+# First time on a fresh host:
+#   mkdir -p data logs && chown -R 1000:1000 data logs  # UID 1000 = btc
+#
+# Migrating from the old named volume:
+#   ./monitoring/scripts/migrate-data.sh
+# =====================================================================
+
+x-btc-base: &btc-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: btc-engine:latest
+  pull_policy: never
+  restart: unless-stopped
+  volumes:
+    - ./data:/data
+    - ./logs:/logs
+
+services:
+
+  # -----------------------------------------------------------------
+  # COLLECTORS — produce raw parquet feeds
+  # -----------------------------------------------------------------
+
+  binance-feed:
+    <<: *btc-base
+    container_name: btc_binance_feed
+    command: ["python3", "/app/live_binance_feed_v2.py"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/live_market_feed.parquet"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
+  multi-exchange:
+    <<: *btc-base
+    container_name: btc_multi_exchange
+    command: ["python3", "/app/collectors/multi_exchange_collector.py"]
+    depends_on:
+      - binance-feed
+
+  # produces intraday_flow.parquet (used by dashboard)
+  intraday-flow:
+    <<: *btc-base
+    container_name: btc_intraday_flow
+    command: ["python3", "/app/intraday_rest_collector.py"]
+
+  orderbook:
+    <<: *btc-base
+    container_name: btc_orderbook
+    command: ["python3", "/app/collectors/orderbook_collector.py"]
+
+  liquidations:
+    <<: *btc-base
+    container_name: btc_liquidations
+    command: ["python3", "/app/collectors/liquidation_collector.py"]
+
+  oi:
+    <<: *btc-base
+    container_name: btc_oi
+    command: ["python3", "/app/collectors/oi_collector.py"]
+
+  # -----------------------------------------------------------------
+  # PIPELINE — recursive cognition runtime over the collected data
+  # -----------------------------------------------------------------
+
+  pipeline:
+    <<: *btc-base
+    container_name: btc_pipeline
+    command: ["python3", "/app/autonomous_runtime_v2.py"]
+    depends_on:
+      - binance-feed
+      - multi-exchange
+      - orderbook
+      - liquidations
+      - oi
+
+# No named volumes — everything is bind-mounted from ./data and ./logs.

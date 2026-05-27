@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from storage.path_registry import resolve_read, resolve_write
+
 print("\nHTF STRUCTURE ENGINE STARTED\n")
 
 # =====================================
@@ -8,7 +10,7 @@ print("\nHTF STRUCTURE ENGINE STARTED\n")
 # =====================================
 
 feed = pd.read_parquet(
-    "live_market_feed.parquet"
+    resolve_read("live_market_feed.parquet")
 )
 
 feed = feed.sort_values(
@@ -187,7 +189,7 @@ htf_df = pd.DataFrame(
 
 htf_df.to_parquet(
 
-    "htf_structure_memory.parquet",
+    resolve_write("htf_structure_memory.parquet"),
 
     index=False
 

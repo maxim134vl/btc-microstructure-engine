@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from storage.path_registry import resolve_read, resolve_write
+
 print("\nCANDLE STRUCTURE ENGINE STARTED\n")
 
 # =====================================
@@ -8,7 +10,7 @@ print("\nCANDLE STRUCTURE ENGINE STARTED\n")
 # =====================================
 
 flow = pd.read_parquet(
-    "multi_exchange_flow.parquet"
+    resolve_read("multi_exchange_flow.parquet")
 )
 
 flow["timestamp"] = pd.to_datetime(
@@ -288,7 +290,7 @@ ohlc["volume_zscore"] = (
 ohlc = ohlc.reset_index()
 
 ohlc.to_parquet(
-    "candle_structure_memory.parquet"
+    resolve_write("candle_structure_memory.parquet")
 )
 
 # =====================================

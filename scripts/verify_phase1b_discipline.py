@@ -10,6 +10,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+from parquet_utils import safe_read_parquet
+
 
 def _run_with_env(env: dict[str, str]) -> subprocess.CompletedProcess:
     merged = os.environ.copy()
@@ -62,7 +64,7 @@ def check_discipline_exports_default() -> bool:
     import pandas as pd
 
     bootstrap_runtime()
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
 
     required = [
@@ -167,7 +169,7 @@ def check_runtime_with_discipline_enabled() -> bool:
 
     import pandas as pd
 
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
 
     if not bool(latest.get("discipline_active")):

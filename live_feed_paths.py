@@ -2,36 +2,43 @@ import os
 
 import pandas as pd
 
-# Canonical live feed path (repository root, cwd-relative).
-CANONICAL_LIVE_FEED_PATH = "live_market_feed.parquet"
-
-# Deprecated compatibility path — kept in sync by writers.
-LEGACY_LIVE_FEED_PATH = "datasets/live/latest.parquet"
+from storage.path_registry import (
+    CANONICAL_LIVE_FEED_PATH,
+    LEGACY_LIVE_FEED_PATH,
+    resolve_read,
+    resolve_write,
+)
 
 LEGACY_PARTITION_DIR = "datasets/live"
+
+# Backward-compatible exports (Phase 4B — canonical paths via registry).
+__all__ = [
+    "CANONICAL_LIVE_FEED_PATH",
+    "LEGACY_LIVE_FEED_PATH",
+    "LEGACY_PARTITION_DIR",
+    "read_live_feed",
+    "write_live_feed_snapshot",
+]
 
 
 def read_live_feed() -> pd.DataFrame:
     """Read canonical feed, migrating legacy snapshot if needed."""
 
-    if os.path.exists(CANONICAL_LIVE_FEED_PATH):
-        return pd.read_parquet(CANONICAL_LIVE_FEED_PATH)
-
-    if os.path.exists(LEGACY_LIVE_FEED_PATH):
-        legacy = pd.read_parquet(LEGACY_LIVE_FEED_PATH)
-        write_live_feed_snapshot(legacy)
-        return legacy
+    path = resolve_read(CANONICAL_LIVE_FEED_PATH)
+    if os.path.exists(path):
+        return pd.read_parquet(path)
 
     return pd.DataFrame()
 
 
 def write_live_feed_snapshot(df: pd.DataFrame) -> None:
-    """Persist live feed to canonical path and legacy mirror."""
+    """Persist live feed to canonical path and legacy mirror (no silent duplication)."""
 
+    canonical = resolve_write(CANONICAL_LIVE_FEED_PATH)
     os.makedirs(LEGACY_PARTITION_DIR, exist_ok=True)
 
     df.to_parquet(
-        CANONICAL_LIVE_FEED_PATH,
+        canonical,
         index=False,
     )
 

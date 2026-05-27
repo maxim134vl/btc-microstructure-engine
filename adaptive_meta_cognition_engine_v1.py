@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from state_manager_v1 import STATE
+from storage.path_registry import resolve_read, resolve_write
 
 def run():
     
@@ -20,7 +21,7 @@ def run():
     ]
 
     reinforcement = pd.read_parquet(
-        "auction_reinforcement_memory.parquet"
+        resolve_read("auction_reinforcement_memory.parquet")
     )
 
     latest = probabilistic.iloc[-1]
@@ -343,7 +344,7 @@ def run():
     }])
 
     row.to_parquet(
-        "adaptive_meta_cognition_state.parquet"
+        resolve_write("adaptive_meta_cognition_state.parquet")
     )
 if __name__ == "__main__":
 

@@ -1,0 +1,119 @@
+{% set s = view.stats %}
+<div class="row row-cards">
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-sm">
+      <div class="card-body">
+        <div class="row align-items-center">
+          <div class="col-auto"><span class="bg-primary-lt text-primary avatar"><i class="ti ti-server"></i></span></div>
+          <div class="col">
+            <div class="font-weight-medium">
+              {{ s.containers_running }} / {{ s.containers_total }} <span class="text-secondary fs-5">containers</span>
+            </div>
+            <div class="text-secondary small">{{ s.containers_healthy }} healthy</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-sm">
+      <div class="card-body">
+        <div class="row align-items-center">
+          <div class="col-auto">
+            {% if s.alerts_critical %}
+              <span class="bg-danger-lt text-danger avatar"><i class="ti ti-alert-octagon"></i></span>
+            {% elif s.alerts_warning %}
+              <span class="bg-warning-lt text-warning avatar"><i class="ti ti-alert-triangle"></i></span>
+            {% else %}
+              <span class="bg-success-lt text-success avatar"><i class="ti ti-circle-check"></i></span>
+            {% endif %}
+          </div>
+          <div class="col">
+            <div class="font-weight-medium">
+              {{ s.alerts_total }} <span class="text-secondary fs-5">alerts</span>
+            </div>
+            <div class="text-secondary small">
+              {{ s.alerts_critical }} crit · {{ s.alerts_warning }} warn · {{ s.alerts_info }} info
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-sm">
+      <div class="card-body">
+        <div class="row align-items-center">
+          <div class="col-auto"><span class="bg-info-lt text-info avatar"><i class="ti ti-database"></i></span></div>
+          <div class="col">
+            <div class="font-weight-medium">
+              {{ s.parquets_total }} <span class="text-secondary fs-5">parquets</span>
+            </div>
+            <div class="text-secondary small">{{ s.parquets_stale }} stale · {{ s.parquets_invalid }} invalid</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-sm">
+      <div class="card-body">
+        <div class="row align-items-center">
+          <div class="col-auto">
+            {% set rstat = s.runtime_status %}
+            <span class="bg-{{ {'ok':'success','degraded':'warning','down':'danger','unknown':'secondary'}.get(rstat,'secondary') }}-lt text-{{ {'ok':'success','degraded':'warning','down':'danger','unknown':'secondary'}.get(rstat,'secondary') }} avatar">
+              <i class="ti ti-refresh"></i>
+            </span>
+          </div>
+          <div class="col">
+            <div class="font-weight-medium">
+              {{ s.runtime_age_seconds|fmt_age }} <span class="text-secondary fs-5">iter age</span>
+            </div>
+            <div class="text-secondary small">runtime: {{ rstat }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-sm">
+      <div class="card-body">
+        <div class="row align-items-center">
+          <div class="col-auto"><span class="bg-cyan-lt text-cyan avatar"><i class="ti ti-cpu"></i></span></div>
+          <div class="col">
+            <div class="font-weight-medium">
+              {{ s.cpu_busy_ratio|fmt_pct }} <span class="text-secondary fs-5">cpu</span>
+            </div>
+            <div class="text-secondary small">load {{ s.load1|fmt_n(2) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card card-sm">
+      <div class="card-body">
+        <div class="row align-items-center">
+          <div class="col-auto">
+            {% set dfr = s.disk_free_ratio or 1.0 %}
+            <span class="bg-{{ 'danger' if dfr < 0.05 else 'warning' if dfr < 0.15 else 'success' }}-lt text-{{ 'danger' if dfr < 0.05 else 'warning' if dfr < 0.15 else 'success' }} avatar">
+              <i class="ti ti-device-floppy"></i>
+            </span>
+          </div>
+          <div class="col">
+            <div class="font-weight-medium">
+              {{ s.disk_free_ratio|fmt_pct }} <span class="text-secondary fs-5">disk free</span>
+            </div>
+            <div class="text-secondary small">mem {{ s.memory_used_ratio|fmt_pct }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,127 @@
+{# Group parquets by kind: tracked producers first, then memory/unknown.
+   Alerts only fire on live/rest; memory/unknown are informational. #}
+{% set parquets = data.snapshot.parquets %}
+{% set history  = data.history or {} %}
+{% set tracked = parquets | selectattr('kind', 'in', ['live', 'rest']) | list %}
+{% set memory  = parquets | selectattr('kind', 'equalto', 'memory') | list %}
+{% set unknown = parquets | selectattr('kind', 'equalto', 'unknown') | list %}
+
+<table class="table table-vcenter table-hover card-table">
+  <thead>
+    <tr>
+      <th>producer</th>
+      <th>file</th>
+      <th class="w-1">kind</th>
+      <th class="text-end w-1">age</th>
+      <th class="text-end w-1">size</th>
+      <th class="text-end w-1">rows</th>
+      <th class="text-end w-1">rows/min</th>
+      <th class="text-center" style="width:120px">trend</th>
+      <th class="w-1">schema</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="table-light"><td colspan="9" class="text-secondary small fw-bold">TRACKED PRODUCERS</td></tr>
+    {% if not tracked %}
+      <tr><td colspan="9" class="text-center text-secondary p-3">no tracked producers</td></tr>
+    {% endif %}
+    {% for p in tracked %}
+      {% set age = p.age_seconds or 0 %}
+      {% set thresh_warn = 30 if p.kind == 'live' else 60 %}
+      {% set thresh_crit = 60 if p.kind == 'live' else 120 %}
+      {% set state = 'crit' if age >= thresh_crit else 'warn' if age >= thresh_warn else 'ok' %}
+      <tr class="{{ 'text-warning' if state == 'warn' else 'text-danger' if state == 'crit' }}">
+        <td class="font-monospace">
+          <span class="status-dot status-{{ 'green' if state == 'ok' else 'yellow' if state == 'warn' else 'red' }} me-1"></span>
+          {{ p.producer or '?' }}
+        </td>
+        <td class="font-monospace">
+          <a href="/state?file={{ p.file }}" class="text-reset">{{ p.file }}</a>
+        </td>
+        <td><span class="badge bg-{{ 'info' if p.kind == 'live' else 'cyan' }}-lt">{{ p.kind }}</span></td>
+        <td class="text-end font-monospace">{{ p.age_seconds|fmt_age }}</td>
+        <td class="text-end font-monospace">{{ p.size_bytes|fmt_bytes }}</td>
+        <td class="text-end font-monospace">{{ p.rows|fmt_n(0) }}</td>
+        <td class="text-end font-monospace">{{ p.rows_per_minute|fmt_n(1) }}</td>
+        <td class="text-center p-1">
+          <canvas class="spark" width="110" height="22" data-history='{{ history.get(p.file, [])|tojson }}'></canvas>
+        </td>
+        <td>
+          {% if p.schema_valid %}
+            <span class="badge bg-success-lt">ok</span>
+          {% else %}
+            <span class="badge bg-danger-lt">INVALID</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+
+    {% if memory %}
+      <tr class="table-light"><td colspan="9" class="text-secondary small fw-bold">PIPELINE MEMORY (sparse-write OK, no freshness alerts)</td></tr>
+      {% for p in memory %}
+        <tr class="text-secondary">
+          <td class="font-monospace">pipeline</td>
+          <td class="font-monospace">
+            <a href="/state?file={{ p.file }}" class="text-reset">{{ p.file }}</a>
+          </td>
+          <td><span class="badge bg-secondary-lt">memory</span></td>
+          <td class="text-end font-monospace">{{ p.age_seconds|fmt_age }}</td>
+          <td class="text-end font-monospace">{{ p.size_bytes|fmt_bytes }}</td>
+          <td class="text-end font-monospace">{{ p.rows|fmt_n(0) }}</td>
+          <td class="text-end font-monospace">{{ p.rows_per_minute|fmt_n(1) }}</td>
+          <td class="text-center p-1">
+            <canvas class="spark" width="110" height="22" data-history='{{ history.get(p.file, [])|tojson }}'></canvas>
+          </td>
+          <td>
+            {% if p.schema_valid %}<span class="text-success">ok</span>{% else %}<span class="text-danger">—</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    {% endif %}
+
+    {% if unknown %}
+      <tr class="table-light"><td colspan="9" class="text-secondary small fw-bold">UNKNOWN (not in producer map)</td></tr>
+      {% for p in unknown %}
+        <tr class="text-secondary">
+          <td class="font-monospace">—</td>
+          <td class="font-monospace"><a href="/state?file={{ p.file }}" class="text-reset">{{ p.file }}</a></td>
+          <td><span class="badge bg-secondary-lt">unknown</span></td>
+          <td class="text-end font-monospace">{{ p.age_seconds|fmt_age }}</td>
+          <td class="text-end font-monospace">{{ p.size_bytes|fmt_bytes }}</td>
+          <td class="text-end font-monospace">{{ p.rows|fmt_n(0) }}</td>
+          <td class="text-end font-monospace">{{ p.rows_per_minute|fmt_n(1) }}</td>
+          <td></td>
+          <td><span class="text-secondary">—</span></td>
+        </tr>
+      {% endfor %}
+    {% endif %}
+  </tbody>
+</table>
+
+<script>
+// Draw tiny sparklines on every canvas.spark in this partial. Vanilla canvas
+// keeps the partial cheap to re-render every HTMX swap (no Chart.js teardown).
+(function () {
+  document.querySelectorAll('canvas.spark').forEach(function (el) {
+    let pts;
+    try { pts = JSON.parse(el.dataset.history); } catch { return; }
+    if (!Array.isArray(pts) || pts.length < 2) return;
+
+    const W = el.width, H = el.height, pad = 2;
+    const ctx = el.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    const ys = pts.map(p => p[1]);
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const range = (yMax - yMin) || 1;
+    ctx.strokeStyle = '#206bc4';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    pts.forEach(function (p, i) {
+      const x = pad + (i / (pts.length - 1)) * (W - 2 * pad);
+      const y = H - pad - ((p[1] - yMin) / range) * (H - 2 * pad);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+})();
+</script>

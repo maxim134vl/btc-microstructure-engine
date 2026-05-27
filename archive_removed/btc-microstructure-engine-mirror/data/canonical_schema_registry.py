@@ -1,0 +1,1 @@
+/app/canonical_schema_registry.py

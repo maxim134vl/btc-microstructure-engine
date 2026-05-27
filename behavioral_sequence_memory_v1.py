@@ -6,6 +6,7 @@ import pandas as pd
 import os
 
 from datetime import datetime
+from storage.path_registry import resolve_write
 
 print()
 print("BEHAVIORAL SEQUENCE MEMORY")
@@ -257,7 +258,7 @@ if len(combined) > MAX_ROWS:
 # =====================================
 
 temp_file = (
-    MEMORY_FILE + ".tmp"
+    resolve_write(MEMORY_FILE) + ".tmp"
 )
 
 combined.to_parquet(
@@ -267,7 +268,7 @@ combined.to_parquet(
 
 os.replace(
     temp_file,
-    MEMORY_FILE
+    resolve_write(MEMORY_FILE)
 )
 
 # =====================================

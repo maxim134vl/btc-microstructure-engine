@@ -1,0 +1,269 @@
+# =============================================================================
+# docker-compose.monitoring.yml
+# -----------------------------------------------------------------------------
+# Simplified stack: health-api is the only UI/edge surface. No Traefik,
+# Prometheus, Grafana, Alertmanager, Loki, or Promtail. health-api scrapes
+# metrics-exporter / cadvisor / node-exporter directly and talks to the
+# Docker socket (read-only) for container introspection and log tail.
+#
+# Services (7):
+#   * metrics-exporter   :9101  (internal) parquet/feature observer
+#   * alert-engine       :9102  (internal) self-evaluating rule engine
+#   * watchdog           :9103  (internal) self-healing
+#   * health-api         :8080  (HOST)     Bootstrap admin UI + API
+#   * redis              :6379  (internal) alert state + pubsub
+#   * cadvisor           :8080  (internal) container metrics
+#   * node-exporter      :9100  (internal) host metrics
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-base: &svc-base
+  restart: unless-stopped
+  logging: *default-logging
+  security_opt:
+    - no-new-privileges:true
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # metrics-exporter — domain-aware observer of the engine's parquet store
+  # ---------------------------------------------------------------------------
+  metrics-exporter:
+    <<: *svc-base
+    image: btc-metrics-exporter:${OBS_IMAGE_TAG:-latest}
+    build:
+      context: ../services/metrics-exporter
+      dockerfile: Dockerfile
+    container_name: btc_obs_metrics_exporter
+    hostname: metrics-exporter
+    user: "10001:10001"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      DATA_DIR: "/data"
+      METRICS_EXPORTER_PORT: "9101"
+      METRICS_EXPORTER_SCAN_INTERVAL_SECONDS: "${METRICS_EXPORTER_SCAN_INTERVAL_SECONDS:-10}"
+      METRICS_EXPORTER_FEATURE_SAMPLE_ROWS: "${METRICS_EXPORTER_FEATURE_SAMPLE_ROWS:-2000}"
+    volumes:
+      # Bind mount (repo-root/data) — same dir the engine writes to.
+      # :ro so observer can't tamper with the source.
+      - ../../data:/data:ro
+    networks:
+      - obsplane
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9101/healthz',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # alert-engine — self-evaluating rule engine over metrics-exporter snapshot
+  # ---------------------------------------------------------------------------
+  alert-engine:
+    <<: *svc-base
+    image: btc-alert-engine:${OBS_IMAGE_TAG:-latest}
+    build:
+      context: ../services/alert-engine
+      dockerfile: Dockerfile
+    container_name: btc_obs_alert_engine
+    hostname: alert-engine
+    user: "10001:10001"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      ALERT_ENGINE_PORT: "9102"
+      ALERT_ENGINE_REDIS_URL: "redis://redis:6379/0"
+      ALERT_ENGINE_METRICS_URL: "http://metrics-exporter:9101"
+      ALERT_ENGINE_EVAL_INTERVAL_SECONDS: "${ALERT_ENGINE_EVAL_INTERVAL_SECONDS:-15}"
+      ALERT_ENGINE_COOLDOWN_DEFAULT_SECONDS: "${ALERT_ENGINE_COOLDOWN_DEFAULT_SECONDS:-300}"
+    networks:
+      - obsplane
+    depends_on:
+      redis:
+        condition: service_healthy
+      metrics-exporter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9102/healthz',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # watchdog — self-healing (queries metrics-exporter directly)
+  # ---------------------------------------------------------------------------
+  watchdog:
+    <<: *svc-base
+    image: btc-watchdog:${OBS_IMAGE_TAG:-latest}
+    build:
+      context: ../services/watchdog
+      dockerfile: Dockerfile
+    container_name: btc_obs_watchdog
+    hostname: watchdog
+    user: "10001:10001"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      WATCHDOG_PORT: "9103"
+      WATCHDOG_METRICS_URL: "http://metrics-exporter:9101"
+      WATCHDOG_STALL_THRESHOLD_SECONDS: "${WATCHDOG_STALL_THRESHOLD_SECONDS:-120}"
+      WATCHDOG_RESTART_BUDGET_PER_HOUR: "${WATCHDOG_RESTART_BUDGET_PER_HOUR:-10}"
+      WATCHDOG_DRY_RUN: "${WATCHDOG_DRY_RUN:-true}"
+      WATCHDOG_ENABLED: "${WATCHDOG_ENABLED:-true}"
+    # docker.sock read-write because restart() is a POST endpoint. We rely on
+    # the docker SDK surface restriction (only restart()/inspect()/list()
+    # are reachable in our code) as the second line of defense.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "0"
+    networks:
+      - obsplane
+    depends_on:
+      metrics-exporter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9103/healthz',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # health-api — central UI server + API gateway
+  # ---------------------------------------------------------------------------
+  health-api:
+    <<: *svc-base
+    image: btc-health-api:${OBS_IMAGE_TAG:-latest}
+    build:
+      context: ../services/health-api
+      dockerfile: Dockerfile
+    container_name: btc_obs_health_api
+    hostname: health-api
+    user: "10001:10001"
+    ports:
+      - "${HEALTH_API_PORT:-8080}:8080"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      HEALTH_API_PORT: "8080"
+      HEALTH_API_METRICS_URL: "http://metrics-exporter:9101"
+      HEALTH_API_ALERT_ENGINE_URL: "http://alert-engine:9102"
+      HEALTH_API_WATCHDOG_URL: "http://watchdog:9103"
+      HEALTH_API_CADVISOR_URL: "http://cadvisor:8080"
+      HEALTH_API_NODE_EXPORTER_URL: "http://node-exporter:9100"
+      HEALTH_API_REDIS_URL: "redis://redis:6379/0"
+      HEALTH_API_REFRESH_INTERVAL_SECONDS: "${HEALTH_API_REFRESH_INTERVAL_SECONDS:-5}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    group_add:
+      - "0"
+    networks:
+      - obsplane
+    depends_on:
+      metrics-exporter:
+        condition: service_healthy
+      alert-engine:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Redis — alert state + pubsub
+  # ---------------------------------------------------------------------------
+  redis:
+    <<: *svc-base
+    image: redis:${REDIS_VERSION:-7.4-alpine}
+    container_name: btc_obs_redis
+    hostname: redis
+    user: "999:999"
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "no"
+      - "--maxmemory"
+      - "64mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+      - "--save"
+      - ""
+    volumes:
+      - btc_obs_redis:/data
+    networks:
+      - obsplane
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # cAdvisor — per-container CPU / mem / IO (scraped by health-api)
+  # ---------------------------------------------------------------------------
+  cadvisor:
+    <<: *svc-base
+    image: gcr.io/cadvisor/cadvisor:${CADVISOR_VERSION:-v0.49.1}
+    container_name: btc_obs_cadvisor
+    hostname: cadvisor
+    privileged: false
+    devices:
+      - /dev/kmsg
+    command:
+      - "--port=8080"
+      - "--housekeeping_interval=10s"
+      - "--docker_only=true"
+      - "--store_container_labels=false"
+      - "--disable_metrics=disk,diskIO,tcp,udp,percpu,sched,process,hugetlb,referenced_memory,resctrl,cpu_topology,advtcp,oom_event,network"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    networks:
+      - obsplane
+
+  # ---------------------------------------------------------------------------
+  # node-exporter — host CPU / mem / disk (scraped by health-api)
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    <<: *svc-base
+    image: prom/node-exporter:${NODE_EXPORTER_VERSION:-v1.8.2}
+    container_name: btc_obs_node_exporter
+    hostname: node-exporter
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker/.+|var/lib/containers/.+)($$|/)"
+      - "--collector.netclass.ignored-devices=^(veth.*|docker.*|lo|br-.*)$$"
+      - "--web.listen-address=:9100"
+      - "--no-collector.wifi"
+      - "--no-collector.hwmon"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro
+    networks:
+      - obsplane
+
+volumes:
+  btc_obs_redis:
+    name: btc_obs_redis
+    driver: local
+  # Engine data is bind-mounted from the host (../../data) — no named volume.
+
+networks:
+  obsplane:
+    name: btc_obs_obsplane
+    driver: bridge

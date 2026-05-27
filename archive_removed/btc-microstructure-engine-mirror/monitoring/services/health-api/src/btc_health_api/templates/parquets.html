@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Data Flow{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">observability</div>
+        <h2 class="page-title">Data Flow · Parquet Store</h2>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row row-cards">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">parquet inventory</h3>
+        <div class="card-actions text-secondary small">
+          green = fresh · yellow = aging · red = stale
+        </div>
+      </div>
+      <div id="parquets-table" hx-get="/partials/parquets-table"
+           hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+        {% include "partials/parquets_table.html" %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row row-cards mt-3">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header"><h3 class="card-title">feature health</h3></div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead><tr><th>dataset / feature</th><th class="text-end">NaN %</th><th class="text-end">inf</th><th class="text-end">z mean</th><th class="text-end">z std</th></tr></thead>
+          <tbody>
+            {% for f in data.snapshot.features %}
+              <tr class="{{ 'text-danger' if (f.nan_ratio or 0) > 0.1 else 'text-warning' if (f.nan_ratio or 0) > 0.01 }}">
+                <td class="font-monospace">{{ f.dataset }} / <strong>{{ f.feature }}</strong></td>
+                <td class="text-end font-monospace">{{ (f.nan_ratio or 0)|fmt_pct }}</td>
+                <td class="text-end font-monospace">{{ f.inf_count or 0 }}</td>
+                <td class="text-end font-monospace">{{ f.zmean|fmt_n(4) }}</td>
+                <td class="text-end font-monospace">{{ f.zstd|fmt_n(4) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header"><h3 class="card-title">regime distribution</h3></div>
+      <div class="card-body">
+        {% set reg = data.snapshot.regime %}
+        {% if reg and reg.distribution %}
+          <div class="mb-2 text-secondary small">
+            entropy <strong>{{ reg.entropy_bits|fmt_n(3) }}</strong> bit
+            · sampled from <span class="font-monospace">{{ reg.file or '—' }}</span>
+          </div>
+          {% for r in reg.distribution %}
+            <div class="mb-2">
+              <div class="d-flex">
+                <span class="font-monospace">{{ r.regime }}</span>
+                <span class="ms-auto font-monospace">{{ (r.p * 100)|round(1) }}%</span>
+              </div>
+              <div class="progress progress-sm">
+                <div class="progress-bar bg-primary" style="width: {{ (r.p * 100)|round(1) }}%"></div>
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="text-secondary">no regime data yet</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

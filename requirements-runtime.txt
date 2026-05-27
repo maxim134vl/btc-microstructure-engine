@@ -1,0 +1,7 @@
+# Minimal runtime dependencies — Phase 4B normalized set
+# Full lockfile: requirements.txt
+
+pandas>=2.0
+pyarrow>=14.0
+numpy>=1.26
+ccxt>=4.0

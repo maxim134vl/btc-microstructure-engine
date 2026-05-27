@@ -1,0 +1,80 @@
+{# Multi-line history chart for tracked producers (live + rest).
+   Vanilla canvas — no Chart.js instance to leak across HTMX swaps. #}
+{% set parquets = data.snapshot.parquets %}
+{% set history  = data.history or {} %}
+{% set tracked  = parquets | selectattr('kind', 'in', ['live', 'rest']) | list %}
+
+{% if not tracked %}
+  <div class="empty p-3">
+    <p class="empty-title text-secondary small">no tracked producers</p>
+  </div>
+{% else %}
+  <div class="card-body p-3">
+    <div class="d-flex flex-wrap gap-3 mb-2 small">
+      {% set palette = ['#206bc4', '#4ec9b0', '#f59f00', '#ae3ec9', '#74b816', '#e8590c', '#0ca678', '#fa5252'] %}
+      {% for p in tracked %}
+        {% set color = palette[loop.index0 % palette|length] %}
+        <span>
+          <span class="d-inline-block" style="width:10px;height:10px;background:{{ color }};border-radius:2px;vertical-align:middle"></span>
+          <span class="font-monospace text-secondary">{{ p.producer }}</span>
+          <span class="font-monospace">{{ p.rows|fmt_n(0) }}</span>
+        </span>
+      {% endfor %}
+    </div>
+    <canvas id="live-feeds-chart" height="180"
+            data-series='{
+              "files": {{ tracked|map(attribute='file')|list|tojson }},
+              "names": {{ tracked|map(attribute='producer')|list|tojson }},
+              "history": {{ history|tojson }}
+            }'></canvas>
+  </div>
+
+  <script>
+  (function () {
+    const el = document.getElementById('live-feeds-chart');
+    if (!el) return;
+    let cfg;
+    try { cfg = JSON.parse(el.dataset.series); } catch { return; }
+    const palette = ['#206bc4', '#4ec9b0', '#f59f00', '#ae3ec9', '#74b816', '#e8590c', '#0ca678', '#fa5252'];
+
+    // resize to parent width on every render
+    const W = el.width = el.parentElement.clientWidth - 32;
+    const H = el.height;
+    const ctx = el.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    // gather all (file, series). Normalize each to [0..1] of its own range
+    // so a high-volume file doesn't squash low-volume ones.
+    const series = cfg.files.map(f => cfg.history[f] || []).filter(s => s.length > 1);
+    if (!series.length) {
+      ctx.fillStyle = '#aaa';
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.fillText('not enough samples yet — wait one scan cycle…', 12, H / 2);
+      return;
+    }
+
+    // grid lines
+    ctx.strokeStyle = '#eef0f3'; ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = (i / 4) * H;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    series.forEach(function (pts, idx) {
+      const ys = pts.map(p => p[1]);
+      const yMin = Math.min(...ys), yMax = Math.max(...ys);
+      const range = (yMax - yMin) || 1;
+      const color = palette[idx % palette.length];
+      ctx.strokeStyle = color; ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      pts.forEach(function (p, i) {
+        const x = (i / (pts.length - 1)) * W;
+        // 6% padding top/bottom so lines don't touch the edges
+        const y = H - 0.06 * H - ((p[1] - yMin) / range) * (H * 0.88);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
+  })();
+  </script>
+{% endif %}

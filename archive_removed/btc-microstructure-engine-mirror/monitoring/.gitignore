@@ -1,0 +1,37 @@
+# local secrets / env
+.env
+.env.local
+.env.*.local
+
+# generated TLS — keep the directory but exclude any cert/key material
+infra/traefik/certs/*.pem
+infra/traefik/certs/*.key
+infra/traefik/certs/*.crt
+infra/traefik/certs/*.csr
+infra/traefik/acme.json
+
+# generated htpasswd (bcrypt entries land in .env, the file itself is not committed)
+infra/traefik/htpasswd
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# node
+services/monitor-ui/node_modules/
+services/monitor-ui/dist/
+
+# backups (local)
+backups/
+
+# editor
+.idea/
+.vscode/
+.DS_Store

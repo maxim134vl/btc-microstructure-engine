@@ -1,0 +1,19 @@
+<div class="list-group list-group-flush">
+{% for d in view.domains %}
+  {% set color = {'ok':'success','degraded':'warning','down':'danger','unknown':'secondary'}.get(d.status, 'secondary') %}
+  <div class="list-group-item">
+    <div class="row align-items-center">
+      <div class="col-auto">
+        <span class="status-dot status-dot-animated status-{{ color }}"></span>
+      </div>
+      <div class="col text-truncate">
+        <span class="text-reset d-block">{{ d.name|upper }}</span>
+        <div class="d-block text-secondary text-truncate mt-n1 small">{{ d.summary }}</div>
+      </div>
+      <div class="col-auto">
+        <span class="badge bg-{{ color }}-lt">{{ d.status }}</span>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+</div>

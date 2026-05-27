@@ -1,0 +1,1 @@
+/app/bearish_research_logger_v1.py

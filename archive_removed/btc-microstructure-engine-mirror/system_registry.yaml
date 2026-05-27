@@ -1,0 +1,126 @@
+collectors:
+
+  live_binance_feed_v2:
+    status: active
+    role: live_market_feed
+    critical: true
+
+  intraday_rest_collector:
+    status: active
+    role: historical_rest_collector
+    critical: true
+    warning: high_cpu_usage
+
+  orderbook_collector:
+    status: active
+    role: liquidity_microstructure
+
+  liquidation_collector:
+    status: active
+    role: liquidation_feed
+
+  oi_collector:
+    status: active
+    role: open_interest_feed
+
+  multi_exchange_collector:
+    status: active
+    role: cross_exchange_data
+
+
+runtime:
+
+  autonomous_runtime_v1:
+    status: active
+    role: recursive_cognition_runtime
+    critical: true
+
+  live_cognitive_orchestrator_v1:
+    status: uncertain
+    role: legacy_orchestrator
+    warning: possible_runtime_overlap
+
+  live_engine_runner:
+    status: uncertain
+    role: legacy_runner
+
+
+core_cognition:
+
+  candle_geometry_incremental_v3:
+    status: active
+
+  volume_localization_incremental_v3:
+    status: active
+
+  live_volume_flow_engine_v1:
+    status: active
+
+  flow_liquidity_interaction_engine_v3:
+    status: active
+
+  intent_validation_engine_v1:
+    status: active
+
+  live_mutation_runtime_engine_v1:
+    status: active
+
+  cognitive_confidence_engine_v1:
+    status: active
+
+  temporal_decay_engine_v2:
+    status: active
+
+  volatility_adaptive_engine_v1:
+    status: active
+
+  htf_structure_engine_v1:
+    status: active
+
+  htf_ltf_context_engine_v1:
+    status: active
+
+  fractal_memory_engine_v1:
+    status: active
+
+  predictive_sequence_engine_v1:
+    status: active
+
+
+legacy_engines:
+
+  acceptance_engine:
+    status: legacy
+
+  inventory_engine:
+    status: legacy
+
+  liquidity_vacuum_engine:
+    status: legacy
+
+  market_narrative_engine:
+    status: legacy
+
+  narrative_validation_engine:
+    status: legacy
+
+  volume_memory_engine:
+    status: legacy
+
+  divergence_aftermath_engine:
+    status: legacy
+
+  structure_engine:
+    status: legacy
+
+  regime_engine:
+    status: legacy
+
+
+experimental:
+
+  live_research_lab:
+    status: experimental
+
+  initiative_memory_engine_v4:
+    status: experimental

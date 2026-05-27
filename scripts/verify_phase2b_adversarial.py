@@ -9,6 +9,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+from parquet_utils import safe_read_parquet
+
 
 def bootstrap_runtime(enable_adversarial: bool = False) -> None:
     if enable_adversarial:
@@ -61,7 +63,7 @@ def check_failure_mode_exports_default() -> bool:
     import pandas as pd
 
     bootstrap_runtime(enable_adversarial=False)
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
 
     required = [
@@ -88,7 +90,7 @@ def check_adversarial_exports_enabled() -> bool:
     import pandas as pd
 
     bootstrap_runtime(enable_adversarial=True)
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
 
     if not bool(latest.get("adversarial_diagnostics_active")):

@@ -9,6 +9,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+from parquet_utils import safe_read_parquet
+
 
 def bootstrap_runtime() -> None:
     from runtime_cognition_engine_v1 import run as run_runtime_cognition
@@ -31,7 +33,7 @@ def check_regime_exports() -> bool:
     import pandas as pd
 
     bootstrap_runtime()
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
 
     required = [
@@ -72,7 +74,7 @@ def check_regime_exports() -> bool:
 def check_drift_metrics() -> bool:
     import pandas as pd
 
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
     required = [
         "calibration_drift_score",
@@ -100,7 +102,7 @@ def check_drift_metrics() -> bool:
 def check_walk_forward_stability() -> bool:
     import pandas as pd
 
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
     required = [
         "walk_forward_epoch",

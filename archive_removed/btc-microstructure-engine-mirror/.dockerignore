@@ -1,0 +1,41 @@
+# exclude things that bloat the build context or aren't needed at runtime
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+
+# local virtualenv
+venv/
+.venv/
+
+# editor / OS
+.idea/
+.vscode/
+.DS_Store
+.ipynb_checkpoints/
+
+# large data artifacts — these are produced at runtime in the volume
+*.parquet
+*.npy
+*.npz
+*.csv
+*.png
+*.jpg
+*.pdf
+
+# legacy / archive trees (not used by canonical runtime)
+archive/
+legacy/
+
+# notebooks
+*.ipynb
+
+# audits / dumps
+directories_snapshot.txt
+project_structure.txt
+parquet_inventory.txt
+
+# secrets / env
+.env
+.env.*

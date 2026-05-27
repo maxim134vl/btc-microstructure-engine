@@ -8,6 +8,7 @@ sys.path.insert(0, ROOT)
 
 import pandas as pd
 
+from parquet_utils import safe_read_parquet
 from runtime_integrity import (
     ALIGNMENT_STATUS_VALID,
     enrich_alignment_status,
@@ -48,7 +49,7 @@ def check_lineage_columns() -> bool:
             ok = False
             continue
 
-        frame = pd.read_parquet(path)
+        frame = safe_read_parquet(path)
         if len(frame) == 0:
             print(f"WARN: {path} empty")
             continue
@@ -78,8 +79,8 @@ def check_alignment_integrity() -> bool:
         print("FAIL: runtime cognition parquet missing")
         return False
 
-    cognition = pd.read_parquet(RUNTIME_COGNITION_MEMORY_PATH)
-    synthesis = pd.read_parquet(SYNTHESIS_OUTPUT_PATH)
+    cognition = safe_read_parquet(RUNTIME_COGNITION_MEMORY_PATH)
+    synthesis = safe_read_parquet(SYNTHESIS_OUTPUT_PATH)
 
     enriched = enrich_alignment_status(
         cognition,
@@ -170,7 +171,7 @@ def check_conviction_decomposition() -> bool:
             ok = False
             continue
 
-        frame = pd.read_parquet(path)
+        frame = safe_read_parquet(path)
         if len(frame) == 0:
             print(f"WARN: {path} empty")
             continue
@@ -194,8 +195,8 @@ def check_no_stale_cognition_injection() -> bool:
     run_runtime_cognition()
     refresh_state()
 
-    cognition = pd.read_parquet(RUNTIME_COGNITION_MEMORY_PATH)
-    synthesis = pd.read_parquet(SYNTHESIS_OUTPUT_PATH)
+    cognition = safe_read_parquet(RUNTIME_COGNITION_MEMORY_PATH)
+    synthesis = safe_read_parquet(SYNTHESIS_OUTPUT_PATH)
     enriched = enrich_alignment_status(cognition, synthesis=synthesis)
 
     latest = enriched.iloc[-1]

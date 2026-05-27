@@ -1,6 +1,6 @@
 # REPO NORMALIZATION PLAN
 
-**Status:** Phase 4A — in progress  
+**Status:** Phase 4B — complete  
 **Updated:** 2026-05-27
 
 ---
@@ -19,20 +19,34 @@
 
 ---
 
-## 2. Pending (Post-4A)
+## 2. Completed (Phase 4B)
 
-| Item | Action |
-|------|--------|
-| `btc-microstructure-engine/` mirror | Archive entire tree → `archive_removed/btc-microstructure-engine-mirror/` |
-| Inventory snapshots | Move `python_files.txt`, `parquet_inventory.txt`, etc. → `archive_removed/snapshots/` |
-| Generated audit docs | Relocate to `reports/` or exclude from commits |
-| Root `.parquet` files | Migrate to `data/` (Migration Phase 9) |
-| `master_auction_runtime_v1.py` | Convert to thin shim after pipeline validation |
-| Deprecated orchestrators | Archive `autonomous_runtime_v*`, `behavioral_runtime_loop_v1` |
+- [x] `storage/path_registry.py` — canonical parquet truth
+- [x] `data/` layout with legacy migration shims
+- [x] `master_auction_runtime_v1.py` → thin deprecation shim
+- [x] Legacy orchestrators deprecated with warnings
+- [x] Mirror archived → `archive_removed/btc-microstructure-engine-mirror/`
+- [x] `runtime_hardening.py` operational gate
+- [x] `scripts/bootstrap_runtime.sh` reproducible deploy
+- [x] Expanded `scripts/final_repo_audit.py`
+- [x] `scripts/verify_phase4b_hardening.py`
+- [x] `pyproject.toml` + `requirements-runtime.txt` normalization
+- [x] Platform freeze candidate documentation
 
 ---
 
-## 3. Non-Goals (Frozen)
+## 3. Remaining (Post-4B)
+
+| Item | Action |
+|------|--------|
+| Root engine → package migration | `src/btc_ml/services/` |
+| Root shim removal | After import normalization |
+| Non-pipeline script parquet paths | Gradual registry adoption |
+| CI / Makefile / lint | DevOps hardening |
+
+---
+
+## 4. Non-Goals (Frozen)
 
 - Ontology expansion or redesign
 - Threshold recalibration
@@ -41,4 +55,4 @@
 
 ---
 
-*See also: `docs/DUPLICATE_RESOLUTION_PLAN.md`*
+*See also: `docs/FINAL_PLATFORM_FREEZE.md`, `docs/LEGACY_DEPRECATION_PLAN.md`*

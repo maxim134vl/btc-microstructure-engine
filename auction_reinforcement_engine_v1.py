@@ -10,6 +10,7 @@ from runtime_integrity import (
 )
 from runtime_lineage import apply_lineage_metadata
 from state_manager_v1 import STATE
+from storage.path_registry import resolve_read, resolve_write
 
 
 def _belief_entropy(window: pd.DataFrame) -> float:
@@ -96,7 +97,7 @@ def run():
     try:
 
         memory = pd.read_parquet(
-            "auction_reinforcement_memory.parquet"
+            resolve_read("auction_reinforcement_memory.parquet")
         )
 
     except:
@@ -390,7 +391,7 @@ def run():
     memory = memory.tail(100)
 
     memory.to_parquet(
-        "auction_reinforcement_memory.parquet"
+        resolve_write("auction_reinforcement_memory.parquet")
     )
 
     STATE["auction_reinforcement"] = (

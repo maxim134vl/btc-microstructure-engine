@@ -1,0 +1,32 @@
+# =============================================================================
+# docker-compose.dev.yml — dev overrides on top of monitoring.yml.
+#
+# Effect: expose internal-only service ports to loopback for direct CLI
+# access during development. Production deploys do NOT load this overlay.
+# =============================================================================
+
+services:
+
+  metrics-exporter:
+    ports:
+      - "127.0.0.1:9101:9101"
+
+  alert-engine:
+    ports:
+      - "127.0.0.1:9102:9102"
+
+  watchdog:
+    ports:
+      - "127.0.0.1:9103:9103"
+
+  # redis not host-published in dev — 6379 often conflicts with a system
+  # redis or a phantom binding on macOS Docker Desktop. Use docker exec
+  # if you need redis-cli access.
+
+  cadvisor:
+    ports:
+      - "127.0.0.1:8090:8080"
+
+  node-exporter:
+    ports:
+      - "127.0.0.1:9100:9100"

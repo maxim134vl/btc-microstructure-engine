@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Services{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">infrastructure</div>
+        <h2 class="page-title">Services</h2>
+      </div>
+      <div class="col-auto">
+        <span class="text-secondary small">click name → tail logs · click refresh icon → restart container</span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div id="services-table" hx-get="/partials/services-table"
+       hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+    {% include "partials/services_table.html" %}
+  </div>
+</div>
+{% endblock %}

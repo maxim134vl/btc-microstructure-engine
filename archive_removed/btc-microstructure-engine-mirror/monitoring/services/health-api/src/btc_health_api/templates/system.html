@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}System{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">infrastructure</div>
+        <h2 class="page-title">System</h2>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="system-panel" hx-get="/partials/system-panel"
+     hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+  {% include "partials/system_panel.html" %}
+</div>
+{% endblock %}

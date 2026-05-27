@@ -11,6 +11,8 @@ sys.path.insert(0, ROOT)
 
 import pandas as pd
 
+from parquet_utils import safe_read_parquet
+from storage.path_registry import resolve_read
 from calibration_diagnostics import (
     CALIBRATION_EXPORT_COLUMNS,
     CONFLICT_EXPORT_COLUMNS,
@@ -45,11 +47,11 @@ def check_decomposition_integrity() -> bool:
         "auction_reinforcement_memory.parquet",
         "probabilistic_auction_memory.parquet",
     ]:
-        if not os.path.exists(path):
+        if not os.path.exists(resolve_read(path)):
             print(f"FAIL: {path} missing")
             return False
 
-        frame = pd.read_parquet(path)
+        frame = safe_read_parquet(path)
         if len(frame) == 0:
             print(f"FAIL: {path} empty")
             return False
@@ -66,7 +68,7 @@ def check_decomposition_integrity() -> bool:
 
 
 def check_saturation_metrics() -> bool:
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
     missing = set(SATURATION_EXPORT_COLUMNS) - set(frame.columns)
     if missing:
@@ -87,7 +89,7 @@ def check_saturation_metrics() -> bool:
 
 
 def check_persistence_tracking() -> bool:
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     missing = set(PERSISTENCE_EXPORT_COLUMNS) - set(frame.columns)
     if missing:
         print(f"FAIL: persistence tracking missing: {sorted(missing)}")
@@ -103,7 +105,7 @@ def check_persistence_tracking() -> bool:
 
 
 def check_contradiction_export() -> bool:
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     missing = set(CONFLICT_EXPORT_COLUMNS) - set(frame.columns)
     if missing:
         print(f"FAIL: contradiction export missing: {sorted(missing)}")
@@ -124,7 +126,7 @@ def check_contradiction_export() -> bool:
 
 
 def check_sigmoid_wrapper_consistency() -> bool:
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     missing = set(CALIBRATION_EXPORT_COLUMNS) - set(frame.columns)
     if missing:
         print(f"FAIL: sigmoid wrapper columns missing: {sorted(missing)}")
@@ -191,7 +193,7 @@ def check_realism_audit_generated() -> bool:
 
 
 def check_diagnostic_column_count() -> bool:
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
     missing = set(DIAGNOSTIC_EXPORT_COLUMNS) - set(frame.columns)
     if missing:

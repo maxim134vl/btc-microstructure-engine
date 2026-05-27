@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import datetime
+from storage.path_registry import resolve_read, resolve_write
 
 print()
 print("MICROSTRUCTURE CANDLE ENGINE")
@@ -10,7 +11,7 @@ print()
 # =====================================
 
 df = pd.read_parquet(
-    "btc_15m.parquet"
+    resolve_read("btc_15m.parquet")
 )
 
 latest = df.iloc[-1]
@@ -232,5 +233,5 @@ row = pd.DataFrame([{
 }])
 
 row.to_parquet(
-    "microstructure_candle_memory.parquet"
+    resolve_write("microstructure_candle_memory.parquet")
 )

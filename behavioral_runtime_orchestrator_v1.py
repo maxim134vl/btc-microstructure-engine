@@ -1,206 +1,24 @@
-import pandas as pd
+#!/usr/bin/env python3
+"""Deprecated behavioral orchestrator — use ./run.sh or python run.py (Phase 4B)."""
 
-print()
-print("BEHAVIORAL RUNTIME ORCHESTRATOR")
-print()
+from __future__ import annotations
 
-# =====================================
-# LOAD
-# =====================================
+import sys
+import warnings
 
-observer = pd.read_parquet(
-    "behavioral_observer_state.parquet"
-)
 
-execution = pd.read_parquet(
-    "behavioral_execution_state.parquet"
-)
-
-sequence = pd.read_parquet(
-    "behavioral_sequence_memory.parquet"
-)
-
-# =====================================
-# LATEST
-# =====================================
-
-latest_observer = (
-    observer.iloc[-1]
-)
-
-latest_execution = (
-    execution.iloc[-1]
-)
-
-latest_sequence = (
-    sequence.iloc[-1]
-)
-
-# =====================================
-# EXTRACT
-# =====================================
-
-trade_bias = (
-    latest_execution[
-        "trade_bias"
-    ]
-)
-
-execution_state = (
-    latest_execution[
-        "execution_state"
-    ]
-)
-
-execution_confidence = (
-    latest_execution[
-        "execution_confidence"
-    ]
-)
-
-dominant_behavior = (
-    latest_execution[
-        "dominant_behavior"
-    ]
-)
-
-persistence = (
-    latest_execution[
-        "persistence"
-    ]
-)
-
-# =====================================
-# DEFAULT ACTION
-# =====================================
-
-final_action = (
-    "STANDBY"
-)
-
-participation_state = (
-    "NO_PARTICIPATION"
-)
-
-# =====================================
-# LONG PARTICIPATION
-# =====================================
-
-if (
-
-    trade_bias == (
-        "MEAN_REVERSION_LONG"
+def main() -> int:
+    warnings.warn(
+        "behavioral_runtime_orchestrator_v1.py is deprecated; use ./run.sh or python run.py",
+        DeprecationWarning,
+        stacklevel=1,
     )
+    print()
+    print("DEPRECATED: behavioral_runtime_orchestrator_v1.py")
+    print("Canonical runtime: ./run.sh  or  python run.py")
+    print()
+    return 1
 
-    and
 
-    execution_confidence >= 0.6
-
-    and
-
-    persistence >= 2
-
-):
-
-    final_action = (
-        "PREPARE_LONG"
-    )
-
-    participation_state = (
-        "CONVICTION_BUILDING"
-    )
-
-# =====================================
-# DEFENSIVE PARTICIPATION
-# =====================================
-
-if (
-
-    trade_bias == (
-        "DEFENSIVE_LONG"
-    )
-
-    and
-
-    execution_confidence >= 0.6
-
-):
-
-    final_action = (
-        "PASSIVE_LONG_MONITOR"
-    )
-
-    participation_state = (
-        "DEFENSIVE_PARTICIPATION"
-    )
-
-# =====================================
-# NO TRADE
-# =====================================
-
-if (
-
-    trade_bias == (
-        "NO_TRADE"
-    )
-
-):
-
-    final_action = (
-        "AVOID_PARTICIPATION"
-    )
-
-    participation_state = (
-        "ROTATIONAL_ENVIRONMENT"
-    )
-
-# =====================================
-# OUTPUT
-# =====================================
-
-print(
-    "FINAL ACTION:"
-)
-
-print(
-    final_action
-)
-
-print()
-
-print(
-    "PARTICIPATION STATE:"
-)
-
-print(
-    participation_state
-)
-
-print()
-
-# =====================================
-# SAVE
-# =====================================
-
-row = pd.DataFrame([{
-
-    "final_action":
-        final_action,
-
-    "participation_state":
-        participation_state,
-
-    "execution_confidence":
-        execution_confidence,
-
-    "trade_bias":
-        trade_bias,
-
-    "dominant_behavior":
-        dominant_behavior
-
-}])
-
-row.to_parquet(
-    "behavioral_runtime_state.parquet"
-)
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from storage.path_registry import resolve_read, resolve_write
+
 print("\nVOLUME CLASSIFICATION ENGINE STARTED\n")
 
 # =====================================
@@ -8,7 +10,7 @@ print("\nVOLUME CLASSIFICATION ENGINE STARTED\n")
 # =====================================
 
 df = pd.read_parquet(
-    "candle_structure_memory.parquet"
+    resolve_read("candle_structure_memory.parquet")
 )
 
 df = df.dropna().copy()
@@ -108,7 +110,7 @@ df.loc[
 # =====================================
 
 df.to_parquet(
-    "volume_classification_memory.parquet"
+    resolve_write("volume_classification_memory.parquet")
 )
 
 # =====================================

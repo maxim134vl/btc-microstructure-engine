@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">observability</div>
+        <h2 class="page-title">Logs {% if container %}· <span class="font-monospace text-secondary fs-3">{{ container }}</span>{% endif %}</h2>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row row-cards">
+  <div class="col-md-3">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">engine</h3>
+      </div>
+      <div class="list-group list-group-flush list-group-hoverable">
+        {% for c in data.engine_containers %}
+          <a href="/logs?container={{ c.name }}" class="list-group-item list-group-item-action {% if c.name == container %}active{% endif %}">
+            <div class="row align-items-center">
+              <div class="col-auto">
+                <span class="status-dot status-{{ 'green' if c.state == 'running' else 'red' if c.state == 'exited' else 'yellow' }}"></span>
+              </div>
+              <div class="col text-truncate font-monospace">{{ c.name }}</div>
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header"><h3 class="card-title text-secondary">observability</h3></div>
+      <div class="list-group list-group-flush list-group-hoverable">
+        {% for c in data.obs_containers %}
+          <a href="/logs?container={{ c.name }}" class="list-group-item list-group-item-action {% if c.name == container %}active{% endif %}">
+            <div class="row align-items-center">
+              <div class="col-auto">
+                <span class="status-dot status-{{ 'green' if c.state == 'running' else 'red' if c.state == 'exited' else 'yellow' }}"></span>
+              </div>
+              <div class="col text-truncate font-monospace text-secondary small">{{ c.name }}</div>
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-9">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">
+          {% if container %}tail · {{ container }}{% else %}select a container{% endif %}
+        </h3>
+        <div class="card-actions">
+          {% if container %}
+            <a href="/logs?container={{ container }}" class="btn btn-sm btn-ghost-secondary"><i class="ti ti-refresh"></i></a>
+          {% endif %}
+        </div>
+      </div>
+      <div class="card-body p-0">
+        {% if container %}
+          <pre class="log-tail mb-0"
+               hx-get="/partials/logs/{{ container }}?lines=400"
+               hx-trigger="every {{ refresh_s * 2 }}s"
+               hx-swap="innerHTML"><code>{{ log_text or 'no output yet' }}</code></pre>
+        {% else %}
+          <div class="empty">
+            <p class="empty-title">no container selected</p>
+            <p class="empty-subtitle text-secondary">pick one from the list on the left</p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

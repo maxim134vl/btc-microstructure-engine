@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from storage.path_registry import resolve_read, resolve_write
+
 print("\nHTF LTF CONTEXT ENGINE STARTED\n")
 
 # =====================================
@@ -8,7 +10,7 @@ print("\nHTF LTF CONTEXT ENGINE STARTED\n")
 # =====================================
 
 flow = pd.read_parquet(
-    "live_volume_flow_memory.parquet"
+    resolve_read("live_volume_flow_memory.parquet")
 )
 
 # =====================================
@@ -16,7 +18,7 @@ flow = pd.read_parquet(
 # =====================================
 
 interactions = pd.read_parquet(
-    "flow_liquidity_interaction_memory.parquet"
+    resolve_read("flow_liquidity_interaction_memory.parquet")
 )
 
 # =====================================
@@ -24,7 +26,7 @@ interactions = pd.read_parquet(
 # =====================================
 
 htf = pd.read_parquet(
-    "htf_structure_memory.parquet"
+    resolve_read("htf_structure_memory.parquet")
 )
 
 # =====================================
@@ -295,7 +297,7 @@ context_df = pd.DataFrame(
 
 context_df.to_parquet(
 
-    "htf_ltf_context_memory.parquet",
+    resolve_write("htf_ltf_context_memory.parquet"),
 
     index=False
 

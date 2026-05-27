@@ -17,10 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 def load_probabilistic(path: Optional[str] = None) -> pd.DataFrame:
-    file_path = path or os.path.join(
-        ROOT,
-        "probabilistic_auction_memory.parquet",
-    )
+    file_path = path or "probabilistic_auction_memory.parquet"
     frame = safe_read_parquet(file_path)
     if len(frame) == 0:
         return frame
@@ -30,10 +27,7 @@ def load_probabilistic(path: Optional[str] = None) -> pd.DataFrame:
 
 
 def load_reinforcement(path: Optional[str] = None) -> pd.DataFrame:
-    file_path = path or os.path.join(
-        ROOT,
-        "auction_reinforcement_memory.parquet",
-    )
+    file_path = path or "auction_reinforcement_memory.parquet"
     frame = safe_read_parquet(file_path)
     if len(frame) == 0:
         return frame
@@ -43,10 +37,7 @@ def load_reinforcement(path: Optional[str] = None) -> pd.DataFrame:
 
 
 def load_cognition(path: Optional[str] = None) -> pd.DataFrame:
-    file_path = path or os.path.join(
-        ROOT,
-        "runtime_cognition_memory.parquet",
-    )
+    file_path = path or "runtime_cognition_memory.parquet"
     return safe_read_parquet(file_path)
 
 

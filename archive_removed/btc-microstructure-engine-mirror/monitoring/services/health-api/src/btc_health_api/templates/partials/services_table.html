@@ -1,0 +1,66 @@
+{% set rt = data.per_container_rt %}
+<table class="table table-vcenter table-hover card-table">
+  <thead>
+    <tr>
+      <th>name</th>
+      <th>image</th>
+      <th class="w-1">state</th>
+      <th class="w-1">health</th>
+      <th class="text-end w-1">uptime</th>
+      <th class="text-end w-1">cpu</th>
+      <th class="text-end w-1">mem</th>
+      <th class="w-1 text-end">actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if not data.engine_containers %}
+      <tr><td colspan="8" class="text-center text-secondary p-3">no engine containers detected</td></tr>
+    {% endif %}
+    {% for c in data.engine_containers %}
+      {% set rt_c = rt.get(c.name, {}) %}
+      <tr>
+        <td>
+          <div class="d-flex align-items-center">
+            <span class="status-dot status-{{ 'green' if c.state == 'running' else 'red' if c.state == 'exited' else 'yellow' }} me-2"></span>
+            <a href="/logs?container={{ c.name }}" class="text-reset font-monospace">{{ c.name }}</a>
+          </div>
+          {% if c.compose_service %}
+            <div class="text-secondary small">{{ c.compose_service }}</div>
+          {% endif %}
+        </td>
+        <td class="font-monospace text-truncate" style="max-width: 220px">{{ c.image }}</td>
+        <td><span class="badge bg-{{ 'success' if c.state == 'running' else 'danger' if c.state == 'exited' else 'secondary' }}-lt">{{ c.state }}</span></td>
+        <td>
+          {% if c.health == 'healthy' %}
+            <span class="text-success"><i class="ti ti-heartbeat"></i> healthy</span>
+          {% elif c.health == 'unhealthy' %}
+            <span class="text-danger"><i class="ti ti-heart-broken"></i> unhealthy</span>
+          {% elif c.health == 'starting' %}
+            <span class="text-warning"><i class="ti ti-loader"></i> starting</span>
+          {% else %}
+            <span class="text-secondary">—</span>
+          {% endif %}
+        </td>
+        <td class="text-end text-secondary">{{ c.uptime or '—' }}</td>
+        <td class="text-end font-monospace">
+          {% set v = rt_c.get('cpu_pct') %}
+          {% if v is not none %}{{ v|fmt_n(1) }}%{% else %}—{% endif %}
+        </td>
+        <td class="text-end font-monospace">
+          {% set v = rt_c.get('memory_bytes') %}
+          {% if v is not none %}{{ v|fmt_bytes }}{% else %}—{% endif %}
+        </td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-ghost-secondary" href="/logs?container={{ c.name }}"
+             title="view logs"><i class="ti ti-file-text"></i></a>
+          <button class="btn btn-sm btn-ghost-warning"
+                  hx-post="/api/services/{{ c.name }}/restart"
+                  hx-confirm="Restart {{ c.name }}?"
+                  hx-target="#services-table"
+                  hx-trigger="click"
+                  title="restart"><i class="ti ti-reload"></i></button>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>

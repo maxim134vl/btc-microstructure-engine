@@ -8,11 +8,13 @@ STATE_DIRECTORY = "state"
 
 DATASET_DIRECTORY = "datasets"
 
-# Canonical live market feed (see live_feed_paths.py).
-LIVE_MARKET_FEED_PARQUET = "live_market_feed.parquet"
+# Canonical live market feed (see storage/path_registry.py).
+from storage.path_registry import (  # noqa: E402
+    CANONICAL_LIVE_FEED_PATH,
+    LEGACY_LIVE_FEED_PATH as LEGACY_LIVE_FEED_PARQUET,
+)
 
-# Deprecated mirror path — kept in sync for backward compatibility.
-LEGACY_LIVE_FEED_PARQUET = "datasets/live/latest.parquet"
+LIVE_MARKET_FEED_PARQUET = CANONICAL_LIVE_FEED_PATH
 
 ENABLE_RUNTIME_CACHE = True
 

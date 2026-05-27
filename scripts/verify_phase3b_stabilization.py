@@ -9,6 +9,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+from parquet_utils import safe_read_parquet
+
 
 def bootstrap_runtime(enable_stabilization: bool = False) -> None:
     os.environ["ENABLE_ONTOLOGY_REFINEMENT"] = "true"
@@ -39,7 +41,7 @@ def check_stabilization_exports_default() -> bool:
 
     os.environ.pop("ENABLE_ONTOLOGY_STABILIZATION", None)
     bootstrap_runtime(enable_stabilization=False)
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
 
     required = [
@@ -67,7 +69,7 @@ def check_stabilization_exports_enabled() -> bool:
 
     os.environ["ENABLE_ONTOLOGY_STABILIZATION"] = "true"
     bootstrap_runtime(enable_stabilization=True)
-    frame = pd.read_parquet("probabilistic_auction_memory.parquet")
+    frame = safe_read_parquet("probabilistic_auction_memory.parquet")
     latest = frame.iloc[-1]
 
     if not bool(latest.get("ontology_stabilization_active")):

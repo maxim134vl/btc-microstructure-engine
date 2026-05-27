@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}Compare{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">observability</div>
+        <h2 class="page-title">Compare Parquets</h2>
+      </div>
+      <div class="col-auto text-secondary small">
+        side-by-side schema + sample rows + history
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+{# pickers — pick A and B, then submit #}
+<form class="row row-cards mb-3" method="get" action="/compare">
+  {% for side in [('A', a), ('B', b)] %}
+    <div class="col-md-6">
+      <div class="input-group">
+        <span class="input-group-text">{{ side[0] }}</span>
+        <select class="form-select font-monospace" name="{{ side[0]|lower }}">
+          <option value="">— select —</option>
+          {% for p in data.snapshot.parquets %}
+            <option value="{{ p.file }}" {% if p.file == side[1] %}selected{% endif %}>
+              {{ p.file }} · {{ p.kind }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  {% endfor %}
+  <div class="col-12 mt-2 d-flex gap-2 align-items-center">
+    <label class="form-label mb-0 me-2">sample rows</label>
+    {% for n in [25, 50, 100, 200] %}
+      <button name="rows" value="{{ n }}" class="btn btn-sm btn-{{ 'primary' if rows == n else 'outline-secondary' }}">{{ n }}</button>
+    {% endfor %}
+    <button type="submit" class="btn btn-sm btn-success ms-auto"><i class="ti ti-refresh"></i> compare</button>
+  </div>
+</form>
+
+{% if a and b and preview_a and preview_b %}
+  {# ----- schema diff ----- #}
+  {% set cols_a = preview_a.columns | list %}
+  {% set cols_b = preview_b.columns | list %}
+  {% set sa = cols_a | unique | list %}
+  {% set sb = cols_b | unique | list %}
+  {% set only_a = sa | reject('in', sb) | list %}
+  {% set only_b = sb | reject('in', sa) | list %}
+  {% set common = sa | select('in', sb) | list %}
+  {# type mismatches: same column name, different type string #}
+  {% set type_a = dict(zip(cols_a, preview_a.types)) %}
+  {% set type_b = dict(zip(cols_b, preview_b.types)) %}
+
+  <div class="row row-cards mb-3">
+    <div class="col-md-4">
+      <div class="card card-md">
+        <div class="card-body text-center">
+          <h3 class="mb-1">{{ common|length }}</h3>
+          <span class="text-secondary">shared columns</span>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-md">
+        <div class="card-body text-center">
+          <h3 class="mb-1 text-warning">{{ only_a|length }}</h3>
+          <span class="text-secondary">only in A</span>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-md">
+        <div class="card-body text-center">
+          <h3 class="mb-1 text-warning">{{ only_b|length }}</h3>
+          <span class="text-secondary">only in B</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row row-cards">
+
+    {# ===== column A ===== #}
+    {% for side, file, prev in [('A', a, preview_a), ('B', b, preview_b)] %}
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">{{ side }} · <span class="font-monospace">{{ file }}</span></h3>
+            <div class="card-actions">
+              <a class="btn btn-sm btn-outline-primary"
+                 href="/api/parquets/csv/{{ file }}?rows={{ prev.rows_total }}">
+                <i class="ti ti-download"></i> CSV
+              </a>
+              <a class="btn btn-sm btn-ghost-secondary" href="/state?file={{ file }}">open →</a>
+            </div>
+          </div>
+          <div class="card-body">
+
+            <div class="row text-secondary small mb-3">
+              <div class="col-4"><strong>{{ prev.rows_total|fmt_n(0) }}</strong> rows</div>
+              <div class="col-4"><strong>{{ prev.size_bytes|fmt_bytes }}</strong></div>
+              <div class="col-4"><strong>{{ prev.columns|length }}</strong> cols</div>
+            </div>
+
+            {% if history.get(file) %}
+              <div class="mb-3">
+                <canvas class="compare-spark" height="60"
+                        data-history='{{ history[file]|tojson }}'></canvas>
+              </div>
+            {% endif %}
+
+            <h5 class="mb-2">columns</h5>
+            <div class="table-responsive mb-3" style="max-height: 220px">
+              <table class="table table-sm">
+                <thead><tr><th>column</th><th>type</th></tr></thead>
+                <tbody>
+                  {% for col in prev.columns %}
+                    {% set in_other = (col in (cols_b if side == 'A' else cols_a)) %}
+                    {% set other_type = (type_b if side == 'A' else type_a).get(col) %}
+                    {% set this_type = (type_a if side == 'A' else type_b).get(col) %}
+                    {% set type_mismatch = in_other and other_type and this_type and other_type != this_type %}
+                    <tr class="{% if not in_other %}table-warning{% elif type_mismatch %}table-info{% endif %}">
+                      <td class="font-monospace small">
+                        {% if not in_other %}<i class="ti ti-arrow-{{ 'left' if side == 'B' else 'right' }} text-warning" title="only in {{ side }}"></i>{% endif %}
+                        {% if type_mismatch %}<i class="ti ti-alert-circle text-info" title="type differs"></i>{% endif %}
+                        {{ col }}
+                      </td>
+                      <td class="font-monospace text-secondary small">{{ prev.types[loop.index0] }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            <h5 class="mb-2">last {{ prev.rows_returned }} rows</h5>
+            <div class="table-responsive" style="max-height: 360px">
+              <table class="table table-sm table-striped">
+                <thead>
+                  <tr>{% for col in prev.columns %}<th class="font-monospace small">{{ col }}</th>{% endfor %}</tr>
+                </thead>
+                <tbody>
+                  {% for row in prev.rows %}
+                    <tr>
+                      {% for col in prev.columns %}
+                        <td class="font-monospace small">
+                          {%- set v = row[col] -%}
+                          {%- if v is none -%}<span class="text-secondary">—</span>
+                          {%- elif v is number -%}{{ v|fmt_n(4) if v is float else v }}
+                          {%- else -%}{{ v|string|truncate(40, True, '…') }}
+                          {%- endif -%}
+                        </td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+{% elif a or b %}
+  <div class="card">
+    <div class="card-body empty">
+      <p class="empty-title text-secondary">
+        {% if not a %}select A{% endif %}
+        {% if not b %}select B{% endif %}
+        {% if a and not preview_a %}— file A not readable{% endif %}
+        {% if b and not preview_b %}— file B not readable{% endif %}
+      </p>
+    </div>
+  </div>
+{% else %}
+  <div class="card">
+    <div class="card-body empty">
+      <p class="empty-title">pick two parquets to compare</p>
+      <p class="empty-subtitle text-secondary">
+        commonly useful for comparing schema between live producers and pipeline memory snapshots
+      </p>
+    </div>
+  </div>
+{% endif %}
+
+<script>
+(function () {
+  document.querySelectorAll('canvas.compare-spark').forEach(function (el) {
+    let pts;
+    try { pts = JSON.parse(el.dataset.history); } catch { return; }
+    if (!Array.isArray(pts) || pts.length < 2) return;
+    const ctx = el.getContext('2d');
+    const W = el.width = el.parentElement.clientWidth, H = el.height;
+    ctx.clearRect(0, 0, W, H);
+    const ys = pts.map(p => p[1]);
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const range = (yMax - yMin) || 1;
+    ctx.strokeStyle = '#206bc4';
+    ctx.fillStyle = 'rgba(32, 107, 196, 0.12)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    pts.forEach(function (p, i) {
+      const x = (i / (pts.length - 1)) * W;
+      const y = H - ((p[1] - yMin) / range) * H;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+  });
+})();
+</script>
+{% endblock %}

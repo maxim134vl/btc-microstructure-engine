@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+
+{% block page_header %}
+<div class="page-header d-print-none">
+  <div class="container-xl">
+    <div class="row g-2 align-items-center">
+      <div class="col">
+        <div class="page-pretitle">observability</div>
+        <h2 class="page-title">Alerts</h2>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row row-cards">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">active</h3>
+      </div>
+      <div id="alerts-table" hx-get="/partials/alerts-table"
+           hx-trigger="every {{ refresh_s }}s" hx-swap="innerHTML">
+        {% include "partials/alerts_table.html" %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if circuits %}
+<div class="row row-cards mt-3">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header"><h3 class="card-title">open circuit breakers (watchdog)</h3></div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead><tr><th>target</th><th class="text-end">cooloff (s)</th></tr></thead>
+          <tbody>
+            {% for target, ttl in circuits.items() %}
+              <tr><td class="font-monospace">{{ target }}</td><td class="text-end">{{ ttl|round(0)|int }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="row row-cards mt-3">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header"><h3 class="card-title">watchdog audit log (last 100)</h3></div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead><tr><th class="w-1">ts</th><th class="w-1">policy</th><th>target</th><th>reason</th><th class="w-1">outcome</th></tr></thead>
+          <tbody>
+            {% for e in audit %}
+              <tr>
+                <td class="font-monospace text-secondary small">{{ ((e.ts or 0)|int)|string }}</td>
+                <td><span class="badge bg-secondary-lt">{{ e.policy or '—' }}</span></td>
+                <td class="font-monospace">{{ e.target or '—' }}</td>
+                <td class="text-secondary small">{{ e.reason or '' }}</td>
+                <td>
+                  {% set oc = e.outcome or '' %}
+                  {% set c = 'success' if oc == 'ok' else 'warning' if oc == 'skipped' else 'danger' if oc == 'fail' else 'secondary' %}
+                  <span class="badge bg-{{ c }}-lt">{{ oc }}</span>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
