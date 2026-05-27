@@ -1,8 +1,46 @@
-import pandas as pd
+import math
+
 import numpy as np
+import pandas as pd
 
 from datetime import datetime
+from runtime_integrity import (
+    ALIGNMENT_STATUS_VALID,
+    log_runtime_warning,
+)
+from runtime_lineage import apply_lineage_metadata
 from state_manager_v1 import STATE
+
+
+def _belief_entropy(window: pd.DataFrame) -> float:
+    if len(window) == 0 or "belief_state" not in window.columns:
+        return 0.0
+
+    counts = window["belief_state"].value_counts(normalize=True)
+    entropy = 0.0
+    for probability in counts:
+        if probability > 0:
+            entropy -= probability * math.log(probability)
+    return entropy
+
+
+def _resolve_alignment(runtime_cognition: dict) -> tuple:
+    alignment_status = runtime_cognition.get(
+        "alignment_status",
+        "MISSING",
+    )
+    raw_alignment = runtime_cognition.get("alignment_score")
+
+    if alignment_status == ALIGNMENT_STATUS_VALID and raw_alignment is not None:
+        return float(raw_alignment), alignment_status, float(raw_alignment) * 0.25
+
+    log_runtime_warning(
+        f"Reinforcement skipped alignment contribution "
+        f"(status={alignment_status})"
+    )
+    return 0.0, alignment_status, 0.0
+
+
 def run():
 
     print()
@@ -13,25 +51,13 @@ def run():
 
     print()
 
-    # =====================================
-    # LOAD
-    # =====================================
-
     synthesis = STATE[
         "auction_synthesis"
-    ]
-
-    convergence = STATE[
-        "auction_convergence"
     ]
 
     latest_synthesis = (
         synthesis.iloc[-1]
     )
-
-    # =====================================
-    # RUNTIME COGNITION
-    # =====================================
 
     runtime_cognition = STATE.get(
         "runtime_cognition",
@@ -57,13 +83,8 @@ def run():
         "NONE"
     )
 
-    alignment_score = float(
-
-        runtime_cognition.get(
-            "alignment_score",
-            0.25
-        )
-
+    alignment_score, alignment_status, alignment_component = (
+        _resolve_alignment(runtime_cognition)
     )
 
     location_bias = runtime_cognition.get(
@@ -71,10 +92,6 @@ def run():
         "NEUTRAL"
 
     )
-
-    # =====================================
-    # MEMORY
-    # =====================================
 
     try:
 
@@ -86,15 +103,9 @@ def run():
 
         memory = pd.DataFrame()
 
-    # =====================================
-    # EXTRACT
-    # =====================================
-
     auction_state = latest_synthesis[
         "auction_state"
     ]
-
-    latest_synthesis = synthesis.iloc[-1]
 
     volume_response = STATE[
         "volume_response"
@@ -102,11 +113,6 @@ def run():
 
     latest_response = (
         volume_response.iloc[-1]
-    )
-
-    volume_event = latest_response.get(
-        "volume_event",
-        "NEUTRAL"
     )
 
     effort_result_state = latest_response.get(
@@ -128,127 +134,80 @@ def run():
 
     )
 
-    # =====================================
-    # INITIAL BELIEF
-    # =====================================
-
-    belief_strength = 0.5
-
-    # -------------------------------------
-    # ABSORPTION
-    # -------------------------------------
+    reinforcement_component = 0.5
 
     if effort_result_state == (
         "ABSORPTION_RESPONSE"
     ):
 
-        belief_strength += 0.15
+        reinforcement_component += 0.15
 
-    # -------------------------------------
-    # UNFINISHED AUCTION
-    # -------------------------------------
+    unfinished_auction_component = 0.0
 
     if unfinished_auction == True:
 
-        belief_strength += 0.1
-
-    # -------------------------------------
-    # DISTRIBUTION
-    # -------------------------------------
+        unfinished_auction_component = 0.1
+        reinforcement_component += 0.1
 
     if localized_behavior == (
         "localized_distribution"
     ):
 
-        belief_strength += 0.1
-
-    # -------------------------------------
-    # STRUCTURAL CONTEXT
-    # -------------------------------------
+        reinforcement_component += 0.1
 
     if auction_state != (
         "NEUTRAL"
     ):
 
-        belief_strength += 0.15
+        reinforcement_component += 0.15
 
-    # -------------------------------------
-    # COGNITION PERSISTENCE
-    # -------------------------------------
-
-    belief_strength += (
-        persistence_score * 0.2
-    )
-
-    # -------------------------------------
-    # STRUCTURAL RANK
-    # -------------------------------------
+    persistence_component = persistence_score * 0.2
+    reinforcement_component += persistence_component
 
     if structural_rank == "HIGH":
 
-        belief_strength += 0.15
-
-    # -------------------------------------
-    # EXHAUSTION PENALTY
-    # -------------------------------------
+        reinforcement_component += 0.15
 
     if synthesis_state == (
         "LOCAL_EXHAUSTION"
     ):
 
-        belief_strength -= 0.2
+        reinforcement_component -= 0.2
 
-    # -------------------------------------
-    # MTF ALIGNMENT
-    # -------------------------------------
+    belief_strength = reinforcement_component
+    belief_strength += alignment_component
 
-    belief_strength += (
-        alignment_score * 0.25
-    )
-
-    # -------------------------------------
-    # LOCATION BIAS
-    # -------------------------------------
+    location_component = 0.0
 
     if location_bias == (
         "LOWER_ABSORPTION"
     ):
 
+        location_component += 0.20
         belief_strength += 0.20
-
-    # -------------------------------------
 
     if location_bias == (
         "UPPER_DISTRIBUTION"
     ):
 
+        location_component -= 0.15
         belief_strength -= 0.15
-
-    # -------------------------------------
 
     if location_bias == (
         "MID_AUCTION_TRANSFER"
     ):
 
+        location_component -= 0.10
         belief_strength -= 0.10
-
-    # -------------------------------------
 
     if location_bias == (
         "LOWER_CAPITULATION"
     ):
 
+        location_component += 0.10
         belief_strength += 0.10
 
-    # =====================================
-    # CONFLICT SUPPRESSION
-    # =====================================
-
     conflict_score = 0
-
-    # -------------------------------------
-    # LOW ALIGNMENT + HIGH CONVICTION
-    # -------------------------------------
 
     if (
         alignment_score < 0.50
@@ -257,10 +216,6 @@ def run():
     ):
 
         conflict_score += 0.20
-
-    # -------------------------------------
-    # STRUCTURAL CONFLICT
-    # -------------------------------------
 
     if (
 
@@ -274,25 +229,16 @@ def run():
 
         conflict_score += 0.10
 
-    # -------------------------------------
-    # MID AUCTION TRANSFER
-    # -------------------------------------
-
     if location_bias == (
         "MID_AUCTION_TRANSFER"
     ):
 
         conflict_score += 0.10
 
-    # =====================================
-    # APPLY SUPPRESSION
-    # =====================================
+    conflict_penalty = conflict_score
+    belief_strength -= conflict_penalty
 
-    belief_strength -= conflict_score
-
-    # =====================================
-    # DIMINISHING RETURNS
-    # =====================================
+    entropy_penalty = _belief_entropy(memory.tail(25))
 
     belief_strength = (
 
@@ -306,10 +252,6 @@ def run():
 
     )
 
-    # =====================================
-    # NORMALIZATION
-    # =====================================
-
     belief_strength = max(
         0,
         min(
@@ -318,15 +260,9 @@ def run():
         )
     )
 
-    # =====================================
-    # BELIEF STATE
-    # =====================================
-
     belief_state = (
         "NEUTRAL_CONVICTION"
     )
-
-    # -------------------------------------
 
     if belief_strength >= 0.8:
 
@@ -334,17 +270,11 @@ def run():
             "HIGH_CONVICTION"
         )
 
-    # -------------------------------------
-
     elif belief_strength >= 0.65:
 
         belief_state = (
             "MODERATE_CONVICTION"
         )
-
-    # =====================================
-    # OUTPUT
-    # =====================================
 
     print(
         "BELIEF STATE:"
@@ -376,10 +306,6 @@ def run():
 
     print()
 
-    # =====================================
-    # SAVE
-    # =====================================
-
     row = pd.DataFrame([{
 
         "auction_state":
@@ -400,7 +326,45 @@ def run():
         "timestamp":
             datetime.utcnow(),
 
+        "alignment_status":
+            alignment_status,
+
+        "alignment_component":
+            alignment_component,
+
+        "persistence_component":
+            persistence_component,
+
+        "location_component":
+            location_component,
+
+        "unfinished_auction_component":
+            unfinished_auction_component,
+
+        "entropy_penalty":
+            entropy_penalty,
+
+        "conflict_penalty":
+            conflict_penalty,
+
+        "reinforcement_component":
+            reinforcement_component,
+
     }])
+
+    row = apply_lineage_metadata(
+        row,
+        engine_name="auction_reinforcement_engine_v1.py",
+        source_parquet="auction_synthesis_memory.parquet",
+        dependency_chain=[
+            "runtime_cognition_memory.parquet",
+            "auction_synthesis_memory.parquet",
+            "volume_response_state.parquet",
+            "auction_reinforcement_engine_v1.py",
+            "auction_reinforcement_memory.parquet",
+        ],
+        event_timestamp_col="timestamp",
+    )
 
     memory = pd.concat([
 
@@ -418,6 +382,7 @@ def run():
     STATE["auction_reinforcement"] = (
         memory
     )
+
 
 if __name__ == "__main__":
 

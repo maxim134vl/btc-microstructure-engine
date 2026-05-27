@@ -12,50 +12,17 @@ from runtime_integrity import (
     log_runtime_error,
     log_runtime_warning,
 )
-from runtime_lineage import lineage_record_from_row
 from state_manager_v1 import STATE
 
-RUNTIME_COGNITION_MEMORY_PATH = "runtime_cognition_memory.parquet"
+COGNITION_PATH = "runtime_cognition_memory.parquet"
 SYNTHESIS_PATH = "multi_timeframe_synthesis.parquet"
 
 
-def resolve_alignment_for_state(latest_state: pd.Series) -> dict:
-    status = latest_state.get("alignment_status", ALIGNMENT_STATUS_MISSING)
-    alignment_score = latest_state.get("alignment_score")
-
+def _alignment_score_for_state(row: pd.Series):
+    status = row.get("alignment_status", ALIGNMENT_STATUS_MISSING)
     if status == ALIGNMENT_STATUS_VALID:
-        return {
-            "alignment_status": status,
-            "alignment_score": float(alignment_score),
-        }
-
-    if status == ALIGNMENT_STATUS_STALE:
-        log_runtime_warning(
-            "Stale alignment_score for cognition timestamp "
-            f"{latest_state.get('timestamp')}"
-        )
-        if pd.notna(alignment_score):
-            return {
-                "alignment_status": status,
-                "alignment_score": float(alignment_score),
-            }
-
-    if status == ALIGNMENT_STATUS_MISSING:
-        log_runtime_warning(
-            "Missing alignment_score for cognition timestamp "
-            f"{latest_state.get('timestamp')}"
-        )
-
-    if status == ALIGNMENT_STATUS_INVALID:
-        log_runtime_error(
-            "Invalid alignment_score for cognition timestamp "
-            f"{latest_state.get('timestamp')}: {alignment_score!r}"
-        )
-
-    return {
-        "alignment_status": status,
-        "alignment_score": None,
-    }
+        return float(row["alignment_score"])
+    return None
 
 
 def run():
@@ -66,25 +33,8 @@ def run():
     )
     print()
 
-    cognition = safe_read_parquet(
-        RUNTIME_COGNITION_MEMORY_PATH
-    )
-
-    synthesis = safe_read_parquet(
-        SYNTHESIS_PATH
-    )
-
-    cognition = enrich_alignment_status(
-        cognition,
-        synthesis=synthesis if len(synthesis) > 0 else None,
-    )
-
-    audit = export_alignment_audit(cognition)
-    if len(audit) > 0:
-        log_runtime_warning(
-            f"Exported {len(audit)} invalid/missing/stale alignment rows "
-            "to runtime_cognition_alignment_audit.parquet"
-        )
+    cognition = safe_read_parquet(COGNITION_PATH)
+    synthesis = safe_read_parquet(SYNTHESIS_PATH)
 
     if len(cognition) == 0:
 
@@ -96,9 +46,42 @@ def run():
 
         return
 
+    cognition = enrich_alignment_status(
+        cognition,
+        synthesis=synthesis,
+    )
+
+    audit = export_alignment_audit(cognition)
+    if len(audit) > 0:
+        log_runtime_warning(
+            f"Exported {len(audit)} alignment audit row(s) to "
+            "runtime_cognition_alignment_audit.parquet"
+        )
+
     latest_state = cognition.iloc[-1]
-    alignment_payload = resolve_alignment_for_state(latest_state)
-    lineage = lineage_record_from_row(latest_state)
+    alignment_status = latest_state.get(
+        "alignment_status",
+        ALIGNMENT_STATUS_MISSING,
+    )
+
+    if alignment_status == ALIGNMENT_STATUS_MISSING:
+        log_runtime_error(
+            "alignment_score missing for latest cognition row — "
+            "no default injected"
+        )
+    elif alignment_status == ALIGNMENT_STATUS_INVALID:
+        log_runtime_error(
+            "alignment_score invalid for latest cognition row — "
+            "no default injected"
+        )
+    elif alignment_status == ALIGNMENT_STATUS_STALE:
+        log_runtime_warning(
+            "alignment_score stale for latest cognition row"
+        )
+
+    drift_metrics, drift_warnings = compute_drift_metrics()
+    for warning in drift_warnings:
+        log_runtime_warning(warning)
 
     STATE["runtime_cognition"] = {
 
@@ -121,44 +104,33 @@ def run():
             latest_state["structural_rank"],
 
         "alignment_score":
-            alignment_payload["alignment_score"],
+            _alignment_score_for_state(latest_state),
 
         "alignment_status":
-            alignment_payload["alignment_status"],
+            alignment_status,
 
         "location_bias":
             latest_state["location_bias"],
 
         "lineage_engine":
-            lineage.get("lineage_engine"),
+            latest_state.get("lineage_engine"),
 
         "lineage_source_parquet":
-            lineage.get("lineage_source_parquet"),
+            latest_state.get("lineage_source_parquet"),
 
         "lineage_event_timestamp":
-            lineage.get("lineage_event_timestamp"),
+            latest_state.get("lineage_event_timestamp"),
 
         "lineage_propagation_timestamp":
-            lineage.get("lineage_propagation_timestamp"),
+            latest_state.get("lineage_propagation_timestamp"),
 
         "lineage_dependency_chain":
-            lineage.get("lineage_dependency_chain"),
+            latest_state.get("lineage_dependency_chain"),
+
+        "drift_metrics":
+            drift_metrics,
 
     }
-
-    metrics, drift_warnings = compute_drift_metrics()
-    for warning in drift_warnings:
-        log_runtime_warning(warning)
-
-    print(
-        "ALIGNMENT STATUS:",
-        alignment_payload["alignment_status"],
-    )
-
-    print(
-        "DRIFT METRICS:",
-        metrics,
-    )
 
     print(
         STATE["runtime_cognition"]
@@ -166,9 +138,6 @@ def run():
 
     print()
 
-# =====================================
-# START
-# =====================================
 
 if __name__ == "__main__":
 

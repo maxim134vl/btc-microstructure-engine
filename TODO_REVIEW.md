@@ -1,6 +1,6 @@
 # TODO_REVIEW — Manual Review Required
 
-**Updated:** 2026-05-26 (post architectural decisions)
+**Updated:** 2026-05-27 (Phase 0B integrity hardening)
 
 ---
 
@@ -18,7 +18,7 @@
 - [x] **V-002 Feed path:** Canonical `live_market_feed.parquet` via `live_feed_paths.py` + legacy mirror
 - [x] **V-001 Stage 2 batch:** `stage2_cognition_runtime_v1.py` wired in master loop before cognition load
 - [x] **V-011 Climax API:** `process_auction_climax` uses passed `dataset` (STATE only in standalone `run()`)
-- [ ] **V-003 Cognition fallback:** Remove silent `alignment_score` default in production mode
+- [x] **V-003 Cognition fallback:** Explicit `alignment_status` — no silent `fillna(0.25)` in cognition load; audit export via `runtime_cognition_alignment_audit.parquet`
 
 See: `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`
 
@@ -67,6 +67,7 @@ Do **not** change during repository refactor:
 - [x] Create `docs/DUPLICATE_RESOLUTION_PLAN.md`
 - [x] Create `docs/MIGRATION_PLAN_SRC_BTC_ML.md`
 - [x] Create `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`
+- [x] Create `docs/RUNTIME_LINEAGE_MAP.md` (Phase 0B)
 - [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
 - [ ] Add root `README.md`
 - [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
@@ -79,6 +80,7 @@ Do **not** change during repository refactor:
 |-------|-------------|--------|
 | 0 | Documentation + audit | ✅ Done |
 | 0A | Runtime wiring integrity | ✅ Done |
+| 0B | Runtime integrity hardening (lineage, alignment, decomposition, drift) | ✅ Done |
 | 1 | `src/btc_ml/` skeleton | Pending |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |

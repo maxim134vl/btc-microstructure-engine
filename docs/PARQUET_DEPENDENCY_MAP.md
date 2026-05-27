@@ -1,7 +1,7 @@
 # PARQUET DEPENDENCY MAP
 
 **Status:** Canonical reference (root repository)  
-**Updated:** 2026-05-26 (Phase 0A wiring applied)  
+**Updated:** 2026-05-27 (Phase 0B integrity hardening applied)  
 **Source tree:** Repository root (`/Users/fontecrypto/btc-ml`) — **canonical**  
 **Deprecated mirror:** `btc-microstructure-engine/` — do not use for lineage
 
@@ -100,10 +100,10 @@ Orchestrator: **`master_auction_runtime_v1.py`** (canonical)
 | 8 | `climactic_behavior_engine_v1.py` | `volume_response_state.parquet`, `climactic_behavior_memory.parquet` | `climactic_behavior_memory.parquet` | `[LIVE]` |
 | 9 | `auction_convergence_engine_v1.py` | `volume_response_state.parquet`, `auction_convergence_memory.parquet` | `auction_convergence_memory.parquet` | `[LIVE]` |
 | 10 | `auction_synthesis_engine_v1.py` | `volume_response_state.parquet`, `auction_convergence_memory.parquet`, `auction_synthesis_memory.parquet`, `htf_structure_memory.parquet`, `htf_ltf_context_memory.parquet` | `auction_synthesis_memory.parquet` | `[LIVE]` |
-| 11 | **`stage2_cognition_runtime_v1.py`** | `STATE["candle_structure"]` ← `candle_structure_memory.parquet` | **`multi_timeframe_synthesis.parquet`**, **`runtime_cognition_memory.parquet`** | **`[LIVE]`** |
-| 12 | `runtime_cognition_engine_v1.py` | `runtime_cognition_memory.parquet` | `STATE["runtime_cognition"]` (in-memory) | `[LIVE]` |
-| 13 | `auction_reinforcement_engine_v1.py` | `auction_reinforcement_memory.parquet`, `STATE` synthesis/convergence | `auction_reinforcement_memory.parquet` | `[LIVE]` |
-| 14 | `probabilistic_auction_engine_v1.py` | `STATE` reinforcement | `probabilistic_auction_memory.parquet` | `[LIVE]` |
+| 11 | **`stage2_cognition_runtime_v1.py`** | `STATE["candle_structure"]` ← `candle_structure_memory.parquet` | **`multi_timeframe_synthesis.parquet`**, **`runtime_cognition_memory.parquet`** (+ lineage columns) | **`[LIVE]`** |
+| 12 | `runtime_cognition_engine_v1.py` | `runtime_cognition_memory.parquet`, `multi_timeframe_synthesis.parquet` (alignment cross-check) | `STATE["runtime_cognition"]` (in-memory), `runtime_cognition_alignment_audit.parquet` (on failure) | `[LIVE]` |
+| 13 | `auction_reinforcement_engine_v1.py` | `auction_reinforcement_memory.parquet`, `STATE` synthesis/convergence | `auction_reinforcement_memory.parquet` (+ lineage + decomposition) | `[LIVE]` |
+| 14 | `probabilistic_auction_engine_v1.py` | `STATE` reinforcement | `probabilistic_auction_memory.parquet` (+ lineage + decomposition) | `[LIVE]` |
 | 15 | `auction_decay_engine_v1.py` | `auction_convergence_memory.parquet`, `auction_reinforcement_memory.parquet`, `auction_decay_memory.parquet` | `auction_decay_memory.parquet` | `[LIVE]` |
 | 16 | `state_transition_engine_v1.py` | `auction_synthesis_memory.parquet`, `probabilistic_auction_memory.parquet`, `state_transition_memory.parquet` | `state_transition_memory.parquet`, `state_transition_engine_state.parquet` | `[LIVE]` |
 | 17 | `adaptive_meta_cognition_engine_v1.py` | `STATE` probabilistic + reinforcement | `adaptive_meta_cognition_state.parquet` | `[LIVE]` |
@@ -143,6 +143,14 @@ Loaded at import via `refresh_state()`:
 | `probabilistic_auction` | `probabilistic_auction_memory.parquet` | `probabilistic_auction_engine_v1` | state_transition, meta, STATE |
 | `adaptive_meta_cognition` | `adaptive_meta_cognition_state.parquet` | `adaptive_meta_cognition_engine_v1` | STATE |
 | `runtime_cognition` | *(dict in memory)* | `runtime_cognition_engine_v1` | probabilistic, reinforcement |
+
+**Phase 0B STATE extensions (`runtime_cognition`):**
+
+| Field | Purpose |
+|-------|---------|
+| `alignment_status` | `VALID` / `STALE` / `MISSING` / `INVALID` |
+| `lineage_*` | Propagation metadata from latest cognition row |
+| `drift_metrics` | Timestamp drift observability snapshot |
 
 ---
 
@@ -226,7 +234,21 @@ Priority parquet contracts for `schemas/` package:
 5. `probabilistic_auction_memory.parquet`
 6. `multi_timeframe_synthesis.parquet`
 7. `runtime_cognition_memory.parquet`
+8. `runtime_cognition_alignment_audit.parquet` *(Phase 0B)*
 
 ---
 
-*See also: `docs/CANONICAL_RUNTIME_MAP.md`, `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`*
+## 10. Phase 0B Integrity Artifacts
+
+| Artifact | Writer | Purpose |
+|----------|--------|---------|
+| `runtime_lineage.py` | shared | Lineage column builder |
+| `runtime_integrity.py` | shared | Alignment validation, drift metrics, audit export |
+| `runtime_cognition_alignment_audit.parquet` | `runtime_cognition_engine_v1` | Invalid/missing/stale alignment rows |
+| `scripts/verify_phase0b_integrity.py` | verification | Phase 0B integrity checks |
+
+See **`docs/RUNTIME_LINEAGE_MAP.md`** for full lineage + decomposition schema.
+
+---
+
+*See also: `docs/CANONICAL_RUNTIME_MAP.md`, `docs/RUNTIME_LINEAGE_MAP.md`, `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`*

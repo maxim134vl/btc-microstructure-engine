@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 
 from parquet_utils import (
@@ -10,7 +12,43 @@ from state_guard import (
 )
 
 from datetime import datetime
+from runtime_integrity import (
+    ALIGNMENT_STATUS_VALID,
+    log_runtime_warning,
+)
+from runtime_lineage import apply_lineage_metadata
 from state_manager_v1 import STATE
+
+
+def _belief_entropy(window: pd.DataFrame) -> float:
+    if len(window) == 0 or "belief_state" not in window.columns:
+        return 0.0
+
+    counts = window["belief_state"].value_counts(normalize=True)
+    entropy = 0.0
+    for probability in counts:
+        if probability > 0:
+            entropy -= probability * math.log(probability)
+    return entropy
+
+
+def _resolve_alignment(runtime_cognition: dict) -> tuple:
+    alignment_status = runtime_cognition.get(
+        "alignment_status",
+        "MISSING",
+    )
+    raw_alignment = runtime_cognition.get("alignment_score")
+
+    if alignment_status == ALIGNMENT_STATUS_VALID and raw_alignment is not None:
+        score = float(raw_alignment)
+        return score, alignment_status, 1.0 + score
+
+    log_runtime_warning(
+        f"Probabilistic skipped alignment multiplier "
+        f"(status={alignment_status})"
+    )
+    return None, alignment_status, 1.0
+
 
 def run():
 
@@ -22,20 +60,12 @@ def run():
     
     print()
 
-    # =====================================
-    # LOAD
-    # =====================================
-
     reinforcement = STATE[
         "auction_reinforcement"
     ]
 
     latest = reinforcement.iloc[-1]
 
-    # =====================================
-    # RUNTIME COGNITION
-    # =====================================
- 
     runtime_cognition = STATE.get(
         "runtime_cognition",
         {}
@@ -53,11 +83,8 @@ def run():
         )
     )
 
-    alignment_score = float(
-        runtime_cognition.get(
-            "alignment_score",
-            0.25
-        )
+    alignment_score, alignment_status, alignment_component = (
+        _resolve_alignment(runtime_cognition)
     )
 
     location_bias = runtime_cognition.get(
@@ -70,15 +97,7 @@ def run():
         "LOW"
     )
 
-    # =====================================
-    # MEMORY WINDOW
-    # =====================================
-
     window = reinforcement.tail(25)
-
-    # =====================================
-    # COUNTS
-    # =====================================
 
     absorption_count = len(
 
@@ -122,10 +141,6 @@ def run():
 
     )
 
-    # =====================================
-    # PROBABILITIES
-    # =====================================
-
     absorption_probability = (
 
         absorption_count
@@ -156,15 +171,11 @@ def run():
 
     )
 
-    # =====================================
-    # AUCTION REGIME
-    # =====================================
+    reinforcement_component = conviction_probability
 
     auction_regime = (
         "UNCERTAIN"
         )
-
-    # -------------------------------------
 
     if (
 
@@ -176,8 +187,6 @@ def run():
             "DISTRIBUTION_REGIME"
         )
 
-    # -------------------------------------
-
     if (
 
         absorption_probability > 0.5
@@ -187,8 +196,6 @@ def run():
         auction_regime = (
             "ABSORPTION_REGIME"
         )
-
-    # -------------------------------------
 
     if (
 
@@ -200,10 +207,6 @@ def run():
             "HIGH_CONVICTION_AUCTION"
         )
 
-    # =====================================
-    # NORMALIZATION
-    # =====================================
-
     absorption_probability = min(
         absorption_probability,
         1
@@ -218,10 +221,6 @@ def run():
         conviction_probability,
         1
     )
-
-    # =====================================
-    # COGNITION ADJUSTMENTS
-    # =====================================
 
     if (
 
@@ -233,8 +232,6 @@ def run():
 
         conviction_probability *= 0.7
 
-    # -------------------------------------
-
     if (
 
         structural_rank
@@ -245,7 +242,7 @@ def run():
 
         conviction_probability *= 1.25
 
-    # -------------------------------------
+    persistence_component = persistence_score
 
     if persistence_score > 0.7:
 
@@ -253,17 +250,10 @@ def run():
            "STRUCTURAL_REGIME"
         )
 
-    # -------------------------------------
-    # MTF ALIGNMENT
-    # -------------------------------------
+    if alignment_status == ALIGNMENT_STATUS_VALID:
+        conviction_probability *= alignment_component
 
-    conviction_probability *= (
-        1 + alignment_score
-    )
-
-    # -------------------------------------
-    # LOCATION BIAS
-    # -------------------------------------
+    location_component = 1.0
 
     if location_bias == (
         "LOWER_ABSORPTION"
@@ -272,24 +262,21 @@ def run():
         absorption_probability *= 1.25
 
         conviction_probability *= 1.15
-
-    # -------------------------------------
+        location_component *= 1.15
 
     if location_bias == (
         "UPPER_DISTRIBUTION"
     ):
 
         conviction_probability *= 0.75
-
-    # -------------------------------------
+        location_component *= 0.75
 
     if location_bias == (
         "MID_AUCTION_TRANSFER"
     ):
 
         conviction_probability *= 0.85
-
-    # -------------------------------------
+        location_component *= 0.85
 
     if location_bias == (
         "LOWER_CAPITULATION"
@@ -297,13 +284,28 @@ def run():
 
         absorption_probability *= 1.10
 
-    # =====================================
-    # INTERPRETATION
-    # =====================================
+    volume_response = STATE.get("volume_response")
+    unfinished_auction_component = 0.0
+    if volume_response is not None and len(volume_response) > 0:
+        unfinished_auction_component = float(
+            bool(
+                volume_response.iloc[-1].get(
+                    "unfinished_auction",
+                    False,
+                )
+            )
+        )
+
+    entropy_penalty = _belief_entropy(window)
+
+    conflict_penalty = float(
+        latest.get(
+            "conflict_penalty",
+            0.0,
+        )
+    )
 
     interpretation = []
-
-    # -------------------------------------
 
     if absorption_probability > 0.4:
 
@@ -314,8 +316,6 @@ def run():
             "continues increasing."
         )
 
-    # -------------------------------------
-
     if distribution_probability > 0.5:
 
         interpretation.append(
@@ -325,8 +325,6 @@ def run():
             "distribution characteristics."
         )
 
-    # -------------------------------------
-
     if conviction_probability > 0.7:
 
         interpretation.append(
@@ -335,10 +333,6 @@ def run():
             "is becoming increasingly "
             "self-reinforcing."
         )
-
-    # =====================================
-    # FINAL NORMALIZATION
-    # =====================================
 
     absorption_probability = min(
         absorption_probability,
@@ -354,10 +348,6 @@ def run():
         conviction_probability,
         1.0
     )
-
-    # =====================================
-    # OUTPUT
-    # =====================================
 
     print(
         "AUCTION REGIME:"
@@ -423,12 +413,6 @@ def run():
 
     print()
 
-    # =====================================
-    # SAVE
-    # =====================================
-
-    from datetime import datetime
-
     row = pd.DataFrame([{
 
     "timestamp":
@@ -444,14 +428,75 @@ def run():
         distribution_probability,
 
     "conviction_probability":
-        conviction_probability
+        conviction_probability,
+
+    "alignment_status":
+        alignment_status,
+
+    "alignment_component":
+        alignment_component,
+
+    "persistence_component":
+        persistence_component,
+
+    "location_component":
+        location_component,
+
+    "unfinished_auction_component":
+        unfinished_auction_component,
+
+    "entropy_penalty":
+        entropy_penalty,
+
+    "conflict_penalty":
+        conflict_penalty,
+
+    "reinforcement_component":
+        reinforcement_component,
 
     }])
+
+    row = apply_lineage_metadata(
+        row,
+        engine_name="probabilistic_auction_engine_v1.py",
+        source_parquet="auction_reinforcement_memory.parquet",
+        dependency_chain=[
+            "runtime_cognition_memory.parquet",
+            "auction_reinforcement_memory.parquet",
+            "probabilistic_auction_engine_v1.py",
+            "probabilistic_auction_memory.parquet",
+        ],
+        event_timestamp_col="timestamp",
+    )
 
     state_payload = {
 
         "auction_regime":
-            auction_regime
+            auction_regime,
+
+        "alignment_status":
+            alignment_status,
+
+        "alignment_component":
+            alignment_component,
+
+        "persistence_component":
+            persistence_component,
+
+        "location_component":
+            location_component,
+
+        "unfinished_auction_component":
+            unfinished_auction_component,
+
+        "entropy_penalty":
+            entropy_penalty,
+
+        "conflict_penalty":
+            conflict_penalty,
+
+        "reinforcement_component":
+            reinforcement_component,
 
     }
 
@@ -489,9 +534,6 @@ def run():
             "probabilistic_auction_memory.parquet"
         )
 
-# =====================================
-# START
-# =====================================
 
 if __name__ == "__main__":
     run()

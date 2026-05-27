@@ -108,26 +108,46 @@ def enrich_alignment_status(
         reference_alignment = pd.NA
 
     statuses = []
+    synthesis_by_ts = {}
+    if synthesis is not None and len(synthesis) > 0:
+        synthesis_by_ts = {
+            pd.to_datetime(row["timestamp"]): row.get("alignment_score")
+            for _, row in synthesis.iterrows()
+        }
+        synthesis_latest = max(synthesis_by_ts.keys())
+    else:
+        synthesis_latest = None
+
     for _, row in merged.iterrows():
-        statuses.append(
-            classify_alignment_score(
-                row.get("alignment_score"),
-                event_timestamp=row.get("timestamp"),
-                reference_timestamp=row.get("timestamp"),
-                stale_seconds=stale_seconds,
-            )
-        )
+        event_ts = pd.to_datetime(row.get("timestamp"))
+        status = classify_alignment_score(row.get("alignment_score"))
+
+        if status == ALIGNMENT_STATUS_VALID and synthesis_by_ts:
+            reference_score = synthesis_by_ts.get(event_ts)
+            if reference_score is not None:
+                current_score = _safe_float(row.get("alignment_score"))
+                reference_value = _safe_float(reference_score)
+                if (
+                    current_score is not None
+                    and reference_value is not None
+                    and abs(current_score - reference_value) > 1e-9
+                ):
+                    status = ALIGNMENT_STATUS_STALE
+            elif event_ts not in synthesis_by_ts:
+                status = ALIGNMENT_STATUS_STALE
+
+        if (
+            status == ALIGNMENT_STATUS_VALID
+            and synthesis_latest is not None
+            and event_ts == pd.to_datetime(merged["timestamp"]).max()
+        ):
+            drift_seconds = (synthesis_latest - event_ts).total_seconds()
+            if drift_seconds > stale_seconds:
+                status = ALIGNMENT_STATUS_STALE
+
+        statuses.append(status)
 
     merged["alignment_status"] = statuses
-
-    stale_mask = merged["alignment_status"] == ALIGNMENT_STATUS_VALID
-    if synthesis is not None and len(synthesis) > 0:
-        synthesis_latest = pd.to_datetime(synthesis["timestamp"]).max()
-        event_ts = pd.to_datetime(merged["timestamp"])
-        stale_rows = event_ts < synthesis_latest - pd.Timedelta(seconds=stale_seconds)
-        merged.loc[stale_rows & stale_mask, "alignment_status"] = (
-            ALIGNMENT_STATUS_STALE
-        )
 
     return merged
 

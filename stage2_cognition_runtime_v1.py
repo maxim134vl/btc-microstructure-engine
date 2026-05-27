@@ -3,10 +3,13 @@ import pandas as pd
 from auction_climax_engine_v1 import process_auction_climax
 from multi_timeframe_dataset_builder import aggregate_behavioral_timeframe
 from multi_timeframe_synthesis_engine import synthesize_multi_timeframe_behavior
+from parquet_utils import atomic_parquet_write
+from runtime_lineage import apply_lineage_metadata
 from state_manager_v1 import STATE, refresh_state
 
 SYNTHESIS_OUTPUT_PATH = "multi_timeframe_synthesis.parquet"
 RUNTIME_COGNITION_MEMORY_PATH = "runtime_cognition_memory.parquet"
+CANDLE_STRUCTURE_SOURCE = "candle_structure_memory.parquet"
 
 COGNITION_COLUMNS = [
     "timestamp",
@@ -18,6 +21,8 @@ COGNITION_COLUMNS = [
     "alignment_score",
     "location_bias",
 ]
+
+STAGE2_ENGINE = "stage2_cognition_runtime_v1.py"
 
 
 def build_stage2_synthesis(base_dataset: pd.DataFrame) -> pd.DataFrame:
@@ -102,18 +107,41 @@ def run() -> None:
 
     synthesis_output = build_stage2_synthesis(base_dataset)
 
-    synthesis_output.to_parquet(
+    synthesis_output = apply_lineage_metadata(
+        synthesis_output,
+        engine_name=STAGE2_ENGINE,
+        source_parquet=CANDLE_STRUCTURE_SOURCE,
+        dependency_chain=[
+            CANDLE_STRUCTURE_SOURCE,
+            STAGE2_ENGINE,
+            SYNTHESIS_OUTPUT_PATH,
+        ],
+    )
+
+    atomic_parquet_write(
+        synthesis_output,
         SYNTHESIS_OUTPUT_PATH,
-        index=False,
     )
 
     runtime_cognition_memory = export_runtime_cognition_memory(
         synthesis_output
     )
 
-    runtime_cognition_memory.to_parquet(
+    runtime_cognition_memory = apply_lineage_metadata(
+        runtime_cognition_memory,
+        engine_name=STAGE2_ENGINE,
+        source_parquet=SYNTHESIS_OUTPUT_PATH,
+        dependency_chain=[
+            CANDLE_STRUCTURE_SOURCE,
+            STAGE2_ENGINE,
+            SYNTHESIS_OUTPUT_PATH,
+            RUNTIME_COGNITION_MEMORY_PATH,
+        ],
+    )
+
+    atomic_parquet_write(
+        runtime_cognition_memory,
         RUNTIME_COGNITION_MEMORY_PATH,
-        index=False,
     )
 
     print(

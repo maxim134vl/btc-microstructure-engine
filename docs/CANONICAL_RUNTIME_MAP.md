@@ -1,7 +1,7 @@
 # CANONICAL RUNTIME MAP
 
 **Status:** Approved architecture  
-**Updated:** 2026-05-26 (Phase 0A wiring applied)  
+**Updated:** 2026-05-27 (Phase 0B integrity hardening applied)  
 **Canonical orchestrator:** `master_auction_runtime_v1.py`  
 **Canonical source tree:** Repository root  
 **Deprecated:** `btc-microstructure-engine/` (mirror only)
@@ -79,6 +79,15 @@ PHASE 4 — REINFORCEMENT & PROBABILITY
 - Output: `multi_timeframe_synthesis.parquet`, `runtime_cognition_memory.parquet`
 - Verification: `venv/bin/python3 scripts/verify_phase0a_wiring.py`
 
+**Phase 0B integrity (observability only):**
+
+- Alignment validation: no silent `0.25` fallback — explicit `alignment_status`
+- Lineage columns on cognition propagation parquets
+- Conviction decomposition export on reinforcement + probabilistic rows
+- Timestamp drift warnings via `runtime_integrity.compute_drift_metrics()`
+- Verification: `venv/bin/python3 scripts/verify_phase0b_integrity.py`
+- Reference: `docs/RUNTIME_LINEAGE_MAP.md`
+
 **Research batch still available:** `research_dataset_builder_v1.py` (offline master dataset builder — not required for live cognition updates)
 
 ---
@@ -155,6 +164,8 @@ These remain in repo until `archive_removed/` migration. **Do not extend.**
 | `runtime_state_manager.py` | Loop health tracking |
 | `engine_registry.py` | In-process engine dispatch |
 | `runtime_config.py` | Path constants |
+| `runtime_lineage.py` | Cognition propagation lineage metadata |
+| `runtime_integrity.py` | Alignment validation + timestamp drift checks |
 
 ---
 
@@ -190,4 +201,4 @@ run()
 
 ---
 
-*See also: `docs/DUPLICATE_RESOLUTION_PLAN.md`, `docs/MIGRATION_PLAN_SRC_BTC_ML.md`*
+*See also: `docs/DUPLICATE_RESOLUTION_PLAN.md`, `docs/MIGRATION_PLAN_SRC_BTC_ML.md`, `docs/RUNTIME_LINEAGE_MAP.md`*
