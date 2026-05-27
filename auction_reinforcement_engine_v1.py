@@ -1,4 +1,7 @@
 import pandas as pd
+import numpy as np
+
+from datetime import datetime
 from state_manager_v1 import STATE
 def run():
 
@@ -27,6 +30,49 @@ def run():
     )
 
     # =====================================
+    # RUNTIME COGNITION
+    # =====================================
+
+    runtime_cognition = STATE.get(
+        "runtime_cognition",
+        {}
+    )
+
+    persistence_score = float(
+
+        runtime_cognition.get(
+            "persistence_score",
+            0
+        )
+
+    )
+
+    structural_rank = runtime_cognition.get(
+        "structural_rank",
+        "LOW"
+    )
+
+    synthesis_state = runtime_cognition.get(
+        "synthesis_state",
+        "NONE"
+    )
+
+    alignment_score = float(
+
+        runtime_cognition.get(
+            "alignment_score",
+            0.25
+        )
+
+    )
+
+    location_bias = runtime_cognition.get(
+        "location_bias",
+        "NEUTRAL"
+
+    )
+
+    # =====================================
     # MEMORY
     # =====================================
 
@@ -50,13 +96,37 @@ def run():
 
     latest_synthesis = synthesis.iloc[-1]
 
-    volume_event = "NEUTRAL"
+    volume_response = STATE[
+        "volume_response"
+    ]
 
-    effort_result_state = "NEUTRAL"
+    latest_response = (
+        volume_response.iloc[-1]
+    )
 
-    localized_behavior = "neutral"
+    volume_event = latest_response.get(
+        "volume_event",
+        "NEUTRAL"
+    )
 
-    unfinished_auction = False
+    effort_result_state = latest_response.get(
+        "effort_result_state",
+        "NEUTRAL"
+    )
+
+    localized_behavior = latest_response.get(
+        "localized_behavior",
+        "neutral"
+    )
+
+    unfinished_auction = bool(
+
+        latest_response.get(
+            "unfinished_auction",
+            False
+        )
+
+    )
 
     # =====================================
     # INITIAL BELIEF
@@ -102,51 +172,139 @@ def run():
 
         belief_strength += 0.15
 
-    # =====================================
-    # CONVERGENCE MEMORY
-    # =====================================
+    # -------------------------------------
+    # COGNITION PERSISTENCE
+    # -------------------------------------
 
-    recent_absorption = len(
-
-        convergence[
-
-            convergence[
-                "effort_result_state"
-            ] == (
-                "ABSORPTION_RESPONSE"
-            )
-
-        ]
-
+    belief_strength += (
+        persistence_score * 0.2
     )
 
-    recent_distribution = len(
+    # -------------------------------------
+    # STRUCTURAL RANK
+    # -------------------------------------
 
-        convergence[
+    if structural_rank == "HIGH":
 
-            convergence[
-                "localized_behavior"
-            ] == (
-                "localized_distribution"
-            )
+        belief_strength += 0.15
 
-        ]
+    # -------------------------------------
+    # EXHAUSTION PENALTY
+    # -------------------------------------
 
+    if synthesis_state == (
+        "LOCAL_EXHAUSTION"
+    ):
+
+        belief_strength -= 0.2
+
+    # -------------------------------------
+    # MTF ALIGNMENT
+    # -------------------------------------
+
+    belief_strength += (
+        alignment_score * 0.25
     )
 
-    # =====================================
-    # REINFORCEMENT
-    # =====================================
+    # -------------------------------------
+    # LOCATION BIAS
+    # -------------------------------------
 
-    if recent_absorption >= 3:
+    if location_bias == (
+        "LOWER_ABSORPTION"
+    ):
 
-        belief_strength += 0.2
+        belief_strength += 0.20
 
     # -------------------------------------
 
-    if recent_distribution >= 4:
+    if location_bias == (
+        "UPPER_DISTRIBUTION"
+    ):
 
-        belief_strength += 0.2
+        belief_strength -= 0.15
+
+    # -------------------------------------
+
+    if location_bias == (
+        "MID_AUCTION_TRANSFER"
+    ):
+
+        belief_strength -= 0.10
+
+    # -------------------------------------
+
+    if location_bias == (
+        "LOWER_CAPITULATION"
+    ):
+
+        belief_strength += 0.10
+
+    # =====================================
+    # CONFLICT SUPPRESSION
+    # =====================================
+
+    conflict_score = 0
+
+    # -------------------------------------
+    # LOW ALIGNMENT + HIGH CONVICTION
+    # -------------------------------------
+
+    if (
+        alignment_score < 0.50
+        and
+        belief_strength > 0.75
+    ):
+
+        conflict_score += 0.20
+
+    # -------------------------------------
+    # STRUCTURAL CONFLICT
+    # -------------------------------------
+
+    if (
+
+        structural_rank == "LOW"
+
+        and
+
+        belief_strength > 0.65
+
+    ):
+
+        conflict_score += 0.10
+
+    # -------------------------------------
+    # MID AUCTION TRANSFER
+    # -------------------------------------
+
+    if location_bias == (
+        "MID_AUCTION_TRANSFER"
+    ):
+
+        conflict_score += 0.10
+
+    # =====================================
+    # APPLY SUPPRESSION
+    # =====================================
+
+    belief_strength -= conflict_score
+
+    # =====================================
+    # DIMINISHING RETURNS
+    # =====================================
+
+    belief_strength = (
+
+        1 -
+
+        np.exp(
+
+            -belief_strength
+
+        )
+
+    )
 
     # =====================================
     # NORMALIZATION
@@ -237,7 +395,10 @@ def run():
             localized_behavior,
 
         "effort_result_state":
-            effort_result_state
+            effort_result_state,
+
+        "timestamp":
+            datetime.utcnow(),
 
     }])
 
@@ -252,6 +413,10 @@ def run():
 
     memory.to_parquet(
         "auction_reinforcement_memory.parquet"
+    )
+
+    STATE["auction_reinforcement"] = (
+        memory
     )
 
 if __name__ == "__main__":

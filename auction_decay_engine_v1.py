@@ -66,19 +66,11 @@ distribution_events = len(
 
 # -------------------------------------
 
-unfinished_auctions = len(
+unfinished_auctions = int(
 
     recent_convergence[
-
-        recent_convergence[
-            "unfinished_auction"
-        ]
-
-        ==
-
-        True
-
-    ]
+        "unfinished_auctions"
+    ].sum()
 
 )
 

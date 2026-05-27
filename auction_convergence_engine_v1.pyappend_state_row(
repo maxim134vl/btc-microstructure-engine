@@ -273,10 +273,10 @@ def run():
             convergence_state,
 
         "unfinished_auctions":
-            unfinished_count,
+            unfinished_auctions,
 
         "distribution_events":
-            distribution_count,
+            distribution_events,
 
         "localized_behavior":
             localized_behavior
@@ -289,10 +289,10 @@ def run():
             convergence_state,
 
         "unfinished_auctions":
-            unfinished_count,
+            unfinished_auctions,
 
         "distribution_events":
-            distribution_count
+            distribution_events
 
     }
 
@@ -314,4 +314,22 @@ def run():
         "auction_convergence_memory.parquet"
     )
 
-run()
+    print("SAVE BLOCK REACHED")
+
+    append_state_row(
+
+        "auction_convergence_memory.parquet",
+
+        row
+
+    )
+
+    print()
+
+    print(
+        "MEMORY SAVED:"
+    )
+
+    print(
+        "auction_convergence_memory.parquet"
+    )

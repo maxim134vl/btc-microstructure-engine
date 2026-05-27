@@ -33,6 +33,44 @@ def run():
     latest = reinforcement.iloc[-1]
 
     # =====================================
+    # RUNTIME COGNITION
+    # =====================================
+ 
+    runtime_cognition = STATE.get(
+        "runtime_cognition",
+        {}
+    )
+
+    synthesis_state = runtime_cognition.get(
+        "synthesis_state",
+        "NONE"
+    )
+
+    persistence_score = float(
+        runtime_cognition.get(
+            "persistence_score",
+            0
+        )
+    )
+
+    alignment_score = float(
+        runtime_cognition.get(
+            "alignment_score",
+            0.25
+        )
+    )
+
+    location_bias = runtime_cognition.get(
+        "location_bias",
+        "NEUTRAL"
+    )
+
+    structural_rank = runtime_cognition.get(
+        "structural_rank",
+        "LOW"
+    )
+
+    # =====================================
     # MEMORY WINDOW
     # =====================================
 
@@ -163,6 +201,103 @@ def run():
         )
 
     # =====================================
+    # NORMALIZATION
+    # =====================================
+
+    absorption_probability = min(
+        absorption_probability,
+        1
+    )
+
+    distribution_probability = min(
+        distribution_probability,
+        1
+    )
+
+    conviction_probability = min(
+        conviction_probability,
+        1
+    )
+
+    # =====================================
+    # COGNITION ADJUSTMENTS
+    # =====================================
+
+    if (
+
+        synthesis_state
+        ==
+        "LOCAL_EXHAUSTION"
+
+    ):
+
+        conviction_probability *= 0.7
+
+    # -------------------------------------
+
+    if (
+
+        structural_rank
+        ==
+        "HIGH"
+
+    ):
+
+        conviction_probability *= 1.25
+
+    # -------------------------------------
+
+    if persistence_score > 0.7:
+
+        auction_regime = (
+           "STRUCTURAL_REGIME"
+        )
+
+    # -------------------------------------
+    # MTF ALIGNMENT
+    # -------------------------------------
+
+    conviction_probability *= (
+        1 + alignment_score
+    )
+
+    # -------------------------------------
+    # LOCATION BIAS
+    # -------------------------------------
+
+    if location_bias == (
+        "LOWER_ABSORPTION"
+    ):
+
+        absorption_probability *= 1.25
+
+        conviction_probability *= 1.15
+
+    # -------------------------------------
+
+    if location_bias == (
+        "UPPER_DISTRIBUTION"
+    ):
+
+        conviction_probability *= 0.75
+
+    # -------------------------------------
+
+    if location_bias == (
+        "MID_AUCTION_TRANSFER"
+    ):
+
+        conviction_probability *= 0.85
+
+    # -------------------------------------
+
+    if location_bias == (
+        "LOWER_CAPITULATION"
+    ):
+
+        absorption_probability *= 1.10
+
+    # =====================================
     # INTERPRETATION
     # =====================================
 
@@ -200,6 +335,25 @@ def run():
             "is becoming increasingly "
             "self-reinforcing."
         )
+
+    # =====================================
+    # FINAL NORMALIZATION
+    # =====================================
+
+    absorption_probability = min(
+        absorption_probability,
+        1.0
+    )
+
+    distribution_probability = min(
+        distribution_probability,
+        1.0
+    )
+
+    conviction_probability = min(
+        conviction_probability,
+        1.0
+    )
 
     # =====================================
     # OUTPUT
@@ -334,3 +488,10 @@ def run():
         print(
             "probabilistic_auction_memory.parquet"
         )
+
+# =====================================
+# START
+# =====================================
+
+if __name__ == "__main__":
+    run()

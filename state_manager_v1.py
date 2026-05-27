@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 
 # =====================================
@@ -14,9 +15,15 @@ STATE["auction_synthesis"] = pd.read_parquet(
     "auction_synthesis_memory.parquet"
 )
 
-STATE["auction_reinforcement"] = pd.read_parquet(
-    "auction_reinforcement_memory.parquet"
-)
+try:
+
+    STATE["auction_reinforcement"] = pd.read_parquet(
+        "auction_reinforcement_memory.parquet"
+    )
+
+except Exception:
+
+    STATE["auction_reinforcement"] = pd.DataFrame()
 
 STATE["auction_convergence"] = pd.read_parquet(
     "auction_convergence_memory.parquet"
@@ -42,6 +49,12 @@ def refresh_state():
 
     global STATE
 
+    STATE["candle_structure"] = (
+        pd.read_parquet(
+            "candle_structure_memory.parquet"
+        )
+    )
+
     STATE["auction_synthesis"] = (
         pd.read_parquet(
             "auction_synthesis_memory.parquet"
@@ -55,9 +68,17 @@ def refresh_state():
     )
 
     STATE["auction_reinforcement"] = (
+
         pd.read_parquet(
             "auction_reinforcement_memory.parquet"
         )
+
+        if os.path.exists(
+            "auction_reinforcement_memory.parquet"
+        )
+
+        else pd.DataFrame()
+
     )
 
     STATE["probabilistic_auction"] = (
@@ -71,4 +92,5 @@ def refresh_state():
             "adaptive_meta_cognition_state.parquet"
         )
     )
+
 refresh_state()

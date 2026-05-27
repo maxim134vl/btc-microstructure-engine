@@ -285,6 +285,8 @@ ohlc["volume_zscore"] = (
 # SAVE MEMORY
 # =====================================
 
+ohlc = ohlc.reset_index()
+
 ohlc.to_parquet(
     "candle_structure_memory.parquet"
 )

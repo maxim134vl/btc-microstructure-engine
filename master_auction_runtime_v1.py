@@ -57,6 +57,8 @@ pipeline = [
 
     "auction_synthesis_engine_v1.py",
 
+    "runtime_cognition_engine_v1.py",
+
     "auction_reinforcement_engine_v1.py",
 
     "probabilistic_auction_engine_v1.py",
