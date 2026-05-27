@@ -2,6 +2,10 @@ import math
 
 import pandas as pd
 
+from calibration_diagnostics import (
+    DIAGNOSTIC_EXPORT_COLUMNS,
+    build_diagnostic_exports,
+)
 from parquet_utils import (
     safe_read_parquet,
     append_state_row
@@ -349,6 +353,36 @@ def run():
         1.0
     )
 
+    raw_conviction = conviction_probability
+
+    probabilistic_history = safe_read_parquet(
+        "probabilistic_auction_memory.parquet"
+    )
+
+    current_snapshot = {
+        "auction_regime": auction_regime,
+        "absorption_probability": absorption_probability,
+        "distribution_probability": distribution_probability,
+        "conviction_probability": conviction_probability,
+        "raw_conviction": raw_conviction,
+        "alignment_status": alignment_status,
+        "alignment_component": alignment_component,
+        "persistence_component": persistence_component,
+        "location_component": location_component,
+        "unfinished_auction_component": unfinished_auction_component,
+        "entropy_penalty": entropy_penalty,
+        "conflict_penalty": conflict_penalty,
+        "reinforcement_component": reinforcement_component,
+    }
+
+    diagnostic_exports = build_diagnostic_exports(
+        probabilistic_history=probabilistic_history,
+        reinforcement_history=reinforcement,
+        reinforcement_window=window,
+        runtime_cognition=runtime_cognition,
+        current_row=current_snapshot,
+    )
+
     print(
         "AUCTION REGIME:"
     )
@@ -454,6 +488,8 @@ def run():
     "reinforcement_component":
         reinforcement_component,
 
+    **diagnostic_exports,
+
     }])
 
     row = apply_lineage_metadata(
@@ -497,6 +533,11 @@ def run():
 
         "reinforcement_component":
             reinforcement_component,
+
+        **{
+            key: diagnostic_exports[key]
+            for key in DIAGNOSTIC_EXPORT_COLUMNS
+        },
 
     }
 
