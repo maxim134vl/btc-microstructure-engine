@@ -1,6 +1,6 @@
 # TODO_REVIEW — Manual Review Required
 
-**Updated:** 2026-05-27 (Phase 2B adversarial robustness)
+**Updated:** 2026-05-27 (Phase 3A ontology refinement)
 
 ---
 
@@ -37,8 +37,8 @@ See: `docs/RUNTIME_RESEARCH_BOUNDARY_VIOLATIONS.md`
 
 Do **not** change during repository refactor:
 
-- [ ] **Climax separation:** SELLING_CLIMAX vs STOPPING_VOLUME cluster merge
-- [ ] **`future_return_3`** in stopping volume — research-only gate or live-safe replacement
+- [x] **Climax separation:** SELLING_CLIMAX vs STOPPING_VOLUME cluster merge (Phase 3A)
+- [x] **`future_return_3`** in stopping volume — removed from refined runtime path (Phase 3A)
 - [ ] **`conviction_probability`** exceeds 1.0 — domain confirmation
 
 ---
@@ -79,6 +79,10 @@ Do **not** change during repository refactor:
 - [x] Create `docs/FAILURE_MODE_ANALYSIS.md` (Phase 2B)
 - [x] Create `docs/INSTABILITY_PROPAGATION_MODEL.md` (Phase 2B)
 - [x] Create `docs/REGIME_TRANSITION_SURVIVAL.md` (Phase 2B)
+- [x] Create `docs/ONTOLOGY_REFINEMENT_MODEL.md` (Phase 3A)
+- [x] Create `docs/EFFORT_RESULT_SEMANTICS.md` (Phase 3A)
+- [x] Create `docs/ABSORPTION_VS_CAPITULATION.md` (Phase 3A)
+- [x] Create `docs/POST_EVENT_BEHAVIORAL_EVOLUTION.md` (Phase 3A)
 - [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
 - [ ] Add root `README.md`
 - [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
@@ -96,6 +100,7 @@ Do **not** change during repository refactor:
 | 1B | Controlled probabilistic discipline | ✅ Done |
 | 2A | Cross-regime robustness & calibration stability | ✅ Done |
 | 2B | Adversarial robustness & failure-mode engineering | ✅ Done |
+| 3A | Behavioral ontology refinement & semantic separation | ✅ Done |
 | 1 | `src/btc_ml/` skeleton | Pending |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |

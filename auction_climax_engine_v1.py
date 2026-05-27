@@ -1,6 +1,11 @@
 import pandas as pd
 import numpy as np
 
+from adversarial_ontology_stability import evaluate_ontology_under_stress
+from ontology_config import get_ontology_settings, ontology_refinement_active
+from ontology_refinement import ONTOLOGY_EXPORT_COLUMNS, apply_ontology_pipeline
+from post_event_evolution import POST_EVENT_EXPORT_COLUMNS, compute_post_event_evolution
+
 
 def process_auction_climax(
     dataset,
@@ -21,21 +26,19 @@ def process_auction_climax(
     ] = "NEUTRAL"
 
     # =====================================
-    # FUTURE RETURNS
+    # RESEARCH-ONLY LOOKAHEAD (excluded from refined runtime ontology)
     # =====================================
 
-    dataset[
-        "future_return_3"
-    ] = (
+    if not ontology_refinement_active():
+        dataset[
+            "future_return_3"
+        ] = (
+            dataset["close"]
+            .shift(-3)
+            / dataset["close"]
+            - 1
+        )
 
-        dataset["close"]
-        .shift(-3)
-
-        / dataset["close"]
-
-        - 1
-
-    )
 
     # =====================================
     # ROLLING PERCENTILES
@@ -396,189 +399,45 @@ def process_auction_climax(
     ] = "MID_AUCTION_TRANSFER"
 
     # =====================================
-    # SELLING CLIMAX
+    # SELL-SIDE SEMANTIC SEPARATION (Phase 3A)
+    # STOPPING_VOLUME first, SELLING_CLIMAX only if still NORMAL
     # =====================================
 
-    selling_climax_condition = (
+    dataset = apply_ontology_pipeline(dataset)
+    dataset = compute_post_event_evolution(dataset)
 
-        (
-            dataset[
-                "volume_percentile_50"
-            ] >= 0.80
-        )
-
-        &
-
-        (
-
-            dataset[
-                "delta"
-            ]
-
-            <
-
-            dataset[
-                "delta"
-            ].rolling(20).quantile(0.35)
-
-        )
-
-        &
-
-        (
-            dataset[
-                "spread_percentile_50"
-            ] >= 0.45
-        )
-
-        &
-
-        (
-
-            (
-                dataset[
-                    "efficiency_decay"
-                ] < 0.80
-            )
-
-            |
-
-            (
-
-                dataset[
-                    "efficiency_decay"
-                ] > 1.20
-
-            )
-
-        )
-
-        &
-
-        (
-            dataset[
-                "range_position"
-            ] < 0.45
-        )
-
-    )
-
-    dataset.loc[
-
-        selling_climax_condition,
-
-        "auction_event_type"
-
-    ] = "SELLING_CLIMAX"
-
-    dataset.loc[
-
-        selling_climax_condition,
-
-        "location_bias"
-
-    ] = "LOWER_CAPITULATION"
-
-    # =====================================
-    # STOPPING VOLUME
-    # =====================================
-
-    stopping_volume_condition = (
-
-        (
-            dataset[
-                "volume_percentile_50"
-            ] >= 0.85
-        )
-
-        &
-
-        (
-            dataset[
-                "spread_percentile_50"
-            ] >= 0.45
-        )
-
-        &
-
-        (
-            dataset[
-                "delta"
-            ] < 0
-        )
-
-        &
-
-        (
-            dataset[
-                "range_position"
-            ] < 0.40
-        )
-
-        &
-
-        (
-            dataset[
-                "lower_wick_ratio"
-            ] > 0.10
-        )
-
-        &
-
-        (
-            dataset[
-                "future_return_3"
-            ] > 0
-        )
-
-        &
-
-        (
-            dataset[
-                "efficiency_decay"
-            ] < 1.20
-        )
-
-    )
-
-    dataset.loc[
-
-        stopping_volume_condition,
-
-        "auction_event_type"
-
-    ] = "STOPPING_VOLUME"
-
-    dataset.loc[
-
-        stopping_volume_condition,
-
-        "location_bias"
-
-    ] = "LOWER_ABSORPTION"
+    stability_exports = evaluate_ontology_under_stress()
+    for key, value in stability_exports.items():
+        if key not in {"event_priority_order"}:
+            dataset[key] = value
 
     # =====================================
     # OUTPUT
     # =====================================
 
-    climax_events = dataset[
-
-        dataset[
-            "auction_event_type"
-        ] != "NORMAL"
-
-    ][[
-
+    output_columns = [
         "timestamp",
         "auction_event_type",
         "volume_percentile_50",
         "spread_percentile_50",
         "delta",
         "spread",
-        "future_return_3",
-        "event_strength"
+        "event_strength",
+        "efficiency_decay",
+        "effort_result_zone",
+        "delta_behavior_shift",
+        "recovery_structure_score",
+        "climax_resolution_behavior",
+        "absorption_persistence_score",
+        "cluster_behavior_resolution",
+    ]
 
-    ]]
+    if "future_return_3" in dataset.columns:
+        output_columns.insert(7, "future_return_3")
+
+    climax_events = dataset[
+        dataset["auction_event_type"] != "NORMAL"
+    ][output_columns]
 
     print()
 
