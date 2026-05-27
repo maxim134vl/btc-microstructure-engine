@@ -13,6 +13,14 @@ from runtime_dependency_guard import should_run_engine
 from runtime_dependency_map import DEPENDENCIES
 from runtime_state_manager import update_runtime_state
 
+try:
+    from runtime_cache import clear_cache
+except ImportError:
+    def clear_cache() -> None:
+        pass
+
+_CYCLE_COUNT = 0
+
 CANONICAL_PIPELINE = [
     "candle_structure_engine_v1.py",
     "volume_classification_engine_v1.py",
@@ -56,6 +64,11 @@ def _load_engines():
 def run_once() -> None:
     """Execute one full canonical pipeline pass."""
 
+    global _CYCLE_COUNT
+    _CYCLE_COUNT += 1
+
+    clear_cache()
+
     engines = _load_engines()
     root = _repo_root()
     python = sys.executable
@@ -63,6 +76,7 @@ def run_once() -> None:
     print()
     print("=" * 40)
     print(datetime.now())
+    print(f"PIPELINE CYCLE: {_CYCLE_COUNT}")
     print("=" * 40)
     print()
 
@@ -78,7 +92,9 @@ def run_once() -> None:
         start_time = time.time()
         try:
             if engine in engines:
-                engines[engine]()
+                result = engines[engine]()
+                if isinstance(result, int) and result != 0:
+                    raise RuntimeError(f"ENGINE FAILED: {engine} (exit {result})")
             else:
                 result = subprocess.run(
                     [python, os.path.join(root, engine)],

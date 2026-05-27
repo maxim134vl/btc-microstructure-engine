@@ -1,6 +1,6 @@
 # PHASE 1B CALIBRATION RESULTS
 
-**Generated:** 2026-05-27T10:08:30.197556+00:00  
+**Generated:** 2026-05-27T11:51:31.045415+00:00  
 **Phase:** 1B — Controlled Probabilistic Discipline  
 **Default runtime:** discipline flags OFF (backward compatible)
 
@@ -10,17 +10,17 @@
 
 | Metric | Discipline OFF | Discipline ON | Delta |
 |--------|----------------|---------------|-------|
-| Mean conviction | 0.9503 | 0.6734 | -0.2769 |
-| Saturation frequency (>0.90) | 0.900 | 0.000 | -0.900 |
-| Mean saturation reduction | -0.9000 | -0.3729 | 0.5271 |
-| Entropy interaction (mean) | 0.0000 | 0.0006 | 0.0006 |
-| Reinforcement stability proxy | 1.2658 | 1.0147 | -0.2511 |
+| Mean conviction | 0.0000 | 0.0648 | 0.0648 |
+| Saturation frequency (>0.90) | 0.000 | 0.000 | 0.000 |
+| Mean saturation reduction | 0.0000 | 0.0000 | 0.0000 |
+| Entropy interaction (mean) | 0.0000 | 0.0000 | 0.0000 |
+| Reinforcement stability proxy | 0.0000 | 0.0000 | 0.0000 |
 
 ## 2. Discipline ON Detail
 
 - Rows compared: **100**
-- Mean raw vs disciplined divergence: **0.1859**
-- Max divergence: **0.2575**
+- Mean raw vs disciplined divergence: **-0.0648**
+- Max divergence: **-0.0648**
 
 ## 3. Rollout Guidance
 
@@ -44,15 +44,15 @@ export CALIBRATION_MODE=disciplined   # raw | disciplined | sigmoid
 ```json
 {
   "rows_compared": 100,
-  "mean_raw_conviction": 0.5031249999999999,
-  "mean_disciplined_conviction": 0.9503125000000001,
+  "mean_raw_conviction": 0.0,
+  "mean_disciplined_conviction": 0.0,
   "mean_divergence": 0.0,
   "max_divergence": 0.0,
   "saturation_frequency_before": 0.0,
-  "saturation_frequency_after": 0.9,
-  "mean_saturation_reduction": -0.8999999999999999,
+  "saturation_frequency_after": 0.0,
+  "mean_saturation_reduction": 0.0,
   "entropy_suppression_effectiveness": 0.0,
-  "reinforcement_stability_proxy": 1.2657945891605853
+  "reinforcement_stability_proxy": 0.0
 }
 ```
 
@@ -61,15 +61,15 @@ export CALIBRATION_MODE=disciplined   # raw | disciplined | sigmoid
 ```json
 {
   "rows_compared": 100,
-  "mean_raw_conviction": 0.5031249999999999,
-  "mean_disciplined_conviction": 0.6733854374190744,
-  "mean_divergence": 0.1858664869027587,
-  "max_divergence": 0.2575409605848294,
+  "mean_raw_conviction": 0.0,
+  "mean_disciplined_conviction": 0.06483781792779535,
+  "mean_divergence": -0.06483781792779535,
+  "max_divergence": -0.06483781792779535,
   "saturation_frequency_before": 0.0,
   "saturation_frequency_after": 0.0,
-  "mean_saturation_reduction": -0.37294417221870063,
-  "entropy_suppression_effectiveness": 0.0006000000000000005,
-  "reinforcement_stability_proxy": 1.0146523160544356
+  "mean_saturation_reduction": 0.0,
+  "entropy_suppression_effectiveness": 0.0,
+  "reinforcement_stability_proxy": 0.0
 }
 ```
 

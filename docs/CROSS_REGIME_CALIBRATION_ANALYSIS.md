@@ -1,6 +1,6 @@
 # CROSS-REGIME CALIBRATION ANALYSIS
 
-**Generated:** 2026-05-27T10:08:09.328079+00:00  
+**Generated:** 2026-05-27T11:51:23.514985+00:00  
 **Phase:** 2A — Cross-Regime Robustness & Calibration Stability  
 **Scope:** Robustness engineering — no ontology or threshold changes
 
@@ -10,13 +10,14 @@
 
 - Probabilistic rows analyzed: **200**
 - Walk-forward epochs: **1**
-- Mean calibration stability score: **0.785**
+- Mean calibration stability score: **0.909**
 
 ## 2. Conviction & Calibration Metrics by Regime
 
 | Regime | Rows | Mean Conviction | Saturation Freq | Entropy Effectiveness | Conflict Density | Reinforcement Persistence |
 |--------|------|-----------------|-----------------|----------------------|------------------|---------------------------|
-| `BALANCED_AUCTION` | 1 | 0.443 | 0.000 | 1.000 | 0.400 | 0.440 |
+| `BALANCED_AUCTION` | 8 | 0.302 | 0.000 | 1.000 | 0.400 | 0.300 |
+| `TREND_EXHAUSTION` | 125 | 0.002 | 0.000 | 1.000 | 0.250 | 0.002 |
 
 ## 3. Unstable Regime Detection
 
@@ -28,7 +29,7 @@ Regimes flagged when saturation frequency > 0.25, entropy effectiveness < 0.50, 
 
 | Epoch | Stability Score | Regime Drift | Conviction Drift | Entropy Drift | Reinforcement Drift |
 |-------|-----------------|--------------|------------------|---------------|---------------------|
-| 0 | 0.785 | 0.500 | 0.141 | 0.077 | 0.200 |
+| 0 | 0.909 | 0.061 | 0.045 | 0.101 | 0.060 |
 
 ## 5. Interpretation
 
@@ -39,25 +40,33 @@ This report identifies where disciplined cognition remains stable across changin
 ```json
 {
   "regime_metrics": {
+    "TREND_EXHAUSTION": {
+      "rows": 125.0,
+      "mean_conviction": 0.0019319999999999995,
+      "saturation_frequency": 0.0,
+      "entropy_suppression_effectiveness": 1.0,
+      "mean_conflict_density": 0.2504,
+      "reinforcement_persistence": 0.00192
+    },
     "BALANCED_AUCTION": {
-      "rows": 1.0,
-      "mean_conviction": 0.44275,
+      "rows": 8.0,
+      "mean_conviction": 0.301875,
       "saturation_frequency": 0.0,
       "entropy_suppression_effectiveness": 1.0,
       "mean_conflict_density": 0.4,
-      "reinforcement_persistence": 0.44
+      "reinforcement_persistence": 0.3
     }
   },
   "walk_forward_epochs": [
     {
       "walk_forward_epoch": 0,
-      "calibration_stability_score": 0.7853619975637526,
-      "regime_drift_score": 0.5,
-      "conviction_drift": 0.14087499999999997,
-      "entropy_drift": 0.07665876218123724,
-      "reinforcement_drift": 0.2,
-      "contradiction_persistence": 0.4,
-      "calibration_degradation": 0.21463800243624742
+      "calibration_stability_score": 0.9087605012034414,
+      "regime_drift_score": 0.06060606060606058,
+      "conviction_drift": 0.044625,
+      "entropy_drift": 0.10072624559465632,
+      "reinforcement_drift": 0.059574468085106386,
+      "contradiction_persistence": 0.25,
+      "calibration_degradation": 0.0912394987965586
     }
   ],
   "unstable_regimes": []

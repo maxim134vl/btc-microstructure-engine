@@ -95,9 +95,15 @@ def apply_semantic_separation(
         base_mask
         & normal_mask
         & (frame["efficiency_decay"] < settings.stopping_volume_max_decay)
-        & (frame["close_position_ratio"] > 0.35)
-        & (frame["lower_wick_ratio"] > 0.25)
-        & (frame["delta_behavior_shift"] > 0.0)
+        & (
+            (frame["close_position_ratio"] > settings.stopping_min_close_position_ratio)
+            | (frame["recovery_structure_score"] >= settings.stopping_recovery_score_alt)
+        )
+        & (frame["lower_wick_ratio"] > settings.stopping_min_lower_wick_ratio)
+        & (
+            (frame["delta_behavior_shift"] > settings.stopping_min_delta_shift)
+            | (frame["recovery_structure_score"] >= settings.stopping_recovery_score_alt)
+        )
         & (frame["effort_result_zone"] == "ABSORPTION")
     )
 
@@ -109,8 +115,8 @@ def apply_semantic_separation(
         & (frame["auction_event_type"] == "NORMAL")
         & (frame["efficiency_decay"] > settings.selling_climax_min_decay)
         & (frame["close_position_ratio"] < 0.25)
-        & (frame["lower_wick_ratio"] < 0.20)
-        & (frame["delta_behavior_shift"] <= 0.0)
+        & (frame["lower_wick_ratio"] < settings.selling_max_lower_wick_ratio)
+        & (frame["delta_behavior_shift"] <= settings.selling_max_delta_shift)
         & (frame["effort_result_zone"] == "CAPITULATION")
     )
 

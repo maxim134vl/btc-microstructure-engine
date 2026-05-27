@@ -57,7 +57,10 @@ def compute_post_event_evolution(
     frame = dataset.copy()
 
     for column in POST_EVENT_EXPORT_COLUMNS:
-        frame[column] = np.nan
+        if column == "climax_resolution_behavior":
+            frame[column] = pd.Series([None] * len(frame), dtype=object)
+        else:
+            frame[column] = np.nan
 
     event_types = {"STOPPING_VOLUME", "SELLING_CLIMAX"}
     event_indices = frame.index[

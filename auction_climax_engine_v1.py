@@ -52,7 +52,7 @@ def process_auction_climax(
             "volume"
         ]
 
-        .rolling(50)
+        .rolling(50, min_periods=1)
 
         .rank(pct=True)
 
@@ -66,7 +66,7 @@ def process_auction_climax(
             "spread"
     ]
 
-        .rolling(50)
+        .rolling(50, min_periods=1)
 
         .rank(pct=True)
 
@@ -89,7 +89,7 @@ def process_auction_climax(
         dataset[
             "directional_efficiency"
         ]
-        .rolling(20)
+        .rolling(20, min_periods=1)
         .mean()
     )
 
@@ -161,7 +161,7 @@ def process_auction_climax(
         dataset[
             "high"
         ]
-        .rolling(50)
+        .rolling(50, min_periods=1)
         .max()
 
     )
@@ -173,7 +173,7 @@ def process_auction_climax(
         dataset[
             "low"
         ]
-        .rolling(50)
+        .rolling(50, min_periods=1)
         .min()
 
     )
@@ -435,6 +435,8 @@ def process_auction_climax(
     if "future_return_3" in dataset.columns:
         output_columns.insert(7, "future_return_3")
 
+    output_columns = [col for col in output_columns if col in dataset.columns]
+
     climax_events = dataset[
         dataset["auction_event_type"] != "NORMAL"
     ][output_columns]
@@ -458,7 +460,7 @@ def process_auction_climax(
         dataset[
             "directional_efficiency"
         ]
-        .rolling(20)
+        .rolling(20, min_periods=1)
         .mean()
     )
 

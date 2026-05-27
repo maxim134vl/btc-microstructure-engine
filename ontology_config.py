@@ -19,6 +19,13 @@ class OntologySettings:
     swing_cluster_window: int = 5
     post_event_horizon: int = 5
     warn_on_overlap: bool = True
+    # Secondary discriminator restoration bounds (Phase 4B density restoration)
+    stopping_min_lower_wick_ratio: float = 0.15
+    stopping_min_close_position_ratio: float = 0.20
+    stopping_min_delta_shift: float = -0.15
+    stopping_recovery_score_alt: float = 0.40
+    selling_max_lower_wick_ratio: float = 0.25
+    selling_max_delta_shift: float = 0.0
 
 
 def get_ontology_settings() -> OntologySettings:
@@ -53,6 +60,12 @@ def get_ontology_settings() -> OntologySettings:
         swing_cluster_window=_env_int("SWING_CLUSTER_WINDOW", 5),
         post_event_horizon=_env_int("POST_EVENT_HORIZON", 5),
         warn_on_overlap=_env_bool("ONTOLOGY_WARN_ON_OVERLAP", True),
+        stopping_min_lower_wick_ratio=_env_float("STOPPING_MIN_LOWER_WICK_RATIO", 0.15),
+        stopping_min_close_position_ratio=_env_float("STOPPING_MIN_CLOSE_POSITION_RATIO", 0.20),
+        stopping_min_delta_shift=_env_float("STOPPING_MIN_DELTA_SHIFT", -0.15),
+        stopping_recovery_score_alt=_env_float("STOPPING_RECOVERY_SCORE_ALT", 0.40),
+        selling_max_lower_wick_ratio=_env_float("SELLING_MAX_LOWER_WICK_RATIO", 0.25),
+        selling_max_delta_shift=_env_float("SELLING_MAX_DELTA_SHIFT", 0.0),
     )
 
 
