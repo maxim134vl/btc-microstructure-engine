@@ -1,6 +1,6 @@
 # TODO_REVIEW — Manual Review Required
 
-**Updated:** 2026-05-27 (Phase 2A cross-regime robustness)
+**Updated:** 2026-05-27 (Phase 2B adversarial robustness)
 
 ---
 
@@ -75,6 +75,10 @@ Do **not** change during repository refactor:
 - [x] Create `docs/CROSS_REGIME_CALIBRATION_ANALYSIS.md` (Phase 2A — generated)
 - [x] Create `docs/CALIBRATION_DRIFT_MODEL.md` (Phase 2A)
 - [x] Create `docs/REGIME_TRANSITION_MODEL.md` (Phase 2A)
+- [x] Create `docs/ADVERSARIAL_ROBUSTNESS_MODEL.md` (Phase 2B)
+- [x] Create `docs/FAILURE_MODE_ANALYSIS.md` (Phase 2B)
+- [x] Create `docs/INSTABILITY_PROPAGATION_MODEL.md` (Phase 2B)
+- [x] Create `docs/REGIME_TRANSITION_SURVIVAL.md` (Phase 2B)
 - [ ] Mark `README_RUNTIME.md` as deprecated (points to wrong runtime)
 - [ ] Add root `README.md`
 - [ ] Update `docs/SYSTEM_MAP.md` with Stage 2 section
@@ -91,6 +95,7 @@ Do **not** change during repository refactor:
 | 1A | Probabilistic calibration diagnostics | ✅ Done |
 | 1B | Controlled probabilistic discipline | ✅ Done |
 | 2A | Cross-regime robustness & calibration stability | ✅ Done |
+| 2B | Adversarial robustness & failure-mode engineering | ✅ Done |
 | 1 | `src/btc_ml/` skeleton | Pending |
 | 2 | Infrastructure move | Pending |
 | 3 | Service engines move | Pending |

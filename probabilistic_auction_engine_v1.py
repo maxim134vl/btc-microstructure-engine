@@ -12,6 +12,10 @@ from calibration_discipline import (
     apply_probabilistic_discipline,
     resolve_runtime_conviction,
 )
+from adversarial_diagnostics import (
+    ADVERSARIAL_EXPORT_COLUMNS,
+    build_adversarial_exports,
+)
 from calibration_drift_engine import (
     compute_calibration_drift,
     log_drift_warning,
@@ -447,6 +451,12 @@ def run():
         **stability_exports,
     }
 
+    robustness_snapshot.update(robustness_exports)
+    adversarial_exports = build_adversarial_exports(
+        robustness_snapshot,
+        history=probabilistic_history,
+    )
+
     print(
         "AUCTION REGIME:"
     )
@@ -460,6 +470,13 @@ def run():
     print(regime_exports.get("regime_state"))
     print("REGIME CONFIDENCE:")
     print(round(float(regime_exports.get("regime_confidence", 0.0)), 2))
+
+    if adversarial_exports.get("adversarial_diagnostics_active"):
+        print()
+        print("FAILURE MODE:")
+        print(adversarial_exports.get("failure_mode"))
+        print("FRAGILITY SCORE:")
+        print(round(float(adversarial_exports.get("probabilistic_fragility_score", 0.0)), 2))
 
     print()
 
@@ -573,6 +590,8 @@ def run():
 
     **robustness_exports,
 
+    **adversarial_exports,
+
     }])
 
     row = apply_lineage_metadata(
@@ -618,11 +637,14 @@ def run():
             reinforcement_component,
 
         **{
-            key: robustness_exports.get(
+            key: adversarial_exports.get(
                 key,
-                discipline_result.get(
+                robustness_exports.get(
                     key,
-                    diagnostic_exports.get(key),
+                    discipline_result.get(
+                        key,
+                        diagnostic_exports.get(key),
+                    ),
                 ),
             )
             for key in (
@@ -631,6 +653,7 @@ def run():
                 + list(regime_exports.keys())
                 + list(drift_exports.keys())
                 + list(stability_exports.keys())
+                + list(ADVERSARIAL_EXPORT_COLUMNS)
             )
         },
 
