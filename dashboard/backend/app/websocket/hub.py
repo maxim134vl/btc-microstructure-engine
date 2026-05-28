@@ -1,4 +1,4 @@
-"""WebSocket broadcast hub for live dashboard updates."""
+"""WebSocket broadcast hub for live ops monitor."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from app.config import POLL_INTERVAL_S
-from app.services.domain_builders import build_live_snapshot
+from app.services.ops_monitor import build_ops_snapshot
 
 
 class WebSocketHub:
@@ -43,7 +43,7 @@ class WebSocketHub:
     async def _poll_loop(self) -> None:
         while True:
             try:
-                snapshot = await build_live_snapshot()
+                snapshot = await build_ops_snapshot(ws_connected=bool(self.connections))
                 self._latest = snapshot
                 if self.connections:
                     payload = json.dumps({"type": "snapshot", "data": snapshot})

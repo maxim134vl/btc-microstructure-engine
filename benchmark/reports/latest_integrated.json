@@ -1,0 +1,43 @@
+{
+  "run_id": "20260528_181603",
+  "generated_at": "2026-05-28T18:16:03.364692",
+  "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/integrated_forensic_20260528_181603.md",
+  "drift_report": "/Users/fontecrypto/btc-ml/benchmark/reports/cognition_drift_20260528_181603.md",
+  "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/integrated_benchmark_20260528_181603.json",
+  "export_csv": "/Users/fontecrypto/btc-ml/benchmark/exports/integrated_summary_20260528_181603.csv",
+  "visuals": [],
+  "summary": {
+    "event_count": 3,
+    "verdict_distribution": {
+      "CONFIDENCE_FAILURE": 3
+    },
+    "root_cause_distribution": {
+      "synthesis instability": 3
+    },
+    "perception_accuracy": 0.0,
+    "reasoning_accuracy": 0.0,
+    "cross_stage_alignment": 0.0,
+    "confidence_realism": 0.0,
+    "contradiction_propagation": 0.0,
+    "synthesis_integrity": 1.0,
+    "narrative_stability": 0.7167,
+    "ontology_coherence": 0.0,
+    "market_confirmation_rate": 0.0,
+    "cognition_drift_frequency": 1.0,
+    "fully_confirmed_rate": 0.0
+  },
+  "drift": {
+    "status": "OK",
+    "health": "WATCH",
+    "signals": [
+      "confidence inflation",
+      "narrative degradation"
+    ],
+    "overconfident_rate": 1.0,
+    "contradiction_rate": 0.0,
+    "misalignment_rate": 1.0,
+    "perception_failure_rate": 0.0,
+    "reasoning_failure_rate": 0.0
+  },
+  "status": "OK"
+}

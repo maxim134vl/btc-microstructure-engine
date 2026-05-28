@@ -1,0 +1,4 @@
+event_index,timestamp,integrated_verdict,stage1_verdict,stage2_verdict,root_cause,failure_pattern,confidence_realism,alignment_level,contradiction_propagation,observed_outcome,move_pct
+1,2026-05-18 06:00:00,CONFIDENCE_FAILURE,PARTIAL,PARTIAL,synthesis instability,D,POOR,LOW,PARTIAL,Market moved flat 0.20% over next 11 candles.,0.197
+2,2026-05-20 05:00:00,CONFIDENCE_FAILURE,PARTIAL,PARTIAL,synthesis instability,D,POOR,LOW,PARTIAL,Market moved flat 0.08% over next 11 candles.,0.076
+3,2026-05-20 08:30:00,CONFIDENCE_FAILURE,PARTIAL,PARTIAL,synthesis instability,D,POOR,LOW,PARTIAL,Market moved flat 0.09% over next 11 candles.,-0.085

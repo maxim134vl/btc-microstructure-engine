@@ -1,0 +1,28 @@
+# Canonical required runtime components — single source of truth for operational health.
+# Health scoring MUST ONLY use items listed here.
+# Everything else is OPTIONAL, LEGACY, RESEARCH, or DORMANT (ignored for CRITICAL).
+
+REQUIRED_COLLECTORS:
+  - binance_live_feed
+
+REQUIRED_PARQUET:
+  - live_market_feed.parquet
+  - candle_structure_memory.parquet
+  - runtime_cognition_memory.parquet
+  - probabilistic_auction_memory.parquet
+
+REQUIRED_ENGINES:
+  - candle_structure_engine_v1.py
+  - runtime_cognition_engine_v1.py
+  - probabilistic_auction_engine_v1.py
+
+# Thresholds (seconds) for production ops semantics
+THRESHOLDS:
+  parquet_live: 900        # 15m candle boundary + buffer
+  parquet_delayed: 3600    # degraded before critical
+  collector_ws: 120
+  collector_dead: 600       # no heartbeat beyond this = truly dead
+  engine_stale: 900
+  pipeline_stall: 1800
+  parquet_stale_info: 1800     # 30m
+  parquet_stale_warning: 7200  # 2h

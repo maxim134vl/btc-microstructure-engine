@@ -1,0 +1,17 @@
+event_index,timestamp,verdict,false_positive,interpretation,observed_outcome,bias_label,move_pct,follow_through
+1,2026-05-18 02:45:00,CONFIRMED,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved upward 0.31% over next 7 candles.,stopping activity,0.314,WEAK
+2,2026-05-18 06:00:00,PARTIAL,False,Trigger event: STOPPING_VOLUME. Synthesis: LOCAL_EXHAUSTION. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.,Market moved upward 0.26% over next 7 candles.,stopping support,0.257,WEAK
+3,2026-05-18 08:30:00,PARTIAL,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved downward 0.19% over next 7 candles.,stopping activity,-0.189,NONE
+4,2026-05-18 15:00:00,PARTIAL,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved upward 0.14% over next 7 candles.,stopping activity,0.137,NONE
+5,2026-05-18 18:15:00,CONFIRMED,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved upward 0.94% over next 7 candles.,stopping activity,0.945,MODERATE
+6,2026-05-19 21:00:00,FALSE POSITIVE,True,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.,Market moved downward 0.37% over next 7 candles.,stopping activity,-0.37,WEAK
+7,2026-05-20 04:30:00,CONFIRMED,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.,Market moved upward 0.69% over next 7 candles.,stopping activity,0.693,WEAK
+8,2026-05-20 05:00:00,PARTIAL,False,Trigger event: BUYING_CLIMAX. Synthesis: INTERMEDIATE_REVERSAL. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved upward 0.23% over next 7 candles.,buyer climax exhaustion,0.229,WEAK
+9,2026-05-20 07:00:00,PARTIAL,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved upward 0.11% over next 7 candles.,stopping activity,0.108,NONE
+10,2026-05-20 07:30:00,PARTIAL,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.,Market moved upward 0.17% over next 7 candles.,stopping activity,0.169,NONE
+11,2026-05-20 08:15:00,CONFIRMED,False,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.,Market moved upward 0.45% over next 7 candles.,stopping activity,0.451,WEAK
+12,2026-05-20 08:30:00,PARTIAL,False,Trigger event: BUYING_CLIMAX. Synthesis: LOCAL_EXHAUSTION. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved upward 0.11% over next 7 candles.,buyer climax exhaustion,0.112,NONE
+13,2026-05-20 13:30:00,CONFIRMED,False,Volume class: climax. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved upward 0.60% over next 7 candles.,volume climax,0.603,WEAK
+14,2026-05-21 00:45:00,PARTIAL,False,Volume class: climax. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.,Market moved upward 0.06% over next 7 candles.,volume climax,0.059,NONE
+15,2026-05-21 08:45:00,FALSE POSITIVE,True,Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.,Market moved downward 0.72% over next 7 candles.,stopping activity,-0.716,WEAK
+16,2026-05-21 18:57:56.394969,CONFIRMED,False,Effort/result: ABSORPTION_RESPONSE. Localized behavior: localized_distribution. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.,Market moved upward 0.00% over next 0 candles.,absorption response,0.0,NONE

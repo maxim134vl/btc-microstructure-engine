@@ -1,17 +1,22 @@
-import type { LiveSnapshot } from "../types";
+import type { OpsSnapshot } from "../types/ops";
 
 const API = "/api/v1";
 
-export async function fetchSnapshot(): Promise<LiveSnapshot> {
-  const response = await fetch(`${API}/snapshot`);
-  if (!response.ok) throw new Error(`snapshot ${response.status}`);
+export async function fetchOpsSnapshot(): Promise<OpsSnapshot> {
+  const response = await fetch(`${API}/ops/snapshot`);
+  if (!response.ok) throw new Error(`ops snapshot ${response.status}`);
   return response.json();
 }
 
-export function connectLive(onSnapshot: (data: LiveSnapshot) => void, onStatus: (ok: boolean) => void) {
+export async function fetchDebugSnapshot(): Promise<unknown> {
+  const response = await fetch(`${API}/debug/snapshot`);
+  if (!response.ok) throw new Error(`debug snapshot ${response.status}`);
+  return response.json();
+}
+
+export function connectOps(onSnapshot: (data: OpsSnapshot) => void, onStatus: (ok: boolean) => void) {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const host = window.location.host;
-  const socket = new WebSocket(`${protocol}://${host}/ws/live`);
+  const socket = new WebSocket(`${protocol}://${window.location.host}/ws/live`);
 
   socket.onopen = () => onStatus(true);
   socket.onclose = () => onStatus(false);
@@ -21,7 +26,7 @@ export function connectLive(onSnapshot: (data: LiveSnapshot) => void, onStatus: 
       const payload = JSON.parse(event.data);
       if (payload.type === "snapshot") onSnapshot(payload.data);
     } catch {
-      /* ignore malformed frames */
+      /* ignore */
     }
   };
 

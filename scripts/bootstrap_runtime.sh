@@ -49,5 +49,8 @@ echo "Running hardening checks ..."
 
 echo
 echo "Bootstrap complete."
+echo "Start collectors: ./scripts/start_collectors.sh"
 echo "Start runtime: ./run.sh"
+echo "Start runtime + collectors: ./run.sh --with-collectors"
+echo "Verify ingestion: python3 scripts/verify_live_ingestion.py"
 echo "Verify Phase 4B: ./run.sh --verify-4b"

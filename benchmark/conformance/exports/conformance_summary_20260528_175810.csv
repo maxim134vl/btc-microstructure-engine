@@ -1,0 +1,27 @@
+layer,metric,expected_level,observed_value,verdict,divergence,calibration_hint
+stage1,climax_density,low,0.0357,CONFIRMED,0.0,Climax classification thresholds may be too sensitive.
+stage1,false_positive_rate,low,0.125,CONFIRMED,0.0,Perception bias scoring may be miscalibrated for current regime.
+stage1,initiative_followthrough,medium_high,0.0,SEVERE_DRIFT,1.0,Initiative detection thresholds likely too sensitive during low volatility.
+stage1,transition_stability,stable,0.0,SEVERE_DRIFT,1.0,Transition persistence assumptions diverge from runtime reality.
+stage1,market_structure_coherence,high,0.625,CONFIRMED,0.0,Structure classification ontology may be fragmenting.
+stage1,confirmed_rate,moderate,0.375,CONFIRMED,0.0,Stage 1 perception layer requires calibration review.
+stage1,climax_confirmation_rate,moderate,0.4,CONFIRMED,0.0,Climax threshold or follow-through horizon may need adjustment.
+stage1,contradiction_frequency,low,0.125,CONFIRMED,0.0,Perception ontology producing conflicting signals.
+stage2,confidence_realism,moderate,0.0,CALIBRATION_COLLAPSE,1.0,Confidence weighting exceeds observed follow-through quality.
+stage2,narrative_coherence,high,0.7167,CONFIRMED,0.0,Synthesis narrative construction degrading — review MTF alignment rules.
+stage2,contradiction_frequency,low,0.0,CONFIRMED,0.0,Reasoning layer producing contradictory synthesis states.
+stage2,synthesis_stability,stable,0.0,SEVERE_DRIFT,1.0,Synthesis state machine may be overreacting to local noise.
+stage2,reasoning_accuracy,moderate,0.0,SEVERE_DRIFT,1.0,Reasoning bias mapping diverges from market behavior.
+stage2,confidence_drift,low,1.0,SEVERE_DRIFT,1.0,Confidence inflation detected — review conviction decomposition weights.
+stage2,transition_logic_quality,stable,0.0,SEVERE_DRIFT,1.0,Transition logic producing noisy state flips.
+stage2,context_failure_rate,low,0.0,CONFIRMED,0.0,Stage 2 losing contextual linkage to Stage 1 inputs.
+integrated,fully_confirmed_rate,moderate,0.0,SEVERE_DRIFT,1.0,End-to-end cognition chain rarely confirms — review cross-stage wiring.
+integrated,cross_stage_alignment,high,0.0,SEVERE_DRIFT,1.0,Perception-to-reasoning handoff diverging from architecture intent.
+integrated,confidence_realism,moderate,0.0,SEVERE_DRIFT,1.0,Integrated confidence exceeds market confirmation quality.
+integrated,ontology_coherence,high,0.0,ONTOLOGY_DEGRADATION,1.0,Ontology fragmentation detected across cognition layers.
+integrated,cognition_drift_frequency,low,1.0,SEVERE_DRIFT,1.0,Rolling cognition drift exceeds architectural tolerance.
+integrated,contradiction_propagation,low,0.0,CONFIRMED,0.0,Contradiction cascade detected — review propagation guards.
+integrated,narrative_stability,high,0.7167,CONFIRMED,0.0,Narrative degradation across integrated cognition chain.
+integrated,market_confirmation_rate,moderate,0.0,SEVERE_DRIFT,1.0,Architecture assumptions about market confirmation diverge from runtime.
+integrated,perception_accuracy,moderate,0.0,SEVERE_DRIFT,1.0,Perception layer failing within integrated validation.
+integrated,reasoning_accuracy,moderate,0.0,SEVERE_DRIFT,1.0,Reasoning layer failing within integrated validation.

@@ -20,7 +20,12 @@ from live_feed_paths import (
 
 from datetime import datetime
 
+from collector_heartbeat import write_heartbeat
+
 print("\nLIVE BINANCE FEED V2 STARTED\n")
+
+COLLECTOR_NAME = "binance_live_feed"
+_message_count = 0
 
 # =====================================
 # SETTINGS
@@ -138,6 +143,16 @@ def safe_append_candle(candle):
     # Canonical feed + legacy mirror snapshot.
     write_live_feed_snapshot(df)
 
+    global _message_count
+    _message_count += 1
+    write_heartbeat(
+        COLLECTOR_NAME,
+        status="ALIVE",
+        event="candle_saved",
+        message_count=_message_count,
+        extra={"last_timestamp": str(candle["timestamp"])},
+    )
+
 # =====================================
 # ON MESSAGE
 # =====================================
@@ -154,10 +169,13 @@ def on_message(ws, message):
 
         candle_closed = kline["x"]
 
-        # ignore live candle
-
         if not candle_closed:
-
+            write_heartbeat(
+                COLLECTOR_NAME,
+                status="CONNECTED",
+                event="kline_tick",
+                message_count=_message_count,
+            )
             return
 
         timestamp = pd.to_datetime(
@@ -270,6 +288,13 @@ def on_message(ws, message):
 
         print()
 
+        write_heartbeat(
+            COLLECTOR_NAME,
+            status="ERROR",
+            event="message_error",
+            last_error=str(e),
+        )
+
 # =====================================
 # ERROR
 # =====================================
@@ -284,6 +309,13 @@ def on_error(ws, error):
 
     print()
 
+    write_heartbeat(
+        COLLECTOR_NAME,
+        status="ERROR",
+        event="websocket_error",
+        last_error=str(error),
+    )
+
 # =====================================
 # CLOSE
 # =====================================
@@ -296,6 +328,13 @@ def on_close(ws, close_status_code, close_msg):
 
     print()
 
+    write_heartbeat(
+        COLLECTOR_NAME,
+        status="DISCONNECTED",
+        event="websocket_closed",
+        extra={"code": close_status_code, "msg": close_msg},
+    )
+
 # =====================================
 # OPEN
 # =====================================
@@ -306,9 +345,17 @@ def on_open(ws):
         "CONNECTED TO BINANCE\n"
     )
 
+    write_heartbeat(
+        COLLECTOR_NAME,
+        status="CONNECTED",
+        event="websocket_open",
+    )
+
 # =====================================
 # MAIN LOOP
 # =====================================
+
+write_heartbeat(COLLECTOR_NAME, status="STARTING", event="process_start")
 
 while True:
 

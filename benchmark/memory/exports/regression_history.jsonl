@@ -1,0 +1,2 @@
+{"cycle_id": "20260528_181603", "generated_at": "2026-05-28T18:16:03.397707", "type": "REGRESSION", "metric": "trust_level", "label": "Trust classification", "delta": null, "note": "Cycle classified as TOXIC."}
+{"cycle_id": "20260528_181635", "generated_at": "2026-05-28T18:16:35.850906", "type": "REGRESSION", "metric": "trust_level", "label": "Trust classification", "delta": null, "note": "Cycle classified as TOXIC."}

@@ -1,0 +1,61 @@
+# Stage 1 architecture conformance expectations
+# Compare observed benchmark metrics against intended cognition behavior.
+
+lookback_days: 7
+
+metrics:
+  climax_density:
+    description: Climax events should be rare relative to total cognition events.
+    expected_level: low
+    observed_key: climax_event_rate
+    max: 0.20
+    calibration_hint: Climax classification thresholds may be too sensitive.
+
+  false_positive_rate:
+    description: Stage 1 false positives should remain low.
+    expected_level: low
+    observed_key: false_positive_rate
+    max: 0.15
+    calibration_hint: Perception bias scoring may be miscalibrated for current regime.
+
+  initiative_followthrough:
+    description: Initiative detection should show medium-high confirmation.
+    expected_level: medium_high
+    observed_key: initiative_accuracy
+    min: 0.35
+    calibration_hint: Initiative detection thresholds likely too sensitive during low volatility.
+
+  transition_stability:
+    description: Auction transition interpretation should remain stable.
+    expected_level: stable
+    observed_key: transition_stability
+    min: 0.40
+    calibration_hint: Transition persistence assumptions diverge from runtime reality.
+
+  market_structure_coherence:
+    description: Market structure interpretation should stay coherent.
+    expected_level: high
+    observed_key: market_structure_coherence
+    min: 0.55
+    calibration_hint: Structure classification ontology may be fragmenting.
+
+  confirmed_rate:
+    description: Overall Stage 1 perception confirmation should be moderate or better.
+    expected_level: moderate
+    observed_key: confirmed_rate
+    min: 0.30
+    calibration_hint: Stage 1 perception layer requires calibration review.
+
+  climax_confirmation_rate:
+    description: Climax events that occur should confirm at reasonable rate.
+    expected_level: moderate
+    observed_key: climax_confirmation_rate
+    min: 0.35
+    calibration_hint: Climax threshold or follow-through horizon may need adjustment.
+
+  contradiction_frequency:
+    description: Contradictions in Stage 1 layer should remain low.
+    expected_level: low
+    observed_key: false_positive_rate
+    max: 0.20
+    calibration_hint: Perception ontology producing conflicting signals.

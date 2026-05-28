@@ -1,0 +1,446 @@
+{
+  "run_id": "20260528_181635",
+  "cycle_id": "20260528_181635",
+  "generated_at": "2026-05-28T18:16:35.866942",
+  "status": "OK",
+  "trust": {
+    "trust_level": "TOXIC",
+    "cognition_health": "DEGRADED",
+    "stability_score": 0.4231,
+    "overconfident_rate": 1.0,
+    "drift_frequency": 1.0
+  },
+  "comparison": {
+    "status": "OK",
+    "previous_cycle_id": "20260528_181603",
+    "comparisons": [
+      {
+        "metric": "cognition_stability_score",
+        "label": "Cognition stability",
+        "current": 0.4231,
+        "previous": 0.4231,
+        "rolling_average": 0.4231,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "confidence_realism_score",
+        "label": "Confidence realism",
+        "current": 0.0,
+        "previous": 0.0,
+        "rolling_average": 0.0,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "ontology_integrity_score",
+        "label": "Ontology integrity",
+        "current": 0.75,
+        "previous": 0.75,
+        "rolling_average": 0.75,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "transition_stability_score",
+        "label": "Transition stability",
+        "current": 0.0,
+        "previous": 0.0,
+        "rolling_average": 0.0,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "contradiction_pressure_score",
+        "label": "Contradiction pressure",
+        "current": 1.0,
+        "previous": 1.0,
+        "rolling_average": 1.0,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "calibration_health_score",
+        "label": "Calibration health",
+        "current": 0.1731,
+        "previous": 0.1731,
+        "rolling_average": 0.1731,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "confirmed_rate",
+        "label": "Stage 1 confirmation",
+        "current": 0.375,
+        "previous": 0.375,
+        "rolling_average": 0.375,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "reasoning_accuracy",
+        "label": "Reasoning accuracy",
+        "current": 0.0,
+        "previous": 0.0,
+        "rolling_average": 0.0,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "cognition_drift_frequency",
+        "label": "Cognition drift",
+        "current": 1.0,
+        "previous": 1.0,
+        "rolling_average": 1.0,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      },
+      {
+        "metric": "overconfident_rate",
+        "label": "Overconfidence",
+        "current": 1.0,
+        "previous": 1.0,
+        "rolling_average": 1.0,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.0,
+        "trend": "stable"
+      }
+    ],
+    "rolling_average": {
+      "cognition_stability_score": 0.4231,
+      "confidence_realism_score": 0.0,
+      "ontology_integrity_score": 0.75,
+      "transition_stability_score": 0.0,
+      "contradiction_pressure_score": 1.0,
+      "calibration_health_score": 0.1731,
+      "confirmed_rate": 0.375,
+      "reasoning_accuracy": 0.0,
+      "cognition_drift_frequency": 1.0,
+      "overconfident_rate": 1.0
+    },
+    "best_stability_cycle": "20260528_181603",
+    "worst_stability_cycle": "20260528_181603",
+    "history_length": 2
+  },
+  "regression": {
+    "verdict": "MIXED",
+    "improvement_count": 0,
+    "regression_count": 1,
+    "events": [
+      {
+        "type": "REGRESSION",
+        "metric": "trust_level",
+        "label": "Trust classification",
+        "delta": null,
+        "note": "Cycle classified as TOXIC."
+      }
+    ]
+  },
+  "evolution": {
+    "timeline": {
+      "confidence_realism": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.0
+        }
+      ],
+      "contradiction_pressure": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 1.0
+        }
+      ],
+      "ontology_integrity": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.75
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.75
+        }
+      ],
+      "transition_stability": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.0
+        }
+      ],
+      "cognition_stability": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.4231
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.4231
+        }
+      ],
+      "narrative_coherence": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.7167
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.7167
+        }
+      ],
+      "narrative_stability": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.7167
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.7167
+        }
+      ],
+      "cognition_drift": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 1.0
+        }
+      ],
+      "calibration_effectiveness": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.1731
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.1731
+        }
+      ],
+      "confidence_inflation": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 1.0
+        }
+      ]
+    },
+    "trends": {
+      "confidence_realism": "stable",
+      "contradiction_pressure": "stable",
+      "ontology_integrity": "stable",
+      "transition_stability": "stable",
+      "cognition_stability": "stable",
+      "narrative_coherence": "stable",
+      "narrative_stability": "stable",
+      "cognition_drift": "stable",
+      "calibration_effectiveness": "stable",
+      "confidence_inflation": "stable"
+    },
+    "cycle_count": 2
+  },
+  "calibration_evolution": {
+    "entry": {
+      "cycle_id": "20260528_181635",
+      "generated_at": "2026-05-28T18:16:35.850906",
+      "calibration_status": "NEEDS_REVIEW",
+      "recommendations": [
+        {
+          "priority": "CALIBRATION_COLLAPSE",
+          "layer": "stage2",
+          "metric": "confidence_realism",
+          "recommendation": "Confidence weighting exceeds observed follow-through quality.",
+          "evidence": "Inverse metric overconfident_rate=100.0% exceeds max 30.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage1",
+          "metric": "initiative_followthrough",
+          "recommendation": "Initiative detection thresholds likely too sensitive during low volatility.",
+          "evidence": "Observed 0.0% below minimum 35.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage1",
+          "metric": "transition_stability",
+          "recommendation": "Transition persistence assumptions diverge from runtime reality.",
+          "evidence": "Observed 0.0% below minimum 40.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage2",
+          "metric": "synthesis_stability",
+          "recommendation": "Synthesis state machine may be overreacting to local noise.",
+          "evidence": "Observed 0.0% below minimum 35.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage2",
+          "metric": "reasoning_accuracy",
+          "recommendation": "Reasoning bias mapping diverges from market behavior.",
+          "evidence": "Observed 0.0% below minimum 30.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage2",
+          "metric": "confidence_drift",
+          "recommendation": "Confidence inflation detected \u2014 review conviction decomposition weights.",
+          "evidence": "Observed 100.0% exceeds maximum 35.0%.",
+          "observed_value": 1.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage2",
+          "metric": "transition_logic_quality",
+          "recommendation": "Transition logic producing noisy state flips.",
+          "evidence": "Observed 0.0% below minimum 35.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "fully_confirmed_rate",
+          "recommendation": "End-to-end cognition chain rarely confirms \u2014 review cross-stage wiring.",
+          "evidence": "Observed 0.0% below minimum 25.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "cross_stage_alignment",
+          "recommendation": "Perception-to-reasoning handoff diverging from architecture intent.",
+          "evidence": "Observed 0.0% below minimum 45.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "confidence_realism",
+          "recommendation": "Integrated confidence exceeds market confirmation quality.",
+          "evidence": "Observed 0.0% below minimum 40.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "cognition_drift_frequency",
+          "recommendation": "Rolling cognition drift exceeds architectural tolerance.",
+          "evidence": "Observed 100.0% exceeds maximum 35.0%.",
+          "observed_value": 1.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "market_confirmation_rate",
+          "recommendation": "Architecture assumptions about market confirmation diverge from runtime.",
+          "evidence": "Observed 0.0% below minimum 30.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "perception_accuracy",
+          "recommendation": "Perception layer failing within integrated validation.",
+          "evidence": "Observed 0.0% below minimum 30.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "reasoning_accuracy",
+          "recommendation": "Reasoning layer failing within integrated validation.",
+          "evidence": "Observed 0.0% below minimum 30.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "ONTOLOGY_DEGRADATION",
+          "layer": "integrated",
+          "metric": "ontology_coherence",
+          "recommendation": "Ontology fragmentation detected across cognition layers.",
+          "evidence": "Observed 0.0% below minimum 45.0%.",
+          "observed_value": 0.0
+        }
+      ],
+      "confidence_realism_delta": 0.0,
+      "overconfident_rate_delta": 0.0,
+      "calibration_health_delta": 0.0,
+      "regression_verdict": "MIXED",
+      "calibration_improved": false
+    },
+    "note": "Calibration change impact inconclusive."
+  },
+  "ontology_evolution": {
+    "entry": {
+      "cycle_id": "20260528_181635",
+      "generated_at": "2026-05-28T18:16:35.850906",
+      "ontology_status": "INTACT",
+      "ontology_score": 0.75,
+      "ontology_coherence": 0.0,
+      "integrity_delta": 0.0,
+      "issues": [
+        "cross_stage_alignment: SEVERE_DRIFT",
+        "ontology_coherence: ONTOLOGY_DEGRADATION"
+      ]
+    },
+    "signal": "ontology stable"
+  },
+  "dataset_counts": {
+    "validated_cognition": 25,
+    "failed_cognition": 16,
+    "drift_epochs": 0,
+    "toxic_periods": 1,
+    "ontology_health_history": 2,
+    "calibration_history": 7
+  },
+  "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/memory/reports/evolution_20260528_181635.md",
+  "history_length": 2,
+  "export_json": "/Users/fontecrypto/btc-ml/benchmark/memory/exports/evolution_20260528_181635.json"
+}

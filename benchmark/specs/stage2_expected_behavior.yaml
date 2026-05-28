@@ -1,0 +1,62 @@
+# Stage 2 architecture conformance expectations
+
+lookback_days: 7
+
+metrics:
+  confidence_realism:
+    description: Confidence should remain moderate and match follow-through.
+    expected_level: moderate
+    observed_key: probabilistic_calibration_quality
+    min: 0.40
+    inverse_key: overconfident_rate
+    inverse_max: 0.30
+    calibration_hint: Confidence weighting exceeds observed follow-through quality.
+
+  narrative_coherence:
+    description: Stage 2 narratives should remain coherent.
+    expected_level: high
+    observed_key: narrative_coherence
+    min: 0.60
+    calibration_hint: Synthesis narrative construction degrading — review MTF alignment rules.
+
+  contradiction_frequency:
+    description: Internal reasoning contradictions should remain low.
+    expected_level: low
+    observed_key: contradiction_frequency
+    max: 0.25
+    calibration_hint: Reasoning layer producing contradictory synthesis states.
+
+  synthesis_stability:
+    description: Synthesis conclusions should remain stable when confirmed.
+    expected_level: stable
+    observed_key: synthesis_stability
+    min: 0.35
+    calibration_hint: Synthesis state machine may be overreacting to local noise.
+
+  reasoning_accuracy:
+    description: Stage 2 reasoning should confirm at moderate rate.
+    expected_level: moderate
+    observed_key: reasoning_accuracy
+    min: 0.30
+    calibration_hint: Reasoning bias mapping diverges from market behavior.
+
+  confidence_drift:
+    description: Confidence drift should remain low.
+    expected_level: low
+    observed_key: confidence_drift
+    max: 0.35
+    calibration_hint: Confidence inflation detected — review conviction decomposition weights.
+
+  transition_logic_quality:
+    description: Regime transition logic should remain stable.
+    expected_level: stable
+    observed_key: transition_logic_quality
+    min: 0.35
+    calibration_hint: Transition logic producing noisy state flips.
+
+  context_failure_rate:
+    description: Context integrity failures should remain rare.
+    expected_level: low
+    observed_key: context_failure_rate
+    max: 0.20
+    calibration_hint: Stage 2 losing contextual linkage to Stage 1 inputs.

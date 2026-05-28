@@ -1,0 +1,195 @@
+{
+  "run_id": "20260528_181602",
+  "generated_at": "2026-05-28T18:16:03.089437",
+  "lookback_days": 7,
+  "forward_horizon": 11,
+  "summary": {
+    "event_count": 3,
+    "verdict_distribution": {
+      "PARTIAL": 3
+    },
+    "reasoning_accuracy": 0.0,
+    "probabilistic_calibration_quality": 0.0,
+    "contradiction_frequency": 0.0,
+    "synthesis_stability": 0.0,
+    "narrative_coherence": 0.7167,
+    "confidence_drift": 1.0,
+    "regime_interpretation_accuracy": 0.0,
+    "transition_logic_quality": 0.0,
+    "overconfident_rate": 1.0,
+    "context_failure_rate": 0.0
+  },
+  "events": [
+    {
+      "event_index": 1,
+      "timestamp": "2026-05-18 06:00:00",
+      "stage1_inputs": [
+        "stopping volume",
+        "stopping",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime high conviction auction, persistence m15 only, location lower absorption, high conviction auction state.",
+      "observed_outcome": "Market moved up 0.20% over next 11 candles.",
+      "verdict": "PARTIAL",
+      "validation_note": "Partial market confirmation of Stage 2 reasoning.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "OVERCONFIDENT",
+      "confidence_score": 1.0,
+      "calibration_note": "High confidence (100%) contradicted by forward market.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.0,
+      "contradiction_level": "LOW",
+      "contradiction_issues": [],
+      "context_integrity": "PARTIAL",
+      "context_score": 0.367,
+      "context_note": "Stage 1 inputs partially support Stage 2 narrative.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": null,
+      "outcome": {
+        "move_pct": 0.197,
+        "max_up_pct": 0.392,
+        "max_down_pct": 0.284,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "up"
+      },
+      "context": {
+        "timestamp": "2026-05-18 06:00:00",
+        "stage1_inputs": [
+          "stopping volume",
+          "stopping",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime high conviction auction, persistence m15 only, location lower absorption, high conviction auction state.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "STOPPING_VOLUME",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "LOWER_ABSORPTION",
+        "auction_regime": "HIGH_CONVICTION_AUCTION",
+        "conviction_probability": 1.0,
+        "regime_confidence": null,
+        "distribution_probability": 0.0,
+        "belief_state": NaN,
+        "contradiction_flags": NaN
+      }
+    },
+    {
+      "event_index": 2,
+      "timestamp": "2026-05-20 05:00:00",
+      "stage1_inputs": [
+        "buying climax",
+        "climax",
+        "buyer initiative"
+      ],
+      "stage2_interpretation": "Intermediate reversal synthesis, regime high conviction auction, persistence m30 confirmed, location upper distribution, high conviction auction state.",
+      "observed_outcome": "Market moved flat 0.08% over next 11 candles.",
+      "verdict": "PARTIAL",
+      "validation_note": "Partial market confirmation of Stage 2 reasoning.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "OVERCONFIDENT",
+      "confidence_score": 1.0,
+      "calibration_note": "High confidence (100%) contradicted by forward market.",
+      "narrative_coherence": 0.75,
+      "contradiction_score": 0.0,
+      "contradiction_level": "LOW",
+      "contradiction_issues": [],
+      "context_integrity": "HIGH",
+      "context_score": 0.533,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "intermediate reversal structure",
+      "transition_state": null,
+      "outcome": {
+        "move_pct": 0.076,
+        "max_up_pct": 0.327,
+        "max_down_pct": 0.118,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "flat"
+      },
+      "context": {
+        "timestamp": "2026-05-20 05:00:00",
+        "stage1_inputs": [
+          "buying climax",
+          "climax",
+          "buyer initiative"
+        ],
+        "stage2_interpretation": "Intermediate reversal synthesis, regime high conviction auction, persistence m30 confirmed, location upper distribution, high conviction auction state.",
+        "synthesis_state": "INTERMEDIATE_REVERSAL",
+        "trigger_event": "BUYING_CLIMAX",
+        "persistence": "M30_CONFIRMED",
+        "persistence_score": 0.5,
+        "structural_rank": "MEDIUM",
+        "alignment_score": 0.5,
+        "location_bias": "UPPER_DISTRIBUTION",
+        "auction_regime": "HIGH_CONVICTION_AUCTION",
+        "conviction_probability": 1.0,
+        "regime_confidence": null,
+        "distribution_probability": 0.0,
+        "belief_state": NaN,
+        "contradiction_flags": NaN
+      }
+    },
+    {
+      "event_index": 3,
+      "timestamp": "2026-05-20 08:30:00",
+      "stage1_inputs": [
+        "buying climax",
+        "climax",
+        "buyer initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime high conviction auction, persistence m15 only, location upper distribution, high conviction auction state.",
+      "observed_outcome": "Market moved flat 0.09% over next 11 candles.",
+      "verdict": "PARTIAL",
+      "validation_note": "Partial market confirmation of Stage 2 reasoning.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "OVERCONFIDENT",
+      "confidence_score": 1.0,
+      "calibration_note": "High confidence (100%) contradicted by forward market.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.0,
+      "contradiction_level": "LOW",
+      "contradiction_issues": [],
+      "context_integrity": "HIGH",
+      "context_score": 0.7,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": null,
+      "outcome": {
+        "move_pct": -0.085,
+        "max_up_pct": 0.172,
+        "max_down_pct": 0.212,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "flat"
+      },
+      "context": {
+        "timestamp": "2026-05-20 08:30:00",
+        "stage1_inputs": [
+          "buying climax",
+          "climax",
+          "buyer initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime high conviction auction, persistence m15 only, location upper distribution, high conviction auction state.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "BUYING_CLIMAX",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "UPPER_DISTRIBUTION",
+        "auction_regime": "HIGH_CONVICTION_AUCTION",
+        "conviction_probability": 1.0,
+        "regime_confidence": null,
+        "distribution_probability": 0.0,
+        "belief_state": NaN,
+        "contradiction_flags": NaN
+      }
+    }
+  ]
+}

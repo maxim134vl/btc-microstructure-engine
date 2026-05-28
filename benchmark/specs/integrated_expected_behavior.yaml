@@ -1,0 +1,74 @@
+# Integrated cognition architecture conformance expectations
+
+lookback_days: 7
+
+metrics:
+  fully_confirmed_rate:
+    description: Full cognition chains should confirm end-to-end at meaningful rate.
+    expected_level: moderate
+    observed_key: fully_confirmed_rate
+    min: 0.25
+    calibration_hint: End-to-end cognition chain rarely confirms — review cross-stage wiring.
+
+  cross_stage_alignment:
+    description: Stage 1 perception and Stage 2 reasoning should align.
+    expected_level: high
+    observed_key: cross_stage_alignment
+    min: 0.45
+    calibration_hint: Perception-to-reasoning handoff diverging from architecture intent.
+
+  confidence_realism:
+    description: Integrated confidence should remain realistic.
+    expected_level: moderate
+    observed_key: confidence_realism
+    min: 0.40
+    calibration_hint: Integrated confidence exceeds market confirmation quality.
+
+  ontology_coherence:
+    description: Ontology should remain coherent across the cognition chain.
+    expected_level: high
+    observed_key: ontology_coherence
+    min: 0.45
+    calibration_hint: Ontology fragmentation detected across cognition layers.
+
+  cognition_drift_frequency:
+    description: Cognition drift signals should remain low.
+    expected_level: low
+    observed_key: cognition_drift_frequency
+    max: 0.35
+    calibration_hint: Rolling cognition drift exceeds architectural tolerance.
+
+  contradiction_propagation:
+    description: Contradictions should not propagate through the chain.
+    expected_level: low
+    observed_key: contradiction_propagation
+    max: 0.25
+    calibration_hint: Contradiction cascade detected — review propagation guards.
+
+  narrative_stability:
+    description: Integrated narratives should remain stable.
+    expected_level: high
+    observed_key: narrative_stability
+    min: 0.55
+    calibration_hint: Narrative degradation across integrated cognition chain.
+
+  market_confirmation_rate:
+    description: Combined cognition narrative should confirm against market.
+    expected_level: moderate
+    observed_key: market_confirmation_rate
+    min: 0.30
+    calibration_hint: Architecture assumptions about market confirmation diverge from runtime.
+
+  perception_accuracy:
+    description: Stage 1 perception within integrated chains should hold.
+    expected_level: moderate
+    observed_key: perception_accuracy
+    min: 0.30
+    calibration_hint: Perception layer failing within integrated validation.
+
+  reasoning_accuracy:
+    description: Stage 2 reasoning within integrated chains should hold.
+    expected_level: moderate
+    observed_key: reasoning_accuracy
+    min: 0.30
+    calibration_hint: Reasoning layer failing within integrated validation.

@@ -1,0 +1,296 @@
+{
+  "cycle_id": "20260528_181603",
+  "generated_at": "2026-05-28T18:16:03.397707",
+  "layers": {
+    "stage1": {
+      "run_id": "20260528_181602",
+      "generated_at": "2026-05-28T18:16:02.809482",
+      "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage1_forensic_20260528_181602.md",
+      "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage1_benchmark_20260528_181602.json",
+      "export_csv": "/Users/fontecrypto/btc-ml/benchmark/exports/stage1_summary_20260528_181602.csv",
+      "visuals": [],
+      "summary": {
+        "event_count": 16,
+        "verdict_distribution": {
+          "CONFIRMED": 6,
+          "PARTIAL": 8,
+          "FALSE POSITIVE": 2
+        },
+        "initiative_accuracy": 0.0,
+        "climax_confirmation_rate": 0.4,
+        "stopping_quality_rate": 0.3636,
+        "transition_stability": 0.0,
+        "probabilistic_consistency": 0.375,
+        "false_positive_rate": 0.125,
+        "confirmed_rate": 0.375,
+        "follow_through_strong_rate": 0.0,
+        "market_structure_coherence": 0.625
+      },
+      "status": "OK"
+    },
+    "stage2": {
+      "run_id": "20260528_181602",
+      "generated_at": "2026-05-28T18:16:03.090316",
+      "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage2_forensic_20260528_181602.md",
+      "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_benchmark_20260528_181602.json",
+      "export_csv": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_summary_20260528_181602.csv",
+      "visuals": [],
+      "summary": {
+        "event_count": 3,
+        "verdict_distribution": {
+          "PARTIAL": 3
+        },
+        "reasoning_accuracy": 0.0,
+        "probabilistic_calibration_quality": 0.0,
+        "contradiction_frequency": 0.0,
+        "synthesis_stability": 0.0,
+        "narrative_coherence": 0.7167,
+        "confidence_drift": 1.0,
+        "regime_interpretation_accuracy": 0.0,
+        "transition_logic_quality": 0.0,
+        "overconfident_rate": 1.0,
+        "context_failure_rate": 0.0
+      },
+      "status": "OK"
+    },
+    "integrated": {
+      "run_id": "20260528_181603",
+      "generated_at": "2026-05-28T18:16:03.364692",
+      "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/integrated_forensic_20260528_181603.md",
+      "drift_report": "/Users/fontecrypto/btc-ml/benchmark/reports/cognition_drift_20260528_181603.md",
+      "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/integrated_benchmark_20260528_181603.json",
+      "export_csv": "/Users/fontecrypto/btc-ml/benchmark/exports/integrated_summary_20260528_181603.csv",
+      "visuals": [],
+      "summary": {
+        "event_count": 3,
+        "verdict_distribution": {
+          "CONFIDENCE_FAILURE": 3
+        },
+        "root_cause_distribution": {
+          "synthesis instability": 3
+        },
+        "perception_accuracy": 0.0,
+        "reasoning_accuracy": 0.0,
+        "cross_stage_alignment": 0.0,
+        "confidence_realism": 0.0,
+        "contradiction_propagation": 0.0,
+        "synthesis_integrity": 1.0,
+        "narrative_stability": 0.7167,
+        "ontology_coherence": 0.0,
+        "market_confirmation_rate": 0.0,
+        "cognition_drift_frequency": 1.0,
+        "fully_confirmed_rate": 0.0
+      },
+      "drift": {
+        "status": "OK",
+        "health": "WATCH",
+        "signals": [
+          "confidence inflation",
+          "narrative degradation"
+        ],
+        "overconfident_rate": 1.0,
+        "contradiction_rate": 0.0,
+        "misalignment_rate": 1.0,
+        "perception_failure_rate": 0.0,
+        "reasoning_failure_rate": 0.0
+      },
+      "status": "OK"
+    },
+    "conformance": {
+      "run_id": "20260528_181603",
+      "generated_at": "2026-05-28T18:16:03.387835",
+      "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/conformance/reports/conformance_forensic_20260528_181603.md",
+      "drift_report": "/Users/fontecrypto/btc-ml/benchmark/conformance/reports/conformance_drift_20260528_181603.md",
+      "calibration_report": "/Users/fontecrypto/btc-ml/benchmark/conformance/reports/calibration_audit_20260528_181603.md",
+      "export_json": "/Users/fontecrypto/btc-ml/benchmark/conformance/exports/conformance_audit_20260528_181603.json",
+      "export_csv": "/Users/fontecrypto/btc-ml/benchmark/conformance/exports/conformance_summary_20260528_181603.csv",
+      "visuals": [],
+      "summary": {
+        "metric_count": 26,
+        "confirmed_count": 11,
+        "partial_count": 0,
+        "failed_count": 1,
+        "drifting_count": 14,
+        "cognition_stability_score": 0.4231,
+        "ontology_integrity_score": 0.75,
+        "calibration_health_score": 0.1731,
+        "confidence_realism_score": 0.0,
+        "transition_stability_score": 0.0,
+        "contradiction_pressure_score": 1.0,
+        "drift_severity_score": 1.0,
+        "cognition_health": "DEGRADED",
+        "health_emoji": "\ud83d\udd34",
+        "verdict_distribution": {
+          "CONFIRMED": 11,
+          "SEVERE_DRIFT": 13,
+          "CALIBRATION_COLLAPSE": 1,
+          "ONTOLOGY_DEGRADATION": 1
+        }
+      },
+      "drift": {
+        "severity": "SEVERE",
+        "signals": [
+          "confidence inflation",
+          "narrative degradation",
+          "conformance regression",
+          "transition instability",
+          "ontology fragmentation",
+          "perception drift",
+          "synthesis drift"
+        ],
+        "failed_count": 14,
+        "drifting_count": 0,
+        "history_runs": 1,
+        "drift_map": {
+          "confidence inflation": true,
+          "narrative degradation": false,
+          "contradiction growth": false,
+          "transition instability": true,
+          "ontology fragmentation": true,
+          "threshold oversensitivity": false,
+          "perception drift": true,
+          "synthesis drift": true
+        }
+      },
+      "calibration": {
+        "status": "NEEDS_REVIEW",
+        "recommendation_count": 15,
+        "recommendations": [
+          {
+            "priority": "CALIBRATION_COLLAPSE",
+            "layer": "stage2",
+            "metric": "confidence_realism",
+            "recommendation": "Confidence weighting exceeds observed follow-through quality.",
+            "evidence": "Inverse metric overconfident_rate=100.0% exceeds max 30.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "stage1",
+            "metric": "initiative_followthrough",
+            "recommendation": "Initiative detection thresholds likely too sensitive during low volatility.",
+            "evidence": "Observed 0.0% below minimum 35.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "stage1",
+            "metric": "transition_stability",
+            "recommendation": "Transition persistence assumptions diverge from runtime reality.",
+            "evidence": "Observed 0.0% below minimum 40.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "stage2",
+            "metric": "synthesis_stability",
+            "recommendation": "Synthesis state machine may be overreacting to local noise.",
+            "evidence": "Observed 0.0% below minimum 35.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "stage2",
+            "metric": "reasoning_accuracy",
+            "recommendation": "Reasoning bias mapping diverges from market behavior.",
+            "evidence": "Observed 0.0% below minimum 30.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "stage2",
+            "metric": "confidence_drift",
+            "recommendation": "Confidence inflation detected \u2014 review conviction decomposition weights.",
+            "evidence": "Observed 100.0% exceeds maximum 35.0%.",
+            "observed_value": 1.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "stage2",
+            "metric": "transition_logic_quality",
+            "recommendation": "Transition logic producing noisy state flips.",
+            "evidence": "Observed 0.0% below minimum 35.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "integrated",
+            "metric": "fully_confirmed_rate",
+            "recommendation": "End-to-end cognition chain rarely confirms \u2014 review cross-stage wiring.",
+            "evidence": "Observed 0.0% below minimum 25.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "integrated",
+            "metric": "cross_stage_alignment",
+            "recommendation": "Perception-to-reasoning handoff diverging from architecture intent.",
+            "evidence": "Observed 0.0% below minimum 45.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "integrated",
+            "metric": "confidence_realism",
+            "recommendation": "Integrated confidence exceeds market confirmation quality.",
+            "evidence": "Observed 0.0% below minimum 40.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "integrated",
+            "metric": "cognition_drift_frequency",
+            "recommendation": "Rolling cognition drift exceeds architectural tolerance.",
+            "evidence": "Observed 100.0% exceeds maximum 35.0%.",
+            "observed_value": 1.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "integrated",
+            "metric": "market_confirmation_rate",
+            "recommendation": "Architecture assumptions about market confirmation diverge from runtime.",
+            "evidence": "Observed 0.0% below minimum 30.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "integrated",
+            "metric": "perception_accuracy",
+            "recommendation": "Perception layer failing within integrated validation.",
+            "evidence": "Observed 0.0% below minimum 30.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "SEVERE_DRIFT",
+            "layer": "integrated",
+            "metric": "reasoning_accuracy",
+            "recommendation": "Reasoning layer failing within integrated validation.",
+            "evidence": "Observed 0.0% below minimum 30.0%.",
+            "observed_value": 0.0
+          },
+          {
+            "priority": "ONTOLOGY_DEGRADATION",
+            "layer": "integrated",
+            "metric": "ontology_coherence",
+            "recommendation": "Ontology fragmentation detected across cognition layers.",
+            "evidence": "Observed 0.0% below minimum 45.0%.",
+            "observed_value": 0.0
+          }
+        ]
+      },
+      "ontology": {
+        "score": 0.75,
+        "status": "INTACT",
+        "issues": [
+          "cross_stage_alignment: SEVERE_DRIFT",
+          "ontology_coherence: ONTOLOGY_DEGRADATION"
+        ],
+        "metric_count": 8
+      },
+      "cognition_health": "DEGRADED",
+      "health_emoji": "\ud83d\udd34",
+      "status": "OK"
+    }
+  },
+  "layer_count": 4
+}

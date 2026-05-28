@@ -1,0 +1,4 @@
+event_index,timestamp,verdict,confidence_quality,contradiction_level,context_integrity,stage2_interpretation,observed_outcome,move_pct,confidence_score
+1,2026-05-18 06:00:00,PARTIAL,OVERCONFIDENT,LOW,PARTIAL,"Local_exhaustion synthesis, regime high_conviction_auction, persistence m15_only, location lower_absorption, high conviction auction state.",Market moved up 0.20% over next 11 candles.,0.197,1.0
+2,2026-05-20 05:00:00,PARTIAL,OVERCONFIDENT,LOW,HIGH,"Intermediate_reversal synthesis, regime high_conviction_auction, persistence m30_confirmed, location upper_distribution, high conviction auction state.",Market moved flat 0.08% over next 11 candles.,0.076,1.0
+3,2026-05-20 08:30:00,PARTIAL,OVERCONFIDENT,LOW,HIGH,"Local_exhaustion synthesis, regime high_conviction_auction, persistence m15_only, location upper_distribution, high conviction auction state.",Market moved flat 0.09% over next 11 candles.,-0.085,1.0

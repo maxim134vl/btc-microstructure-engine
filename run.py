@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 
 
@@ -59,6 +60,11 @@ def main() -> int:
         action="store_true",
         help="Skip startup hardening checks (not recommended)",
     )
+    parser.add_argument(
+        "--with-collectors",
+        action="store_true",
+        help="Start collector watchdog before pipeline (required for live feed)",
+    )
     args = parser.parse_args()
 
     _bootstrap_paths()
@@ -86,6 +92,19 @@ def main() -> int:
             return code
 
     from btc_ml.runtime.pipeline import run_forever, run_once
+
+    root = os.getcwd()
+
+    if args.with_collectors:
+        watchdog = os.path.join(root, "collector_watchdog.py")
+        if os.path.exists(watchdog):
+            print("Starting collector watchdog (--required-only) ...")
+            subprocess.Popen(
+                [sys.executable, watchdog, "--required-only"],
+                cwd=root,
+            )
+        else:
+            print("WARNING: collector_watchdog.py not found — live feed will remain stale")
 
     print()
     print("CANONICAL RUNTIME ENTRYPOINT")

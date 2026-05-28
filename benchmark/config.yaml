@@ -1,0 +1,81 @@
+# Stage 1 cognitive validation benchmark configuration
+
+auto_run:
+  enabled: false
+  interval_days: 7
+  min_candles: 672  # ~7 days of 15m bars
+
+forward_horizon_candles: 7
+lookback_days: 7
+
+paths:
+  reports: benchmark/reports
+  exports: benchmark/exports
+  visuals: benchmark/visuals
+
+validation_targets:
+  - market_structure
+  - initiative
+  - climax
+  - stopping
+  - effort_result
+  - auction_state
+  - state_transition
+  - mtf_alignment
+  - probabilistic
+
+stage2:
+  lookback_days: 7
+  forward_horizon_candles: 11
+  auto_run:
+    enabled: false
+    interval_days: 7
+  validation_targets:
+    - reasoning_quality
+    - synthesis_correctness
+    - probabilistic_validity
+    - context_coherence
+    - regime_interpretation
+    - transition_logic
+    - narrative_continuity
+    - contradiction_handling
+    - confidence_calibration
+    - multi_signal_integration
+
+integrated:
+  lookback_days: 7
+  forward_horizon_candles: 11
+  auto_run:
+    enabled: false
+    interval_days: 7
+  validation_targets:
+    - stage1_correctness
+    - stage2_correctness
+    - cross_stage_consistency
+    - narrative_coherence
+    - confidence_realism
+    - contradiction_propagation
+    - perception_reasoning_alignment
+    - market_confirmation
+    - cognitive_drift
+    - ontology_integrity
+
+conformance:
+  lookback_days: 7
+  auto_run:
+    enabled: true
+    interval_days: 7
+
+memory:
+  auto_run:
+    enabled: true
+    interval_days: 7
+  datasets:
+    - validated_cognition
+    - failed_cognition
+    - contradiction_events
+    - drift_epochs
+    - toxic_periods
+    - calibration_history
+    - regression_history
+    - ontology_health_history

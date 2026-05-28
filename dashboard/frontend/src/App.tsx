@@ -1,183 +1,202 @@
-import { useEffect, useMemo } from "react";
-import { connectLive, fetchSnapshot } from "./api/client";
+import { useEffect, useState } from "react";
+import { connectOps, fetchDebugSnapshot, fetchOpsSnapshot } from "./api/client";
+import {
+  compareStage1Stage2,
+  exportValidationPackage,
+  fetchEvolutionReport,
+  fetchValidationReport,
+  fetchValidationSnapshot,
+  generateVisualReplay,
+  runEvolutionCycle,
+  runIntegratedBenchmark,
+  runConformanceBacktest,
+  runStage2Benchmark,
+  runValidationBenchmark,
+} from "./api/validationClient";
 import {
   AlertsPanel,
-  CollapsibleSection,
-  CompactOntologyPanel,
-  D1DominancePanel,
-  MtfHierarchyPanel,
-  NarrativePanel,
-  RibbonChipView,
-  StateBlock,
-} from "./components/cockpit";
-import { buildOperatorView } from "./lib/operatorView";
-import {
-  CognitionPanelView,
-  HealthPanelView,
-  ReplayPanelView,
-  RuntimeOperationsPanel,
-  TopologyPanelView,
-} from "./panels";
-import { useDashboardStore } from "./store/dashboardStore";
+  CollectorsPanel,
+  EngineTable,
+  FeedConfidencePanel,
+  HealthPanel,
+  OpsRibbon,
+  ParquetPanel,
+  PipelinePanel,
+  StabilityPanel,
+} from "./components/ops/MonitorPanels";
+import { ValidationPanel } from "./components/validation/ValidationPanel";
+import { VisualCognitionPanel } from "./components/visual-cognition/VisualCognitionPanel";
+import { useMonitorStore } from "./store/monitorStore";
+import type { ValidationSnapshot } from "./types/validation";
 
-function OperatorRibbon() {
-  const snapshot = useDashboardStore((s) => s.snapshot);
-  const connected = useDashboardStore((s) => s.connected);
-  const view = useMemo(() => buildOperatorView(snapshot, connected), [snapshot, connected]);
+type ViewMode = "ops" | "debug" | "validation" | "visual-cognition";
 
-  return (
-    <header className="sticky top-0 z-30 border-b border-command-border bg-[#04070d]/98 backdrop-blur">
-      <div className="border-b border-command-border/60 px-4 py-2">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-xs font-semibold tracking-[0.22em] text-slate-100">BTC-ML OPERATOR COCKPIT</div>
-            <div className="text-[10px] text-command-muted">Behavioral control center · primary supervision surface</div>
-          </div>
-          <div className="text-[10px] font-mono text-command-muted">
-            {view?.alerts.filter((a) => a.severity === "CRITICAL").length ?? 0} critical ·{" "}
-            {view?.alerts.filter((a) => a.severity === "WARNING").length ?? 0} warning
-          </div>
-        </div>
-      </div>
-      <div className="panel-scroll flex gap-2 overflow-x-auto px-4 py-3">
-        {view?.ribbon.map((chip) => <RibbonChipView key={chip.key} chip={chip} />)}
-      </div>
-    </header>
-  );
-}
-
-function PrimaryCockpit() {
-  const snapshot = useDashboardStore((s) => s.snapshot);
-  const connected = useDashboardStore((s) => s.connected);
-  const view = useMemo(() => buildOperatorView(snapshot, connected), [snapshot, connected]);
-
-  if (!view || !snapshot) {
-    return (
-      <div className="flex h-64 items-center justify-center text-sm text-command-muted">
-        Awaiting live runtime snapshot…
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-12">
-      {/* LEFT — narrative + D1 + regime */}
-      <div className="flex min-h-0 flex-col gap-3 xl:col-span-3">
-        <NarrativePanel narrative={view.narrative} />
-        <D1DominancePanel mtf={view.mtf} />
-        <section className="rounded border border-command-border bg-command-panel p-4">
-          <div className="text-[10px] uppercase tracking-wider text-command-muted">Active Regime</div>
-          <div className="mt-2 font-mono text-lg font-semibold text-slate-100">{view.narrative.regime.replace(/_/g, " ")}</div>
-          <div className="mt-3 text-xs text-command-muted">
-            Confidence {String(snapshot.regime?.regime_confidence ?? "—")}
-          </div>
-        </section>
-      </div>
-
-      {/* CENTER — ontology, auction, MTF */}
-      <div className="flex min-h-0 flex-col gap-3 xl:col-span-5">
-        <section className="rounded border border-command-border bg-command-panel p-4">
-          <div className="text-[10px] uppercase tracking-wider text-command-muted">Current Auction State</div>
-          <div className="mt-2 font-mono text-2xl font-semibold text-slate-100">
-            {view.narrative.auctionState.replace(/_/g, " ")}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <StateBlock label="Transition" value={String(snapshot.state_transitions?.latest_transition?.transition_state ?? "STABLE")} />
-            <StateBlock label="MTF Alignment" value={view.mtf.agreement} descriptor={view.mtf.alignmentStrength} />
-          </div>
-        </section>
-        <CompactOntologyPanel events={snapshot.ontology?.ontology_event_feed ?? []} />
-        <MtfHierarchyPanel mtf={view.mtf} />
-      </div>
-
-      {/* RIGHT — health, contradictions, alerts */}
-      <div className="flex min-h-0 flex-col gap-3 xl:col-span-4">
-        <section className="rounded border border-command-border bg-command-panel p-4">
-          <div className="text-[10px] uppercase tracking-wider text-command-muted">Runtime Health</div>
-          <div className="mt-2 font-mono text-xl font-semibold text-slate-100">{view.narrative.runtimeStability}</div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div className="rounded border border-command-border px-2 py-1.5">
-              <div className="text-command-muted">Cycle</div>
-              <div className="font-mono">{snapshot.runtime_operations?.pipeline_cycle_counter ?? "—"}</div>
-            </div>
-            <div className="rounded border border-command-border px-2 py-1.5">
-              <div className="text-command-muted">Latency</div>
-              <div className="font-mono">{view.pipelineLatencySeconds?.toFixed(1) ?? "—"}s</div>
-            </div>
-          </div>
-        </section>
-        <section className="rounded border border-command-border bg-command-panel p-4">
-          <div className="text-[10px] uppercase tracking-wider text-command-muted">Contradiction State</div>
-          <div className="mt-2 font-mono text-xl font-semibold text-slate-100">{view.narrative.contradictions}</div>
-          <div className="mt-2 text-xs text-command-muted">
-            Reinforcement {view.narrative.reinforcement} · Cognition {view.narrative.cognitionStability}
-          </div>
-        </section>
-        <AlertsPanel alerts={view.alerts} />
-      </div>
-    </div>
-  );
-}
-
-function AdvancedDiagnostics() {
-  const snapshot = useDashboardStore((s) => s.snapshot);
-  const advancedOpen = useDashboardStore((s) => s.advancedOpen);
-  const toggleAdvanced = useDashboardStore((s) => s.toggleAdvanced);
-
-  return (
-    <div className="mt-3 space-y-2 border-t border-command-border pt-3">
-      <CollapsibleSection
-        title="Advanced Diagnostics"
-        subtitle="Probabilistic decomposition · entropy internals · engine telemetry"
-        open={advancedOpen.diagnostics}
-        onToggle={() => toggleAdvanced("diagnostics")}
-      >
-        <div className="grid gap-3 xl:grid-cols-2">
-          <RuntimeOperationsPanel data={snapshot?.runtime_operations} />
-          <CognitionPanelView data={snapshot?.probabilistic_cognition} />
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Forensic / Audit"
-        subtitle="Replay exports · audit artifacts"
-        open={advancedOpen.forensic}
-        onToggle={() => toggleAdvanced("forensic")}
-      >
-        <ReplayPanelView data={snapshot?.replay_audit} />
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Debug / Topology"
-        subtitle="Pipeline graph · dependency propagation · topology internals"
-        open={advancedOpen.debug}
-        onToggle={() => toggleAdvanced("debug")}
-      >
-        <div className="grid gap-3 xl:grid-cols-2">
-          <TopologyPanelView data={snapshot?.topology} />
-          <HealthPanelView data={snapshot?.runtime_health} />
-        </div>
-      </CollapsibleSection>
-    </div>
-  );
-}
-
-export default function App() {
-  const setSnapshot = useDashboardStore((s) => s.setSnapshot);
-  const setConnected = useDashboardStore((s) => s.setConnected);
+function OpsMonitor() {
+  const snapshot = useMonitorStore((s) => s.snapshot);
+  const setSnapshot = useMonitorStore((s) => s.setSnapshot);
+  const setConnected = useMonitorStore((s) => s.setConnected);
+  const acknowledged = useMonitorStore((s) => s.acknowledgedAlerts);
+  const acknowledgeAlert = useMonitorStore((s) => s.acknowledgeAlert);
+  const expandedGroups = useMonitorStore((s) => s.expandedGroups);
+  const toggleGroup = useMonitorStore((s) => s.toggleGroup);
 
   useEffect(() => {
-    fetchSnapshot().then(setSnapshot).catch(console.error);
-    const socket = connectLive(setSnapshot, setConnected);
+    fetchOpsSnapshot().then(setSnapshot).catch(console.error);
+    const socket = connectOps(setSnapshot, setConnected);
     return () => socket.close();
   }, [setSnapshot, setConnected]);
 
+  if (!snapshot) {
+    return <div className="flex h-64 items-center justify-center text-sm text-slate-500">Connecting to runtime monitor…</div>;
+  }
+
   return (
-    <div className="flex min-h-screen flex-col bg-command-bg">
-      <OperatorRibbon />
-      <main className="panel-scroll flex min-h-0 flex-1 flex-col overflow-auto p-3">
-        <PrimaryCockpit />
-        <AdvancedDiagnostics />
+    <div className="space-y-3">
+      <OpsRibbon items={snapshot.ribbon} />
+      <div className="grid gap-3 xl:grid-cols-12">
+        <div className="xl:col-span-7">
+          <EngineTable engines={snapshot.engines} />
+        </div>
+        <div className="space-y-3 xl:col-span-5">
+          <HealthPanel health={snapshot.health} />
+          {snapshot.feed_confidence ? <FeedConfidencePanel feed={snapshot.feed_confidence} /> : null}
+          <PipelinePanel pipeline={snapshot.pipeline} />
+          {snapshot.stability ? <StabilityPanel stability={snapshot.stability} /> : null}
+        </div>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <ParquetPanel
+          parquet={snapshot.parquet}
+          expanded={expandedGroups.has("stale_parquet")}
+          onToggle={() => toggleGroup("stale_parquet")}
+        />
+        <CollectorsPanel collectors={snapshot.collectors} />
+        <AlertsPanel
+          alerts={snapshot.alerts}
+          alertGroups={snapshot.alert_groups}
+          acknowledged={acknowledged}
+          onAck={acknowledgeAlert}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DebugView() {
+  const [payload, setPayload] = useState<string>("Loading debug telemetry…");
+
+  useEffect(() => {
+    fetchDebugSnapshot()
+      .then((data) => setPayload(JSON.stringify(data, null, 2)))
+      .catch((error) => setPayload(String(error)));
+  }, []);
+
+  return (
+    <div className="rounded border border-slate-800 bg-slate-950 p-3">
+      <div className="mb-2 text-sm font-semibold text-amber-400">Debug Mode — cognition/ontology telemetry (not operational)</div>
+      <pre className="panel-scroll max-h-[80vh] overflow-auto text-[10px] text-slate-400">{payload}</pre>
+    </div>
+  );
+}
+
+function ValidationView() {
+  const [snapshot, setSnapshot] = useState<ValidationSnapshot | null>(null);
+
+  useEffect(() => {
+    fetchValidationSnapshot().then(setSnapshot).catch(console.error);
+  }, []);
+
+  if (!snapshot) {
+    return <div className="text-sm text-slate-500">Loading validation framework…</div>;
+  }
+
+  return (
+    <ValidationPanel
+      snapshot={snapshot}
+      onRunStage1={async () => {
+        await runValidationBenchmark();
+        setSnapshot(await fetchValidationSnapshot());
+      }}
+      onRunStage2={async () => {
+        await runStage2Benchmark();
+        setSnapshot(await fetchValidationSnapshot());
+      }}
+      onRunIntegrated={async () => {
+        await runIntegratedBenchmark();
+        setSnapshot(await fetchValidationSnapshot());
+      }}
+      onRunConformance={async (layer) => {
+        await runConformanceBacktest(7, layer);
+        setSnapshot(await fetchValidationSnapshot());
+      }}
+      onRunEvolution={async (fullCycle) => {
+        await runEvolutionCycle(Boolean(fullCycle));
+        setSnapshot(await fetchValidationSnapshot());
+      }}
+      onLoadReport={(stage) => fetchValidationReport(stage)}
+      onLoadEvolutionReport={fetchEvolutionReport}
+      onGenerateVisuals={async (stage) => {
+        await generateVisualReplay(stage);
+        setSnapshot(await fetchValidationSnapshot());
+      }}
+      onExportPackage={(stage) => exportValidationPackage(stage)}
+      onCompare={compareStage1Stage2}
+    />
+  );
+}
+
+function viewFromHash(): ViewMode {
+  const hash = window.location.hash.replace("#", "");
+  if (hash === "debug") return "debug";
+  if (hash === "validation") return "validation";
+  if (hash === "visual-cognition") return "visual-cognition";
+  return "ops";
+}
+
+export default function App() {
+  const [view, setView] = useState<ViewMode>(viewFromHash);
+
+  useEffect(() => {
+    const sync = () => setView(viewFromHash());
+    window.addEventListener("hashchange", sync);
+    sync();
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[#05080d] text-slate-200">
+      <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+        <div>
+          <h1 className="text-sm font-semibold tracking-[0.18em] text-slate-100">BTC-ML RUNTIME OPERATIONS MONITOR</h1>
+          <p className="text-[11px] text-slate-500">
+            {view === "validation"
+              ? "Perception · reasoning · integrated cognition validation"
+              : view === "visual-cognition"
+                ? "Stage 1 MTF visual cognition replay"
+                : "Infrastructure supervision · NOC view"}
+          </p>
+        </div>
+        <nav className="flex gap-3 text-xs font-mono text-slate-500">
+          <a href="#" className={view === "ops" ? "text-slate-200" : "hover:text-slate-300"}>ops</a>
+          <a href="#validation" className={view === "validation" ? "text-violet-300" : "hover:text-slate-300"}>
+            validation
+          </a>
+          <a href="#visual-cognition" className={view === "visual-cognition" ? "text-emerald-300" : "hover:text-slate-300"}>
+            visual-cognition
+          </a>
+          <a href="#debug" className={view === "debug" ? "text-amber-300" : "hover:text-slate-300"}>debug</a>
+        </nav>
+      </header>
+      <main className="p-3">
+        {view === "validation" ? (
+          <ValidationView />
+        ) : view === "visual-cognition" ? (
+          <VisualCognitionPanel />
+        ) : view === "debug" ? (
+          <DebugView />
+        ) : (
+          <OpsMonitor />
+        )}
       </main>
     </div>
   );

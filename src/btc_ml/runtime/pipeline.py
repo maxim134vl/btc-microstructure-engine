@@ -132,6 +132,61 @@ def run_once() -> None:
         print()
 
 
+def _maybe_run_stage1_benchmark() -> None:
+    try:
+        from benchmark.stage1.runner import maybe_auto_run_benchmark
+
+        result = maybe_auto_run_benchmark()
+        if result and result.get("status") == "OK":
+            print(f"Stage 1 benchmark auto-run complete: {result.get('run_id')}")
+    except Exception as error:
+        print(f"Stage 1 benchmark auto-run skipped: {error}")
+
+
+def _maybe_run_stage2_benchmark() -> None:
+    try:
+        from benchmark.stage2.runner import maybe_auto_run_stage2_benchmark
+
+        result = maybe_auto_run_stage2_benchmark()
+        if result and result.get("status") == "OK":
+            print(f"Stage 2 benchmark auto-run complete: {result.get('run_id')}")
+    except Exception as error:
+        print(f"Stage 2 benchmark auto-run skipped: {error}")
+
+
+def _maybe_run_integrated_benchmark() -> None:
+    try:
+        from benchmark.integrated.runner import maybe_auto_run_integrated_benchmark
+
+        result = maybe_auto_run_integrated_benchmark()
+        if result and result.get("status") == "OK":
+            print(f"Integrated benchmark auto-run complete: {result.get('run_id')}")
+    except Exception as error:
+        print(f"Integrated benchmark auto-run skipped: {error}")
+
+
+def _maybe_run_conformance_backtest() -> None:
+    try:
+        from benchmark.conformance.runner import maybe_auto_run_conformance_backtest
+
+        result = maybe_auto_run_conformance_backtest()
+        if result and result.get("status") == "OK":
+            print(f"Conformance backtest auto-run complete: {result.get('run_id')}")
+    except Exception as error:
+        print(f"Conformance backtest auto-run skipped: {error}")
+
+
+def _maybe_run_evolution_memory() -> None:
+    try:
+        from benchmark.memory.runner import maybe_auto_run_evolution
+
+        result = maybe_auto_run_evolution()
+        if result and result.get("status") == "OK":
+            print(f"Cognition evolution cycle complete: {result.get('run_id')}")
+    except Exception as error:
+        print(f"Cognition evolution cycle skipped: {error}")
+
+
 def run_forever() -> None:
     """Run canonical pipeline loop."""
 
@@ -141,4 +196,9 @@ def run_forever() -> None:
 
     while True:
         run_once()
+        _maybe_run_stage1_benchmark()
+        _maybe_run_stage2_benchmark()
+        _maybe_run_integrated_benchmark()
+        _maybe_run_conformance_backtest()
+        _maybe_run_evolution_memory()
         time.sleep(RUNTIME_LOOP_DELAY)

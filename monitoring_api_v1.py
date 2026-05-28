@@ -87,8 +87,40 @@ def dependency_status():
 def health():
 
     return {
-        "status": "running"
+        "status": "running",
+        "deprecated": True,
+        "use": "dashboard/backend/run_api.py",
     }
+
+
+def _mount_ops_routes() -> None:
+    """Forward-compat ops routes when legacy entrypoint is used by mistake."""
+
+    import os
+    import sys
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    backend = os.path.join(root, "dashboard", "backend")
+    if backend not in sys.path:
+        sys.path.insert(0, backend)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+    try:
+        from app.services.ops_monitor import build_ops_snapshot
+    except Exception:
+        return
+
+    @app.get("/api/v1/ops/snapshot")
+    async def ops_snapshot():
+        return await build_ops_snapshot()
+
+    @app.get("/api/v1/snapshot")
+    async def snapshot_alias():
+        return await build_ops_snapshot()
+
+
+_mount_ops_routes()
 
 # =====================================
 # START
