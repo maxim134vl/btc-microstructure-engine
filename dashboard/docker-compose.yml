@@ -1,0 +1,23 @@
+services:
+  dashboard-api:
+    build:
+      context: ..
+      dockerfile: dashboard/backend/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - BTC_ML_DATA_ROOT=/app/data
+      - DASHBOARD_POLL_INTERVAL=2.0
+    volumes:
+      - ..:/app:ro
+      - ../data:/app/data:ro
+    working_dir: /app/dashboard/backend
+
+  dashboard-ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    depends_on:
+      - dashboard-api

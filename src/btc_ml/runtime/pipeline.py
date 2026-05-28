@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 from datetime import datetime
 
-from runtime_config import RUNTIME_LOOP_DELAY
+from runtime_config import ENGINE_TIMEOUT_SECONDS, RUNTIME_LOOP_DELAY
 from runtime_dependency_guard import should_run_engine
 from runtime_dependency_map import DEPENDENCIES
+from runtime_engine_guard import (
+    EngineTimeoutError,
+    export_runtime_blocking_chain,
+    run_engine_subprocess,
+    run_inprocess_with_timeout,
+)
 from runtime_state_manager import update_runtime_state
 
 try:
@@ -92,27 +97,37 @@ def run_once() -> None:
         start_time = time.time()
         try:
             if engine in engines:
-                result = engines[engine]()
+                result = run_inprocess_with_timeout(
+                    engine,
+                    engines[engine],
+                    ENGINE_TIMEOUT_SECONDS,
+                )
                 if isinstance(result, int) and result != 0:
                     raise RuntimeError(f"ENGINE FAILED: {engine} (exit {result})")
             else:
-                result = subprocess.run(
-                    [python, os.path.join(root, engine)],
-                    cwd=root,
-                    capture_output=False,
-                    text=True,
+                run_engine_subprocess(
+                    python,
+                    os.path.join(root, engine),
+                    root,
+                    engine,
+                    ENGINE_TIMEOUT_SECONDS,
                 )
-                if result.returncode != 0:
-                    raise RuntimeError(f"ENGINE FAILED: {engine}")
 
             duration = round(time.time() - start_time, 2)
             print(f"SUCCESS ({duration}s)")
             update_runtime_state(engine, "SUCCESS", duration)
+        except EngineTimeoutError as error:
+            duration = round(time.time() - start_time, 2)
+            print(f"TIMEOUT ({duration}s)")
+            update_runtime_state(engine, "TIMEOUT", duration)
+            print(error)
+            export_runtime_blocking_chain()
         except Exception as error:
             duration = round(time.time() - start_time, 2)
             print(f"FAILED ({duration}s)")
             update_runtime_state(engine, "FAILED", duration)
             print(error)
+            export_runtime_blocking_chain()
 
         print()
 

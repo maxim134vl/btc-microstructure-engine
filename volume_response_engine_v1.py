@@ -256,50 +256,6 @@ price_change = (
 )
 
 # =====================================
-# CLIMACTIC PARTICIPATION
-# =====================================
-
-climax_state = (
-    "NO_CLIMAX"
-)
-
-participation_adjustment = 0
-
-# -------------------------------------
-
-if "climax" in volume_class:
-
-    participation_state = (
-        "CLIMACTIC_PARTICIPATION"
-    )
-
-    participation_adjustment = 0.5
-
-    # ---------------------------------
-
-    if normalized_result < 0:
-
-        climax_state = (
-            "CLIMAX_EXHAUSTION"
-        )
-
-    # ---------------------------------
-
-    elif normalized_result > 0.5:
-
-        climax_state = (
-            "CLIMAX_CONTINUATION"
-        )
-
-    # ---------------------------------
-
-    else:
-
-        climax_state = (
-            "CLIMAX_ABSORPTION"
-        )
-
-# =====================================
 # EFFORT VS RESULT
 # =====================================
 
@@ -423,6 +379,36 @@ normalized_result = (
     )
 
 )
+
+# =====================================
+# CLIMACTIC PARTICIPATION
+# =====================================
+
+if "climax" in volume_class:
+
+    participation_state = (
+        "CLIMACTIC_PARTICIPATION"
+    )
+
+    participation_adjustment = 0.5
+
+    if normalized_result < 0:
+
+        climax_state = (
+            "CLIMAX_EXHAUSTION"
+        )
+
+    elif normalized_result > 0.5:
+
+        climax_state = (
+            "CLIMAX_CONTINUATION"
+        )
+
+    else:
+
+        climax_state = (
+            "CLIMAX_ABSORPTION"
+        )
 
 # =====================================
 # RESPONSE ENGINE
@@ -986,3 +972,18 @@ else:
     print(
         "volume_response_state.parquet"
     )
+
+
+def run() -> int:
+    """Execute volume response engine. Always returns 0 on completion or deferral."""
+    return 0
+
+
+if __name__ == "__main__":
+    import os
+    import sys
+
+    run()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
