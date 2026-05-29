@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import API_PREFIX, CORS_ORIGINS
 from app.services.domain_builders import build_live_snapshot
+from app.services.ops_monitor import build_ops_snapshot
 from app.services.visual_cognition_service import get_visual_cognition_events, get_visual_cognition_snapshot
 from app.services.validation_service import (
     build_evolution_snapshot,
