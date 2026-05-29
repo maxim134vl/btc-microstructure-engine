@@ -1,0 +1,305 @@
+{
+  "status": "OK",
+  "period_start": "2026-05-21",
+  "period_end": "2026-05-28",
+  "event_count": 12,
+  "events_appended_this_run": 12,
+  "weekly_rate": 12.0,
+  "density_target_12_20": true,
+  "density_status": "OK",
+  "distribution": {
+    "IC_CONTINUATION_WEAKENING": 5,
+    "IC_INITIATIVE_DETERIORATION": 5,
+    "IC_ROTATIONAL_PRESSURE": 2
+  },
+  "timeline": [
+    {
+      "timestamp": "2026-05-21 01:15:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "severity": "LOW",
+      "confidence": 0.5,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "effort-down/price-up; delta5=-1068, price5=218.7",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:17.843927+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 01:15:00",
+      "lineage_timestamp": "2026-05-29 09:13:17.843927+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 01:45:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "severity": "HIGH",
+      "confidence": 0.58,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "initiative MA flip 583 \u2192 -276",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:17.867416+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 01:45:00",
+      "lineage_timestamp": "2026-05-29 09:13:17.867416+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 02:15:00",
+      "intermediate_state": "IC_ROTATIONAL_PRESSURE",
+      "severity": "HIGH",
+      "confidence": 0.54,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "sign_flips_5=4",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:17.900227+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 02:15:00",
+      "lineage_timestamp": "2026-05-29 09:13:17.900227+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 03:15:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "severity": "HIGH",
+      "confidence": 0.61,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "effort-down/price-up; delta5=-4037, price5=161.6",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:17.916884+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 03:15:00",
+      "lineage_timestamp": "2026-05-29 09:13:17.916884+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 06:45:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "severity": "HIGH",
+      "confidence": 0.58,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "initiative MA flip -514 \u2192 330",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:17.940597+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 06:45:00",
+      "lineage_timestamp": "2026-05-29 09:13:17.940597+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 07:15:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "severity": "HIGH",
+      "confidence": 0.61,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "effort-up/price-down; delta5=3231, price5=-178.1",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:17.977025+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 07:15:00",
+      "lineage_timestamp": "2026-05-29 09:13:17.977025+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 08:45:00",
+      "intermediate_state": "IC_ROTATIONAL_PRESSURE",
+      "severity": "HIGH",
+      "confidence": 0.59,
+      "source_layers": "[\"candle_structure_memory\", \"volume_classification_memory\"]",
+      "reason": "sign_flips_5=2; volume_class=stopping",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:17.991616+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 08:45:00",
+      "lineage_timestamp": "2026-05-29 09:13:17.991616+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 09:15:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "severity": "HIGH",
+      "confidence": 0.58,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "initiative MA flip 859 \u2192 -292",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:18.004457+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 09:15:00",
+      "lineage_timestamp": "2026-05-29 09:13:18.004457+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 10:30:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "severity": "MEDIUM",
+      "confidence": 0.55,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "effort-up/price-down; delta5=1393, price5=-563.2",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:18.049099+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 10:30:00",
+      "lineage_timestamp": "2026-05-29 09:13:18.049099+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 10:45:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "severity": "HIGH",
+      "confidence": 0.58,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "initiative MA flip -371 \u2192 466",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:18.063312+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 10:45:00",
+      "lineage_timestamp": "2026-05-29 09:13:18.063312+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 11:00:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "severity": "HIGH",
+      "confidence": 0.61,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "effort-up/price-down; delta5=3092, price5=-317.2",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:18.096294+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 11:00:00",
+      "lineage_timestamp": "2026-05-29 09:13:18.096294+00:00"
+    },
+    {
+      "timestamp": "2026-05-21 15:00:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "severity": "HIGH",
+      "confidence": 0.58,
+      "source_layers": "[\"candle_structure_memory\"]",
+      "reason": "initiative MA flip 618 \u2192 -249",
+      "anchor_timestamp": "2026-05-20 08:30:00",
+      "anchor_stage2_state": "LOCAL_EXHAUSTION",
+      "lineage_engine": "intermediate_cognition_engine_v1.py",
+      "lineage_source_parquet": "candle_structure_memory.parquet",
+      "lineage_propagation_timestamp": "2026-05-29 09:13:18.122686+00:00",
+      "lineage_dependency_chain": "candle_structure_memory.parquet->runtime_cognition_memory.parquet->intermediate_cognition_engine_v1.py->intermediate_cognition_memory.parquet",
+      "lineage_event_timestamp": "2026-05-21 15:00:00",
+      "lineage_timestamp": "2026-05-29 09:13:18.122686+00:00"
+    }
+  ],
+  "gap_comparison": {
+    "behavioral_gap_observable_signals": 47,
+    "behavioral_gap_stage2_events": 0,
+    "stage2_5_events": 12,
+    "stage2_events_in_period": 0,
+    "narrative_continuity_restored": true,
+    "coverage_ratio_vs_gap": 0.255,
+    "note": "Stage 2.5 emits deduplicated intermediate states; gap analysis counted raw observable signals."
+  },
+  "cognition_chain_example": [
+    {
+      "layer": "stage1_trigger",
+      "timestamp": "2026-05-20 08:30:00",
+      "state": "BUYING_CLIMAX"
+    },
+    {
+      "layer": "stage2_anchor",
+      "timestamp": "2026-05-20 08:30:00",
+      "state": "LOCAL_EXHAUSTION"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 06:45:00",
+      "state": "IC_INITIATIVE_DETERIORATION",
+      "confidence": 0.58,
+      "severity": "HIGH"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 07:15:00",
+      "state": "IC_CONTINUATION_WEAKENING",
+      "confidence": 0.61,
+      "severity": "HIGH"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 08:45:00",
+      "state": "IC_ROTATIONAL_PRESSURE",
+      "confidence": 0.59,
+      "severity": "HIGH"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 09:15:00",
+      "state": "IC_INITIATIVE_DETERIORATION",
+      "confidence": 0.58,
+      "severity": "HIGH"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 10:30:00",
+      "state": "IC_CONTINUATION_WEAKENING",
+      "confidence": 0.55,
+      "severity": "MEDIUM"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 10:45:00",
+      "state": "IC_INITIATIVE_DETERIORATION",
+      "confidence": 0.58,
+      "severity": "HIGH"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 11:00:00",
+      "state": "IC_CONTINUATION_WEAKENING",
+      "confidence": 0.61,
+      "severity": "HIGH"
+    },
+    {
+      "layer": "stage2_5",
+      "timestamp": "2026-05-21 15:00:00",
+      "state": "IC_INITIATIVE_DETERIORATION",
+      "confidence": 0.58,
+      "severity": "HIGH"
+    },
+    {
+      "layer": "stage2_synthesis",
+      "timestamp": "2026-05-20 05:00:00",
+      "state": "INTERMEDIATE_REVERSAL"
+    }
+  ],
+  "data_coverage": {
+    "candles_in_period": 55,
+    "candle_start": "2026-05-21 00:00:00",
+    "candle_end": "2026-05-21 16:15:00",
+    "last_stage2_event": "2026-05-20 08:30:00"
+  },
+  "acceptance": {
+    "passed": true,
+    "criteria": [
+      "observable narrative continuity between Stage 2 anchor events",
+      "event density 12\u201320/week (or INSUFFICIENT_PERIOD with \u22658 events)",
+      "no trading signals emitted"
+    ]
+  }
+}
