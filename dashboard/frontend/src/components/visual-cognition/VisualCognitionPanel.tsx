@@ -45,7 +45,7 @@ export function VisualCognitionPanel() {
       <section className="rounded border border-slate-800 bg-slate-950 p-3">
         <h1 className="text-sm font-semibold tracking-wide text-emerald-300">VISUAL COGNITION</h1>
         <p className="mt-1 text-xs text-slate-500">
-          Stage 1 market perception replay — M15 → D1 auction hierarchy (cognition memory, not raw candles)
+          Stage 1 perception + Stage 2.5 intermediate cognition replay — M15 → D1 auction hierarchy
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] font-mono text-slate-400">
           <span>Cursor: {snapshot.cursor_timestamp?.replace("T", " ").slice(0, 19) ?? "—"}</span>

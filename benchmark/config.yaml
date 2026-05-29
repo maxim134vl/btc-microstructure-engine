@@ -42,6 +42,32 @@ stage2:
     - confidence_calibration
     - multi_signal_integration
 
+stage2_5:
+  lookback_days: 7
+  validation_horizons: [4, 8, 16]
+  auto_run:
+    enabled: false
+    interval_days: 7
+  validation_targets:
+    - continuation_weakening
+    - initiative_deterioration
+    - rotational_pressure
+    - narrative_continuity
+    - horizon_confirmation
+    - false_positive_detection
+    - early_warning_quality
+    - stage2_anchor_coherence
+
+stage2_5_calibration:
+  auto_run:
+    enabled: false
+    interval_days: 7
+  status_levels:
+    - VERIFIED
+    - STABLE
+    - DEGRADING
+    - NEEDS_CALIBRATION
+
 integrated:
   lookback_days: 7
   forward_horizon_candles: 11

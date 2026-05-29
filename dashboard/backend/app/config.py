@@ -63,6 +63,7 @@ CANONICAL_PIPELINE = [
     "auction_synthesis_engine_v1.py",
     "stage2_cognition_runtime_v1.py",
     "runtime_cognition_engine_v1.py",
+    "intermediate_cognition_engine_v1.py",
     "auction_reinforcement_engine_v1.py",
     "probabilistic_auction_engine_v1.py",
     "auction_decay_engine_v1.py",

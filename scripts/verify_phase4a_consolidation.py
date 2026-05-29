@@ -12,10 +12,18 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 
 def check_canonical_entrypoint() -> bool:
-    from btc_ml.runtime.pipeline import CANONICAL_PIPELINE, run_once
+    from btc_ml.runtime.pipeline import (
+        CANONICAL_PIPELINE,
+        EXPECTED_CANONICAL_PIPELINE_STEP_COUNT,
+        run_once,
+    )
 
-    if len(CANONICAL_PIPELINE) != 17:
-        print(f"FAIL: expected 17 pipeline steps, got {len(CANONICAL_PIPELINE)}")
+    actual = len(CANONICAL_PIPELINE)
+    if actual != EXPECTED_CANONICAL_PIPELINE_STEP_COUNT:
+        print(
+            f"FAIL: expected {EXPECTED_CANONICAL_PIPELINE_STEP_COUNT} pipeline steps, "
+            f"got {actual}"
+        )
         return False
 
     if not os.path.exists(os.path.join(ROOT, "run.py")):

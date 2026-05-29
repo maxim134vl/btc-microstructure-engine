@@ -65,11 +65,22 @@ def check_package_imports(report: HardeningReport) -> None:
         sys.path.insert(0, str(root / "src"))
     try:
         import btc_ml  # noqa: F401
-        from btc_ml.runtime.pipeline import CANONICAL_PIPELINE  # noqa: F401
+        from btc_ml.runtime.pipeline import (
+            CANONICAL_PIPELINE,
+            EXPECTED_CANONICAL_PIPELINE_STEP_COUNT,
+        )  # noqa: F401
         from storage.path_registry import PARQUET_REGISTRY  # noqa: F401
         from config import get_calibration_settings  # noqa: F401
-        if len(CANONICAL_PIPELINE) != 17:
-            report.failures.append(f"pipeline step count != 17 ({len(CANONICAL_PIPELINE)})")
+        actual = len(CANONICAL_PIPELINE)
+        if actual != EXPECTED_CANONICAL_PIPELINE_STEP_COUNT:
+            report.failures.append(
+                f"pipeline step count != {EXPECTED_CANONICAL_PIPELINE_STEP_COUNT} ({actual})"
+            )
+        elif CANONICAL_PIPELINE[12] != "intermediate_cognition_engine_v1.py":
+            report.failures.append(
+                "pipeline step 13 must be intermediate_cognition_engine_v1.py "
+                f"(got {CANONICAL_PIPELINE[12]!r})"
+            )
         else:
             report.passed.append("canonical package imports")
     except ImportError as error:

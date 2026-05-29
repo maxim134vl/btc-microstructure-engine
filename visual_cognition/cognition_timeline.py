@@ -11,6 +11,7 @@ import pandas as pd
 from benchmark.stage1.event_extractor import event_to_interpretation, extract_cognition_events
 from benchmark.stage1.paths import REPORTS_DIR as STAGE1_REPORTS_DIR
 from visual_cognition.behavioral_overlay_engine import detect_behaviors, overlay_for_bar
+from visual_cognition.colors import BEHAVIOR_COLORS
 
 
 def _load_stage1_export() -> list[dict[str, Any]]:
@@ -93,6 +94,35 @@ def _event_type_from_row(row: pd.Series) -> str:
     return "COGNITION_EVENT"
 
 
+def _load_intermediate_events(limit: int = 120) -> list[dict[str, Any]]:
+    from parquet_utils import safe_read_parquet
+
+    frame = safe_read_parquet("intermediate_cognition_memory.parquet")
+    if len(frame) == 0:
+        return []
+    frame = frame.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    frame = frame.dropna(subset=["timestamp"]).sort_values("timestamp").tail(limit)
+    events: list[dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        state = str(row.get("intermediate_state") or "IC_EVENT")
+        ts = row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else str(row["timestamp"])
+        anchor = row.get("anchor_stage2_state")
+        events.append(
+            {
+                "timestamp": ts,
+                "type": state,
+                "label": f"{state} ({row.get('severity')}) — anchor {anchor}",
+                "source": "stage2_5_intermediate",
+                "confidence": row.get("confidence"),
+                "severity": row.get("severity"),
+                "anchor_stage2_state": anchor,
+                "overlay_color": BEHAVIOR_COLORS.get(state),
+            }
+        )
+    return events
+
+
 def build_timeline_from_cognition(
     cognition: pd.DataFrame,
     benchmark_events: list[dict[str, Any]] | None = None,
@@ -122,7 +152,15 @@ def build_timeline_from_cognition(
     if memory_events:
         for event in memory_events:
             ts = event.get("timestamp")
-            if any(item.get("timestamp") == ts for item in timeline):
+            if any(item.get("timestamp") == ts and item.get("source") == event.get("source") for item in timeline):
+                continue
+            timeline.append({**event, "event_index": len(timeline) + 1})
+
+    intermediate_events = _load_intermediate_events()
+    if intermediate_events:
+        for event in intermediate_events:
+            ts = event.get("timestamp")
+            if any(item.get("timestamp") == ts and item.get("source") == "stage2_5_intermediate" for item in timeline):
                 continue
             timeline.append({**event, "event_index": len(timeline) + 1})
 

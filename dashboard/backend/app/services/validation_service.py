@@ -26,6 +26,17 @@ from benchmark.stage2.runner import (
     run_stage2_benchmark,
     should_auto_run_stage2,
 )
+from benchmark.calibration.weekly_calibration import (
+    build_calibration_dashboard_snapshot,
+    run_weekly_calibration,
+)
+from benchmark.stage2_5.paths import latest_pointer_path as stage2_5_latest_path
+from benchmark.stage2_5.runner import (
+    compare_stage2_5_vs_outcome,
+    maybe_auto_run_stage2_5_benchmark,
+    run_stage2_5_benchmark,
+    should_auto_run_stage2_5,
+)
 from benchmark.memory.paths import DATASETS_DIR, EXPORTS_DIR, REPORTS_DIR, latest_evolution_path
 from benchmark.memory.runner import (
     maybe_auto_run_evolution,
@@ -45,9 +56,12 @@ def _read_latest(path: Path) -> dict[str, Any] | None:
 async def build_validation_snapshot() -> dict[str, Any]:
     stage1_latest = _read_latest(STAGE1_REPORTS_DIR / "latest.json")
     stage2_latest = _read_latest(stage2_latest_path())
+    stage2_5_latest = _read_latest(stage2_5_latest_path())
     integrated_latest = _read_latest(integrated_latest_path())
     conformance_latest = _read_latest(conformance_latest_path())
     evolution = await build_evolution_snapshot()
+    intermediate = await build_intermediate_cognition()
+    stage2_5_calibration = build_calibration_dashboard_snapshot()
     return {
         "framework": "cognitive_validation",
         "stage1": {
@@ -100,6 +114,28 @@ async def build_validation_snapshot() -> dict[str, Any]:
                 "NOISY_REASONING",
                 "CONTEXT_FAILURE",
                 "FALSE_NARRATIVE",
+            ],
+        },
+        "stage2_5": {
+            "purpose": "Validate Stage 2.5 intermediate cognition narration vs forward market evolution — not PnL",
+            "auto_run_due": should_auto_run_stage2_5(),
+            "latest_run": stage2_5_latest,
+            "validation_targets": [
+                "continuation_weakening",
+                "initiative_deterioration",
+                "rotational_pressure",
+                "narrative_continuity",
+                "horizon_confirmation",
+                "false_positive_detection",
+                "early_warning_quality",
+                "stage2_anchor_coherence",
+            ],
+            "verdict_types": [
+                "CONFIRMED",
+                "PARTIAL",
+                "FAILED",
+                "FALSE_POSITIVE",
+                "EARLY_WARNING",
             ],
         },
         "integrated": {
@@ -166,6 +202,8 @@ async def build_validation_snapshot() -> dict[str, Any]:
             "memory_datasets_dir": str(DATASETS_DIR),
         },
         "evolution": evolution,
+        "intermediate_cognition": intermediate,
+        "stage2_5_calibration": stage2_5_calibration,
     }
 
 
@@ -175,6 +213,10 @@ async def run_validation_benchmark(**kwargs: Any) -> dict[str, Any]:
 
 async def run_stage2_validation_benchmark(**kwargs: Any) -> dict[str, Any]:
     return run_stage2_benchmark(**kwargs)
+
+
+async def run_stage2_5_validation_benchmark(**kwargs: Any) -> dict[str, Any]:
+    return run_stage2_5_benchmark(**kwargs)
 
 
 async def run_integrated_validation_benchmark(**kwargs: Any) -> dict[str, Any]:
@@ -192,6 +234,8 @@ async def get_validation_report(stage: str = "stage1") -> dict[str, Any]:
         latest_path = integrated_latest_path()
     elif stage == "stage2":
         latest_path = stage2_latest_path()
+    elif stage == "stage2_5":
+        latest_path = stage2_5_latest_path()
     else:
         latest_path = STAGE1_REPORTS_DIR / "latest.json"
     latest = _read_latest(latest_path)
@@ -215,6 +259,8 @@ async def generate_visual_replay(stage: str = "stage1", **kwargs: Any) -> dict[s
         return run_integrated_benchmark(generate_visuals=True, **kwargs)
     if stage == "stage2":
         return run_stage2_benchmark(generate_visuals=True, **kwargs)
+    if stage == "stage2_5":
+        return run_stage2_5_benchmark(generate_visuals=True, **kwargs)
     return run_stage1_benchmark(generate_visuals=True, **kwargs)
 
 
@@ -225,6 +271,8 @@ async def export_validation_package(stage: str = "stage1") -> dict[str, Any]:
         latest_path = integrated_latest_path()
     elif stage == "stage2":
         latest_path = stage2_latest_path()
+    elif stage == "stage2_5":
+        latest_path = stage2_5_latest_path()
     else:
         latest_path = STAGE1_REPORTS_DIR / "latest.json"
     latest = _read_latest(latest_path)
@@ -277,6 +325,18 @@ async def get_conformance_health() -> dict[str, Any]:
         "calibration": latest.get("calibration"),
         "run_id": latest.get("run_id"),
     }
+
+
+async def compare_stage2_5_vs_outcome_report() -> dict[str, Any]:
+    return compare_stage2_5_vs_outcome()
+
+
+async def run_stage2_5_calibration(*, force: bool = False) -> dict[str, Any]:
+    return run_weekly_calibration(force=force)
+
+
+async def get_stage2_5_calibration_snapshot() -> dict[str, Any]:
+    return build_calibration_dashboard_snapshot()
 
 
 async def compare_stage1_stage2() -> dict[str, Any]:

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { connectOps, fetchDebugSnapshot, fetchOpsSnapshot } from "./api/client";
 import {
   compareStage1Stage2,
+  compareStage2_5VsOutcome,
   exportValidationPackage,
   fetchEvolutionReport,
   fetchValidationReport,
@@ -11,6 +12,8 @@ import {
   runIntegratedBenchmark,
   runConformanceBacktest,
   runStage2Benchmark,
+  runStage2_5Benchmark,
+  runStage2_5Calibration,
   runValidationBenchmark,
 } from "./api/validationClient";
 import {
@@ -121,6 +124,14 @@ function ValidationView() {
         await runStage2Benchmark();
         setSnapshot(await fetchValidationSnapshot());
       }}
+      onRunStage2_5={async () => {
+        await runStage2_5Benchmark();
+        setSnapshot(await fetchValidationSnapshot());
+      }}
+      onRunStage2_5Calibration={async () => {
+        await runStage2_5Calibration(true);
+        setSnapshot(await fetchValidationSnapshot());
+      }}
       onRunIntegrated={async () => {
         await runIntegratedBenchmark();
         setSnapshot(await fetchValidationSnapshot());
@@ -141,6 +152,7 @@ function ValidationView() {
       }}
       onExportPackage={(stage) => exportValidationPackage(stage)}
       onCompare={compareStage1Stage2}
+      onCompareStage2_5={compareStage2_5VsOutcome}
     />
   );
 }

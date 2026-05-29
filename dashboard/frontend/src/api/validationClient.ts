@@ -2,6 +2,8 @@ import type {
   EvolutionReport,
   EvolutionRun,
   EvolutionSnapshot,
+  Stage2_5CalibrationSnapshot,
+  Stage2_5Comparison,
   StageComparison,
   ValidationReport,
   ValidationRun,
@@ -65,14 +67,41 @@ export async function fetchConformanceHealth(): Promise<{
   return response.json();
 }
 
-export async function fetchValidationReport(stage: "stage1" | "stage2" | "integrated" | "conformance" = "stage1"): Promise<ValidationReport> {
+export async function runStage2_5Calibration(force = false): Promise<Record<string, unknown>> {
+  const response = await fetch(`${API}/validation/stage2_5/calibration/run?force=${force}`, { method: "POST" });
+  if (!response.ok) throw new Error(`stage2.5 calibration run ${response.status}`);
+  return response.json();
+}
+
+export async function fetchStage2_5Calibration(): Promise<Stage2_5CalibrationSnapshot> {
+  const response = await fetch(`${API}/validation/stage2_5/calibration`);
+  if (!response.ok) throw new Error(`stage2.5 calibration snapshot ${response.status}`);
+  return response.json();
+}
+
+export async function runStage2_5Benchmark(start = "2026-05-21", end = "2026-05-28 23:59:59"): Promise<ValidationRun> {
+  const response = await fetch(
+    `${API}/validation/stage2_5/run?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    { method: "POST" },
+  );
+  if (!response.ok) throw new Error(`stage2.5 validation run ${response.status}`);
+  return response.json();
+}
+
+export async function compareStage2_5VsOutcome(): Promise<Stage2_5Comparison> {
+  const response = await fetch(`${API}/validation/stage2_5/compare`);
+  if (!response.ok) throw new Error(`stage2.5 compare ${response.status}`);
+  return response.json();
+}
+
+export async function fetchValidationReport(stage: "stage1" | "stage2" | "stage2_5" | "integrated" | "conformance" = "stage1"): Promise<ValidationReport> {
   const response = await fetch(`${API}/validation/report?stage=${stage}`);
   if (!response.ok) throw new Error(`validation report ${response.status}`);
   return response.json();
 }
 
 export async function generateVisualReplay(
-  stage: "stage1" | "stage2" | "integrated" | "conformance" = "stage1",
+  stage: "stage1" | "stage2" | "stage2_5" | "integrated" | "conformance" = "stage1",
   lookbackDays = 7,
   forwardHorizon = stage === "stage1" ? 7 : 11,
 ): Promise<ValidationRun> {
@@ -88,7 +117,7 @@ export async function generateVisualReplay(
 }
 
 export async function exportValidationPackage(
-  stage: "stage1" | "stage2" | "integrated" | "conformance" = "stage1",
+  stage: "stage1" | "stage2" | "stage2_5" | "integrated" | "conformance" = "stage1",
 ): Promise<{ status: string; exports: { type: string; path: string }[] }> {
   const response = await fetch(`${API}/validation/export?stage=${stage}`);
   if (!response.ok) throw new Error(`validation export ${response.status}`);

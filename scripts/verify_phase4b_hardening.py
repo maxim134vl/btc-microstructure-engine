@@ -29,10 +29,15 @@ def check_path_registry() -> bool:
 
 
 def check_canonical_runtime_boot() -> bool:
-    from btc_ml.runtime.pipeline import CANONICAL_PIPELINE, run_once
+    from btc_ml.runtime.pipeline import (
+        CANONICAL_PIPELINE,
+        EXPECTED_CANONICAL_PIPELINE_STEP_COUNT,
+        run_once,
+    )
 
-    if len(CANONICAL_PIPELINE) != 17:
-        print(f"FAIL: pipeline steps != 17 ({len(CANONICAL_PIPELINE)})")
+    actual = len(CANONICAL_PIPELINE)
+    if actual != EXPECTED_CANONICAL_PIPELINE_STEP_COUNT:
+        print(f"FAIL: pipeline steps != {EXPECTED_CANONICAL_PIPELINE_STEP_COUNT} ({actual})")
         return False
 
     if not os.path.exists(os.path.join(ROOT, "run.py")):

@@ -15,6 +15,7 @@ from app.services.validation_service import (
     build_evolution_snapshot,
     build_validation_snapshot,
     compare_stage1_stage2,
+    compare_stage2_5_vs_outcome_report,
     export_validation_package,
     generate_visual_replay,
     get_conformance_health,
@@ -24,6 +25,9 @@ from app.services.validation_service import (
     run_evolution_cycle,
     run_integrated_validation_benchmark,
     run_stage2_validation_benchmark,
+    run_stage2_5_validation_benchmark,
+    run_stage2_5_calibration,
+    get_stage2_5_calibration_snapshot,
     run_validation_benchmark,
 )
 from app.websocket.hub import hub
@@ -119,6 +123,28 @@ def _register_api_routes(app: FastAPI) -> None:
             lookback_days=lookback_days,
             forward_horizon=forward_horizon,
         )
+
+    @app.post(f"{API_PREFIX}/validation/stage2_5/run", tags=["validation"])
+    async def validation_stage2_5_run(
+        lookback_days: int | None = None,
+        start: str | None = "2026-05-21",
+        end: str | None = "2026-05-28 23:59:59",
+    ):
+        if lookback_days is not None:
+            return await run_stage2_5_validation_benchmark(lookback_days=lookback_days)
+        return await run_stage2_5_validation_benchmark(start=start, end=end)
+
+    @app.get(f"{API_PREFIX}/validation/stage2_5/compare", tags=["validation"])
+    async def validation_stage2_5_compare():
+        return await compare_stage2_5_vs_outcome_report()
+
+    @app.get(f"{API_PREFIX}/validation/stage2_5/calibration", tags=["validation"])
+    async def validation_stage2_5_calibration():
+        return await get_stage2_5_calibration_snapshot()
+
+    @app.post(f"{API_PREFIX}/validation/stage2_5/calibration/run", tags=["validation"])
+    async def validation_stage2_5_calibration_run(force: bool = False):
+        return await run_stage2_5_calibration(force=force)
 
     @app.post(f"{API_PREFIX}/validation/integrated/run", tags=["validation"])
     async def validation_integrated_run(lookback_days: int = 7, forward_horizon: int = 11):

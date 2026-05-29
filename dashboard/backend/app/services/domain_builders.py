@@ -503,6 +503,30 @@ async def build_topology() -> dict[str, Any]:
     }
 
 
+async def build_intermediate_cognition(*, tail: int = 40) -> dict[str, Any]:
+    """Stage 2.5 intermediate cognition timeline for dashboard."""
+
+    df = await read_parquet("intermediate_cognition_memory.parquet", tail=tail)
+    latest = latest_row(df) or {}
+    records = df_records(df, limit=tail)
+
+    distribution: dict[str, int] = {}
+    for row in records:
+        state = str(row.get("intermediate_state") or "UNKNOWN")
+        distribution[state] = distribution.get(state, 0) + 1
+
+    return {
+        "purpose": "Tier-2 intermediate cognition — context narration between Stage 2 synthesis events",
+        "latest": latest,
+        "timeline": records,
+        "distribution": distribution,
+        "event_count": len(records),
+        "linked_stage2_anchor": latest.get("anchor_stage2_state"),
+        "anchor_timestamp": latest.get("anchor_timestamp"),
+        "generated_at": datetime.now().isoformat(),
+    }
+
+
 async def build_live_snapshot() -> dict[str, Any]:
     return {
         "runtime_operations": await build_runtime_operations(),
@@ -510,6 +534,7 @@ async def build_live_snapshot() -> dict[str, Any]:
         "probabilistic_cognition": await build_probabilistic_cognition(),
         "state_transitions": await build_state_transitions(),
         "mtf_cognition": await build_mtf_cognition(),
+        "intermediate_cognition": await build_intermediate_cognition(),
         "reinforcement": await build_reinforcement_contradictions(),
         "regime": await build_regime_monitoring(),
         "runtime_health": await build_runtime_health(),

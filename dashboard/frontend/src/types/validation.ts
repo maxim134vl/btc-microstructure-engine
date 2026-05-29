@@ -75,13 +75,88 @@ export interface EvolutionRun {
   history_length?: number;
 }
 
+export interface IntermediateCognitionRow {
+  timestamp?: string;
+  intermediate_state?: string;
+  confidence?: number;
+  severity?: string;
+  anchor_stage2_state?: string;
+  anchor_timestamp?: string;
+  reason?: string;
+}
+
+export interface IntermediateCognitionSnapshot {
+  purpose: string;
+  latest?: IntermediateCognitionRow;
+  timeline: IntermediateCognitionRow[];
+  distribution: Record<string, number>;
+  event_count: number;
+  linked_stage2_anchor?: string;
+  anchor_timestamp?: string;
+}
+
+export interface Stage2_5Comparison {
+  status: string;
+  run_id?: string;
+  summary?: ValidationSummary;
+  comparisons?: {
+    timestamp?: string;
+    intermediate_state?: string;
+    interpretation?: string;
+    observed_outcome?: string;
+    verdict?: string;
+    confirmation_horizon?: number | null;
+  }[];
+  narrative_confirmation_rate?: number;
+  by_state?: Record<string, ValidationSummary>;
+}
+
+export interface Stage2_5CalibrationState {
+  status?: string;
+  event_count?: number;
+  metrics?: Record<string, number | null>;
+  trends?: Record<string, { current?: number | null; previous?: number | null; trend?: string }>;
+}
+
+export interface Stage2_5CalibrationSnapshot {
+  purpose: string;
+  auto_run_due?: boolean;
+  latest_run?: {
+    run_id?: string;
+    generated_at?: string;
+    overall_status?: string;
+    overall_metrics?: Record<string, number | null>;
+    overall_trends?: Record<string, { current?: number | null; previous?: number | null; trend?: string }>;
+    states?: Record<string, Stage2_5CalibrationState>;
+    report_markdown?: string;
+    status?: string;
+  } | null;
+  live_assessment?: {
+    overall_status?: string;
+    overall_metrics?: Record<string, number | null>;
+    overall_trends?: Record<string, { current?: number | null; previous?: number | null; trend?: string }>;
+    states?: Record<string, Stage2_5CalibrationState>;
+  };
+  weekly_history?: {
+    run_id?: string;
+    generated_at?: string;
+    overall_status?: string;
+    states?: Record<string, string>;
+    overall_metrics?: Record<string, number | null>;
+  }[];
+  status_definitions?: string[];
+}
+
 export interface ValidationSnapshot {
   framework: string;
   stage1: ValidationStageSnapshot;
   stage2: ValidationStageSnapshot;
+  stage2_5: ValidationStageSnapshot;
+  stage2_5_calibration?: Stage2_5CalibrationSnapshot;
   integrated: ValidationStageSnapshot;
   conformance: ConformanceSnapshot;
   evolution: EvolutionSnapshot;
+  intermediate_cognition?: IntermediateCognitionSnapshot;
   exports: {
     reports_dir: string;
     exports_dir: string;

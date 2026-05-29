@@ -6,6 +6,7 @@ export interface LiveSnapshot {
   probabilistic_cognition?: ProbabilisticCognition;
   state_transitions?: StateTransitions;
   mtf_cognition?: MtfCognition;
+  intermediate_cognition?: IntermediateCognitionPanel;
   reinforcement?: ReinforcementPanel;
   regime?: RegimePanel;
   runtime_health?: RuntimeHealth;
@@ -89,6 +90,16 @@ export interface TimeframeState {
   auction_state?: string;
   in_live_pipeline?: boolean;
   recent_events?: Record<string, unknown>[];
+}
+
+export interface IntermediateCognitionPanel {
+  purpose: string;
+  latest?: Record<string, unknown>;
+  timeline: Record<string, unknown>[];
+  distribution: Record<string, number>;
+  event_count: number;
+  linked_stage2_anchor?: string;
+  anchor_timestamp?: string;
 }
 
 export interface ReinforcementPanel {

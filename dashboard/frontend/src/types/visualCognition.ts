@@ -53,6 +53,10 @@ export interface TimelineEvent {
   verdict?: string;
   source?: string;
   behaviors?: string[];
+  source?: string;
+  confidence?: number;
+  severity?: string;
+  anchor_stage2_state?: string;
   overlay_color?: string;
 }
 

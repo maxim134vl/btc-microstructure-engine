@@ -8,6 +8,8 @@ import auction_convergence_engine_v1
 
 import stage2_cognition_runtime_v1
 
+import intermediate_cognition_engine_v1
+
 import state_transition_engine_v1
 
 ENGINES = {
@@ -26,6 +28,9 @@ ENGINES = {
 
     "stage2_cognition_runtime_v1.py":
         stage2_cognition_runtime_v1.run,
+
+    "intermediate_cognition_engine_v1.py":
+        intermediate_cognition_engine_v1.run,
 
     "state_transition_engine_v1.py":
         state_transition_engine_v1.run,

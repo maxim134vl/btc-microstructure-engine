@@ -192,6 +192,28 @@ export function MtfPanelView({ data }: { data?: LiveSnapshot["mtf_cognition"] })
   );
 }
 
+export function IntermediateCognitionPanelView({ data }: { data?: LiveSnapshot["intermediate_cognition"] }) {
+  if (!data) return <PanelShell title="Intermediate Cognition">Loading…</PanelShell>;
+
+  return (
+    <PanelShell title="Intermediate Cognition" subtitle="Stage 2.5 Tier-2 context narration">
+      <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <MetricCell label="Events" value={data.event_count} />
+        <MetricCell label="Latest state" value={data.latest?.intermediate_state} />
+        <MetricCell label="Stage 2 anchor" value={data.linked_stage2_anchor} />
+        <MetricCell label="Confidence" value={data.latest?.confidence} />
+      </div>
+      <div className="space-y-1 text-xs font-mono">
+        {data.timeline.slice(-15).reverse().map((row, index) => (
+          <div key={index} className="rounded border border-command-border px-2 py-1">
+            {String(row.timestamp ?? "—")} · {String(row.intermediate_state ?? "—")} · conf {String(row.confidence ?? "—")} · {String(row.severity ?? "—")} · anchor {String(row.anchor_stage2_state ?? "—")}
+          </div>
+        ))}
+      </div>
+    </PanelShell>
+  );
+}
+
 export function ReinforcementPanelView({ data }: { data?: LiveSnapshot["reinforcement"] }) {
   if (!data) return <PanelShell title="Reinforcement & Contradictions">Loading…</PanelShell>;
 

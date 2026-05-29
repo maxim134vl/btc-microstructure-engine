@@ -14,6 +14,11 @@ DEPENDENCIES = {
         "runtime_cognition_memory.parquet"
     ],
 
+    "intermediate_cognition_engine_v1.py": [
+        "candle_structure_memory.parquet",
+        "runtime_cognition_memory.parquet",
+    ],
+
     "probabilistic_auction_engine_v1.py": [
         "auction_synthesis_memory.parquet",
         "auction_reinforcement_memory.parquet"

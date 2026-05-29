@@ -134,5 +134,6 @@ def build_replay_snapshot(
             "cognition_rows": len(cognition),
             "candle_rows": len(candles),
             "timeline_events": len(timeline),
+            "intermediate_events": sum(1 for event in timeline if event.get("source") == "stage2_5_intermediate"),
         },
     }

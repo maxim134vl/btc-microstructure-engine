@@ -64,6 +64,15 @@ def build_cognition_frame(*, lookback_days: int = 7) -> tuple[pd.DataFrame, pd.D
             "structural_rank",
             "alignment_score",
         ],
+        "intermediate_cognition_memory.parquet": [
+            "timestamp",
+            "intermediate_state",
+            "confidence",
+            "severity",
+            "anchor_stage2_state",
+            "anchor_timestamp",
+            "reason",
+        ],
         "probabilistic_auction_memory.parquet": ["timestamp", "auction_regime", "conviction_probability"],
     }.items():
         layer = _load(name)
