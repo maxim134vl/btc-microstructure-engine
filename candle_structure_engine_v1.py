@@ -1,79 +1,48 @@
 import pandas as pd
 import numpy as np
 
-from storage.path_registry import resolve_read, resolve_write
+from live_feed_paths import read_live_feed_history
+from storage.path_registry import resolve_write
 
 print("\nCANDLE STRUCTURE ENGINE STARTED\n")
 
 # =====================================
-# LOAD DATA
+# LOAD DATA — canonical live feed (not multi_exchange_flow)
 # =====================================
 
-flow = pd.read_parquet(
-    resolve_read("multi_exchange_flow.parquet")
-)
+feed = read_live_feed_history()
 
-flow["timestamp"] = pd.to_datetime(
-    flow["timestamp"]
-)
+if len(feed) == 0:
+    print("NO LIVE FEED DATA")
+    print()
+    raise SystemExit(1)
 
-flow = flow.sort_values(
-    "timestamp"
-)
+feed["timestamp"] = pd.to_datetime(feed["timestamp"])
+feed = feed.sort_values("timestamp").drop_duplicates(subset=["timestamp"])
 
-# =====================================
-# BUILD OHLC
-# =====================================
-
-ohlc = flow.resample(
-    "15min",
-    on="timestamp"
-).agg({
-
-    "avg_price": [
-        "first",
-        "max",
-        "min",
-        "last"
-    ],
-
-    "buy_volume": "sum",
-
-    "sell_volume": "sum",
-
-    "delta": "sum"
-
-})
-
-ohlc.columns = [
-
-    "open",
-    "high",
-    "low",
-    "close",
-
-    "buy_volume",
-    "sell_volume",
-
-    "delta"
-
-]
-
-ohlc = ohlc.dropna()
+ohlc = feed.copy()
 
 # =====================================
-# TOTAL VOLUME
+# DELTA / BUY-SELL SPLIT
 # =====================================
 
-ohlc["volume"] = (
+if "taker_buy_volume" in ohlc.columns:
+    ohlc["buy_volume"] = ohlc["taker_buy_volume"].fillna(0)
+    ohlc["sell_volume"] = (ohlc["volume"] - ohlc["buy_volume"]).clip(lower=0)
+else:
+    body_share = (
+        (ohlc["close"] - ohlc["open"]).abs()
+        / (ohlc["high"] - ohlc["low"] + 0.000001)
+    ).clip(0, 1)
+    bullish = ohlc["close"] >= ohlc["open"]
+    ohlc["buy_volume"] = np.where(
+        bullish,
+        ohlc["volume"] * (0.5 + 0.5 * body_share),
+        ohlc["volume"] * (0.5 - 0.5 * body_share),
+    )
+    ohlc["sell_volume"] = ohlc["volume"] - ohlc["buy_volume"]
 
-    ohlc["buy_volume"]
-
-    +
-
-    ohlc["sell_volume"]
-
-)
+ohlc["delta"] = ohlc["buy_volume"] - ohlc["sell_volume"]
 
 # =====================================
 # CANDLE TYPE
@@ -287,7 +256,7 @@ ohlc["volume_zscore"] = (
 # SAVE MEMORY
 # =====================================
 
-ohlc = ohlc.reset_index()
+ohlc = ohlc.reset_index(drop=True)
 
 ohlc.to_parquet(
     resolve_write("candle_structure_memory.parquet")
@@ -308,6 +277,12 @@ print()
 print("TOTAL CANDLES:")
 
 print(len(ohlc))
+
+print()
+
+print("TIMESTAMP RANGE:")
+
+print(ohlc["timestamp"].min(), "->", ohlc["timestamp"].max())
 
 print()
 

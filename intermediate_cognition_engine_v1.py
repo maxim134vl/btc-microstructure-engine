@@ -14,6 +14,7 @@ import pandas as pd
 
 from parquet_utils import append_state_row, safe_read_parquet
 from runtime_lineage import apply_lineage_metadata
+from config.stage2_5_calibration import LEGACY_THRESHOLDS, Stage25Thresholds, load_stage2_5_thresholds
 
 MEMORY_PATH = "intermediate_cognition_memory.parquet"
 ENGINE_NAME = "intermediate_cognition_engine_v1.py"
@@ -33,12 +34,6 @@ STATE_PRIORITY = {
     "IC_ROTATIONAL_PRESSURE": 1,
 }
 
-CONTINUATION_DELTA_MIN = 350.0
-CONTINUATION_PRICE_MIN = 150.0
-INITIATIVE_MA_MIN = 180.0
-INITIATIVE_SWING_MIN = 450.0
-ROTATIONAL_FLIPS_MIN = 4
-
 BASE_CONFIDENCE = {
     "IC_CONTINUATION_WEAKENING": 0.55,
     "IC_INITIATIVE_DETERIORATION": 0.52,
@@ -46,6 +41,12 @@ BASE_CONFIDENCE = {
 }
 
 MAX_MEMORY_ROWS = 520
+
+
+def _active_thresholds(
+    thresholds: Stage25Thresholds | None = None,
+) -> Stage25Thresholds:
+    return thresholds or load_stage2_5_thresholds()
 
 
 def _prep(df: pd.DataFrame) -> pd.DataFrame:
@@ -125,9 +126,11 @@ def detect_candidates(
     *,
     start: pd.Timestamp | None = None,
     end: pd.Timestamp | None = None,
+    thresholds: Stage25Thresholds | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate Phase 1 intermediate triggers over M15 candles."""
 
+    thresholds = _active_thresholds(thresholds)
     candles = _prep(candles)
     if len(candles) < 6:
         return []
@@ -166,11 +169,11 @@ def detect_candidates(
 
         # IC_CONTINUATION_WEAKENING
         if (
-            delta5 > CONTINUATION_DELTA_MIN
-            and price5 < -CONTINUATION_PRICE_MIN
+            delta5 > thresholds.continuation_delta_min
+            and price5 < -thresholds.continuation_price_min
         ) or (
-            delta5 < -CONTINUATION_DELTA_MIN
-            and price5 > CONTINUATION_PRICE_MIN
+            delta5 < -thresholds.continuation_delta_min
+            and price5 > thresholds.continuation_price_min
         ):
             severity = _severity_continuation(delta5, price5)
             direction = "effort-up/price-down" if delta5 > 0 else "effort-down/price-up"
@@ -189,9 +192,9 @@ def detect_candidates(
         if pd.notna(ma5_prev) and np.sign(ma5_prev) != np.sign(ma5):
             swing = abs(ma5 - ma5_prev)
             if (
-                abs(ma5) >= INITIATIVE_MA_MIN
-                and abs(ma5_prev) >= INITIATIVE_MA_MIN
-                and swing >= INITIATIVE_SWING_MIN
+                abs(ma5) >= thresholds.initiative_ma_min
+                and abs(ma5_prev) >= thresholds.initiative_ma_min
+                and swing >= thresholds.initiative_swing_min
             ):
                 severity = _severity_initiative(ma5_prev, ma5)
                 candidates.append(
@@ -206,13 +209,13 @@ def detect_candidates(
                 )
 
         # IC_ROTATIONAL_PRESSURE
-        rotational = sign_flips >= ROTATIONAL_FLIPS_MIN
+        rotational = sign_flips >= thresholds.rotational_flips_min
         vc = vol_lookup.get(ts)
-        if vc == "stopping":
+        if vc == "stopping" and sign_flips >= thresholds.rotational_stopping_min_flips:
             rotational = True
             sources = list(dict.fromkeys(sources + ["volume_classification_memory"]))
         if rotational:
-            severity = "HIGH" if sign_flips >= ROTATIONAL_FLIPS_MIN or vc == "stopping" else "MEDIUM"
+            severity = "HIGH" if sign_flips >= thresholds.rotational_flips_min or vc == "stopping" else "MEDIUM"
             if severity == "MEDIUM" and vc != "stopping":
                 rotational = False
         if rotational:
@@ -241,9 +244,17 @@ def should_persist(
     existing: pd.DataFrame,
     candidate: dict[str, Any],
     *,
-    cooldown_bars: int = COOLDOWN_BARS,
+    cooldown_bars: int | None = None,
+    confidence_material_delta: float | None = None,
 ) -> bool:
     """Return True if candidate should be appended given cooldown rules."""
+
+    cooldown_bars = COOLDOWN_BARS if cooldown_bars is None else cooldown_bars
+    confidence_material_delta = (
+        CONFIDENCE_MATERIAL_DELTA
+        if confidence_material_delta is None
+        else confidence_material_delta
+    )
 
     if len(existing) == 0:
         return True
@@ -278,7 +289,7 @@ def should_persist(
 
     last_conf = float(last.get("confidence") or 0)
     new_conf = float(candidate.get("confidence") or 0)
-    if abs(new_conf - last_conf) >= CONFIDENCE_MATERIAL_DELTA:
+    if abs(new_conf - last_conf) >= confidence_material_delta:
         return True
 
     return False
@@ -300,12 +311,23 @@ def enrich_with_anchor(rows: list[dict[str, Any]], stage2: pd.DataFrame) -> list
     return enriched
 
 
-def persist_candidates(candidates: list[dict[str, Any]], *, reset: bool = False) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+def persist_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    reset: bool = False,
+    thresholds: Stage25Thresholds | None = None,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     existing = pd.DataFrame() if reset else _prep(safe_read_parquet(MEMORY_PATH))
     appended: list[dict[str, Any]] = []
+    thresholds = _active_thresholds(thresholds)
 
     for candidate in sorted(candidates, key=lambda r: r["timestamp"]):
-        if should_persist(existing, candidate):
+        if should_persist(
+            existing,
+            candidate,
+            cooldown_bars=thresholds.cooldown_bars,
+            confidence_material_delta=thresholds.confidence_material_delta,
+        ):
             row = pd.DataFrame([candidate])
             row = apply_lineage_metadata(
                 row,

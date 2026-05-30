@@ -1,0 +1,112 @@
+schema_version: 1
+calibrated_at: '2026-05-30T12:27:30.577458+00:00'
+source: canonical_live_feed
+active_profile: live_feed
+calibration_window:
+  start: '2026-05-02'
+  end: '2026-05-30 23:59:59'
+distribution_summary:
+  delta:
+    mean: -0.9209
+    median: -1.311
+    p75: 44.5502
+    p90: 98.5116
+    p95: 149.6448
+    p99: 342.2131
+  delta5:
+    mean: -4.6756
+    median: -3.6386
+    p75: 93.7409
+    p90: 227.039
+    p95: 360.5239
+    p99: 793.409
+  abs_delta5:
+    mean: 164.7579
+    median: 100.7042
+    p75: 201.8422
+    p90: 381.4141
+    p95: 551.0341
+    p99: 1015.5471
+  price5:
+    mean: -10.8611
+    median: -5.14
+    p75: 130.12
+    p90: 288.1
+    p95: 435.182
+    p99: 1114.4938
+  abs_price5:
+    mean: 213.5504
+    median: 143.24
+    p75: 271.92
+    p90: 467.966
+    p95: 610.037
+    p99: 1283.0356
+  continuation_divergence_abs_delta5:
+    mean: 52.2124
+    median: 28.2011
+    p75: 68.8934
+    p90: 128.0296
+    p95: 171.38
+    p99: 315.0126
+  continuation_divergence_abs_price5:
+    mean: 155.0633
+    median: 49.88
+    p75: 95.85
+    p90: 185.126
+    p95: 713.932
+    p99: 2418.7444
+  initiative_ma:
+    mean: 32.9516
+    median: 20.1408
+    p75: 40.3684
+    p90: 76.2828
+    p95: 110.2068
+    p99: 203.1094
+  initiative_ma_prev:
+    mean: 32.4787
+    median: 19.0385
+    p75: 38.8846
+    p90: 76.771
+    p95: 107.0281
+    p99: 208.581
+  initiative_swing:
+    mean: 63.9104
+    median: 44.1415
+    p75: 78.8797
+    p90: 134.2763
+    p95: 182.917
+    p99: 297.7112
+  sign_flips:
+    mean: 2.0722
+    median: 2.0
+    p75: 3.0
+    p90: 3.0
+    p95: 4.0
+    p99: 4.0
+expected_density:
+  weekly_min: 12
+  weekly_max: 20
+  simulated_weekly_rate: 17.62
+  simulated_total: 73
+expected_state_mix:
+  IC_ROTATIONAL_PRESSURE: 34
+  IC_INITIATIVE_DETERIORATION: 34
+  IC_CONTINUATION_WEAKENING: 5
+legacy:
+  continuation_delta_min: 350.0
+  continuation_price_min: 150.0
+  initiative_ma_min: 180.0
+  initiative_swing_min: 450.0
+  rotational_flips_min: 4
+  rotational_stopping_min_flips: 0
+  cooldown_bars: 4
+  confidence_material_delta: 0.08
+live_feed:
+  continuation_delta_min: 128.0296
+  continuation_price_min: 185.126
+  initiative_ma_min: 40.3684
+  initiative_swing_min: 134.2763
+  rotational_flips_min: 5
+  rotational_stopping_min_flips: 2
+  cooldown_bars: 4
+  confidence_material_delta: 0.08

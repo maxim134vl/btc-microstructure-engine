@@ -205,7 +205,9 @@ def on_message(ws, message):
 
             "close": float(kline["c"]),
 
-            "volume": float(kline["v"])
+            "volume": float(kline["v"]),
+
+            "taker_buy_volume": float(kline.get("V", kline["v"]) / 2),
 
         }
 
