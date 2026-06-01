@@ -1,5 +1,5 @@
 schema_version: 1
-calibrated_at: '2026-05-30T12:27:30.577458+00:00'
+calibrated_at: '2026-05-30T12:42:28.980555+00:00'
 source: canonical_live_feed
 active_profile: live_feed
 calibration_window:
@@ -86,12 +86,12 @@ distribution_summary:
 expected_density:
   weekly_min: 12
   weekly_max: 20
-  simulated_weekly_rate: 17.62
-  simulated_total: 73
+  simulated_weekly_rate: 19.55
+  simulated_total: 81
 expected_state_mix:
-  IC_ROTATIONAL_PRESSURE: 34
-  IC_INITIATIVE_DETERIORATION: 34
-  IC_CONTINUATION_WEAKENING: 5
+  IC_CONTINUATION_WEAKENING: 16
+  IC_INITIATIVE_DETERIORATION: 53
+  IC_ROTATIONAL_PRESSURE: 12
 legacy:
   continuation_delta_min: 350.0
   continuation_price_min: 150.0
@@ -102,11 +102,11 @@ legacy:
   cooldown_bars: 4
   confidence_material_delta: 0.08
 live_feed:
-  continuation_delta_min: 128.0296
-  continuation_price_min: 185.126
+  continuation_delta_min: 68.8934
+  continuation_price_min: 95.85
   initiative_ma_min: 40.3684
-  initiative_swing_min: 134.2763
+  initiative_swing_min: 78.8797
   rotational_flips_min: 5
-  rotational_stopping_min_flips: 2
+  rotational_stopping_min_flips: 3
   cooldown_bars: 4
   confidence_material_delta: 0.08
