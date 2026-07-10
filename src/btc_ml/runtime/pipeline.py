@@ -115,6 +115,7 @@ def run_once() -> None:
                     root,
                     engine,
                     ENGINE_TIMEOUT_SECONDS,
+                    cycle_id=_CYCLE_COUNT,
                 )
 
             duration = round(time.time() - start_time, 2)
