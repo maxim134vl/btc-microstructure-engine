@@ -42,13 +42,14 @@ CANONICAL_PIPELINE = [
     "intermediate_cognition_engine_v1.py",
     "auction_reinforcement_engine_v1.py",
     "probabilistic_auction_engine_v1.py",
+    "auction_context_arbitration_engine_v1.py",
     "auction_decay_engine_v1.py",
     "state_transition_engine_v1.py",
     "adaptive_meta_cognition_engine_v1.py",
 ]
 
 # Frozen step count for operational hardening — update only with intentional pipeline changes.
-EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 18
+EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 19
 
 
 def _repo_root() -> str:

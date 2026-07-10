@@ -6,6 +6,8 @@ import adaptive_meta_cognition_engine_v1
 
 import auction_convergence_engine_v1
 
+import auction_context_arbitration_engine_v1
+
 import stage2_cognition_runtime_v1
 
 import intermediate_cognition_engine_v1
@@ -22,6 +24,9 @@ ENGINES = {
 
     "probabilistic_auction_engine_v1.py":
         probabilistic_auction_engine_v1.run,
+
+    "auction_context_arbitration_engine_v1.py":
+        auction_context_arbitration_engine_v1.run,
 
     "adaptive_meta_cognition_engine_v1.py":
         adaptive_meta_cognition_engine_v1.run,

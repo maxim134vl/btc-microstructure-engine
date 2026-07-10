@@ -63,6 +63,7 @@ PARQUET_REGISTRY: dict[str, str] = {
     "behavioral_scoring_memory.parquet": "cognition",
     "live_volume_flow_memory.parquet": "cognition",
     "flow_liquidity_interaction_memory.parquet": "cognition",
+    "auction_context_arbitration_memory.parquet": "cognition",
     # reinforcement
     "auction_reinforcement_memory.parquet": "reinforcement",
     "auction_synthesis_memory.parquet": "reinforcement",

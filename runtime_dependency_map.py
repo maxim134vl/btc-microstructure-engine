@@ -24,6 +24,12 @@ DEPENDENCIES = {
         "auction_reinforcement_memory.parquet"
     ],
 
+    "auction_context_arbitration_engine_v1.py": [
+        "candle_structure_memory.parquet",
+        "volume_response_state.parquet",
+        "auction_convergence_memory.parquet",
+    ],
+
     "state_transition_engine_v1.py": [
         "auction_synthesis_memory.parquet",
         "probabilistic_auction_memory.parquet"
