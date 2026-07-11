@@ -27,8 +27,43 @@ This layer publishes:
 | `active_market_context` | Stable context the chart should paint |
 
 `DEVELOPING` raw directional context can become a **candidate**, but cannot instantly become active.
-`OBSERVE` can **challenge** an active directional context, but does not instantly end it.
-Only a confirmed opposite `ACTIVE` context (or `INVALIDATED`) replaces / clears the active context.
+`OBSERVE` alone can **challenge** an active directional context, but does not instantly end it.
+Auction neutralization or a confirmed opposite `ACTIVE` context closes / replaces it.
+
+## CHALLENGED is not terminal
+
+`CHALLENGED` means the active directional thesis is contested, not dead.
+
+It stays challenged when:
+
+- raw OBSERVE appears without full auction/cognitive BALANCE confluence
+- opposite DEVELOPING appears without confirmed ACTIVE replacement
+- evidence is incomplete
+
+It must **not** hang forever once auction neutralization arrives.
+
+## INVALIDATED closes old directional context
+
+`INVALIDATED` closes the previous LONG/SHORT and sets:
+
+- `active_market_context = OBSERVE`
+- `invalidation_type = AUCTION_NEUTRALIZATION` (or `OPPOSITE_CONTEXT_REPLACEMENT` / `THESIS_REJECTION`)
+- `previous_active_market_context` = the closed context
+
+BALANCE neutralization does **not** create a new LONG or SHORT.
+After invalidation the system stays in OBSERVE until a confirmed directional context appears.
+
+### Auction neutralization confluence
+
+For active SHORT or LONG, invalidate only when **all** are true:
+
+- `raw_market_context == OBSERVE`
+- `raw_context_status == OBSERVE`
+- `raw_cognitive_market_state == BALANCE`
+- `raw_state_direction == NEUTRAL`
+- `auction_episode == BALANCE`
+
+No TTL. No N-bar rule. No `active_context_age_bars` rule. No `challenge_ratio` rule. No price rewrite.
 
 ## Why no manual TTL
 
@@ -36,12 +71,22 @@ No “N bars then expire”.
 No rolling-window smoothing.
 No rewriting history from later price.
 
-Lifetime ends only when:
+Episode ends when:
 
+- auction/cognitive neutralization invalidates active context, or
 - confirmed opposite context becomes active, or
 - source row is `INVALIDATED`
 
-`active_context_age_bars` is diagnostic only.
+`active_context_age_bars` is diagnostic only and applies **only** while
+`active_market_context` is LONG_CONTEXT or SHORT_CONTEXT.
+
+If `active_market_context == OBSERVE` or `lifecycle_state` is
+`NO_ACTIVE_CONTEXT` / `INVALIDATED`:
+
+- `active_context_age_bars = 0`
+- `active_context_started_at = null`
+
+There is no active directional context to age.
 
 ## Why DEVELOPING cannot flip active context
 
@@ -52,21 +97,20 @@ So:
 
 - OBSERVE + DEVELOPING LONG → `CANDIDATE`, active stays OBSERVE
 - ACTIVE LONG + DEVELOPING SHORT → `CHALLENGED`, active stays LONG
-- ACTIVE LONG + ACTIVE SHORT → active becomes SHORT
+- ACTIVE LONG + ACTIVE SHORT → active becomes SHORT (`OPPOSITE_CONTEXT_REPLACEMENT`)
 
 ## Why OBSERVE challenges instead of always ending
 
-OBSERVE often means “no clear directional reading on this bar”, not “the prior process is dead”.
+OBSERVE alone often means “no clear directional reading on this bar”, not “the prior process is dead”.
 Ending active context on every OBSERVE bar would shatter episodes again.
 
-OBSERVE while LONG/SHORT is active → `CHALLENGED`.
-A later confirmed opposite ACTIVE context can replace it.
+OBSERVE while LONG/SHORT is active → `CHALLENGED`, unless full BALANCE neutralization confluence is present.
 
-## action_allowed does not rewrite market context
+## Invalidation is not a trade signal
 
-`action_allowed` / `action_reason` are carried through for diagnostics.
-They never change `active_market_context`.
-Trade policy must not erase market truth.
+Closing SHORT/LONG to OBSERVE is observational.
+`action_allowed` stays `False`.
+No execution.
 
 ## Chart should read lifecycle episodes
 
@@ -75,6 +119,7 @@ Paint intervals from `market_context_lifecycle_episodes.parquet` using `active_m
 Do **not** paint raw per-bar flips from `final_market_context_episodes.parquet` as the primary visual.
 
 CHALLENGED bars stay inside the same active episode until `active_market_context` actually changes.
+Auction neutralization ends the directional episode and starts an OBSERVE episode.
 
 ## Shadow-only
 
@@ -86,6 +131,12 @@ CHALLENGED bars stay inside the same active episode until `active_market_context
 
 ```bash
 cd /Users/fontecrypto/btc-ml && venv/bin/python scripts/research/build_market_context_lifecycle_memory.py
+```
+
+Or full shadow chain:
+
+```bash
+cd /Users/fontecrypto/btc-ml && venv/bin/python scripts/research/build_market_context_shadow_chain.py
 ```
 
 Tests:

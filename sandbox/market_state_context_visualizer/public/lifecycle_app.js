@@ -58,10 +58,24 @@ function actionLabel(allowed) {
 
 function updateStatusLine() {
   const latest = state.latest || {};
-  const context = latest.active_market_context || "OBSERVE";
-  const lifecycle = latest.lifecycle_state || "NO_ACTIVE_CONTEXT";
-  const age = latest.active_context_age_bars ?? 0;
-  statusLine.textContent = `Current: ${context} · ${lifecycle} · age ${age} bars · ${actionLabel(Boolean(latest.action_allowed))}`;
+  if (latest.status_line) {
+    statusLine.textContent = `Current: ${latest.status_line}`;
+  } else {
+    const context = latest.active_market_context || "OBSERVE";
+    const lifecycle = latest.lifecycle_state || "NO_ACTIVE_CONTEXT";
+    if (context === "OBSERVE") {
+      const prev = latest.previous_active_market_context;
+      const inv = latest.invalidation_type;
+      if (prev && inv && inv !== "NONE") {
+        statusLine.textContent = `Current: ${context} · ${lifecycle} · previous ${prev} invalidated · ${inv}`;
+      } else {
+        statusLine.textContent = `Current: ${context} · ${lifecycle} · no active directional context · ${actionLabel(Boolean(latest.action_allowed))}`;
+      }
+    } else {
+      const age = latest.active_context_age_bars ?? 0;
+      statusLine.textContent = `Current: ${context} · ${lifecycle} · age ${age} bars · ${actionLabel(Boolean(latest.action_allowed))}`;
+    }
+  }
   const blocks = latest.context_blocks_count ?? state.episodes.filter((ep) => ep.context === "LONG_CONTEXT" || ep.context === "SHORT_CONTEXT").length;
   sourceLine.textContent = `source: lifecycle episodes · ${blocks} context blocks`;
 }

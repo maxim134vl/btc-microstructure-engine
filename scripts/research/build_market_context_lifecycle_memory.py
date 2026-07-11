@@ -3,6 +3,9 @@
 
 Converts choppy per-bar market_context into a stable active_market_context
 lifecycle without TTL / N-bar rules / trade-policy rewriting.
+
+Auction-based invalidation can close a directional context when OBSERVE
+confluence with BALANCE / NEUTRAL auction+cognitive thesis rejection appears.
 """
 
 from __future__ import annotations
@@ -16,8 +19,9 @@ from typing import Any
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "market_context_lifecycle_memory_v1"
+BUILDER_VERSION = "market_context_lifecycle_memory_v2"
 INPUT_PATH = ROOT / "data" / "cognition" / "final_market_context_memory.parquet"
+AUCTION_PATH = ROOT / "data" / "cognition" / "auction_episode_memory.parquet"
 MEMORY_OUTPUT_PATH = ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
 EPISODES_OUTPUT_PATH = ROOT / "data" / "cognition" / "market_context_lifecycle_episodes.parquet"
 
@@ -29,6 +33,7 @@ REQUIRED_MEMORY_COLUMNS = [
     "raw_cognitive_market_state",
     "raw_state_direction",
     "raw_context_reason",
+    "raw_auction_episode",
     "active_market_context",
     "lifecycle_state",
     "active_context_started_at",
@@ -39,6 +44,13 @@ REQUIRED_MEMORY_COLUMNS = [
     "challenge_context",
     "challenge_started_at",
     "challenge_reason",
+    "previous_active_market_context",
+    "invalidation_reason",
+    "invalidated_at",
+    "invalidated_by_auction_episode",
+    "invalidated_by_cognitive_state",
+    "invalidated_by_market_context",
+    "invalidation_type",
     "transition_reason",
     "action_allowed",
     "action_reason",
@@ -70,6 +82,10 @@ REQUIRED_EPISODE_COLUMNS = [
 
 DIRECTIONAL = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
 CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT", "OBSERVE"})
+INVALIDATION_NONE = "NONE"
+INVALIDATION_AUCTION = "AUCTION_NEUTRALIZATION"
+INVALIDATION_OPPOSITE = "OPPOSITE_CONTEXT_REPLACEMENT"
+INVALIDATION_THESIS = "THESIS_REJECTION"
 
 
 def _clean_text(value: Any, default: str = "UNKNOWN") -> str:
@@ -103,14 +119,6 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
-def _opposite(context: str) -> str | None:
-    if context == "LONG_CONTEXT":
-        return "SHORT_CONTEXT"
-    if context == "SHORT_CONTEXT":
-        return "LONG_CONTEXT"
-    return None
-
-
 def _mode_or_unknown(series: pd.Series) -> str:
     cleaned = series.map(lambda v: _clean_text(v, default="UNKNOWN"))
     if len(cleaned) == 0:
@@ -121,11 +129,44 @@ def _mode_or_unknown(series: pd.Series) -> str:
     return str(counts.index[0])
 
 
+def is_auction_neutralization(
+    *,
+    raw_market_context: str,
+    raw_context_status: str,
+    raw_cognitive_market_state: str,
+    raw_state_direction: str,
+    auction_episode: str,
+) -> bool:
+    """True only on full OBSERVE + BALANCE/NEUTRAL confluence. No TTL / age / ratio."""
+    return (
+        _clean_text(raw_market_context, default="OBSERVE") == "OBSERVE"
+        and _clean_text(raw_context_status, default="UNKNOWN").upper() == "OBSERVE"
+        and _clean_text(raw_cognitive_market_state, default="UNKNOWN").upper() == "BALANCE"
+        and _clean_text(raw_state_direction, default="UNKNOWN").upper() == "NEUTRAL"
+        and _clean_text(auction_episode, default="UNKNOWN").upper() == "BALANCE"
+    )
+
+
+def _empty_invalidation() -> dict[str, Any]:
+    return {
+        "previous_active_market_context": None,
+        "invalidation_reason": None,
+        "invalidated_at": None,
+        "invalidated_by_auction_episode": None,
+        "invalidated_by_cognitive_state": None,
+        "invalidated_by_market_context": None,
+        "invalidation_type": INVALIDATION_NONE,
+    }
+
+
 def step_lifecycle(
     *,
     raw_market_context: str,
     raw_context_status: str,
     raw_context_reason: str,
+    raw_cognitive_market_state: str,
+    raw_state_direction: str,
+    auction_episode: str,
     timestamp: pd.Timestamp,
     prev: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -135,6 +176,9 @@ def step_lifecycle(
         raw = "OBSERVE"
     status = _clean_text(raw_context_status, default="UNKNOWN").upper()
     reason = _clean_text(raw_context_reason, default="UNKNOWN")
+    cognitive = _clean_text(raw_cognitive_market_state, default="UNKNOWN").upper()
+    direction = _clean_text(raw_state_direction, default="UNKNOWN").upper()
+    auction = _clean_text(auction_episode, default="UNKNOWN").upper()
 
     if prev is None:
         active = "OBSERVE"
@@ -149,10 +193,13 @@ def step_lifecycle(
         challenge_reason = None
         transition = "initial state"
         prev_lifecycle = "NO_ACTIVE_CONTEXT"
+        carried_inv = _empty_invalidation()
     else:
         active = _clean_text(prev.get("active_market_context"), default="OBSERVE")
         lifecycle = _clean_text(prev.get("lifecycle_state"), default="NO_ACTIVE_CONTEXT")
         active_started = prev.get("active_context_started_at")
+        if active_started is not None and (isinstance(active_started, float) and pd.isna(active_started)):
+            active_started = None
         active_age = int(prev.get("active_context_age_bars") or 0)
         candidate = prev.get("candidate_context")
         candidate_started = prev.get("candidate_started_at")
@@ -162,8 +209,21 @@ def step_lifecycle(
         challenge_reason = prev.get("challenge_reason")
         transition = ""
         prev_lifecycle = lifecycle
+        # Carry last invalidation diagnostics while still in OBSERVE after a close.
+        prev_inv_type = _clean_text(prev.get("invalidation_type"), default=INVALIDATION_NONE)
+        if prev_inv_type != INVALIDATION_NONE and active == "OBSERVE":
+            carried_inv = {
+                "previous_active_market_context": prev.get("previous_active_market_context"),
+                "invalidation_reason": prev.get("invalidation_reason"),
+                "invalidated_at": prev.get("invalidated_at"),
+                "invalidated_by_auction_episode": prev.get("invalidated_by_auction_episode"),
+                "invalidated_by_cognitive_state": prev.get("invalidated_by_cognitive_state"),
+                "invalidated_by_market_context": prev.get("invalidated_by_market_context"),
+                "invalidation_type": prev_inv_type,
+            }
+        else:
+            carried_inv = _empty_invalidation()
 
-    # Default: clear transient fields unless rules set them.
     new_candidate = None
     new_candidate_started = None
     new_candidate_reason = None
@@ -171,30 +231,67 @@ def step_lifecycle(
     new_challenge_started = None
     new_challenge_reason = None
     new_transition = transition
+    inv = dict(carried_inv)
 
-    # 5. INVALIDATED resets.
+    # Source-row INVALIDATED → thesis rejection to OBSERVE.
     if status == "INVALIDATED":
+        previous = active if active in DIRECTIONAL else None
         active = "OBSERVE"
         lifecycle = "INVALIDATED"
-        active_started = timestamp
+        active_started = None
         active_age = 0
         new_transition = "source context invalidated"
-    # 2. OBSERVE
+        inv = {
+            "previous_active_market_context": previous,
+            "invalidation_reason": "source context invalidated",
+            "invalidated_at": timestamp,
+            "invalidated_by_auction_episode": auction,
+            "invalidated_by_cognitive_state": cognitive,
+            "invalidated_by_market_context": raw,
+            "invalidation_type": INVALIDATION_THESIS,
+        }
+    # OBSERVE path: neutralization or challenge.
     elif raw == "OBSERVE":
         if active == "OBSERVE":
             lifecycle = "NO_ACTIVE_CONTEXT"
-            active_started = active_started or timestamp
-            active_age = 0 if active_started == timestamp else active_age + 1
+            active_started = None
+            active_age = 0
             new_transition = "observe with no active context"
+        elif active in DIRECTIONAL and is_auction_neutralization(
+            raw_market_context=raw,
+            raw_context_status=status,
+            raw_cognitive_market_state=cognitive,
+            raw_state_direction=direction,
+            auction_episode=auction,
+        ):
+            previous = active
+            inv_reason = (
+                f"{previous} invalidated because auction and cognitive state moved to "
+                "BALANCE / NEUTRAL / OBSERVE; no confirmed opposite context required."
+            )
+            active = "OBSERVE"
+            lifecycle = "INVALIDATED"
+            active_started = None
+            active_age = 0
+            new_transition = "auction neutralization invalidated active context"
+            inv = {
+                "previous_active_market_context": previous,
+                "invalidation_reason": inv_reason,
+                "invalidated_at": timestamp,
+                "invalidated_by_auction_episode": auction,
+                "invalidated_by_cognitive_state": cognitive,
+                "invalidated_by_market_context": raw,
+                "invalidation_type": INVALIDATION_AUCTION,
+            }
         else:
-            # Challenge only — do not kill active directional context.
+            # Challenge only — incomplete confluence must not kill active context.
             lifecycle = "CHALLENGED"
             new_challenge = "OBSERVE"
             new_challenge_started = timestamp
             new_challenge_reason = reason
             active_age = active_age + 1
             new_transition = "observe challenged active context"
-    # 3/4 directional
+    # Directional raw contexts.
     elif raw in DIRECTIONAL:
         if status == "DEVELOPING":
             if active == "OBSERVE":
@@ -202,15 +299,12 @@ def step_lifecycle(
                 new_candidate = raw
                 new_candidate_started = timestamp
                 new_candidate_reason = reason
-                active_age = 0 if active_started is None else active_age + 1
-                if active_started is None:
-                    active_started = timestamp
+                active_started = None
+                active_age = 0
                 new_transition = "developing directional context is candidate only"
             elif raw == active:
-                # Same direction developing: keep active; restore ACTIVE unless already challenged path.
                 if prev_lifecycle == "CHALLENGED":
                     lifecycle = "CHALLENGED"
-                    # keep previous challenge if any; otherwise no new challenge
                     new_challenge = challenge
                     new_challenge_started = challenge_started
                     new_challenge_reason = challenge_reason
@@ -219,7 +313,6 @@ def step_lifecycle(
                 active_age = active_age + 1
                 new_transition = "developing same-direction context keeps active"
             else:
-                # Opposite developing: challenge only.
                 lifecycle = "CHALLENGED"
                 new_challenge = raw
                 new_challenge_started = timestamp
@@ -233,26 +326,37 @@ def step_lifecycle(
                 active_started = timestamp
                 active_age = 0
                 new_transition = "confirmed directional context became active"
+                inv = _empty_invalidation()
             elif raw == active:
                 lifecycle = "ACTIVE"
                 active_age = active_age + 1
                 new_transition = "confirmed same-direction context remains active"
             else:
+                previous = active
                 active = raw
                 lifecycle = "ACTIVE"
                 active_started = timestamp
                 active_age = 0
                 new_transition = "confirmed opposite context replaced active context"
+                inv = {
+                    "previous_active_market_context": previous,
+                    "invalidation_reason": (
+                        f"{previous} replaced by confirmed opposite {raw}"
+                    ),
+                    "invalidated_at": timestamp,
+                    "invalidated_by_auction_episode": auction,
+                    "invalidated_by_cognitive_state": cognitive,
+                    "invalidated_by_market_context": raw,
+                    "invalidation_type": INVALIDATION_OPPOSITE,
+                }
         else:
-            # UNKNOWN / other statuses: treat cautiously like developing for flips.
             if active == "OBSERVE":
                 lifecycle = "CANDIDATE"
                 new_candidate = raw
                 new_candidate_started = timestamp
                 new_candidate_reason = reason
-                if active_started is None:
-                    active_started = timestamp
-                active_age = 0 if active_started == timestamp else active_age + 1
+                active_started = None
+                active_age = 0
                 new_transition = "non-active directional status stays candidate"
             elif raw == active:
                 lifecycle = "ACTIVE" if prev_lifecycle != "CHALLENGED" else "CHALLENGED"
@@ -271,10 +375,18 @@ def step_lifecycle(
                 new_transition = "opposite non-active status challenges active"
     else:
         lifecycle = "NO_ACTIVE_CONTEXT" if active == "OBSERVE" else "CHALLENGED"
-        active_age = active_age + 1 if active != "OBSERVE" else 0
+        if active == "OBSERVE":
+            active_started = None
+            active_age = 0
+        else:
+            active_age = active_age + 1
         new_transition = "unhandled raw context"
 
-    if active_started is None:
+    # Age semantics: only directional active contexts have age / started_at.
+    if active == "OBSERVE" or lifecycle in {"NO_ACTIVE_CONTEXT", "INVALIDATED"}:
+        active_started = None
+        active_age = 0
+    elif active in DIRECTIONAL and active_started is None:
         active_started = timestamp
         active_age = 0
 
@@ -290,14 +402,53 @@ def step_lifecycle(
         "challenge_started_at": new_challenge_started,
         "challenge_reason": new_challenge_reason,
         "transition_reason": new_transition,
+        **inv,
     }
 
 
-def build_lifecycle_memory(context_frame: pd.DataFrame) -> pd.DataFrame:
+def attach_auction_episode(context_frame: pd.DataFrame, auction_frame: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Attach auction_episode onto final-context rows (merge_asof or passthrough)."""
+    work = context_frame.copy()
+    if "auction_episode" in work.columns:
+        return work
+
+    if auction_frame is None:
+        if AUCTION_PATH.exists():
+            auction_frame = pd.read_parquet(AUCTION_PATH)
+        else:
+            work["auction_episode"] = "UNKNOWN"
+            return work
+
+    auction = auction_frame.copy()
+    if "timestamp" not in auction.columns or "auction_episode" not in auction.columns:
+        work["auction_episode"] = "UNKNOWN"
+        return work
+
+    work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce").astype("datetime64[ns, UTC]")
+    auction["timestamp"] = pd.to_datetime(auction["timestamp"], utc=True, errors="coerce").astype("datetime64[ns, UTC]")
+    auction = auction.dropna(subset=["timestamp"]).sort_values("timestamp")
+    work = work.dropna(subset=["timestamp"]).sort_values("timestamp")
+    merged = pd.merge_asof(
+        work,
+        auction[["timestamp", "auction_episode"]],
+        on="timestamp",
+        direction="backward",
+        tolerance=pd.Timedelta("2h"),
+    )
+    merged["auction_episode"] = merged["auction_episode"].map(
+        lambda v: _clean_text(v, default="UNKNOWN")
+    )
+    return merged
+
+
+def build_lifecycle_memory(
+    context_frame: pd.DataFrame,
+    auction_frame: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     if context_frame is None or len(context_frame) == 0:
         return pd.DataFrame(columns=REQUIRED_MEMORY_COLUMNS)
 
-    work = context_frame.copy()
+    work = attach_auction_episode(context_frame, auction_frame=auction_frame)
     if "timestamp" not in work.columns or "market_context" not in work.columns:
         raise ValueError("final_market_context_memory missing timestamp/market_context")
     work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
@@ -309,11 +460,17 @@ def build_lifecycle_memory(context_frame: pd.DataFrame) -> pd.DataFrame:
         raw = _clean_text(src.get("market_context"), default="OBSERVE")
         status = _clean_text(src.get("context_status"), default="UNKNOWN")
         reason = _clean_text(src.get("context_reason"), default="UNKNOWN")
+        cognitive = _clean_text(src.get("cognitive_market_state"), default="UNKNOWN")
+        direction = _clean_text(src.get("state_direction"), default="UNKNOWN")
+        auction = _clean_text(src.get("auction_episode"), default="UNKNOWN")
         ts = src["timestamp"]
         step = step_lifecycle(
             raw_market_context=raw,
             raw_context_status=status,
             raw_context_reason=reason,
+            raw_cognitive_market_state=cognitive,
+            raw_state_direction=direction,
+            auction_episode=auction,
             timestamp=ts,
             prev=prev,
         )
@@ -322,16 +479,20 @@ def build_lifecycle_memory(context_frame: pd.DataFrame) -> pd.DataFrame:
             "close": _safe_float(src.get("close")),
             "raw_market_context": raw,
             "raw_context_status": status,
-            "raw_cognitive_market_state": _clean_text(src.get("cognitive_market_state"), default="UNKNOWN"),
-            "raw_state_direction": _clean_text(src.get("state_direction"), default="UNKNOWN"),
+            "raw_cognitive_market_state": cognitive,
+            "raw_state_direction": direction,
             "raw_context_reason": reason,
+            "raw_auction_episode": auction,
             **step,
-            "action_allowed": _safe_bool(src.get("action_allowed"), default=False),
-            "action_reason": _clean_text(src.get("action_reason"), default="UNKNOWN"),
+            # Shadow policy: never enable execution from lifecycle.
+            "action_allowed": False,
+            "action_reason": _clean_text(
+                src.get("action_reason"),
+                default="shadow market context only; execution disabled",
+            ),
             "shadow_only": True,
             "builder_version": BUILDER_VERSION,
         }
-        # action_allowed must never rewrite active context (already true by construction).
         rows.append(row)
         prev = row
 
@@ -367,8 +528,21 @@ def build_lifecycle_episodes(memory_frame: pd.DataFrame) -> pd.DataFrame:
         duration_minutes = float((end_time - start_time).total_seconds() / 60.0)
 
         if idx < len(groups):
-            next_ctx = _clean_text(groups[idx][1].iloc[0]["active_market_context"])
-            end_reason = f"active_market_context changed from {active} to {next_ctx}"
+            next_group = groups[idx][1]
+            next_start = next_group.iloc[0]
+            next_ctx = _clean_text(next_start["active_market_context"])
+            inv_type = _clean_text(next_start.get("invalidation_type"), default=INVALIDATION_NONE)
+            if inv_type == INVALIDATION_AUCTION:
+                end_reason = (
+                    f"auction neutralization closed {active} at invalidation timestamp; "
+                    f"new {next_ctx} episode started"
+                )
+            elif inv_type == INVALIDATION_OPPOSITE:
+                end_reason = f"opposite confirmed context replaced {active} with {next_ctx}"
+            elif inv_type == INVALIDATION_THESIS:
+                end_reason = f"thesis rejection closed {active}; new {next_ctx} episode started"
+            else:
+                end_reason = f"active_market_context changed from {active} to {next_ctx}"
         else:
             end_reason = "latest open lifecycle episode"
 
@@ -392,7 +566,9 @@ def build_lifecycle_episodes(memory_frame: pd.DataFrame) -> pd.DataFrame:
                 "duration_minutes": duration_minutes,
                 "start_lifecycle_state": _clean_text(start.get("lifecycle_state"), default="UNKNOWN"),
                 "end_lifecycle_state": _clean_text(end.get("lifecycle_state"), default="UNKNOWN"),
-                "dominant_lifecycle_state": _mode_or_unknown(group["lifecycle_state"]) if "lifecycle_state" in group.columns else "UNKNOWN",
+                "dominant_lifecycle_state": _mode_or_unknown(group["lifecycle_state"])
+                if "lifecycle_state" in group.columns
+                else "UNKNOWN",
                 "challenged_bars_count": challenged_bars,
                 "candidate_bars_count": candidate_bars,
                 "action_allowed_any": bool(action_flags.any()),
@@ -445,7 +621,14 @@ def main() -> int:
         print(f"ERROR: failed to read {INPUT_PATH}: {exc}", file=sys.stderr)
         return 1
 
-    memory = build_lifecycle_memory(context_frame)
+    auction_frame = None
+    if AUCTION_PATH.exists():
+        try:
+            auction_frame = pd.read_parquet(AUCTION_PATH)
+        except Exception as exc:
+            print(f"WARNING: failed to read auction episodes ({exc}); neutralization may be limited")
+
+    memory = build_lifecycle_memory(context_frame, auction_frame=auction_frame)
     episodes = build_lifecycle_episodes(memory)
     mem_path = write_atomic_parquet(memory, MEMORY_OUTPUT_PATH)
     ep_path = write_atomic_parquet(episodes, EPISODES_OUTPUT_PATH)
@@ -458,6 +641,8 @@ def main() -> int:
         print("latest active_market_context: —")
         print("latest lifecycle_state: —")
         print("latest active_context_age_bars: —")
+        print("latest invalidation_type: —")
+        print("latest previous_active_market_context: —")
     else:
         latest = memory.iloc[-1]
         print(f"latest timestamp: {latest['timestamp']}")
@@ -465,6 +650,8 @@ def main() -> int:
         print(f"latest active_market_context: {latest['active_market_context']}")
         print(f"latest lifecycle_state: {latest['lifecycle_state']}")
         print(f"latest active_context_age_bars: {latest['active_context_age_bars']}")
+        print(f"latest invalidation_type: {latest['invalidation_type']}")
+        print(f"latest previous_active_market_context: {latest['previous_active_market_context']}")
     print(f"output path memory: {mem_path}")
     print(f"output path episodes: {ep_path}")
     return 0

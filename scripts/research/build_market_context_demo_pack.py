@@ -361,7 +361,7 @@ def build_latest_context(inputs: dict[str, Any], status: dict[str, Any]) -> dict
     status_latest = status.get("latest_context") or {}
     if challenge_ratio is None:
         challenge_ratio = status_latest.get("challenge_ratio")
-    return {
+    result = {
         "timestamp": _iso(latest.get("timestamp")),
         "close": _safe_float(latest.get("close")),
         "active_market_context": _clean(latest.get("active_market_context"), "OBSERVE"),
@@ -373,7 +373,20 @@ def build_latest_context(inputs: dict[str, Any], status: dict[str, Any]) -> dict
         "raw_market_context": _clean(latest.get("raw_market_context"), "OBSERVE"),
         "challenge_context": _clean(latest.get("challenge_context"), default="") or None,
         "transition_reason": _clean(latest.get("transition_reason")),
+        "previous_active_market_context": _clean(latest.get("previous_active_market_context"), default="") or None,
+        "invalidation_type": _clean(latest.get("invalidation_type"), default="NONE"),
+        "invalidation_reason": _clean(latest.get("invalidation_reason"), default="") or None,
+        "invalidated_at": _iso(latest.get("invalidated_at")),
+        "invalidated_by_auction_episode": _clean(latest.get("invalidated_by_auction_episode"), default="") or None,
+        "invalidated_by_cognitive_state": _clean(latest.get("invalidated_by_cognitive_state"), default="") or None,
+        "invalidated_by_market_context": _clean(latest.get("invalidated_by_market_context"), default="") or None,
     }
+    if result["active_market_context"] == "OBSERVE" or result["lifecycle_state"] in {
+        "NO_ACTIVE_CONTEXT",
+        "INVALIDATED",
+    }:
+        result["active_context_age_bars"] = 0
+    return result
 
 
 def scan_forbidden(payload: Any) -> list[str]:
@@ -488,14 +501,45 @@ def build_demo_pack(inputs: dict[str, Any] | None = None) -> dict[str, Any]:
     # Human explanation for latest context
     last_ep = episodes[-1] if episodes else None
     latest_explanation = last_ep["explanation"] if last_ep else "No lifecycle episodes available."
-    if latest.get("lifecycle_state") == "CHALLENGED":
-        latest_explanation += (
-            f" Current age is {latest.get('active_context_age_bars')} bars; "
-            f"challenge_ratio={latest.get('challenge_ratio')}."
+    if latest.get("active_market_context") == "OBSERVE":
+        prev_ctx = latest.get("previous_active_market_context")
+        inv_type = _clean(latest.get("invalidation_type"), default="NONE")
+        inv_reason = latest.get("invalidation_reason")
+        if prev_ctx and inv_type != "NONE":
+            latest_explanation = (
+                f"No active directional context. "
+                f"Previous active context {prev_ctx} was cancelled via {inv_type}. "
+                f"{inv_reason or ''} "
+                "This is not a new opposite LONG/SHORT context. "
+                f"action_allowed=False because {_clean(latest.get('action_reason'))}."
+            ).replace("  ", " ").strip()
+        else:
+            latest_explanation = (
+                "No active directional context (OBSERVE / NO_ACTIVE_CONTEXT). "
+                f"action_allowed=False because {_clean(latest.get('action_reason'))}."
+            )
+    elif latest.get("lifecycle_state") == "INVALIDATED" or _clean(
+        latest.get("invalidation_type"), default="NONE"
+    ) in {"AUCTION_NEUTRALIZATION", "OPPOSITE_CONTEXT_REPLACEMENT", "THESIS_REJECTION"}:
+        prev_ctx = latest.get("previous_active_market_context") or "UNKNOWN"
+        inv_reason = latest.get("invalidation_reason") or "auction/cognitive neutralization"
+        inv_type = latest.get("invalidation_type") or "NONE"
+        latest_explanation = (
+            f"Previous active context {prev_ctx} was closed by {inv_type}. "
+            f"{inv_reason} "
+            "This is not a new opposite LONG/SHORT context — active is OBSERVE until a confirmed "
+            "directional context appears. "
+            f"action_allowed=False because {_clean(latest.get('action_reason'))}."
         )
-    latest_explanation += (
-        f" action_allowed=False because {_clean(latest.get('action_reason'))}."
-    )
+    else:
+        if latest.get("lifecycle_state") == "CHALLENGED":
+            latest_explanation += (
+                f" Current active context age is {latest.get('active_context_age_bars')} bars; "
+                f"challenge_ratio={latest.get('challenge_ratio')}."
+            )
+        latest_explanation += (
+            f" action_allowed=False because {_clean(latest.get('action_reason'))}."
+        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -524,7 +568,15 @@ def render_markdown(pack: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"- latest active context: `{latest.get('active_market_context')}`")
     lines.append(f"- lifecycle state: `{latest.get('lifecycle_state')}`")
-    lines.append(f"- age: `{latest.get('active_context_age_bars')}` bars")
+    if latest.get("active_market_context") == "OBSERVE":
+        lines.append("- active directional context age: `0` (no active directional context)")
+        if latest.get("previous_active_market_context"):
+            lines.append(
+                f"- previous active context: `{latest.get('previous_active_market_context')}` "
+                f"({latest.get('invalidation_type')})"
+            )
+    else:
+        lines.append(f"- age: `{latest.get('active_context_age_bars')}` bars")
     lines.append(f"- action allowed: `{latest.get('action_allowed')}`")
     lines.append(f"- chain status: `{health.get('shadow_chain_status')}`")
     lines.append(f"- demo pack status: `{pack.get('status')}`")
@@ -543,6 +595,10 @@ def render_markdown(pack: dict[str, Any]) -> str:
     lines.append(f"- lifecycle_state: `{latest.get('lifecycle_state')}`")
     lines.append(f"- challenge_ratio: `{latest.get('challenge_ratio')}`")
     lines.append(f"- action_allowed: `{latest.get('action_allowed')}`")
+    if latest.get("lifecycle_state") == "INVALIDATED":
+        lines.append(f"- previous_active_market_context: `{latest.get('previous_active_market_context')}`")
+        lines.append(f"- invalidation_type: `{latest.get('invalidation_type')}`")
+        lines.append(f"- invalidation_reason: `{latest.get('invalidation_reason')}`")
     lines.append("")
     lines.append(pack.get("latest_context_explanation") or "")
     lines.append("")

@@ -283,3 +283,40 @@ def test_markdown_report_created(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "# Market Context Demo Pack" in text
     assert "## 6. Acceptance checks" in text
     assert "SHORT_CONTEXT" in text
+
+
+def test_demo_pack_explanation_includes_invalidation_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    inputs = _minimal_inputs(tmp_path, monkeypatch)
+    # Rewrite latest lifecycle row as INVALIDATED after SHORT.
+    life = inputs["life_mem"].copy()
+    life.loc[life.index[-1], "active_market_context"] = "OBSERVE"
+    life.loc[life.index[-1], "lifecycle_state"] = "INVALIDATED"
+    life.loc[life.index[-1], "active_context_age_bars"] = 0
+    life.loc[life.index[-1], "active_context_started_at"] = pd.NaT
+    life.loc[life.index[-1], "previous_active_market_context"] = "SHORT_CONTEXT"
+    life.loc[life.index[-1], "invalidation_type"] = "AUCTION_NEUTRALIZATION"
+    life.loc[life.index[-1], "invalidation_reason"] = (
+        "SHORT_CONTEXT invalidated because auction and cognitive state moved to "
+        "BALANCE / NEUTRAL / OBSERVE; no confirmed opposite context required."
+    )
+    life.loc[life.index[-1], "invalidated_by_auction_episode"] = "BALANCE"
+    life.loc[life.index[-1], "invalidated_by_cognitive_state"] = "BALANCE"
+    life.loc[life.index[-1], "invalidated_by_market_context"] = "OBSERVE"
+    inputs["life_mem"] = life
+    # Matching open OBSERVE episode after invalidation.
+    ep = inputs["life_ep"].copy()
+    ep.loc[ep.index[-1], "active_market_context"] = "OBSERVE"
+    ep.loc[ep.index[-1], "start_lifecycle_state"] = "INVALIDATED"
+    ep.loc[ep.index[-1], "end_lifecycle_state"] = "INVALIDATED"
+    ep.loc[ep.index[-1], "dominant_lifecycle_state"] = "INVALIDATED"
+    ep.loc[ep.index[-1], "end_reason"] = "latest open lifecycle episode"
+    inputs["life_ep"] = ep
+
+    pack = mod.build_demo_pack(inputs)
+    assert pack["latest_context"]["lifecycle_state"] == "INVALIDATED"
+    assert pack["latest_context"]["active_context_age_bars"] == 0
+    assert "invalidation_reason" in pack["latest_context"]
+    assert "No active directional context" in pack["latest_context_explanation"]
+    assert "AUCTION_NEUTRALIZATION" in pack["latest_context_explanation"]
+    assert "age" not in pack["latest_context_explanation"].lower()
+    assert "action_allowed=False" in pack["latest_context_explanation"]

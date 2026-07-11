@@ -60,6 +60,13 @@ All acceptance checks true:
 - latest lifecycle episode is open
 - visual source files are lifecycle outputs
 
+When latest lifecycle is `INVALIDATED`, the demo explanation must include:
+
+- which `previous_active_market_context` was closed
+- `invalidation_reason` / `invalidation_type`
+- that this is not a new opposite directional context
+- that `action_allowed=False`
+
 ## Tests
 
 ```bash

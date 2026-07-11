@@ -133,6 +133,9 @@ def build_candle_rows(candles: pd.DataFrame, memory: pd.DataFrame) -> list[dict[
         "transition_reason",
         "challenge_context",
         "candidate_context",
+        "previous_active_market_context",
+        "invalidation_type",
+        "invalidation_reason",
     ]
     keep = [c for c in keep if c in mem.columns]
     merged = pd.merge_asof(
@@ -159,6 +162,9 @@ def build_candle_rows(candles: pd.DataFrame, memory: pd.DataFrame) -> list[dict[
                 "raw_market_context": _clean_text(row.get("raw_market_context"), default="OBSERVE"),
                 "active_context_age_bars": _safe_int(row.get("active_context_age_bars"), default=0),
                 "action_allowed": _safe_bool(row.get("action_allowed"), default=False),
+                "previous_active_market_context": _clean_text(row.get("previous_active_market_context"), default="")
+                or None,
+                "invalidation_type": _clean_text(row.get("invalidation_type"), default="NONE"),
             }
         )
     return rows
@@ -202,6 +208,39 @@ def build_episode_rows(episodes: pd.DataFrame, latest_candle_ts: pd.Timestamp) -
     return out
 
 
+def build_status_line(latest: pd.Series | dict[str, Any]) -> str:
+    active = _clean_text(
+        latest.get("active_market_context") if hasattr(latest, "get") else latest["active_market_context"],
+        default="OBSERVE",
+    )
+    lifecycle = _clean_text(
+        latest.get("lifecycle_state") if hasattr(latest, "get") else latest["lifecycle_state"],
+        default="NO_ACTIVE_CONTEXT",
+    )
+    action = _safe_bool(
+        latest.get("action_allowed") if hasattr(latest, "get") else latest.get("action_allowed"),
+        default=False,
+    )
+    action_text = "action enabled" if action else "action disabled"
+    if active == "OBSERVE":
+        prev = _clean_text(
+            latest.get("previous_active_market_context") if hasattr(latest, "get") else None,
+            default="",
+        )
+        inv_type = _clean_text(
+            latest.get("invalidation_type") if hasattr(latest, "get") else None,
+            default="NONE",
+        )
+        if prev and inv_type != "NONE":
+            return f"{active} · {lifecycle} · previous {prev} invalidated · {inv_type}"
+        return f"{active} · {lifecycle} · no active directional context · {action_text}"
+    age = _safe_int(
+        latest.get("active_context_age_bars") if hasattr(latest, "get") else 0,
+        default=0,
+    )
+    return f"{active} · {lifecycle} · age {age} bars · {action_text}"
+
+
 def build_latest(memory: pd.DataFrame, episodes: list[dict[str, Any]]) -> dict[str, Any]:
     if memory is None or len(memory) == 0:
         return {
@@ -212,6 +251,7 @@ def build_latest(memory: pd.DataFrame, episodes: list[dict[str, Any]]) -> dict[s
             "active_context_age_bars": 0,
             "action_allowed": False,
             "action_reason": "shadow market context only; execution disabled",
+            "status_line": "OBSERVE · NO_ACTIVE_CONTEXT · no active directional context · action disabled",
             "shadow_only": True,
         }
     latest = memory.iloc[-1]
@@ -222,7 +262,7 @@ def build_latest(memory: pd.DataFrame, episodes: list[dict[str, Any]]) -> dict[s
             break
     if open_episode is None and episodes:
         open_episode = episodes[-1]
-    return {
+    payload = {
         "source": "market_context_lifecycle_memory",
         "episodes_source": "market_context_lifecycle_episodes",
         "timestamp": _iso(latest.get("timestamp")),
@@ -235,6 +275,11 @@ def build_latest(memory: pd.DataFrame, episodes: list[dict[str, Any]]) -> dict[s
         "action_reason": _clean_text(latest.get("action_reason"), default="UNKNOWN"),
         "transition_reason": _clean_text(latest.get("transition_reason"), default="UNKNOWN"),
         "challenge_context": _clean_text(latest.get("challenge_context"), default="") or None,
+        "previous_active_market_context": _clean_text(latest.get("previous_active_market_context"), default="")
+        or None,
+        "invalidation_type": _clean_text(latest.get("invalidation_type"), default="NONE"),
+        "invalidation_reason": _clean_text(latest.get("invalidation_reason"), default="") or None,
+        "invalidated_at": _iso(latest.get("invalidated_at")) if "invalidated_at" in latest.index else None,
         "shadow_only": True,
         "open_episode_id": open_episode.get("episode_id") if open_episode else None,
         "open_episode_context": open_episode.get("context") if open_episode else None,
@@ -243,7 +288,11 @@ def build_latest(memory: pd.DataFrame, episodes: list[dict[str, Any]]) -> dict[s
         "context_blocks_count": sum(1 for ep in episodes if ep.get("context") in {"LONG_CONTEXT", "SHORT_CONTEXT"}),
         "episodes_count": len(episodes),
     }
-
+    # Enforce OBSERVE age semantics in visual payload even if upstream is stale.
+    if payload["active_market_context"] == "OBSERVE":
+        payload["active_context_age_bars"] = 0
+    payload["status_line"] = build_status_line(payload)
+    return payload
 
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
