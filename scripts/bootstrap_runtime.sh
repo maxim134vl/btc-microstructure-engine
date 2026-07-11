@@ -49,8 +49,11 @@ echo "Running hardening checks ..."
 
 echo
 echo "Bootstrap complete."
-echo "Start collectors: ./scripts/start_collectors.sh"
-echo "Start runtime: ./run.sh"
+echo "Start full stack:  make runtime-stack   # or ./scripts/runtime_stack.sh start"
+echo "Stop full stack:   make runtime-stack-stop"
+echo "Stack status:      make runtime-stack-status"
+echo "Start collectors only: ./scripts/start_collectors.sh"
+echo "Start runtime only: ./run.sh"
 echo "Start runtime + collectors: ./run.sh --with-collectors"
 echo "Verify ingestion: python3 scripts/verify_live_ingestion.py"
 echo "Verify Phase 4B: ./run.sh --verify-4b"

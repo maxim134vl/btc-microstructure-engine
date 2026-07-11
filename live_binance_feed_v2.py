@@ -5,6 +5,7 @@ import time
 import ssl
 import os
 import sys
+import threading
 
 sys.path.append(".")
 
@@ -22,10 +23,51 @@ from datetime import datetime
 
 from collector_heartbeat import write_heartbeat
 
-print("\nLIVE BINANCE FEED V2 STARTED\n")
+print("\nLIVE BINANCE FEED V2 STARTED\n", flush=True)
 
 COLLECTOR_NAME = "binance_live_feed"
 _message_count = 0
+_write_lock = threading.Lock()
+_catch_up_lock = threading.Lock()
+WRITE_AUDIT_PATH = os.path.join(
+    "reports", "collector_health", "logs", "live_feed_write_audit.jsonl"
+)
+
+
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def _safe_heartbeat(**kwargs) -> None:
+    try:
+        write_heartbeat(COLLECTOR_NAME, **kwargs)
+    except Exception as exc:
+        _log(f"HEARTBEAT WRITE FAILED: {exc}")
+
+
+def _audit_write(*, candle_ts, rows_before: int, rows_after: int, output_path: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(WRITE_AUDIT_PATH), exist_ok=True)
+        payload = {
+            "audit_timestamp": datetime.now().isoformat(),
+            "candle_timestamp": str(candle_ts),
+            "rows_before": rows_before,
+            "rows_after": rows_after,
+            "output_path": output_path,
+            "symbol": symbol,
+            "interval": interval,
+        }
+        with open(WRITE_AUDIT_PATH, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
+    except Exception as exc:
+        _log(f"WRITE AUDIT FAILED: {exc}")
+
+
+def _taker_buy_volume(kline: dict) -> float:
+    """Binance kline fields are strings — coerce before arithmetic."""
+    raw = kline.get("V", kline.get("v", 0))
+    return float(raw) / 2.0
+
 
 # =====================================
 # SETTINGS
@@ -67,7 +109,8 @@ try:
         )
 
         print(
-            f"LOADED {len(existing)} EXISTING CANDLES\n"
+            f"LOADED {len(existing)} EXISTING CANDLES\n",
+            flush=True,
         )
 
 except Exception as e:
@@ -84,74 +127,85 @@ except Exception as e:
 
 def safe_append_candle(candle):
 
-    try:
+    with _write_lock:
+        try:
 
-        existing = read_live_feed()
+            existing = read_live_feed()
 
-    except Exception:
+        except Exception:
 
-        existing = pd.DataFrame()
+            existing = pd.DataFrame()
 
-    new_row = pd.DataFrame(
-        [candle]
-    )
+        rows_before = len(existing)
 
-    df = pd.concat(
+        new_row = pd.DataFrame(
+            [candle]
+        )
 
-        [existing, new_row],
+        df = pd.concat(
 
-        ignore_index=True
+            [existing, new_row],
 
-    )
+            ignore_index=True
 
-    # =====================================
-    # CLEANUP
-    # =====================================
+        )
 
-    df = df.drop_duplicates(
-        subset=["timestamp"]
-    )
+        # =====================================
+        # CLEANUP
+        # =====================================
 
-    df = df.sort_values(
-        "timestamp"
-    )
+        df = df.drop_duplicates(
+            subset=["timestamp"]
+        )
 
-    # =====================================
-    # LIMIT DATASET SIZE
-    # =====================================
+        df = df.sort_values(
+            "timestamp"
+        )
 
-    if len(df) > MAX_ROWS:
+        # =====================================
+        # LIMIT DATASET SIZE
+        # =====================================
 
-        df = df.iloc[-MAX_ROWS:]
+        if len(df) > MAX_ROWS:
 
-    # =====================================
-    # SAVE PARTITIONED DATASET
-    # =====================================
+            df = df.iloc[-MAX_ROWS:]
 
-    append_parquet(
+        # =====================================
+        # SAVE PARTITIONED DATASET
+        # =====================================
 
-        df,
+        append_parquet(
 
-        DATASET_PATH
+            df,
 
-    )
+            DATASET_PATH
 
-    # =====================================
-    # SAVE LATEST SNAPSHOT
-    # =====================================
+        )
 
-    # Canonical feed + legacy mirror snapshot.
-    write_live_feed_snapshot(df)
+        # =====================================
+        # SAVE LATEST SNAPSHOT
+        # =====================================
 
-    global _message_count
-    _message_count += 1
-    write_heartbeat(
-        COLLECTOR_NAME,
-        status="ALIVE",
-        event="candle_saved",
-        message_count=_message_count,
-        extra={"last_timestamp": str(candle["timestamp"])},
-    )
+        # Canonical feed + legacy mirror snapshot.
+        from storage.path_registry import CANONICAL_LIVE_FEED_PATH, resolve_write
+
+        output_path = resolve_write(CANONICAL_LIVE_FEED_PATH)
+        write_live_feed_snapshot(df)
+        _audit_write(
+            candle_ts=candle["timestamp"],
+            rows_before=rows_before,
+            rows_after=len(df),
+            output_path=output_path,
+        )
+
+        global _message_count
+        _message_count += 1
+        _safe_heartbeat(
+            status="ALIVE",
+            event="candle_saved",
+            message_count=_message_count,
+            extra={"last_timestamp": str(candle["timestamp"]), "output_path": output_path},
+        )
 
 # =====================================
 # ON MESSAGE
@@ -170,8 +224,7 @@ def on_message(ws, message):
         candle_closed = kline["x"]
 
         if not candle_closed:
-            write_heartbeat(
-                COLLECTOR_NAME,
+            _safe_heartbeat(
                 status="CONNECTED",
                 event="kline_tick",
                 message_count=_message_count,
@@ -189,7 +242,7 @@ def on_message(ws, message):
         # DUPLICATE PROTECTION
         # =====================================
 
-        if timestamp == last_closed_timestamp:
+        if last_closed_timestamp is not None and pd.Timestamp(timestamp) == pd.Timestamp(last_closed_timestamp):
 
             return
 
@@ -207,7 +260,7 @@ def on_message(ws, message):
 
             "volume": float(kline["v"]),
 
-            "taker_buy_volume": float(kline.get("V", kline["v"]) / 2),
+            "taker_buy_volume": _taker_buy_volume(kline),
 
         }
 
@@ -227,7 +280,7 @@ def on_message(ws, message):
 
         if any(pd.isna(values)):
 
-            print(
+            _log(
                 "NAN DETECTED - SKIPPING CANDLE"
             )
 
@@ -249,49 +302,48 @@ def on_message(ws, message):
         # DEBUG
         # =====================================
 
-        print("=" * 60)
+        _log("=" * 60)
 
-        print(
+        _log(
             f"CLOSED CANDLE: "
             f"{timestamp}"
         )
 
-        print()
+        _log("")
 
-        print(
+        _log(
             f"O: {candle['open']}"
         )
 
-        print(
+        _log(
             f"H: {candle['high']}"
         )
 
-        print(
+        _log(
             f"L: {candle['low']}"
         )
 
-        print(
+        _log(
             f"C: {candle['close']}"
         )
 
-        print(
+        _log(
             f"V: {candle['volume']}"
         )
 
-        print()
+        _log("")
 
     except Exception as e:
 
-        print()
+        _log("")
 
-        print("MESSAGE PROCESSING ERROR:")
+        _log("MESSAGE PROCESSING ERROR:")
 
-        print(e)
+        _log(str(e))
 
-        print()
+        _log("")
 
-        write_heartbeat(
-            COLLECTOR_NAME,
+        _safe_heartbeat(
             status="ERROR",
             event="message_error",
             last_error=str(e),
@@ -303,52 +355,43 @@ def on_message(ws, message):
 
 def on_error(ws, error):
 
-    print()
+    _log("")
 
-    print("WEBSOCKET ERROR:")
+    _log("WEBSOCKET ERROR:")
 
-    print(error)
+    _log(str(error))
 
-    print()
+    _log("")
 
-    write_heartbeat(
-        COLLECTOR_NAME,
+    _safe_heartbeat(
         status="ERROR",
         event="websocket_error",
         last_error=str(error),
     )
 
-# =====================================
-# CLOSE
-# =====================================
 
 def on_close(ws, close_status_code, close_msg):
 
-    print()
+    _log("")
 
-    print("WEBSOCKET CLOSED")
+    _log("WEBSOCKET CLOSED")
 
-    print()
+    _log("")
 
-    write_heartbeat(
-        COLLECTOR_NAME,
+    _safe_heartbeat(
         status="DISCONNECTED",
         event="websocket_closed",
         extra={"code": close_status_code, "msg": close_msg},
     )
 
-# =====================================
-# OPEN
-# =====================================
 
 def on_open(ws):
 
-    print(
+    _log(
         "CONNECTED TO BINANCE\n"
     )
 
-    write_heartbeat(
-        COLLECTOR_NAME,
+    _safe_heartbeat(
         status="CONNECTED",
         event="websocket_open",
     )
@@ -359,9 +402,82 @@ def on_open(ws):
 
 write_heartbeat(COLLECTOR_NAME, status="STARTING", event="process_start")
 
+
+def catch_up_closed_klines() -> None:
+    """Backfill closed 15m candles since last parquet row via Binance REST."""
+    global last_closed_timestamp
+
+    with _catch_up_lock:
+        import urllib.request
+
+        start_ms = None
+        if last_closed_timestamp is not None:
+            start_ms = int(pd.Timestamp(last_closed_timestamp).timestamp() * 1000) + 1
+
+        url = (
+            "https://api.binance.com/api/v3/klines"
+            f"?symbol={symbol.upper()}&interval={interval}&limit=1000"
+        )
+        if start_ms is not None:
+            url += f"&startTime={start_ms}"
+
+        try:
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(url, timeout=20, context=ctx) as response:
+                rows = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            _log(f"CATCH-UP REQUEST FAILED: {exc}")
+            return
+
+        now_utc = pd.Timestamp.now("UTC").tz_convert(None)
+        added = 0
+        for row in rows:
+            # REST kline: [open_time, o, h, l, c, v, close_time, ..., taker_buy_base, ...]
+            open_time = pd.to_datetime(row[0], unit="ms")
+            close_time = pd.to_datetime(row[6], unit="ms")
+            # Only persist fully closed candles (close_time in the past).
+            if close_time >= now_utc:
+                continue
+            if last_closed_timestamp is not None and pd.Timestamp(open_time) <= pd.Timestamp(last_closed_timestamp):
+                continue
+            candle = {
+                "timestamp": open_time,
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+                "taker_buy_volume": float(row[9]) if len(row) > 9 else float(row[5]) / 2.0,
+            }
+            try:
+                safe_append_candle(candle)
+                last_closed_timestamp = open_time
+                added += 1
+                _log(f"CATCH-UP CLOSED CANDLE: {open_time}")
+            except Exception as exc:
+                _log(f"CATCH-UP SAVE FAILED for {open_time}: {exc}")
+                break
+
+        _log(f"CATCH-UP COMPLETE added={added} last={last_closed_timestamp}")
+
+
+def _periodic_catch_up_loop(interval_s: int = 90) -> None:
+    """REST backfill safety net — keeps parquet current even if websocket is flaky."""
+    while True:
+        time.sleep(interval_s)
+        try:
+            catch_up_closed_klines()
+        except Exception as exc:
+            _log(f"PERIODIC CATCH-UP FAILED: {exc}")
+
+
+catch_up_closed_klines()
+threading.Thread(target=_periodic_catch_up_loop, daemon=True, name="feed-catch-up").start()
+
 while True:
 
     try:
+        catch_up_closed_klines()
 
         ws = websocket.WebSocketApp(
 
@@ -383,23 +499,23 @@ while True:
                 "cert_reqs": ssl.CERT_NONE
             },
 
-            ping_interval=20,
+            ping_interval=45,
 
-            ping_timeout=10
+            ping_timeout=25
 
         )
 
     except Exception as e:
 
-        print()
+        _log("")
 
-        print("RECONNECT ERROR:")
+        _log("RECONNECT ERROR:")
 
-        print(e)
+        _log(str(e))
 
-        print()
+        _log("")
 
-    print(
+    _log(
         "RECONNECTING IN 5 SECONDS...\n"
     )
 

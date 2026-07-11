@@ -121,12 +121,51 @@ def supervise(python: str, root: str, only_required: bool = False) -> None:
                 collector = next(c for c in audit["collectors"] if c["name"] == name)
                 hb_age = collector.get("heartbeat_age_seconds")
                 parquet_age = collector.get("parquet", {}).get("age_seconds")
+                hb_status = str((collector.get("heartbeat") or {}).get("status") or "").upper()
+                hb_event = str((collector.get("heartbeat") or {}).get("event") or "")
+                # Fresh ERROR heartbeats during websocket reconnect storms must not
+                # mask a feed that stopped persisting closed candles.
+                ws_signal_healthy = hb_status in ("CONNECTED", "ALIVE", "STARTING") or hb_event in (
+                    "candle_saved",
+                    "kline_tick",
+                    "websocket_open",
+                    "process_start",
+                )
+                heartbeat_fresh = (
+                    hb_age is not None
+                    and hb_age <= COLLECTOR_STALE_SECONDS
+                    and ws_signal_healthy
+                )
                 if hb_age is not None and hb_age > COLLECTOR_CRITICAL_SECONDS:
                     print(f"[{datetime.now().isoformat()}] RESTART {name}: heartbeat stale ({hb_age}s)")
                     needs_restart = True
-                elif parquet_age is not None and parquet_age > COLLECTOR_CRITICAL_SECONDS and spec.get("required"):
+                elif (
+                    hb_event in ("websocket_error", "websocket_closed", "message_error")
+                    and parquet_age is not None
+                    and parquet_age > COLLECTOR_STALE_SECONDS
+                ):
+                    print(
+                        f"[{datetime.now().isoformat()}] RESTART {name}: websocket errors "
+                        f"with stale parquet ({parquet_age}s, {hb_status}/{hb_event})"
+                    )
+                    needs_restart = True
+                elif (
+                    parquet_age is not None
+                    and parquet_age > COLLECTOR_CRITICAL_SECONDS
+                    and spec.get("required")
+                    and not heartbeat_fresh
+                ):
                     print(f"[{datetime.now().isoformat()}] RESTART {name}: parquet stale ({parquet_age}s)")
                     needs_restart = True
+                elif (
+                    parquet_age is not None
+                    and parquet_age > COLLECTOR_CRITICAL_SECONDS
+                    and heartbeat_fresh
+                ):
+                    print(
+                        f"[{datetime.now().isoformat()}] HOLD {name}: parquet stale "
+                        f"({parquet_age}s) but heartbeat fresh ({hb_age}s, {hb_status})"
+                    )
 
             if needs_restart:
                 if pid and _pid_alive(pid):
