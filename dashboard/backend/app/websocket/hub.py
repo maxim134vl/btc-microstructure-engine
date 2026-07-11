@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from app.config import POLL_INTERVAL_S
+from app.services.json_safety import to_json_safe
 from app.services.ops_monitor import build_ops_snapshot
 
 
@@ -22,7 +23,7 @@ class WebSocketHub:
         await websocket.accept()
         self.connections.add(websocket)
         if self._latest:
-            await websocket.send_text(json.dumps({"type": "snapshot", "data": self._latest}))
+            await websocket.send_text(json.dumps(to_json_safe({"type": "snapshot", "data": self._latest})))
 
     def disconnect(self, websocket: WebSocket) -> None:
         self.connections.discard(websocket)
@@ -43,10 +44,10 @@ class WebSocketHub:
     async def _poll_loop(self) -> None:
         while True:
             try:
-                snapshot = await build_ops_snapshot(ws_connected=bool(self.connections))
+                snapshot = await build_ops_snapshot(ws_connected=bool(self.connections), lite=True)
                 self._latest = snapshot
                 if self.connections:
-                    payload = json.dumps({"type": "snapshot", "data": snapshot})
+                    payload = json.dumps(to_json_safe({"type": "snapshot", "data": snapshot}))
                     dead: list[WebSocket] = []
                     for connection in self.connections:
                         try:

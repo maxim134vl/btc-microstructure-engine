@@ -1,0 +1,17 @@
+export const ruMarketState = {
+  loading: "Загрузка графика market state…",
+  loadFailed: "Не удалось загрузить snapshot market state.",
+  empty: "Нет баров live feed.",
+  subtitle: "Визуализатор runtime-решений — только чтение",
+  readOnly: "Только чтение",
+  inspectorTitle: "Текущее состояние",
+  inspectorHint: "Последние объединённые runtime memories",
+  currentMarketState: "Текущий Market State",
+  currentTradingState: "Текущий Trading State",
+  currentRuleId: "Текущий Rule ID",
+  entryEligible: "Entry Eligible",
+  trendConfidence: "Trend Confidence",
+  marketConfidence: "Market Confidence",
+  cognitionState: "Cognition State",
+  lastDecisionTimestamp: "Время последнего решения",
+};

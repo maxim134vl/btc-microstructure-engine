@@ -2,6 +2,358 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Light theme ── */
+html[data-theme="light"] {
+  color-scheme: light;
+  --ds-color-background: #f5f5f7;
+  --ds-color-surface: #ffffff;
+  --ds-color-surface-secondary: #efeff4;
+  --ds-color-surface-elevated: #ffffff;
+  --ds-color-text-primary: #1d1d1f;
+  --ds-color-text-secondary: #3a3a3c;
+  --ds-color-text-tertiary: #6e6e73;
+  --ds-color-border: rgba(0, 0, 0, 0.06);
+  --ds-color-accent: #007aff;
+  --ds-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+  --ds-font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --ds-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --ds-radius-card: 20px;
+  --ds-radius-button: 12px;
+  --ds-radius-input: 10px;
+  --ds-radius-pill: 9999px;
+  --ds-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 0.5px rgba(0, 0, 0, 0.03);
+  --ds-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.03), 0 2px 8px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  --ds-shadow-lg: 0 2px 4px rgba(0, 0, 0, 0.04), 0 8px 20px rgba(0, 0, 0, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  --ds-shadow-glass: 0 4px 16px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --ds-shadow-neu: 0 1px 2px rgba(0, 0, 0, 0.03), 0 2px 8px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  --ds-motion-duration: 200ms;
+  --ds-motion-easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ds-status-healthy: #34c759;
+  --ds-status-warning: #ff9500;
+  --ds-status-error: #ff3b30;
+  --ds-status-running: #007aff;
+  --ds-status-idle: #8e8e93;
+  --ds-status-healthy-ring-track: color-mix(in srgb, var(--ds-status-healthy) 12%, var(--ds-color-surface-secondary));
+  --ds-status-warning-ring-track: color-mix(in srgb, var(--ds-status-warning) 16%, var(--ds-color-surface-secondary));
+  --ds-status-error-ring-track: color-mix(in srgb, var(--ds-status-error) 18%, var(--ds-color-surface-secondary));
+  --ds-status-idle-ring-track: color-mix(in srgb, var(--ds-status-idle) 12%, var(--ds-color-surface-secondary));
+  --ds-status-healthy-glow: 0 0 0 1.5px color-mix(in srgb, var(--ds-status-healthy) 14%, transparent);
+  --ds-status-warning-glow: 0 0 0 2px color-mix(in srgb, var(--ds-status-warning) 18%, transparent), 0 0 8px color-mix(in srgb, var(--ds-status-warning) 16%, transparent);
+  --ds-status-error-glow: 0 0 0 2.5px color-mix(in srgb, var(--ds-status-error) 22%, transparent), 0 0 10px color-mix(in srgb, var(--ds-status-error) 20%, transparent);
+  --ds-shell-nav-active-bg: rgba(0, 0, 0, 0.07);
+  --ds-shell-nav-hover-bg: rgba(0, 0, 0, 0.04);
+  --command-bg: #efeff4;
+  --command-panel: #ffffff;
+  --command-border: rgba(0, 0, 0, 0.08);
+  --command-muted: #3a3a3c;
+  --command-text: #1d1d1f;
+  --command-accent: #007aff;
+  --command-green: #34c759;
+  --command-yellow: #ff9500;
+  --command-red: #ff3b30;
+}
+
+/* ── Premium dark theme (Phase 3.9) ── */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ds-color-background: #111315;
+  --ds-color-surface-secondary: #151922;
+  --ds-color-surface: #1b2028;
+  --ds-color-surface-elevated: #232933;
+  --ds-color-text-primary: #f5f5f7;
+  --ds-color-text-secondary: #a1a6b0;
+  --ds-color-text-tertiary: #6e7380;
+  --ds-color-border: rgba(255, 255, 255, 0.06);
+  --ds-color-accent: #0a84ff;
+  --ds-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+  --ds-font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --ds-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --ds-radius-card: 20px;
+  --ds-radius-button: 12px;
+  --ds-radius-input: 10px;
+  --ds-radius-pill: 9999px;
+  --ds-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
+  --ds-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --ds-shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --ds-shadow-glass: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --ds-shadow-neu: 0 1px 3px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --ds-motion-duration: 200ms;
+  --ds-motion-easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ds-status-healthy: #30d158;
+  --ds-status-warning: #ff9f0a;
+  --ds-status-error: #ff453a;
+  --ds-status-running: #0a84ff;
+  --ds-status-idle: #98989d;
+  --ds-status-healthy-ring-track: color-mix(in srgb, var(--ds-status-healthy) 10%, var(--ds-color-surface));
+  --ds-status-warning-ring-track: color-mix(in srgb, var(--ds-status-warning) 14%, var(--ds-color-surface));
+  --ds-status-error-ring-track: color-mix(in srgb, var(--ds-status-error) 16%, var(--ds-color-surface));
+  --ds-status-idle-ring-track: color-mix(in srgb, var(--ds-status-idle) 10%, var(--ds-color-surface));
+  --ds-status-healthy-glow: 0 0 0 1.5px color-mix(in srgb, var(--ds-status-healthy) 12%, transparent);
+  --ds-status-warning-glow: 0 0 0 2px color-mix(in srgb, var(--ds-status-warning) 16%, transparent), 0 0 8px color-mix(in srgb, var(--ds-status-warning) 14%, transparent);
+  --ds-status-error-glow: 0 0 0 2.5px color-mix(in srgb, var(--ds-status-error) 20%, transparent), 0 0 12px color-mix(in srgb, var(--ds-status-error) 18%, transparent);
+  --ds-shell-nav-active-bg: rgba(255, 255, 255, 0.09);
+  --ds-shell-nav-hover-bg: rgba(255, 255, 255, 0.05);
+  --command-bg: #1b2028;
+  --command-panel: #232933;
+  --command-border: rgba(255, 255, 255, 0.06);
+  --command-muted: #a1a6b0;
+  --command-text: #f5f5f7;
+  --command-accent: #0a84ff;
+  --command-green: #30d158;
+  --command-yellow: #ff9f0a;
+  --command-red: #ff453a;
+}
+
+/* ── Ops surface (theme-aware) ── */
+.ops-surface {
+  background: var(--ds-color-background);
+  font-family: var(--ds-font-text);
+  color: var(--ds-color-text-primary);
+}
+
+html[data-theme="light"] .ops-surface {
+  color-scheme: light;
+  --ds-color-background: #e8e8ed;
+  --ds-color-surface: #ffffff;
+  --ds-color-surface-secondary: #f2f2f7;
+  --ds-color-surface-elevated: #ffffff;
+  --ds-color-text-primary: #1d1d1f;
+  --ds-color-text-secondary: #3a3a3c;
+  --ds-color-text-tertiary: #6e6e73;
+  --ds-color-border: rgba(0, 0, 0, 0.05);
+  --ds-shadow-neu: 0 1px 2px rgba(0, 0, 0, 0.03), 0 2px 8px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+html[data-theme="dark"] .ops-surface {
+  color-scheme: dark;
+}
+
+.ops-kpi-wash {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  opacity: 0.4;
+}
+
+html[data-theme="dark"] .ops-kpi-wash {
+  opacity: 0.5;
+}
+
+.ops-card {
+  overflow: hidden;
+  border-radius: 22px;
+  border: none;
+  background: linear-gradient(180deg, var(--ds-color-surface-elevated) 0%, var(--ds-color-surface) 100%);
+  box-shadow: var(--ds-shadow-neu);
+  transition: box-shadow var(--ds-motion-duration) var(--ds-motion-easing),
+    transform var(--ds-motion-duration) var(--ds-motion-easing);
+}
+
+html[data-theme="light"] .ops-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f8f8fa 100%);
+}
+
+html[data-theme="dark"] .ops-card {
+  background: linear-gradient(180deg, var(--ds-color-surface-elevated) 0%, var(--ds-color-surface) 100%);
+}
+
+.ops-card:hover {
+  box-shadow: var(--ds-shadow-md);
+}
+
+/* ── Neumorphic shell cards ── */
+.ds-neu-card {
+  border: none;
+  box-shadow: var(--ds-shadow-neu);
+  transition: box-shadow var(--ds-motion-duration) var(--ds-motion-easing);
+}
+
+.ds-neu-card:hover {
+  box-shadow: var(--ds-shadow-md);
+}
+
+.ops-card-shimmer {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, transparent 45%, rgba(0, 122, 255, 0.03) 100%);
+}
+
+html[data-theme="dark"] .ops-card-shimmer {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, transparent 42%, rgba(10, 132, 255, 0.06) 100%);
+}
+
+/* ── Shell chrome ── */
+.shell-sidebar,
+.shell-header {
+  color: var(--ds-color-text-primary);
+}
+
+.shell-sidebar {
+  backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--ds-color-surface-secondary) 88%, transparent);
+}
+
+html[data-theme="dark"] .shell-sidebar {
+  background: color-mix(in srgb, var(--ds-color-surface-secondary) 94%, transparent);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.shell-nav-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ds-color-border), transparent);
+}
+
+.shell-nav-item {
+  outline: none;
+  color: var(--ds-color-text-secondary);
+}
+
+.shell-nav-item:hover:not(.shell-nav-item-active) {
+  background: var(--ds-shell-nav-hover-bg);
+  color: var(--ds-color-text-primary);
+}
+
+.shell-nav-item-active {
+  background: var(--ds-shell-nav-active-bg);
+  color: var(--ds-color-text-primary);
+}
+
+.shell-nav-label {
+  color: inherit;
+}
+
+.icon-chip {
+  color: var(--ds-color-text-secondary);
+  background: color-mix(in srgb, var(--ds-color-surface-secondary) 90%, transparent);
+}
+
+.icon-chip--active {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-sm);
+}
+
+.icon-chip--accent {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-surface);
+}
+
+.env-badge {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-surface-secondary);
+}
+
+.env-badge--prod {
+  background: color-mix(in srgb, var(--ds-status-healthy) 8%, var(--ds-color-surface-secondary));
+}
+
+.env-badge--dev {
+  background: color-mix(in srgb, var(--ds-status-warning) 10%, var(--ds-color-surface-secondary));
+}
+
+.theme-selector {
+  color: var(--ds-color-text-secondary);
+  background: var(--ds-color-surface-secondary);
+  border-color: var(--ds-color-border);
+}
+
+.theme-selector-btn {
+  color: var(--ds-color-text-secondary);
+}
+
+.theme-selector-btn:hover:not(.theme-selector-btn-active) {
+  color: var(--ds-color-text-primary);
+  background: color-mix(in srgb, var(--ds-color-surface) 70%, transparent);
+}
+
+.theme-selector-btn-active {
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-sm);
+}
+
+.timestamp-badge {
+  color: var(--ds-color-text-secondary);
+}
+
+.shell-header {
+  background: color-mix(in srgb, var(--ds-color-surface-elevated) 92%, transparent);
+  border-bottom: 1px solid var(--ds-color-border);
+  backdrop-filter: blur(20px);
+  transition: background-color 200ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    border-color 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+html[data-theme="dark"] .shell-header {
+  background: color-mix(in srgb, var(--ds-color-surface-elevated) 96%, transparent);
+  border-bottom-color: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.28);
+}
+
+/* ── Status dots — tiered hierarchy (calm → attention → critical) ── */
+.status-dot {
+  background: var(--ds-status-idle);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ds-status-idle) 18%, transparent);
+}
+
+.status-dot--operational,
+.status-dot--calm {
+  background: var(--ds-status-healthy);
+  box-shadow: var(--ds-status-healthy-glow);
+}
+
+.status-dot--degraded {
+  background: var(--ds-status-warning);
+  box-shadow: var(--ds-status-warning-glow);
+}
+
+.status-dot--critical {
+  background: var(--ds-status-error);
+  box-shadow: var(--ds-status-error-glow);
+}
+
+.status-dot--offline {
+  background: var(--ds-status-idle);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ds-status-idle) 18%, transparent);
+}
+
+.status-dot-glow--degraded {
+  box-shadow: var(--ds-status-warning-glow);
+}
+
+.status-dot-glow--critical {
+  box-shadow: var(--ds-status-error-glow);
+}
+
+.ring-gauge-progress--degraded {
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--ds-status-warning) 35%, transparent));
+}
+
+.ring-gauge-progress--critical {
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--ds-status-error) 45%, transparent));
+}
+
+.status-dot-ping {
+  opacity: 0.35;
+}
+
+.status-dot-ping--operational {
+  background: var(--ds-status-healthy);
+}
+
+.status-dot-ping--degraded {
+  background: var(--ds-status-warning);
+}
+
+.status-dot-ping--critical {
+  background: var(--ds-status-error);
+}
+
+.status-dot-ping--offline {
+  background: var(--ds-status-idle);
+}
+
 :root {
   color-scheme: dark;
 }
@@ -9,8 +361,9 @@
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: "IBM Plex Sans", system-ui, sans-serif;
-  background: #070b12;
+  font-family: var(--ds-font-text, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif);
+  background: var(--ds-color-background, #111315);
+  color: var(--ds-color-text-primary, #f5f5f7);
 }
 
 * {
@@ -19,7 +372,11 @@ body {
 
 .panel-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+html[data-theme="light"] .panel-scroll {
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
 }
 
 .panel-scroll::-webkit-scrollbar {
@@ -28,6 +385,86 @@ body {
 }
 
 .panel-scroll::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 3px;
+}
+
+html[data-theme="light"] .panel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* ── Legacy slate panels → design-system surfaces (Validation, Debug, etc.) ── */
+.ds-panel-content {
+  color: var(--ds-color-text-primary);
+}
+
+html[data-theme="light"] .ds-panel-content [class*="bg-slate-950"] {
+  background-color: var(--ds-color-surface);
+  box-shadow: var(--ds-shadow-sm);
+}
+
+html[data-theme="light"] .ds-panel-content [class*="border-slate-8"],
+html[data-theme="light"] .ds-panel-content [class*="border-slate-9"],
+html[data-theme="light"] .ds-panel-content [class*="divide-slate-9"] > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--ds-color-border);
+}
+
+html[data-theme="light"] .ds-panel-content .text-ds-text-primary,
+html[data-theme="light"] .ds-panel-content [class*="text-slate-2"],
+html[data-theme="light"] .ds-panel-content [class*="text-slate-3"] {
+  color: var(--ds-color-text-primary);
+}
+
+html[data-theme="light"] .ds-panel-content [class*="text-slate-4"] {
+  color: var(--ds-color-text-secondary);
+}
+
+html[data-theme="light"] .ds-panel-content [class*="text-slate-5"],
+html[data-theme="light"] .ds-panel-content [class*="text-slate-6"] {
+  color: var(--ds-color-text-tertiary);
+}
+
+html[data-theme="dark"] .ds-panel-content [class*="bg-slate-950"] {
+  background: linear-gradient(180deg, var(--ds-color-surface-elevated) 0%, var(--ds-color-surface) 100%);
+  box-shadow: var(--ds-shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+html[data-theme="dark"] .ds-panel-content [class*="bg-slate-900"] {
+  background-color: color-mix(in srgb, var(--ds-color-surface-elevated) 75%, transparent);
+}
+
+html[data-theme="dark"] .ds-panel-content [class*="border-slate-8"],
+html[data-theme="dark"] .ds-panel-content [class*="border-slate-9"],
+html[data-theme="dark"] .ds-panel-content [class*="divide-slate-9"] > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--ds-color-border);
+}
+
+html[data-theme="dark"] .ds-panel-content [class*="text-neutral-"],
+html[data-theme="dark"] .ds-panel-content [class*="text-slate-2"],
+html[data-theme="dark"] .ds-panel-content [class*="text-slate-3"] {
+  color: var(--ds-color-text-primary);
+}
+
+html[data-theme="dark"] .ds-panel-content [class*="text-slate-4"] {
+  color: var(--ds-color-text-secondary);
+}
+
+html[data-theme="dark"] .ds-panel-content [class*="text-slate-5"],
+html[data-theme="dark"] .ds-panel-content [class*="text-slate-6"] {
+  color: var(--ds-color-text-tertiary);
+}
+
+html[data-theme="dark"] .ds-panel-content .text-amber-400,
+html[data-theme="dark"] .ds-panel-content .text-amber-300 {
+  color: var(--ds-status-warning);
+}
+
+html[data-theme="dark"] .ds-panel-content .text-red-300,
+html[data-theme="dark"] .ds-panel-content .text-red-400 {
+  color: var(--ds-status-error);
+}
+
+html[data-theme="dark"] .ds-panel-content [class*="bg-red-950"] {
+  background-color: color-mix(in srgb, var(--ds-status-error) 12%, var(--ds-color-surface));
+  border-color: color-mix(in srgb, var(--ds-status-error) 28%, transparent);
 }

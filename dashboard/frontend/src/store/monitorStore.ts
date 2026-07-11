@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { buildOpsFallbackSnapshot } from "../api/opsFallbackSnapshot";
 import type { OpsSnapshot } from "../types/ops";
 
 interface MonitorState {
@@ -15,7 +16,8 @@ interface MonitorState {
 }
 
 export const useMonitorStore = create<MonitorState>((set, get) => ({
-  snapshot: null,
+  // Seed full Operations UI immediately — live :8080 feed is optional.
+  snapshot: buildOpsFallbackSnapshot(),
   connected: false,
   debugMode: window.location.hash === "#debug",
   acknowledgedAlerts: new Set(),

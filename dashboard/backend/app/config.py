@@ -17,6 +17,11 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from app.pipeline_metadata import (  # noqa: E402
+    CANONICAL_PIPELINE as _CANONICAL_PIPELINE,
+    EXPECTED_CANONICAL_PIPELINE_STEP_COUNT,
+)
+
 POLL_INTERVAL_S = float(os.environ.get("DASHBOARD_POLL_INTERVAL", "2.0"))
 API_PREFIX = "/api/v1"
 CORS_ORIGINS = [
@@ -50,23 +55,5 @@ ONTOLOGY_EVENT_TYPES = (
     "HIGH_AVERAGE_VOLUME",
 )
 
-CANONICAL_PIPELINE = [
-    "candle_structure_engine_v1.py",
-    "volume_classification_engine_v1.py",
-    "schema_validation_engine_v1.py",
-    "behavioral_sequence_memory_v1.py",
-    "behavioral_volume_observer_v1.py",
-    "microstructure_candle_engine_v1.py",
-    "volume_response_engine_v1.py",
-    "climactic_behavior_engine_v1.py",
-    "auction_convergence_engine_v1.py",
-    "auction_synthesis_engine_v1.py",
-    "stage2_cognition_runtime_v1.py",
-    "runtime_cognition_engine_v1.py",
-    "intermediate_cognition_engine_v1.py",
-    "auction_reinforcement_engine_v1.py",
-    "probabilistic_auction_engine_v1.py",
-    "auction_decay_engine_v1.py",
-    "state_transition_engine_v1.py",
-    "adaptive_meta_cognition_engine_v1.py",
-]
+# Synced with app.pipeline_metadata (dashboard-local mirror of runtime pipeline)
+CANONICAL_PIPELINE = list(_CANONICAL_PIPELINE)

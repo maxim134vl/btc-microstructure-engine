@@ -1,16 +1,12 @@
-import type { VisualCognitionSnapshot } from "../types/visualCognition";
+import type { VisualCognitionSnapshot, Stage1EventMapSnapshot } from "../types/visualCognition";
 
 const API = "/api/v1";
 
 export async function fetchVisualCognitionSnapshot(params?: {
-  lookbackDays?: number;
-  maxBars?: number;
   timestamp?: string;
   eventIndex?: number;
 }): Promise<VisualCognitionSnapshot> {
   const search = new URLSearchParams();
-  if (params?.lookbackDays) search.set("lookback_days", String(params.lookbackDays));
-  if (params?.maxBars) search.set("max_bars", String(params.maxBars));
   if (params?.timestamp) search.set("timestamp", params.timestamp);
   if (params?.eventIndex != null) search.set("event_index", String(params.eventIndex));
   const query = search.toString();
@@ -22,5 +18,11 @@ export async function fetchVisualCognitionSnapshot(params?: {
 export async function fetchVisualCognitionEvents(lookbackDays = 7): Promise<{ events: VisualCognitionSnapshot["timeline"] }> {
   const response = await fetch(`${API}/visual-cognition/events?lookback_days=${lookbackDays}`);
   if (!response.ok) throw new Error(`visual cognition events ${response.status}`);
+  return response.json();
+}
+
+export async function fetchStage1EventMap(): Promise<Stage1EventMapSnapshot> {
+  const response = await fetch(`${API}/visual-cognition/stage1-event-map`);
+  if (!response.ok) throw new Error(`stage1 event map ${response.status}`);
   return response.json();
 }

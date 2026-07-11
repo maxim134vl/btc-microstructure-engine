@@ -1,5 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "../../i18n";
+import type { TranslationParams } from "../../i18n";
+
+type TFunction = (key: string, params?: TranslationParams) => string;
 import type { EvolutionReport, IntermediateCognitionSnapshot, Stage2_5CalibrationSnapshot, Stage2_5Comparison, StageComparison, ValidationReport, ValidationSnapshot, ValidationStageSnapshot } from "../../types/validation";
+import { ValidationDomainNav } from "./ValidationDomainNav";
+import { ValidationExecutiveOverview } from "./ValidationExecutiveOverview";
+import { buildExecutiveKpis, type ValidationDomain } from "./validationOverview";
 
 export function ValidationPanel({
   snapshot,
@@ -39,6 +46,10 @@ export function ValidationPanel({
   const [stage2_5Comparison, setStage2_5Comparison] = useState<Stage2_5Comparison | null>(null);
   const [exportPaths, setExportPaths] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [activeDomain, setActiveDomain] = useState<ValidationDomain>("perception");
+  const { t } = useTranslation();
+
+  const executiveKpis = useMemo(() => buildExecutiveKpis(snapshot, t), [snapshot, t]);
 
   async function handleRun(label: string, action: () => Promise<void>) {
     setRunning(label);
@@ -100,210 +111,248 @@ export function ValidationPanel({
   }
 
   return (
-    <div className="space-y-4">
-      <section className="rounded border border-slate-800 bg-slate-950 p-4">
-        <h2 className="text-sm font-semibold tracking-wide text-slate-200">COGNITION HEALTH</h2>
-        <p className="mt-2 text-2xl font-mono">
-          {snapshot.conformance.health_emoji ?? "⚪"} {snapshot.conformance.cognition_health ?? "UNKNOWN"}
-        </p>
-        <p className="mt-1 text-xs text-slate-500">{snapshot.conformance.purpose}</p>
-        {snapshot.conformance.auto_run_due ? (
-          <p className="mt-1 text-[10px] text-amber-400">Conformance audit due (7-day cycle)</p>
-        ) : null}
-      </section>
-
-      {snapshot.intermediate_cognition ? (
-        <IntermediateCognitionSection data={snapshot.intermediate_cognition} />
-      ) : null}
-
-      <StageSection
-        title="Stage 1 — Perception Validation"
-        accent="violet"
-        stage={snapshot.stage1}
-        running={running}
-        runLabel="Run Stage 1 Benchmark"
-        onRun={() => handleRun("stage1", onRunStage1)}
-        onVisuals={() => handleRun("stage1-visuals", () => onGenerateVisuals("stage1"))}
-        onExport={() => handleExport("stage1")}
-        onReport={() => handleReport("stage1")}
-        metrics={stage1Metrics(snapshot.stage1)}
-      />
-
-      <StageSection
-        title="Stage 2.5 — Intermediate Cognition Benchmark"
-        accent="cyan"
-        stage={snapshot.stage2_5}
-        running={running}
-        runLabel="Run Stage 2.5 Benchmark"
-        onRun={() => handleRun("stage2_5", onRunStage2_5)}
-        onVisuals={() => handleRun("stage2_5-visuals", () => onGenerateVisuals("stage2_5"))}
-        onExport={() => handleExport("stage2_5")}
-        onReport={() => handleReport("stage2_5")}
-        extraButtons={
-          <>
-            <ActionButton label="Open Intermediate Cognition Audit" onClick={() => handleReport("stage2_5")} />
-            <ActionButton label="Compare Stage 2.5 vs Outcome" onClick={handleCompareStage2_5} />
-          </>
-        }
-        metrics={stage2_5Metrics(snapshot.stage2_5)}
-      />
-
-      {snapshot.stage2_5_calibration ? (
-        <Stage2_5CalibrationSection
-          data={snapshot.stage2_5_calibration}
-          running={running}
-          onRun={() => handleRun("stage2_5-calibration", onRunStage2_5Calibration)}
-        />
-      ) : null}
-
-      <StageSection
-        title="Stage 2 — Reasoning Validation"
-        accent="sky"
-        stage={snapshot.stage2}
-        running={running}
-        runLabel="Run Stage 2 Benchmark"
-        onRun={() => handleRun("stage2", onRunStage2)}
-        onVisuals={() => handleRun("stage2-visuals", () => onGenerateVisuals("stage2"))}
-        onExport={() => handleExport("stage2")}
-        onReport={() => handleReport("stage2")}
-        extraButtons={
-          <>
-            <ActionButton label="Open Reasoning Replay" onClick={() => handleReport("stage2")} />
-            <ActionButton label="View Contradiction Analysis" onClick={() => handleReport("stage2")} />
-            <ActionButton label="Confidence Calibration Audit" onClick={() => handleReport("stage2")} />
-          </>
-        }
-        metrics={stage2Metrics(snapshot.stage2)}
-      />
-
-      <StageSection
-        title="Integrated — Full Cognition Chain"
-        accent="emerald"
-        stage={snapshot.integrated}
-        running={running}
-        runLabel="Run Integrated Benchmark"
-        onRun={() => handleRun("integrated", onRunIntegrated)}
-        onVisuals={() => handleRun("integrated-visuals", () => onGenerateVisuals("integrated"))}
-        onExport={() => handleExport("integrated")}
-        onReport={() => handleReport("integrated")}
-        extraButtons={
-          <>
-            <ActionButton label="Open Full Cognition Replay" onClick={() => handleReport("integrated")} />
-            <ActionButton label="View Root Cause Analysis" onClick={() => handleReport("integrated")} />
-            <ActionButton label="Open Contradiction Map" onClick={() => handleReport("integrated")} />
-            <ActionButton label="Confidence Drift Analysis" onClick={() => handleReport("integrated")} />
-          </>
-        }
-        metrics={integratedMetrics(snapshot.integrated)}
-      />
-
-      <StageSection
-        title="Conformance — Architecture Backtest"
-        accent="amber"
-        stage={snapshot.conformance}
-        running={running}
-        runLabel="Run Conformance Backtest"
-        onRun={() => handleRun("conformance", () => onRunConformance())}
-        onVisuals={() => handleRun("conformance-visuals", () => onGenerateVisuals("conformance"))}
-        onExport={() => handleExport("conformance")}
-        onReport={() => handleReport("conformance")}
-        extraButtons={
-          <>
-            <ActionButton label="Run Stage 1 Conformance" onClick={() => handleRun("conformance-s1", () => onRunConformance("stage1"))} />
-            <ActionButton label="Run Stage 2 Conformance" onClick={() => handleRun("conformance-s2", () => onRunConformance("stage2"))} />
-            <ActionButton label="Run Integrated Conformance" onClick={() => handleRun("conformance-int", () => onRunConformance("integrated"))} />
-            <ActionButton label="Open Drift Report" onClick={() => handleReport("conformance")} />
-            <ActionButton label="Open Calibration Audit" onClick={() => handleReport("conformance")} />
-          </>
-        }
-        metrics={conformanceMetrics(snapshot.conformance)}
-      />
-
-      <EvolutionSection
-        evolution={snapshot.evolution}
-        running={running}
-        onRun={() => handleRun("evolution", () => onRunEvolution(false))}
-        onRunFull={() => handleRun("evolution-full", () => onRunEvolution(true))}
-        onReport={handleEvolutionReport}
-      />
-
-      <section className="rounded border border-slate-800 bg-slate-950 p-4">
-        <h3 className="text-xs font-semibold text-slate-300">Cross-Stage</h3>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <ActionButton label="Compare Stage 1 vs Stage 2 vs Outcome" onClick={handleCompare} />
-        </div>
-      </section>
-
-      {error ? <p className="text-xs text-red-400">{error}</p> : null}
-
-      {comparison ? (
-        <section className="rounded border border-slate-800 bg-slate-950 p-4">
-          <h3 className="text-xs font-semibold text-slate-300">Stage 1 vs Stage 2 vs Integrated</h3>
-          <div className="mt-2 grid gap-2 md:grid-cols-3 text-[10px] font-mono text-slate-400">
-            <div>
-              <div className="text-violet-400">Stage 1 ({comparison.stage1_run_id ?? "—"})</div>
-              <div>Events: {comparison.stage1_summary?.event_count ?? 0}</div>
-              <div>Confirmed: {pct(comparison.stage1_summary?.confirmed_rate)}</div>
-              <div>Structure coherence: {pct(comparison.stage1_summary?.market_structure_coherence)}</div>
-            </div>
-            <div>
-              <div className="text-sky-400">Stage 2 ({comparison.stage2_run_id ?? "—"})</div>
-              <div>Events: {comparison.stage2_summary?.event_count ?? 0}</div>
-              <div>Reasoning accuracy: {pct(comparison.stage2_summary?.reasoning_accuracy)}</div>
-              <div>Narrative coherence: {pct(comparison.stage2_summary?.narrative_coherence)}</div>
-            </div>
-            <div>
-              <div className="text-emerald-400">Integrated ({comparison.integrated_run_id ?? "—"})</div>
-              <div>Chains: {comparison.integrated_summary?.event_count ?? 0}</div>
-              <div>Fully confirmed: {pct(comparison.integrated_summary?.fully_confirmed_rate)}</div>
-              <div>Drift health: {comparison.drift?.health ?? "—"}</div>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {stage2_5Comparison?.comparisons && stage2_5Comparison.comparisons.length > 0 ? (
-        <section className="rounded border border-slate-800 bg-slate-950 p-4">
-          <h3 className="text-xs font-semibold text-cyan-300">Stage 2.5 vs Outcome</h3>
-          <p className="mt-1 text-[10px] text-slate-500">
-            Narrative confirmation: {pct(stage2_5Comparison.narrative_confirmation_rate)} · run {stage2_5Comparison.run_id ?? "—"}
+    <div className="ops-surface flex min-h-0 flex-1 flex-col gap-5 p-4 sm:p-5">
+      {snapshot.status === "UNAVAILABLE" ? (
+        <section className="ops-card p-4">
+          <p className="text-sm font-medium text-ds-text-primary">{t("validation.unavailable")}</p>
+          <p className="mt-1 text-xs text-ds-text-secondary">
+            {snapshot.message ?? t("validation.notGenerated")}
           </p>
-          <div className="mt-2 space-y-1 text-[10px] font-mono text-slate-400">
-            {stage2_5Comparison.comparisons.slice(0, 12).map((row) => (
-              <div key={`${row.timestamp}-${row.intermediate_state}`} className="rounded border border-slate-900 px-2 py-1">
-                {String(row.timestamp ?? "—").slice(0, 19)} · {row.intermediate_state} · {row.verdict} · {row.observed_outcome}
-              </div>
-            ))}
-          </div>
+          <p className="mt-2 text-[11px] text-ds-text-tertiary">
+            {t("validation.domainsAvailable")}
+          </p>
         </section>
       ) : null}
 
-      {exportPaths.length > 0 ? (
-        <section className="rounded border border-slate-800 bg-slate-950 p-4">
-          <h3 className="text-xs font-semibold text-slate-300">Export Package</h3>
-          <ul className="mt-2 space-y-1 text-[10px] text-slate-500">
-            {exportPaths.map((path) => (
-              <li key={path} className="font-mono">{path}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      <header>
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-ds-text-tertiary">{t("validation.eyebrow")}</p>
+        <h1 className="font-ds-display text-[22px] font-semibold tracking-tight text-ds-text-primary sm:text-[26px]">
+          {t("validation.title")}
+        </h1>
+      </header>
 
-      {report?.markdown ? (
-        <section className="rounded border border-slate-800 bg-slate-950 p-4">
-          <h3 className="mb-2 text-xs font-semibold text-slate-300">
-            Forensic Report — {report.stage ?? "stage1"}
-          </h3>
-          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-[10px] text-slate-400">{report.markdown}</pre>
-        </section>
-      ) : null}
+      <ValidationExecutiveOverview kpis={executiveKpis} />
 
-      {evolutionReport?.markdown ? (
-        <section className="rounded border border-slate-800 bg-slate-950 p-4">
-          <h3 className="mb-2 text-xs font-semibold text-slate-300">Cognition Evolution Report</h3>
-          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-[10px] text-slate-400">{evolutionReport.markdown}</pre>
-        </section>
-      ) : null}
+      <ValidationDomainNav active={activeDomain} onChange={setActiveDomain} />
+
+      <div className="ops-card min-h-0 flex-1 p-4 sm:p-5">
+        <div className="space-y-4">
+          {activeDomain === "perception" ? (
+            <StageSection
+              title={t("validation.stages.stage1.title")}
+              accent="violet"
+              stage={snapshot.stage1}
+              running={running}
+              runLabel={t("validation.stages.stage1.run")}
+              onRun={() => handleRun("stage1", onRunStage1)}
+              onVisuals={() => handleRun("stage1-visuals", () => onGenerateVisuals("stage1"))}
+              onExport={() => handleExport("stage1")}
+              onReport={() => handleReport("stage1")}
+              metrics={stage1Metrics(snapshot.stage1, t)}
+            />
+          ) : null}
+
+          {activeDomain === "reasoning" ? (
+            <>
+              <StageSection
+                title={t("validation.stages.stage2.title")}
+                accent="sky"
+                stage={snapshot.stage2}
+                running={running}
+                runLabel={t("validation.stages.stage2.run")}
+                onRun={() => handleRun("stage2", onRunStage2)}
+                onVisuals={() => handleRun("stage2-visuals", () => onGenerateVisuals("stage2"))}
+                onExport={() => handleExport("stage2")}
+                onReport={() => handleReport("stage2")}
+                extraButtons={
+                  <>
+                    <ActionButton label={t("validation.actions.reasoningReplay")} onClick={() => handleReport("stage2")} />
+                    <ActionButton label={t("validation.actions.contradictionAnalysis")} onClick={() => handleReport("stage2")} />
+                    <ActionButton label={t("validation.actions.calibrationAudit")} onClick={() => handleReport("stage2")} />
+                  </>
+                }
+                metrics={stage2Metrics(snapshot.stage2, t)}
+              />
+              <StageSection
+                title={t("validation.stages.integrated.title")}
+                accent="emerald"
+                stage={snapshot.integrated}
+                running={running}
+                runLabel={t("validation.stages.integrated.run")}
+                onRun={() => handleRun("integrated", onRunIntegrated)}
+                onVisuals={() => handleRun("integrated-visuals", () => onGenerateVisuals("integrated"))}
+                onExport={() => handleExport("integrated")}
+                onReport={() => handleReport("integrated")}
+                extraButtons={
+                  <>
+                    <ActionButton label={t("validation.actions.fullReplay")} onClick={() => handleReport("integrated")} />
+                    <ActionButton label={t("validation.actions.rootCause")} onClick={() => handleReport("integrated")} />
+                    <ActionButton label={t("validation.actions.contradictionMap")} onClick={() => handleReport("integrated")} />
+                    <ActionButton label={t("validation.actions.confidenceDrift")} onClick={() => handleReport("integrated")} />
+                  </>
+                }
+                metrics={integratedMetrics(snapshot.integrated, t)}
+              />
+              <DomainSubsection title={t("validation.crossStageComparison")}>
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton label={t("validation.compareStage1Stage2")} onClick={handleCompare} />
+                </div>
+                {comparison ? (
+                  <div className="mt-3 grid gap-3 md:grid-cols-3">
+                    <ComparisonCard
+                      title={t("validation.comparison.stage1", { runId: comparison.stage1_run_id ?? "—" })}
+                      lines={[
+                        `${t("validation.metrics.events")}: ${comparison.stage1_summary?.event_count ?? 0}`,
+                        `${t("validation.metrics.confirmed")}: ${pct(comparison.stage1_summary?.confirmed_rate)}`,
+                        `${t("validation.metrics.structureCoherence")}: ${pct(comparison.stage1_summary?.market_structure_coherence)}`,
+                      ]}
+                    />
+                    <ComparisonCard
+                      title={t("validation.comparison.stage2", { runId: comparison.stage2_run_id ?? "—" })}
+                      lines={[
+                        `${t("validation.metrics.events")}: ${comparison.stage2_summary?.event_count ?? 0}`,
+                        `${t("validation.metrics.reasoningAccuracy")}: ${pct(comparison.stage2_summary?.reasoning_accuracy)}`,
+                        `${t("validation.metrics.narrativeCoherence")}: ${pct(comparison.stage2_summary?.narrative_coherence)}`,
+                      ]}
+                    />
+                    <ComparisonCard
+                      title={t("validation.comparison.integrated", { runId: comparison.integrated_run_id ?? "—" })}
+                      lines={[
+                        `${t("validation.metrics.chains")}: ${comparison.integrated_summary?.event_count ?? 0}`,
+                        `${t("validation.metrics.fullyConfirmed")}: ${pct(comparison.integrated_summary?.fully_confirmed_rate)}`,
+                        `${t("validation.comparison.driftHealth", { value: comparison.drift?.health ?? "—" })}`,
+                      ]}
+                    />
+                  </div>
+                ) : null}
+              </DomainSubsection>
+            </>
+          ) : null}
+
+          {activeDomain === "intermediate" ? (
+            <>
+              {snapshot.intermediate_cognition ? (
+                <IntermediateCognitionSection data={snapshot.intermediate_cognition} />
+              ) : (
+                <EmptyDomainNote message={t("validation.icNotPresent")} />
+              )}
+              <StageSection
+                title={t("validation.stages.stage2_5.title")}
+                accent="cyan"
+                stage={snapshot.stage2_5}
+                running={running}
+                runLabel={t("validation.stages.stage2_5.run")}
+                onRun={() => handleRun("stage2_5", onRunStage2_5)}
+                onVisuals={() => handleRun("stage2_5-visuals", () => onGenerateVisuals("stage2_5"))}
+                onExport={() => handleExport("stage2_5")}
+                onReport={() => handleReport("stage2_5")}
+                extraButtons={
+                  <>
+                    <ActionButton label={t("validation.actions.intermediateAudit")} onClick={() => handleReport("stage2_5")} />
+                    <ActionButton label={t("validation.actions.compareStage2_5")} onClick={handleCompareStage2_5} />
+                  </>
+                }
+                metrics={stage2_5Metrics(snapshot.stage2_5, t)}
+              />
+              {stage2_5Comparison?.comparisons && stage2_5Comparison.comparisons.length > 0 ? (
+                <DomainSubsection title={t("validation.stage2_5VsOutcome")}>
+                  <p className="text-[11px] text-ds-text-secondary">
+                    {t("validation.narrativeConfirmation", { value: pct(stage2_5Comparison.narrative_confirmation_rate) })} ·{" "}
+                    {t("validation.comparison.runId", { id: stage2_5Comparison.run_id ?? "—" })}
+                  </p>
+                  <div className="mt-3 max-h-[320px] space-y-1 overflow-y-auto pr-1">
+                    {stage2_5Comparison.comparisons.map((row) => (
+                      <div
+                        key={`${row.timestamp}-${row.intermediate_state}`}
+                        className="rounded-xl bg-ds-surface-secondary/80 px-3 py-2 text-[11px] text-ds-text-secondary"
+                      >
+                        {String(row.timestamp ?? "—").slice(0, 19)} · {row.intermediate_state} · {row.verdict} ·{" "}
+                        {row.observed_outcome}
+                      </div>
+                    ))}
+                  </div>
+                </DomainSubsection>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeDomain === "calibration" ? (
+            snapshot.stage2_5_calibration ? (
+              <Stage2_5CalibrationSection
+                data={snapshot.stage2_5_calibration}
+                running={running}
+                onRun={() => handleRun("stage2_5-calibration", onRunStage2_5Calibration)}
+              />
+            ) : (
+              <EmptyDomainNote message={t("validation.calibrationNotPresent")} />
+            )
+          ) : null}
+
+          {activeDomain === "evolution" ? (
+            <EvolutionSection
+              evolution={snapshot.evolution}
+              running={running}
+              onRun={() => handleRun("evolution", () => onRunEvolution(false))}
+              onRunFull={() => handleRun("evolution-full", () => onRunEvolution(true))}
+              onReport={handleEvolutionReport}
+            />
+          ) : null}
+
+          {activeDomain === "architecture" ? (
+            <StageSection
+              title={t("validation.stages.conformance.title")}
+              accent="amber"
+              stage={snapshot.conformance}
+              running={running}
+              runLabel={t("validation.stages.conformance.run")}
+              onRun={() => handleRun("conformance", () => onRunConformance())}
+              onVisuals={() => handleRun("conformance-visuals", () => onGenerateVisuals("conformance"))}
+              onExport={() => handleExport("conformance")}
+              onReport={() => handleReport("conformance")}
+              extraButtons={
+                <>
+                  <ActionButton label={t("validation.actions.conformanceS1")} onClick={() => handleRun("conformance-s1", () => onRunConformance("stage1"))} />
+                  <ActionButton label={t("validation.actions.conformanceS2")} onClick={() => handleRun("conformance-s2", () => onRunConformance("stage2"))} />
+                  <ActionButton label={t("validation.actions.conformanceIntegrated")} onClick={() => handleRun("conformance-int", () => onRunConformance("integrated"))} />
+                  <ActionButton label={t("validation.actions.driftReport")} onClick={() => handleReport("conformance")} />
+                  <ActionButton label={t("validation.actions.calibrationAuditShort")} onClick={() => handleReport("conformance")} />
+                </>
+              }
+              metrics={conformanceMetrics(snapshot.conformance, t)}
+            />
+          ) : null}
+
+          {error ? <p className="text-xs text-ds-status-error">{error}</p> : null}
+
+          {exportPaths.length > 0 ? (
+            <DomainSubsection title={t("validation.exportPackage")}>
+              <ul className="space-y-1 text-[11px] text-ds-text-tertiary">
+                {exportPaths.map((path) => (
+                  <li key={path} className="font-mono break-all">
+                    {path}
+                  </li>
+                ))}
+              </ul>
+            </DomainSubsection>
+          ) : null}
+
+          {report?.markdown ? (
+            <DomainSubsection title={t("validation.forensicReport", { stage: report.stage ?? "stage1" })}>
+              <pre className="panel-scroll max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-ds-surface-secondary/60 p-3 text-[11px] leading-relaxed text-ds-text-secondary">
+                {report.markdown}
+              </pre>
+            </DomainSubsection>
+          ) : null}
+
+          {evolutionReport?.markdown ? (
+            <DomainSubsection title={t("validation.evolutionReport")}>
+              <pre className="panel-scroll max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-ds-surface-secondary/60 p-3 text-[11px] leading-relaxed text-ds-text-secondary">
+                {evolutionReport.markdown}
+              </pre>
+            </DomainSubsection>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -317,6 +366,7 @@ function Stage2_5CalibrationSection({
   running: string | null;
   onRun: () => void;
 }) {
+  const { t } = useTranslation();
   const live = data.live_assessment ?? data.latest_run;
   const overall = live?.overall_status ?? data.latest_run?.overall_status ?? "—";
   const states = live?.states ?? data.latest_run?.states ?? {};
@@ -324,45 +374,44 @@ function Stage2_5CalibrationSection({
   const isRunning = running === "stage2_5-calibration";
 
   return (
-    <section className="rounded border border-slate-800 bg-slate-950 p-4">
-      <h2 className="text-sm font-semibold tracking-wide text-teal-300">STAGE 2.5 CALIBRATION</h2>
-      <p className="mt-1 text-xs text-slate-500">{data.purpose}</p>
+    <DomainSubsection title={t("validation.sections.calibration")}>
+      <p className="text-[12px] text-ds-text-secondary">{data.purpose}</p>
       {data.auto_run_due ? (
-        <p className="mt-1 text-[10px] text-amber-400">Weekly calibration cycle due</p>
+        <p className="mt-1 text-[11px] text-ds-status-warning">{t("validation.sections.weeklyDue")}</p>
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <ActionButton label={isRunning ? "Running…" : "Run Weekly Calibration"} onClick={onRun} disabled={Boolean(running)} />
+        <ActionButton label={isRunning ? t("validation.running") : t("validation.actions.runWeeklyCalibration")} onClick={onRun} disabled={Boolean(running)} />
       </div>
 
       <div className="mt-3 grid gap-3 md:grid-cols-4">
-        <Metric label="Overall status" value={overall} />
-        <Metric label="Precision trend" value={trends.precision?.trend ?? "—"} />
-        <Metric label="Confirmation trend" value={trends.confirmation_rate?.trend ?? "—"} />
-        <Metric label="False positive trend" value={trends.false_positive_rate?.trend ?? "—"} />
+        <Metric label={t("validation.metrics.overallStatus")} value={overall} />
+        <Metric label={t("validation.metrics.precisionTrend")} value={trends.precision?.trend ?? "—"} />
+        <Metric label={t("validation.metrics.confirmationTrend")} value={trends.confirmation_rate?.trend ?? "—"} />
+        <Metric label={t("validation.metrics.falsePositiveTrend")} value={trends.false_positive_rate?.trend ?? "—"} />
       </div>
 
-      <div className="mt-4 overflow-auto">
-        <table className="w-full text-left text-[10px] font-mono">
-          <thead className="text-slate-500">
+      <div className="mt-4 panel-scroll max-h-[280px] overflow-auto">
+        <table className="w-full text-left text-[11px]">
+          <thead className="sticky top-0 bg-ds-surface text-ds-text-tertiary">
             <tr>
-              <th className="pb-2 pr-2">State</th>
-              <th className="pb-2 pr-2">Status</th>
-              <th className="pb-2 pr-2">Precision</th>
-              <th className="pb-2 pr-2">Confirmation</th>
-              <th className="pb-2 pr-2">False pos.</th>
-              <th className="pb-2">Early warn.</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.state")}</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.overallStatus")}</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.precision")}</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.confirmation")}</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.falsePos")}</th>
+              <th className="pb-2 font-medium">{t("validation.metrics.earlyWarn")}</th>
             </tr>
           </thead>
           <tbody>
             {Object.entries(states).map(([state, block]) => (
-              <tr key={state} className="border-t border-slate-900 text-slate-400">
-                <td className="py-1.5 pr-2 text-slate-200">{state.replace("IC_", "")}</td>
-                <td className="py-1.5 pr-2">{block.status ?? "—"}</td>
-                <td className="py-1.5 pr-2">{pct(block.metrics?.precision)}</td>
-                <td className="py-1.5 pr-2">{pct(block.metrics?.confirmation_rate)}</td>
-                <td className="py-1.5 pr-2">{pct(block.metrics?.false_positive_rate)}</td>
-                <td className="py-1.5">{pct(block.metrics?.early_warning_rate)}</td>
+              <tr key={state} className="border-t border-ds-border/60 text-ds-text-secondary">
+                <td className="py-2 pr-2 text-ds-text-primary">{state.replace("IC_", "")}</td>
+                <td className="py-2 pr-2">{block.status ?? "—"}</td>
+                <td className="py-2 pr-2">{pct(block.metrics?.precision)}</td>
+                <td className="py-2 pr-2">{pct(block.metrics?.confirmation_rate)}</td>
+                <td className="py-2 pr-2">{pct(block.metrics?.false_positive_rate)}</td>
+                <td className="py-2">{pct(block.metrics?.early_warning_rate)}</td>
               </tr>
             ))}
           </tbody>
@@ -371,58 +420,58 @@ function Stage2_5CalibrationSection({
 
       {data.weekly_history && data.weekly_history.length > 0 ? (
         <div className="mt-4">
-          <h3 className="text-xs font-semibold text-slate-300">Weekly History</h3>
-          <div className="mt-2 space-y-1 text-[10px] font-mono text-slate-500">
+          <h3 className="text-[13px] font-semibold text-ds-text-primary">{t("validation.metrics.weeklyHistory")}</h3>
+          <div className="mt-2 space-y-1">
             {data.weekly_history.slice(-6).reverse().map((row) => (
-              <div key={row.run_id} className="rounded border border-slate-900 px-2 py-1">
+              <div key={row.run_id} className="rounded-xl bg-ds-surface-secondary/80 px-3 py-2 text-[11px] text-ds-text-secondary">
                 {String(row.generated_at ?? "—").slice(0, 19)} · {row.overall_status} · precision {pct(row.overall_metrics?.precision)}
               </div>
             ))}
           </div>
         </div>
       ) : null}
-    </section>
+    </DomainSubsection>
   );
 }
 
 function IntermediateCognitionSection({ data }: { data: IntermediateCognitionSnapshot }) {
+  const { t } = useTranslation();
   const rows = data.timeline.slice(-20).reverse();
 
   return (
-    <section className="rounded border border-slate-800 bg-slate-950 p-4">
-      <h2 className="text-sm font-semibold tracking-wide text-cyan-300">INTERMEDIATE COGNITION</h2>
-      <p className="mt-1 text-xs text-slate-500">{data.purpose}</p>
+    <DomainSubsection title={t("validation.sections.intermediateCognition")}>
+      <p className="text-[12px] text-ds-text-secondary">{data.purpose}</p>
       <div className="mt-3 grid gap-3 md:grid-cols-4">
-        <Metric label="Events (window)" value={String(data.event_count)} />
-        <Metric label="Latest state" value={data.latest?.intermediate_state ?? "—"} />
-        <Metric label="Stage 2 anchor" value={data.linked_stage2_anchor ?? "—"} />
-        <Metric label="Anchor time" value={String(data.anchor_timestamp ?? "—").slice(0, 16)} />
+        <Metric label={t("validation.metrics.eventsWindow")} value={String(data.event_count)} />
+        <Metric label={t("validation.metrics.latestState")} value={data.latest?.intermediate_state ?? "—"} />
+        <Metric label={t("validation.metrics.stage2Anchor")} value={data.linked_stage2_anchor ?? "—"} />
+        <Metric label={t("validation.metrics.anchorTime")} value={String(data.anchor_timestamp ?? "—").slice(0, 16)} />
       </div>
-      <div className="mt-3 overflow-auto">
-        <table className="w-full text-left text-[10px] font-mono">
-          <thead className="text-slate-500">
+      <div className="mt-4 panel-scroll max-h-[320px] overflow-auto">
+        <table className="w-full text-left text-[11px]">
+          <thead className="sticky top-0 bg-ds-surface text-ds-text-tertiary">
             <tr>
-              <th className="pb-2 pr-2">Timestamp</th>
-              <th className="pb-2 pr-2">State</th>
-              <th className="pb-2 pr-2">Confidence</th>
-              <th className="pb-2 pr-2">Severity</th>
-              <th className="pb-2">Stage 2 anchor</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.timestamp")}</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.state")}</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.confidence")}</th>
+              <th className="pb-2 pr-2 font-medium">{t("validation.metrics.severity")}</th>
+              <th className="pb-2 font-medium">{t("validation.metrics.stage2Anchor")}</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row, index) => (
-              <tr key={`${row.timestamp}-${index}`} className="border-t border-slate-900 text-slate-400">
-                <td className="py-1.5 pr-2">{String(row.timestamp ?? "—").slice(0, 19)}</td>
-                <td className="py-1.5 pr-2 text-slate-200">{row.intermediate_state ?? "—"}</td>
-                <td className="py-1.5 pr-2">{row.confidence != null ? row.confidence.toFixed(2) : "—"}</td>
-                <td className="py-1.5 pr-2">{row.severity ?? "—"}</td>
-                <td className="py-1.5">{row.anchor_stage2_state ?? "—"}</td>
+              <tr key={`${row.timestamp}-${index}`} className="border-t border-ds-border/60 text-ds-text-secondary">
+                <td className="py-2 pr-2">{String(row.timestamp ?? "—").slice(0, 19)}</td>
+                <td className="py-2 pr-2 text-ds-text-primary">{row.intermediate_state ?? "—"}</td>
+                <td className="py-2 pr-2">{row.confidence != null ? row.confidence.toFixed(2) : "—"}</td>
+                <td className="py-2 pr-2">{row.severity ?? "—"}</td>
+                <td className="py-2">{row.anchor_stage2_state ?? "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-    </section>
+    </DomainSubsection>
   );
 }
 
@@ -439,6 +488,7 @@ function EvolutionSection({
   onRunFull: () => void;
   onReport: () => void;
 }) {
+  const { t } = useTranslation();
   const trust = evolution.trust;
   const latest = evolution.latest_run;
   const comparisons = evolution.comparison?.comparisons ?? [];
@@ -448,51 +498,50 @@ function EvolutionSection({
   const isRunning = running?.startsWith("evolution") ?? false;
 
   return (
-    <section className="rounded border border-slate-800 bg-slate-950 p-4">
-      <h2 className="text-sm font-semibold tracking-wide text-rose-300">COGNITION EVOLUTION</h2>
-      <p className="mt-1 text-xs text-slate-500">{evolution.purpose}</p>
+    <DomainSubsection title={t("validation.sections.evolution")}>
+      <p className="text-[12px] text-ds-text-secondary">{evolution.purpose}</p>
       {evolution.auto_run_due ? (
-        <p className="mt-1 text-[10px] text-amber-400">Evolution memory cycle due (7-day interval)</p>
+        <p className="mt-1 text-[11px] text-ds-status-warning">{t("validation.sections.evolutionDue")}</p>
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <ActionButton label={isRunning ? "Running…" : "Update Evolution Memory"} onClick={onRun} disabled={Boolean(running)} />
-        <ActionButton label="Run Full Evolution Cycle" onClick={onRunFull} disabled={Boolean(running)} />
-        <ActionButton label="Open Evolution Report" onClick={onReport} />
+        <ActionButton label={isRunning ? t("validation.running") : t("validation.actions.updateEvolution")} onClick={onRun} disabled={Boolean(running)} />
+        <ActionButton label={t("validation.actions.runFullEvolution")} onClick={onRunFull} disabled={Boolean(running)} />
+        <ActionButton label={t("validation.actions.openEvolutionReport")} onClick={onReport} />
       </div>
 
       <div className="mt-3 grid gap-3 md:grid-cols-3">
-        <Metric label="Trust level" value={trust?.current_trust_level ?? "—"} />
-        <Metric label="Rolling stability" value={pct(trust?.stability_score)} />
-        <Metric label="History cycles" value={String(evolution.history_length ?? 0)} />
-        <Metric label="Regression verdict" value={regression?.verdict ?? "—"} />
-        <Metric label="Trustworthy share" value={pct(trust?.trustworthy_share)} />
-        <Metric label="Stable vs toxic ratio" value={trust?.stable_vs_toxic_ratio?.toFixed(2) ?? "—"} />
+        <Metric label={t("validation.metrics.trustLevel")} value={trust?.current_trust_level ?? "—"} />
+        <Metric label={t("validation.metrics.rollingStability")} value={pct(trust?.stability_score)} />
+        <Metric label={t("validation.metrics.historyCycles")} value={String(evolution.history_length ?? 0)} />
+        <Metric label={t("validation.metrics.regressionVerdict")} value={regression?.verdict ?? "—"} />
+        <Metric label={t("validation.metrics.trustworthyShare")} value={pct(trust?.trustworthy_share)} />
+        <Metric label={t("validation.metrics.stableVsToxic")} value={trust?.stable_vs_toxic_ratio?.toFixed(2) ?? "—"} />
       </div>
 
       {comparisons.length > 0 ? (
         <div className="mt-4">
-          <h3 className="text-xs font-semibold text-slate-300">Longitudinal Comparison</h3>
-          <div className="mt-2 grid gap-2 md:grid-cols-2 text-[10px] font-mono text-slate-400">
-            {comparisons.slice(0, 6).map((row) => (
-              <div key={row.metric ?? row.key ?? row.label} className="rounded border border-slate-900 px-2 py-1">
-                <div className="text-slate-300">{row.label}</div>
-                <div>Current: {pct(row.current)} · Δ prev: {row.delta_vs_previous != null ? `${(row.delta_vs_previous * 100).toFixed(1)}%` : "—"}</div>
-                <div>Trend: {row.trend ?? "—"}</div>
+          <h3 className="text-[13px] font-semibold text-ds-text-primary">{t("validation.sections.longitudinal")}</h3>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {comparisons.map((row) => (
+              <div key={row.metric ?? row.key ?? row.label} className="rounded-xl bg-ds-surface-secondary/80 px-3 py-2 text-[11px] text-ds-text-secondary">
+                <div className="font-medium text-ds-text-primary">{row.label}</div>
+                <div>{t("validation.metrics.currentDelta", { current: pct(row.current), delta: row.delta_vs_previous != null ? `${(row.delta_vs_previous * 100).toFixed(1)}%` : "—" })}</div>
+                <div>{t("validation.metrics.trend", { value: row.trend ?? "—" })}</div>
               </div>
             ))}
           </div>
         </div>
       ) : (
-        <p className="mt-2 text-xs text-slate-500">No longitudinal history yet — run evolution memory to establish baseline.</p>
+        <p className="mt-2 text-[12px] text-ds-text-tertiary">{t("validation.noEvolutionHistory")}</p>
       )}
 
       {Object.keys(trends).length > 0 ? (
         <div className="mt-4">
-          <h3 className="text-xs font-semibold text-slate-300">Evolution Trends</h3>
-          <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-mono text-slate-400">
+          <h3 className="text-[13px] font-semibold text-ds-text-primary">{t("validation.sections.trends")}</h3>
+          <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-ds-text-secondary">
             {Object.entries(trends).map(([alias, trend]) => (
-              <span key={alias} className="rounded border border-slate-900 px-2 py-1">
+              <span key={alias} className="rounded-ds-pill bg-ds-surface-secondary px-2.5 py-1">
                 {alias}: {trend}
               </span>
             ))}
@@ -502,10 +551,10 @@ function EvolutionSection({
 
       {regression?.events && regression.events.length > 0 ? (
         <div className="mt-4">
-          <h3 className="text-xs font-semibold text-slate-300">Regression Events</h3>
-          <ul className="mt-2 space-y-1 text-[10px] text-slate-500">
+          <h3 className="text-[13px] font-semibold text-ds-text-primary">{t("validation.sections.regressionEvents")}</h3>
+          <ul className="mt-2 space-y-1 text-[11px] text-ds-text-secondary">
             {regression.events.map((event, index) => (
-              <li key={`${event.type}-${index}`} className="font-mono">
+              <li key={`${event.type}-${index}`}>
                 [{event.type}] {event.note ?? "—"}
               </li>
             ))}
@@ -515,22 +564,20 @@ function EvolutionSection({
 
       {Object.keys(datasetTotals).length > 0 ? (
         <div className="mt-4">
-          <h3 className="text-xs font-semibold text-slate-300">ML Dataset Buckets</h3>
-          <div className="mt-2 grid gap-2 md:grid-cols-4 text-[10px] font-mono text-slate-400">
+          <h3 className="text-[13px] font-semibold text-ds-text-primary">{t("validation.sections.mlBuckets")}</h3>
+          <div className="mt-2 grid gap-2 md:grid-cols-4 text-[11px] text-ds-text-secondary">
             {Object.entries(datasetTotals).map(([bucket, count]) => (
-              <div key={bucket}>
-                <div className="text-slate-500">{bucket}</div>
-                <div>{count} records</div>
+              <div key={bucket} className="rounded-xl bg-ds-surface-secondary/60 px-3 py-2">
+                <div className="text-ds-text-tertiary">{bucket}</div>
+                <div className="font-medium text-ds-text-primary">{t("validation.sections.records", { count })}</div>
               </div>
             ))}
           </div>
         </div>
       ) : null}
 
-      {latest?.run_id ? (
-        <p className="mt-2 text-[10px] text-slate-500">Latest evolution run: {latest.run_id}</p>
-      ) : null}
-    </section>
+      {latest?.run_id ? <p className="mt-2 text-[11px] text-ds-text-tertiary">{t("validation.sections.latestEvolutionRun", { id: latest.run_id })}</p> : null}
+    </DomainSubsection>
   );
 }
 
@@ -557,18 +604,9 @@ function StageSection({
   onExport: () => void;
   onReport: () => void;
   metrics: { label: string; value: string }[];
-  extraButtons?: React.ReactNode;
+  extraButtons?: ReactNode;
 }) {
-  const accentClass =
-    accent === "violet"
-      ? "text-violet-300"
-      : accent === "sky"
-        ? "text-sky-300"
-        : accent === "emerald"
-          ? "text-emerald-300"
-          : accent === "cyan"
-            ? "text-cyan-300"
-            : "text-amber-300";
+  const { t } = useTranslation();
   const runPrefix =
     accent === "violet"
       ? "stage1"
@@ -582,97 +620,96 @@ function StageSection({
   const isRunning = running?.startsWith(runPrefix) ?? false;
 
   return (
-    <section className="rounded border border-slate-800 bg-slate-950 p-4">
-      <h2 className={`text-sm font-semibold tracking-wide ${accentClass}`}>{title}</h2>
-      <p className="mt-1 text-xs text-slate-500">{stage.purpose}</p>
+    <DomainSubsection title={title}>
+      <p className="text-[12px] text-ds-text-secondary">{stage.purpose}</p>
       {stage.auto_run_due ? (
-        <p className="mt-1 text-[10px] text-amber-400">Auto benchmark cycle due (default: 7 days)</p>
+        <p className="mt-1 text-[11px] text-ds-status-warning">{t("validation.autoBenchmarkDue")}</p>
       ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
-        <ActionButton label={isRunning ? "Running…" : runLabel} onClick={onRun} disabled={Boolean(running)} />
-        <ActionButton label="Generate Visual Replay" onClick={onVisuals} disabled={Boolean(running)} />
-        <ActionButton label="Export Cognition Report" onClick={onExport} disabled={Boolean(running)} />
-        <ActionButton label="Open Benchmark Report" onClick={onReport} />
+        <ActionButton label={isRunning ? t("validation.running") : runLabel} onClick={onRun} disabled={Boolean(running)} />
+        <ActionButton label={t("validation.generateVisualReplay")} onClick={onVisuals} disabled={Boolean(running)} />
+        <ActionButton label={t("validation.exportReport")} onClick={onExport} disabled={Boolean(running)} />
+        <ActionButton label={t("validation.openReport")} onClick={onReport} />
         {extraButtons}
       </div>
       {metrics.length > 0 ? (
-        <div className="mt-3 grid gap-3 md:grid-cols-3">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {metrics.map((metric) => (
             <Metric key={metric.label} label={metric.label} value={metric.value} />
           ))}
         </div>
       ) : (
-        <p className="mt-2 text-xs text-slate-500">No benchmark run yet.</p>
+        <p className="mt-2 text-[12px] text-ds-text-tertiary">{t("validation.noBenchmarkYet")}</p>
       )}
       {stage.latest_run?.visuals && stage.latest_run.visuals.length > 0 ? (
-        <p className="mt-2 text-[10px] text-slate-500">{stage.latest_run.visuals.length} chart(s) in benchmark/visuals/</p>
+        <p className="mt-2 text-[11px] text-ds-text-tertiary">{t("validation.chartsInBenchmark", { count: stage.latest_run.visuals.length })}</p>
       ) : null}
-    </section>
+    </DomainSubsection>
   );
 }
 
-function stage1Metrics(stage: ValidationStageSnapshot) {
+function stage1Metrics(stage: ValidationStageSnapshot, t: TFunction) {
   const summary = stage.latest_run?.summary;
   if (!summary) return [];
   return [
-    { label: "Events", value: String(summary.event_count) },
-    { label: "Confirmed", value: pct(summary.confirmed_rate) },
-    { label: "False positives", value: pct(summary.false_positive_rate) },
-    { label: "Climax confirmation", value: pct(summary.climax_confirmation_rate) },
-    { label: "Stopping quality", value: pct(summary.stopping_quality_rate) },
-    { label: "Structure coherence", value: pct(summary.market_structure_coherence) },
+    { label: t("validation.metrics.events"), value: String(summary.event_count) },
+    { label: t("validation.metrics.confirmed"), value: pct(summary.confirmed_rate) },
+    { label: t("validation.metrics.falsePositives"), value: pct(summary.false_positive_rate) },
+    { label: t("validation.metrics.climaxConfirmation"), value: pct(summary.climax_confirmation_rate) },
+    { label: t("validation.metrics.stoppingQuality"), value: pct(summary.stopping_quality_rate) },
+    { label: t("validation.metrics.structureCoherence"), value: pct(summary.market_structure_coherence) },
   ];
 }
 
-function stage2_5Metrics(stage: ValidationStageSnapshot) {
+function stage2_5Metrics(stage: ValidationStageSnapshot, t: TFunction) {
   const summary = stage.latest_run?.summary as Record<string, unknown> | undefined;
   if (!summary) return [];
   return [
-    { label: "Events", value: String(summary.event_count ?? 0) },
-    { label: "Precision", value: pct(summary.precision as number | undefined) },
-    { label: "Confirmation", value: pct(summary.confirmation_rate as number | undefined) },
-    { label: "False positives", value: pct(summary.false_positive_rate as number | undefined) },
-    { label: "Early warnings", value: pct(summary.early_warning_rate as number | undefined) },
-    { label: "Narrative confirm", value: pct(summary.narrative_confirmation_rate as number | undefined) },
+    { label: t("validation.metrics.events"), value: String(summary.event_count ?? 0) },
+    { label: t("validation.metrics.precision"), value: pct(summary.precision as number | undefined) },
+    { label: t("validation.metrics.confirmation"), value: pct(summary.confirmation_rate as number | undefined) },
+    { label: t("validation.metrics.falsePositives"), value: pct(summary.false_positive_rate as number | undefined) },
+    { label: t("validation.metrics.earlyWarnings"), value: pct(summary.early_warning_rate as number | undefined) },
+    { label: t("validation.metrics.narrativeConfirm"), value: pct(summary.narrative_confirmation_rate as number | undefined) },
   ];
 }
 
-function stage2Metrics(stage: ValidationStageSnapshot) {
+function stage2Metrics(stage: ValidationStageSnapshot, t: TFunction) {
   const summary = stage.latest_run?.summary;
   if (!summary) return [];
   return [
-    { label: "Events", value: String(summary.event_count) },
-    { label: "Reasoning accuracy", value: pct(summary.reasoning_accuracy) },
-    { label: "Calibration quality", value: pct(summary.probabilistic_calibration_quality) },
-    { label: "Narrative coherence", value: pct(summary.narrative_coherence) },
-    { label: "Contradiction rate", value: pct(summary.contradiction_frequency) },
-    { label: "Overconfident rate", value: pct(summary.overconfident_rate) },
+    { label: t("validation.metrics.events"), value: String(summary.event_count) },
+    { label: t("validation.metrics.reasoningAccuracy"), value: pct(summary.reasoning_accuracy) },
+    { label: t("validation.metrics.calibrationQuality"), value: pct(summary.probabilistic_calibration_quality) },
+    { label: t("validation.metrics.narrativeCoherence"), value: pct(summary.narrative_coherence) },
+    { label: t("validation.metrics.contradictionRate"), value: pct(summary.contradiction_frequency) },
+    { label: t("validation.metrics.overconfidentRate"), value: pct(summary.overconfident_rate) },
   ];
 }
 
-function integratedMetrics(stage: ValidationStageSnapshot) {
+function integratedMetrics(stage: ValidationStageSnapshot, t: TFunction) {
   const summary = stage.latest_run?.summary;
   if (!summary) return [];
   return [
-    { label: "Chains", value: String(summary.event_count) },
-    { label: "Fully confirmed", value: pct(summary.fully_confirmed_rate) },
-    { label: "Cross-stage alignment", value: pct(summary.cross_stage_alignment) },
-    { label: "Confidence realism", value: pct(summary.confidence_realism) },
-    { label: "Market confirmation", value: pct(summary.market_confirmation_rate) },
-    { label: "Cognition drift", value: pct(summary.cognition_drift_frequency) },
+    { label: t("validation.metrics.chains"), value: String(summary.event_count) },
+    { label: t("validation.metrics.fullyConfirmed"), value: pct(summary.fully_confirmed_rate) },
+    { label: t("validation.metrics.crossStageAlignment"), value: pct(summary.cross_stage_alignment) },
+    { label: t("validation.metrics.confidenceRealism"), value: pct(summary.confidence_realism) },
+    { label: t("validation.metrics.marketConfirmation"), value: pct(summary.market_confirmation_rate) },
+    { label: t("validation.metrics.cognitionDrift"), value: pct(summary.cognition_drift_frequency) },
   ];
 }
 
-function conformanceMetrics(stage: ValidationStageSnapshot) {
+function conformanceMetrics(stage: ValidationStageSnapshot, t: TFunction) {
   const summary = stage.latest_run?.summary;
   if (!summary) return [];
   return [
-    { label: "Metrics", value: String(summary.metric_count ?? summary.event_count ?? 0) },
-    { label: "Stability", value: pct(summary.cognition_stability_score) },
-    { label: "Ontology", value: pct(summary.ontology_integrity_score) },
-    { label: "Calibration", value: pct(summary.calibration_health_score) },
-    { label: "Drift severity", value: pct(summary.drift_severity_score) },
-    { label: "Failed", value: String(summary.failed_count ?? 0) },
+    { label: t("validation.metrics.metrics"), value: String(summary.metric_count ?? summary.event_count ?? 0) },
+    { label: t("validation.metrics.stability"), value: pct(summary.cognition_stability_score) },
+    { label: t("validation.metrics.ontology"), value: pct(summary.ontology_integrity_score) },
+    { label: t("validation.metrics.calibration"), value: pct(summary.calibration_health_score) },
+    { label: t("validation.metrics.driftSeverity"), value: pct(summary.drift_severity_score) },
+    { label: t("validation.metrics.failed"), value: String(summary.failed_count ?? 0) },
   ];
 }
 
@@ -695,7 +732,7 @@ function ActionButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="rounded border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+      className="rounded-ds-button border border-ds-border bg-ds-surface-secondary px-3 py-1.5 text-[12px] font-medium text-ds-text-primary transition-colors hover:bg-ds-surface disabled:opacity-50"
     >
       {label}
     </button>
@@ -704,9 +741,33 @@ function ActionButton({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded border border-slate-900 px-3 py-2 text-xs font-mono">
-      <div className="text-slate-500">{label}</div>
-      <div className="text-slate-200">{value}</div>
+    <div className="rounded-xl bg-ds-surface-secondary/70 px-3 py-2.5">
+      <div className="text-[11px] text-ds-text-tertiary">{label}</div>
+      <div className="mt-0.5 font-ds-display text-[15px] font-semibold tabular-nums text-ds-text-primary">{value}</div>
     </div>
   );
+}
+
+function DomainSubsection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-xl border border-ds-border/50 bg-ds-surface-secondary/30 p-4">
+      <h2 className="font-ds-display text-[15px] font-semibold text-ds-text-primary">{title}</h2>
+      <div className="mt-3">{children}</div>
+    </section>
+  );
+}
+
+function ComparisonCard({ title, lines }: { title: string; lines: string[] }) {
+  return (
+    <div className="rounded-xl bg-ds-surface-secondary/80 px-3 py-2.5 text-[11px] text-ds-text-secondary">
+      <div className="font-medium text-ds-text-primary">{title}</div>
+      {lines.map((line) => (
+        <div key={line}>{line}</div>
+      ))}
+    </div>
+  );
+}
+
+function EmptyDomainNote({ message }: { message: string }) {
+  return <p className="rounded-xl bg-ds-surface-secondary/50 px-4 py-6 text-[13px] text-ds-text-secondary">{message}</p>;
 }

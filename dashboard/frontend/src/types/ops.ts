@@ -18,6 +18,63 @@ export interface OpsSnapshot {
   alert_groups?: AlertGroups;
   manifest?: ManifestSummary;
   classification?: ClassificationSummary;
+  research_pipeline?: ResearchPipelineSnapshot;
+  runtime_failure_audit?: RuntimeFailureAuditSummary;
+  runtime_skipped_engine_audit?: RuntimeSkippedEngineAuditSummary;
+}
+
+
+export interface RuntimeFailureAuditRecord {
+  timestamp?: string | null;
+  engine?: string | null;
+  status?: string | null;
+  duration_s?: number | null;
+  error?: string | null;
+  exit_code?: number | null;
+  cycle?: number | null;
+}
+
+export interface RuntimeFailureAuditSummary {
+  exists: boolean;
+  path: string;
+  total_count: number;
+  recent_count: number;
+  active_count?: number;
+  historical_count?: number;
+  malformed_count?: number;
+  status?: string;
+  status_label?: string;
+  affects_health?: boolean;
+  latest?: RuntimeFailureAuditRecord | null;
+  recent: RuntimeFailureAuditRecord[];
+  active?: RuntimeFailureAuditRecord[];
+  error?: string;
+}
+
+export interface RuntimeSkippedDependencySnapshot {
+  resolved_path?: string | null;
+  exists?: boolean | null;
+  mtime?: number | null;
+  mtime_iso?: string | null;
+}
+
+export interface RuntimeSkippedEngineAuditRecord {
+  timestamp?: string | null;
+  engine?: string | null;
+  status?: string | null;
+  reason?: string | null;
+  dependencies?: Record<string, RuntimeSkippedDependencySnapshot>;
+}
+
+export interface RuntimeSkippedEngineAuditSummary {
+  exists: boolean;
+  path: string;
+  total_count: number;
+  recent_count: number;
+  malformed_count?: number;
+  latest?: RuntimeSkippedEngineAuditRecord | null;
+  recent: RuntimeSkippedEngineAuditRecord[];
+  error?: string;
 }
 
 export interface ManifestSummary {
@@ -148,7 +205,10 @@ export interface PipelineSummary {
   average_cycle_duration_s?: number;
   uptime_seconds: number;
   failed_engine_count: number;
-  timeout_count: number;
+  failed_required_engine_count?: number;
+  failed_optional_engine_count?: number;
+  timeout_count?: number;
+  timeout_optional_count?: number;
   stalled_engine_count: number;
   heartbeat_level: OpsLevel;
   active_state: string;
@@ -178,4 +238,144 @@ export interface OpsAlert {
   classification?: ComponentClass;
   ignored_by_health?: boolean;
   actionable?: boolean;
+}
+
+export interface ResearchPipelineSnapshot {
+  generated_at?: string;
+  pipeline: PipelineSyncStatus;
+  decision_layer: DecisionLayerSnapshot;
+  model_governance: ModelGovernanceSnapshot;
+  economic_validation: EconomicValidationSnapshot;
+  shadow_inference: ShadowInferenceSnapshot;
+  toxic_box: ToxicBoxSnapshot;
+  drift_monitoring?: DriftMonitoringSnapshot;
+  model_summary?: ModelSummarySnapshot;
+  ribbon_extensions?: RibbonItem[];
+}
+
+export interface PipelineSyncStatus {
+  step_count: number;
+  expected_step_count: number;
+  in_sync: boolean;
+  engines: string[];
+  last_cycle_duration_s?: number | null;
+  average_cycle_duration_s?: number | null;
+}
+
+export interface DecisionLayerSnapshot {
+  level: OpsLevel;
+  status_label?: string;
+  market_state?: string;
+  market_bias?: string;
+  rule_id?: string;
+  market_state_confidence?: number;
+  trend_confidence?: number;
+  trading_state?: string;
+  confidence_band?: string;
+  entry_eligible?: boolean;
+  execution_posture?: string;
+  snapshot_id?: string;
+  timestamp?: string;
+  rows?: Record<string, number>;
+}
+
+export interface ModelGovernanceSnapshot {
+  level: OpsLevel;
+  governance_status?: string;
+  active_model?: string;
+  candidate_model?: string;
+  shadow_model?: string;
+  last_retrain_at?: string;
+  last_validation_at?: string;
+  shadow_macro_f1?: number;
+  shadow_balanced_accuracy?: number;
+  shadow_loss_recall?: number;
+  shadow_rows?: number;
+  rollback_warning?: boolean;
+  rollback_reasons?: string | string[];
+  promotion_eligible?: boolean;
+  promotion_eligible_label?: string;
+  promotion_reasons?: string | string[];
+  monitoring_rows?: number;
+  last_promotion_at?: string;
+  active_model_registered_at?: string;
+  active_model_age_days?: number | null;
+  next_retrain_note?: string;
+}
+
+export interface EconomicValidationSnapshot {
+  level: OpsLevel;
+  status?: string;
+  rows: number;
+  validation_rows?: number;
+  complete_h4h: number;
+  pending_h4h?: number;
+  rolling_window?: number;
+  rolling_complete_count?: number;
+  win_pct?: number | null;
+  neutral_pct?: number | null;
+  loss_pct?: number | null;
+  win_count?: number;
+  neutral_count?: number;
+  loss_count?: number;
+  outcome_distribution?: Record<string, number>;
+  latest_completed_at?: string;
+}
+
+export interface ShadowInferenceSnapshot {
+  level: OpsLevel;
+  validation_status?: string;
+  rows: number;
+  evaluated_rows: number;
+  pending_rows?: number;
+  macro_f1?: number | null;
+  balanced_accuracy?: number | null;
+  loss_recall?: number | null;
+  last_validation_time?: string | null;
+  registry_id?: string;
+  model_version?: string;
+  prediction_distribution?: Record<string, number>;
+  latest_prediction_at?: string;
+}
+
+export interface ToxicBoxSnapshot {
+  level: OpsLevel;
+  severity_label?: string;
+  rows: number;
+  events: number;
+  events_last_7d?: number;
+  events_prior_7d?: number;
+  events_last_30d?: number;
+  events_t0_last_7d?: number;
+  events_t0_last_30d?: number;
+  toxic_rate_7d?: number;
+  toxic_rate_30d?: number;
+  monitoring_mode?: string;
+  hours_since_last_routed?: number | null;
+  trend?: string;
+  type_distribution?: Record<string, number>;
+  latest_timestamp?: string;
+}
+
+export interface DriftMonitoringSnapshot {
+  level: OpsLevel;
+  severity_label?: string;
+  psi?: number | null;
+  psi_feature_max?: number | null;
+  macro_f1?: number | null;
+  loss_recall?: number | null;
+  macro_f1_trend?: number | null;
+  loss_recall_trend?: number | null;
+  last_monitoring_at?: string | null;
+  monitoring_rows?: number;
+}
+
+export interface ModelSummarySnapshot {
+  level: OpsLevel;
+  status?: string;
+  model?: string;
+  shadow_macro_f1?: number | null;
+  loss_recall?: number | null;
+  psi?: number | null;
+  governance_status?: string;
 }

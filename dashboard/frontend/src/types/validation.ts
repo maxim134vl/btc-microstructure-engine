@@ -148,6 +148,8 @@ export interface Stage2_5CalibrationSnapshot {
 }
 
 export interface ValidationSnapshot {
+  status?: "OK" | "UNAVAILABLE";
+  message?: string;
   framework: string;
   stage1: ValidationStageSnapshot;
   stage2: ValidationStageSnapshot;

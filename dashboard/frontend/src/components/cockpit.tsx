@@ -3,22 +3,22 @@ import type { AlertSeverity, BehavioralNarrative, Descriptor, MtfAlignmentView, 
 import { descriptorColor } from "../lib/operatorView";
 
 const LEVEL_STYLES: Record<HealthLevel, string> = {
-  GREEN: "border-command-green/50 bg-command-green/10 text-command-green",
-  YELLOW: "border-command-yellow/50 bg-command-yellow/10 text-command-yellow",
-  RED: "border-command-red/50 bg-command-red/10 text-command-red",
+  GREEN: "border-command-green/50 bg-command-green/10 text-ds-status-healthy",
+  YELLOW: "border-command-yellow/50 bg-command-yellow/10 text-ds-status-warning",
+  RED: "border-command-red/50 bg-command-red/10 text-ds-status-error",
 };
 
 const ALERT_STYLES: Record<AlertSeverity, string> = {
-  INFO: "border-slate-600/50 text-slate-300",
-  WARNING: "border-command-yellow/50 text-command-yellow",
-  CRITICAL: "border-command-red/50 text-command-red",
+  INFO: "border-slate-600/50 text-ds-text-primary",
+  WARNING: "border-command-yellow/50 text-ds-status-warning",
+  CRITICAL: "border-command-red/50 text-ds-status-error",
 };
 
 export function RibbonChipView({ chip }: { chip: RibbonChip }) {
   return (
     <div className={`rounded border px-2.5 py-1.5 ${LEVEL_STYLES[chip.level]}`}>
       <div className="text-[9px] font-semibold tracking-[0.14em] opacity-80">{chip.label}</div>
-      <div className="mt-0.5 max-w-[11rem] truncate font-mono text-xs font-medium text-slate-100">{chip.value}</div>
+      <div className="mt-0.5 max-w-[11rem] truncate font-mono text-xs font-medium text-ds-text-primary">{chip.value}</div>
     </div>
   );
 }
@@ -37,8 +37,8 @@ export function StateBlock({
   const level = descriptor ? descriptorColor(descriptor) : "GREEN";
   return (
     <div className={`rounded border border-command-border bg-command-bg/40 p-3 ${large ? "col-span-full" : ""}`}>
-      <div className="text-[10px] uppercase tracking-[0.12em] text-command-muted">{label}</div>
-      <div className={`mt-1 font-mono font-semibold text-slate-100 ${large ? "text-xl leading-tight" : "text-sm"}`}>{value}</div>
+      <div className="text-[10px] uppercase tracking-[0.12em] text-ds-text-tertiary">{label}</div>
+      <div className={`mt-1 font-mono font-semibold text-ds-text-primary ${large ? "text-xl leading-tight" : "text-sm"}`}>{value}</div>
       {descriptor ? (
         <div className={`mt-2 inline-flex rounded border px-2 py-0.5 text-[10px] uppercase ${LEVEL_STYLES[level]}`}>{descriptor}</div>
       ) : null}
@@ -50,8 +50,8 @@ export function NarrativePanel({ narrative }: { narrative: BehavioralNarrative }
   return (
     <section className="rounded border border-command-border bg-command-panel">
       <header className="border-b border-command-border px-4 py-3">
-        <h2 className="text-base font-semibold tracking-wide text-slate-100">Current Behavioral State</h2>
-        <p className="text-[11px] text-command-muted">Operator interpretation layer</p>
+        <h2 className="text-base font-semibold tracking-wide text-ds-text-primary">Current Behavioral State</h2>
+        <p className="text-[11px] text-ds-text-tertiary">Operator interpretation layer</p>
       </header>
       <div className="grid gap-3 p-4 md:grid-cols-2">
         <StateBlock label="Regime" value={narrative.regime.replace(/_/g, " ")} large />
@@ -76,32 +76,32 @@ export function D1DominancePanel({ mtf }: { mtf: MtfAlignmentView }) {
       <header className="border-b border-command-border px-4 py-3">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-command-accent">D1 Structural Anchor</h2>
-            <p className="text-[11px] text-command-muted">Macro regime context · long-horizon bias</p>
+            <h2 className="text-lg font-semibold text-ds-accent">D1 Structural Anchor</h2>
+            <p className="text-[11px] text-ds-text-tertiary">Macro regime context · long-horizon bias</p>
           </div>
-          <span className="rounded border border-command-accent/40 px-2 py-1 text-[10px] uppercase text-command-accent">Primary TF</span>
+          <span className="rounded border border-command-accent/40 px-2 py-1 text-[10px] uppercase text-ds-accent">Primary TF</span>
         </div>
       </header>
       <div className="p-4">
         <div className="mb-4 rounded border border-command-accent/20 bg-command-bg/60 p-4">
-          <div className="text-[10px] uppercase tracking-wider text-command-muted">Structural bias</div>
-          <div className="mt-2 font-mono text-2xl font-semibold leading-tight text-slate-100">
+          <div className="text-[10px] uppercase tracking-wider text-ds-text-tertiary">Structural bias</div>
+          <div className="mt-2 font-mono text-2xl font-semibold leading-tight text-ds-text-primary">
             {d1?.auction_state?.replace(/_/g, " ") ?? "UNKNOWN"}
           </div>
-          <div className="mt-2 text-sm text-command-accent">{d1?.latest_event_type?.replace(/_/g, " ") ?? "NORMAL"}</div>
+          <div className="mt-2 text-sm text-ds-accent">{d1?.latest_event_type?.replace(/_/g, " ") ?? "NORMAL"}</div>
         </div>
         <div className="grid grid-cols-3 gap-2 text-center text-[10px] uppercase">
           <div className="rounded border border-command-border p-2">
-            <div className="text-command-muted">Agreement</div>
-            <div className="mt-1 font-mono text-sm text-slate-200">{mtf.agreement}</div>
+            <div className="text-ds-text-tertiary">Agreement</div>
+            <div className="mt-1 font-mono text-sm text-ds-text-primary">{mtf.agreement}</div>
           </div>
           <div className="rounded border border-command-border p-2">
-            <div className="text-command-muted">Propagation</div>
-            <div className="mt-1 font-mono text-sm text-slate-200">{mtf.propagation}</div>
+            <div className="text-ds-text-tertiary">Propagation</div>
+            <div className="mt-1 font-mono text-sm text-ds-text-primary">{mtf.propagation}</div>
           </div>
           <div className="rounded border border-command-border p-2">
-            <div className="text-command-muted">Divergence</div>
-            <div className="mt-1 font-mono text-sm text-slate-200">{mtf.divergence}</div>
+            <div className="text-ds-text-tertiary">Divergence</div>
+            <div className="mt-1 font-mono text-sm text-ds-text-primary">{mtf.divergence}</div>
           </div>
         </div>
       </div>
@@ -113,8 +113,8 @@ export function MtfHierarchyPanel({ mtf }: { mtf: MtfAlignmentView }) {
   return (
     <section className="rounded border border-command-border bg-command-panel">
       <header className="border-b border-command-border px-4 py-2">
-        <h2 className="text-sm font-semibold text-slate-100">MTF Alignment</h2>
-        <p className="text-[11px] text-command-muted">D1 → H4 → H1 → M30 → M15 · {mtf.alignmentStrength}</p>
+        <h2 className="text-sm font-semibold text-ds-text-primary">MTF Alignment</h2>
+        <p className="text-[11px] text-ds-text-tertiary">D1 → H4 → H1 → M30 → M15 · {mtf.alignmentStrength}</p>
       </header>
       <div className="space-y-2 p-3">
         {mtf.hierarchy.map((tf) => {
@@ -126,16 +126,16 @@ export function MtfHierarchyPanel({ mtf }: { mtf: MtfAlignmentView }) {
                 isD1 ? "border-command-accent/40 bg-command-accent/5" : "border-command-border/70 bg-command-bg/30"
               }`}
             >
-              <span className={`w-10 font-mono font-semibold ${isD1 ? "text-lg text-command-accent" : "text-xs text-command-muted"}`}>
+              <span className={`w-10 font-mono font-semibold ${isD1 ? "text-lg text-ds-accent" : "text-xs text-ds-text-tertiary"}`}>
                 {tf.timeframe}
               </span>
               <div className="min-w-0 flex-1">
-                <div className={`truncate font-mono ${isD1 ? "text-base text-slate-100" : "text-xs text-slate-300"}`}>
+                <div className={`truncate font-mono ${isD1 ? "text-base text-ds-text-primary" : "text-xs text-ds-text-primary"}`}>
                   {tf.latest_event_type?.replace(/_/g, " ") ?? "NORMAL"}
                 </div>
-                <div className="truncate text-[11px] text-command-muted">{tf.auction_state?.replace(/_/g, " ") ?? "—"}</div>
+                <div className="truncate text-[11px] text-ds-text-tertiary">{tf.auction_state?.replace(/_/g, " ") ?? "—"}</div>
               </div>
-              {!isD1 ? <span className="text-[10px] uppercase text-command-muted">tactical</span> : null}
+              {!isD1 ? <span className="text-[10px] uppercase text-ds-text-tertiary">tactical</span> : null}
             </div>
           );
         })}
@@ -148,17 +148,17 @@ export function AlertsPanel({ alerts }: { alerts: OperatorAlert[] }) {
   return (
     <section className="rounded border border-command-border bg-command-panel">
       <header className="border-b border-command-border px-4 py-2">
-        <h2 className="text-sm font-semibold text-slate-100">Operational Alerts</h2>
-        <p className="text-[11px] text-command-muted">{alerts.length} active</p>
+        <h2 className="text-sm font-semibold text-ds-text-primary">Operational Alerts</h2>
+        <p className="text-[11px] text-ds-text-tertiary">{alerts.length} active</p>
       </header>
       <div className="max-h-64 space-y-2 overflow-auto p-3">
         {alerts.length === 0 ? (
-          <div className="rounded border border-command-green/30 px-3 py-2 text-xs text-command-green">No active alerts — system nominal</div>
+          <div className="rounded border border-command-green/30 px-3 py-2 text-xs text-ds-status-healthy">No active alerts — system nominal</div>
         ) : (
           alerts.map((alert, index) => (
             <div key={index} className={`rounded border px-3 py-2 text-xs ${ALERT_STYLES[alert.severity]}`}>
               <div className="font-mono font-semibold">{alert.severity}</div>
-              <div className="mt-1 text-slate-200">{alert.message}</div>
+              <div className="mt-1 text-ds-text-primary">{alert.message}</div>
             </div>
           ))
         )}
@@ -172,11 +172,11 @@ export function CompactOntologyPanel({ events }: { events: Record<string, unknow
   return (
     <section className="rounded border border-command-border bg-command-panel">
       <header className="border-b border-command-border px-4 py-2">
-        <h2 className="text-sm font-semibold text-slate-100">Ontology Activity</h2>
+        <h2 className="text-sm font-semibold text-ds-text-primary">Ontology Activity</h2>
       </header>
       <div className="space-y-1 p-3">
         {recent.length === 0 ? (
-          <div className="text-xs text-command-muted">No recent dominant events</div>
+          <div className="text-xs text-ds-text-tertiary">No recent dominant events</div>
         ) : (
           recent.map((event, index) => (
             <div key={index} className="rounded border border-command-border/60 px-2 py-1.5 text-xs font-mono">
@@ -210,10 +210,10 @@ export function CollapsibleSection({
         className="flex w-full items-center justify-between border-b border-command-border px-4 py-3 text-left hover:bg-command-border/20"
       >
         <div>
-          <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
-          {subtitle ? <p className="text-[11px] text-command-muted">{subtitle}</p> : null}
+          <h2 className="text-sm font-semibold text-ds-text-primary">{title}</h2>
+          {subtitle ? <p className="text-[11px] text-ds-text-tertiary">{subtitle}</p> : null}
         </div>
-        <span className="text-xs text-command-muted">{open ? "▲ Hide" : "▼ Expand"}</span>
+        <span className="text-xs text-ds-text-tertiary">{open ? "▲ Hide" : "▼ Expand"}</span>
       </button>
       {open ? <div className="p-3">{children}</div> : null}
     </section>
@@ -234,8 +234,8 @@ export function PanelShell({
   return (
     <section className={`flex min-h-0 flex-col rounded border border-command-border bg-command-panel ${className}`}>
       <header className="border-b border-command-border px-3 py-2">
-        <h2 className="text-sm font-semibold tracking-wide text-slate-100">{title}</h2>
-        {subtitle ? <p className="text-[11px] text-command-muted">{subtitle}</p> : null}
+        <h2 className="text-sm font-semibold tracking-wide text-ds-text-primary">{title}</h2>
+        {subtitle ? <p className="text-[11px] text-ds-text-tertiary">{subtitle}</p> : null}
       </header>
       <div className="panel-scroll min-h-0 flex-1 overflow-auto p-3">{children}</div>
     </section>
@@ -245,8 +245,8 @@ export function PanelShell({
 export function MetricCell({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="rounded border border-command-border bg-command-bg/60 p-2">
-      <div className="text-[10px] uppercase tracking-wide text-command-muted">{label}</div>
-      <div className="mt-1 truncate font-mono text-xs text-slate-100">{value === null || value === undefined ? "—" : String(value)}</div>
+      <div className="text-[10px] uppercase tracking-wide text-ds-text-tertiary">{label}</div>
+      <div className="mt-1 truncate font-mono text-xs text-ds-text-primary">{value === null || value === undefined ? "—" : String(value)}</div>
     </div>
   );
 }

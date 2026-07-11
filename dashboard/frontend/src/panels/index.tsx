@@ -21,10 +21,10 @@ export function RuntimeOperationsPanel({ data }: { data?: LiveSnapshot["runtime_
         <MetricCell label="Uptime s" value={data.system.uptime_seconds} />
       </div>
 
-      <h3 className="mb-2 text-xs uppercase tracking-wide text-command-muted">Engine heartbeat map</h3>
+      <h3 className="mb-2 text-xs uppercase tracking-wide text-ds-text-tertiary">Engine heartbeat map</h3>
       <div className="overflow-auto">
         <table className="w-full text-left text-xs font-mono">
-          <thead className="text-command-muted">
+          <thead className="text-ds-text-tertiary">
             <tr>
               <th className="pb-2 pr-2">#</th>
               <th className="pb-2 pr-2">Engine</th>
@@ -36,7 +36,7 @@ export function RuntimeOperationsPanel({ data }: { data?: LiveSnapshot["runtime_
           <tbody>
             {data.engine_execution_order.map((row, index) => (
               <tr key={row.engine} className="border-t border-command-border/60">
-                <td className="py-1.5 pr-2 text-command-muted">{index + 1}</td>
+                <td className="py-1.5 pr-2 text-ds-text-tertiary">{index + 1}</td>
                 <td className="py-1.5 pr-2">{row.engine.replace("_engine_v1.py", "")}</td>
                 <td className="py-1.5 pr-2">
                   <HealthBadge level={row.status === "SUCCESS" ? "GREEN" : row.status === "FAILED" ? "RED" : "YELLOW"} label={row.status} />
@@ -49,12 +49,12 @@ export function RuntimeOperationsPanel({ data }: { data?: LiveSnapshot["runtime_
         </table>
       </div>
 
-      <h3 className="mb-2 mt-4 text-xs uppercase tracking-wide text-command-muted">Last parquet writes</h3>
+      <h3 className="mb-2 mt-4 text-xs uppercase tracking-wide text-ds-text-tertiary">Last parquet writes</h3>
       <div className="grid gap-2 md:grid-cols-2">
         {data.last_parquet_writes.map((item) => (
           <div key={item.file} className="rounded border border-command-border p-2 text-xs font-mono">
-            <div className="text-slate-200">{item.file}</div>
-            <div className="text-command-muted">rows {item.row_count} · age {item.age_seconds}s</div>
+            <div className="text-ds-text-primary">{item.file}</div>
+            <div className="text-ds-text-tertiary">rows {item.row_count} · age {item.age_seconds}s</div>
           </div>
         ))}
       </div>
@@ -73,13 +73,13 @@ export function OntologyPanelView({ data }: { data?: LiveSnapshot["ontology"] })
         ))}
       </div>
 
-      <h3 className="mb-2 text-xs uppercase text-command-muted">Event counts by timeframe</h3>
+      <h3 className="mb-2 text-xs uppercase text-ds-text-tertiary">Event counts by timeframe</h3>
       <div className="grid gap-2 md:grid-cols-5">
         {Object.entries(data.event_counts_by_timeframe).map(([tf, counts]) => (
           <div key={tf} className="rounded border border-command-border p-2 text-xs">
-            <div className="mb-1 font-semibold text-command-accent">{tf}</div>
+            <div className="mb-1 font-semibold text-ds-accent">{tf}</div>
             {Object.entries(counts).map(([event, count]) => (
-              <div key={event} className="flex justify-between font-mono text-command-muted">
+              <div key={event} className="flex justify-between font-mono text-ds-text-tertiary">
                 <span>{event}</span>
                 <span>{count}</span>
               </div>
@@ -88,7 +88,7 @@ export function OntologyPanelView({ data }: { data?: LiveSnapshot["ontology"] })
         ))}
       </div>
 
-      <h3 className="mb-2 mt-4 text-xs uppercase text-command-muted">M15 event feed</h3>
+      <h3 className="mb-2 mt-4 text-xs uppercase text-ds-text-tertiary">M15 event feed</h3>
       <div className="space-y-1 text-xs font-mono">
         {data.ontology_event_feed.slice(-12).reverse().map((event, index) => (
           <div key={index} className="rounded border border-command-border/70 px-2 py-1">
@@ -122,14 +122,14 @@ export function CognitionPanelView({ data }: { data?: LiveSnapshot["probabilisti
         ))}
       </div>
 
-      <h3 className="mb-2 text-xs uppercase text-command-muted">Conviction decomposition</h3>
+      <h3 className="mb-2 text-xs uppercase text-ds-text-tertiary">Conviction decomposition</h3>
       <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">
         {Object.entries(data.decomposition).map(([key, value]) => (
           <MetricCell key={key} label={key} value={value} />
         ))}
       </div>
 
-      <h3 className="mb-2 text-xs uppercase text-command-muted">Contradiction dynamics</h3>
+      <h3 className="mb-2 text-xs uppercase text-ds-text-tertiary">Contradiction dynamics</h3>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {Object.entries(data.contradiction).map(([key, value]) => (
           <MetricCell key={key} label={key} value={value} />
@@ -172,10 +172,10 @@ export function MtfPanelView({ data }: { data?: LiveSnapshot["mtf_cognition"] })
         {data.timeframe_states.map((tf) => (
           <div key={tf.timeframe} className="rounded border border-command-border p-2">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-command-accent">{tf.timeframe}</span>
+              <span className="font-semibold text-ds-accent">{tf.timeframe}</span>
               <HealthBadge level={tf.status === "LIVE" ? "GREEN" : "YELLOW"} label={tf.in_live_pipeline ? "PIPELINE" : "OBS"} />
             </div>
-            <div className="mt-2 space-y-1 text-xs font-mono text-command-muted">
+            <div className="mt-2 space-y-1 text-xs font-mono text-ds-text-tertiary">
               <div>{tf.latest_event_type ?? "NORMAL"}</div>
               <div>{tf.auction_state ?? "—"}</div>
             </div>
@@ -243,7 +243,7 @@ export function RegimePanelView({ data }: { data?: LiveSnapshot["regime"] }) {
       <div className="grid gap-1 text-xs font-mono md:grid-cols-2">
         {Object.entries(data.regime_probabilities).map(([regime, prob]) => (
           <div key={regime} className="flex items-center gap-2 rounded border border-command-border px-2 py-1">
-            <span className="w-40 truncate text-command-muted">{regime}</span>
+            <span className="w-40 truncate text-ds-text-tertiary">{regime}</span>
             <div className="h-2 flex-1 rounded bg-command-bg">
               <div className="h-2 rounded bg-command-accent/70" style={{ width: `${Math.min(100, prob * 100)}%` }} />
             </div>
@@ -263,16 +263,16 @@ export function HealthPanelView({ data }: { data?: LiveSnapshot["runtime_health"
       <div className="mb-3">
         <HealthBadge level={data.operational_health} label={`HEALTH ${data.operational_health}`} />
       </div>
-      <h3 className="mb-2 text-xs uppercase text-command-muted">Alerts</h3>
+      <h3 className="mb-2 text-xs uppercase text-ds-text-tertiary">Alerts</h3>
       <div className="mb-4 space-y-1 text-xs font-mono">
-        {data.alerts.length === 0 ? <div className="text-command-muted">No active alerts</div> : null}
+        {data.alerts.length === 0 ? <div className="text-ds-text-tertiary">No active alerts</div> : null}
         {data.alerts.slice(0, 20).map((alert, index) => (
           <div key={index} className="rounded border border-command-border px-2 py-1">
             [{alert.severity}] {alert.type} {alert.file ?? ""}
           </div>
         ))}
       </div>
-      <h3 className="mb-2 text-xs uppercase text-command-muted">Stale parquet ({data.stale_parquet.length})</h3>
+      <h3 className="mb-2 text-xs uppercase text-ds-text-tertiary">Stale parquet ({data.stale_parquet.length})</h3>
       <div className="space-y-1 text-xs font-mono">
         {data.stale_parquet.slice(0, 12).map((item) => (
           <div key={item.file}>{item.file} · age {item.age_seconds}s</div>
@@ -287,7 +287,7 @@ export function ReplayPanelView({ data }: { data?: LiveSnapshot["replay_audit"] 
 
   return (
     <PanelShell title="Replay & Audit" subtitle="Forensic exports & replay controls">
-      <h3 className="mb-2 text-xs uppercase text-command-muted">Replay controls</h3>
+      <h3 className="mb-2 text-xs uppercase text-ds-text-tertiary">Replay controls</h3>
       <div className="mb-4 space-y-1 text-xs font-mono">
         {Object.entries(data.replay_controls).map(([key, value]) => (
           <div key={key} className="rounded border border-command-border px-2 py-1">
@@ -295,7 +295,7 @@ export function ReplayPanelView({ data }: { data?: LiveSnapshot["replay_audit"] 
           </div>
         ))}
       </div>
-      <h3 className="mb-2 text-xs uppercase text-command-muted">Exports</h3>
+      <h3 className="mb-2 text-xs uppercase text-ds-text-tertiary">Exports</h3>
       <div className="space-y-1 text-xs font-mono">
         {data.replay_exports.map((item) => (
           <div key={item.path} className="rounded border border-command-border px-2 py-1">
@@ -314,12 +314,12 @@ export function TopologyPanelView({ data }: { data?: LiveSnapshot["topology"] })
     <PanelShell title="System Topology" subtitle="Pipeline graph & dependency integrity">
       <div className="mb-3">
         <HealthBadge level={data.orchestration_integrity} label={`TOPOLOGY ${data.orchestration_integrity}`} />
-        {data.dead_nodes.length ? <span className="ml-2 text-xs text-command-red">dead: {data.dead_nodes.join(", ")}</span> : null}
+        {data.dead_nodes.length ? <span className="ml-2 text-xs text-ds-status-error">dead: {data.dead_nodes.join(", ")}</span> : null}
       </div>
       <div className="space-y-1 text-xs font-mono">
         {data.pipeline_nodes.map((node) => (
           <div key={node.id} className="flex items-center gap-2 rounded border border-command-border px-2 py-1">
-            <span className="w-6 text-command-muted">{node.order}</span>
+            <span className="w-6 text-ds-text-tertiary">{node.order}</span>
             <HealthBadge level={node.status === "SUCCESS" ? "GREEN" : node.status === "FAILED" ? "RED" : "YELLOW"} label={node.status} />
             <span className="truncate">{node.id}</span>
           </div>

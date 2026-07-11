@@ -1,0 +1,5 @@
+# Keep the UI build context small — node_modules and dist are rebuilt in-image.
+node_modules
+dist
+*.tsbuildinfo
+.DS_Store

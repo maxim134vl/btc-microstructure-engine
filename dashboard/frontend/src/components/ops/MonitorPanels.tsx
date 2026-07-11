@@ -29,11 +29,11 @@ const DOT: Record<string, string> = {
 };
 
 const CLASS_BADGE: Record<ComponentClass, string> = {
-  REQUIRED: "border-emerald-800/60 bg-emerald-950/40 text-emerald-400",
-  OPTIONAL: "border-slate-700 bg-slate-900/60 text-slate-400",
-  LEGACY: "border-slate-800 bg-slate-950/80 text-slate-600",
-  RESEARCH: "border-violet-900/40 bg-violet-950/30 text-violet-400/80",
-  DORMANT: "border-slate-800 bg-slate-950/80 text-slate-600",
+  REQUIRED: "border-emerald-800/60 bg-emerald-950/40 text-ds-status-healthy",
+  OPTIONAL: "border-slate-700 bg-slate-900/60 text-ds-text-secondary",
+  LEGACY: "border-slate-800 bg-slate-950/80 text-ds-text-tertiary",
+  RESEARCH: "border-violet-900/40 bg-violet-950/30 text-ds-text-secondary/80",
+  DORMANT: "border-slate-800 bg-slate-950/80 text-ds-text-tertiary",
 };
 
 export function dot(level: OpsLevel | EngineStatus | string): string {
@@ -41,15 +41,15 @@ export function dot(level: OpsLevel | EngineStatus | string): string {
 }
 
 export function engineStatusClass(row: EngineRow): string {
-  if (row.ignored_by_health) return "text-slate-500";
+  if (row.ignored_by_health) return "text-ds-text-tertiary";
   return levelClass(row.status);
 }
 
 export function levelClass(level: OpsLevel | string): string {
-  if (level === "GREEN" || level === "HEALTHY") return "text-emerald-400";
-  if (level === "YELLOW" || level === "DEFERRED" || level === "DEGRADED") return "text-amber-400";
-  if (level === "GREY") return "text-slate-500";
-  return "text-red-400";
+  if (level === "GREEN" || level === "HEALTHY") return "text-ds-status-healthy";
+  if (level === "YELLOW" || level === "DEFERRED" || level === "DEGRADED") return "text-ds-status-warning";
+  if (level === "GREY") return "text-ds-text-tertiary";
+  return "text-ds-status-error";
 }
 
 export function ClassBadge({ classification }: { classification?: ComponentClass }) {
@@ -63,7 +63,7 @@ export function ClassBadge({ classification }: { classification?: ComponentClass
 
 export function IgnoredHint({ ignored }: { ignored?: boolean }) {
   if (!ignored) return null;
-  return <span className="ml-2 text-[9px] text-slate-600">ignored by health</span>;
+  return <span className="ml-2 text-[9px] text-ds-text-tertiary">ignored by health</span>;
 }
 
 export function OpsRibbon({ items }: { items: { key: string; label: string; level: OpsLevel; value?: string }[] }) {
@@ -72,8 +72,8 @@ export function OpsRibbon({ items }: { items: { key: string; label: string; leve
       {items.map((item) => (
         <div key={item.key} className="flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs font-mono">
           <span>{dot(item.level)}</span>
-          <span className="text-slate-400">{item.label}</span>
-          {item.value ? <span className="text-slate-200">{item.value}</span> : null}
+          <span className="text-ds-text-secondary">{item.label}</span>
+          {item.value ? <span className="text-ds-text-primary">{item.value}</span> : null}
         </div>
       ))}
     </div>
@@ -83,10 +83,10 @@ export function OpsRibbon({ items }: { items: { key: string; label: string; leve
 export function EngineTable({ engines }: { engines: EngineRow[] }) {
   return (
     <section className="rounded border border-slate-800 bg-slate-950">
-      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-slate-200">Engine Status</header>
+      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-ds-text-primary">Engine Status</header>
       <div className="overflow-auto">
         <table className="w-full text-left text-xs font-mono">
-          <thead className="text-slate-500">
+          <thead className="text-ds-text-tertiary">
             <tr>
               <th className="px-3 py-2">Engine</th>
               <th className="px-3 py-2">Status</th>
@@ -98,18 +98,20 @@ export function EngineTable({ engines }: { engines: EngineRow[] }) {
           <tbody>
             {engines.map((row) => (
               <tr key={row.engine} className={`border-t border-slate-900 ${row.ignored_by_health ? "opacity-70" : ""}`}>
-                <td className="px-3 py-2 text-slate-300">
+                <td className="px-3 py-2 text-ds-text-primary">
                   {row.short_name}
                   <ClassBadge classification={row.classification} />
                 </td>
                 <td className={`px-3 py-2 ${engineStatusClass(row)}`}>
                   {dot(row.status)} {row.status}
-                  {row.note ? <div className="text-[10px] text-slate-500">{row.note}</div> : null}
+                  {row.note ? <div className="text-[10px] text-ds-text-tertiary">{row.note}</div> : null}
                   <IgnoredHint ignored={row.ignored_by_health} />
                 </td>
-                <td className="px-3 py-2 text-slate-400">{row.last_run_ago ?? "—"}</td>
-                <td className="px-3 py-2 text-slate-400">{row.duration_s != null ? `${row.duration_s}s` : "—"}</td>
-                <td className="px-3 py-2 text-slate-500">{row.mode}</td>
+                <td className="px-3 py-2 text-ds-text-secondary">
+                  {row.last_run_ago && /^-/.test(row.last_run_ago.trim()) ? "just now" : row.last_run_ago ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-ds-text-secondary">{row.duration_s != null ? `${row.duration_s}s` : "—"}</td>
+                <td className="px-3 py-2 text-ds-text-tertiary">{row.mode}</td>
               </tr>
             ))}
           </tbody>
@@ -122,7 +124,7 @@ export function EngineTable({ engines }: { engines: EngineRow[] }) {
 function ParquetRowItem({ row }: { row: ParquetRow }) {
   const muted = row.ignored_by_health;
   return (
-    <div className={`rounded border px-2 py-1 ${muted ? "border-slate-900/80 text-slate-600" : "border-slate-900 text-slate-400"}`}>
+    <div className={`rounded border px-2 py-1 ${muted ? "border-slate-900/80 text-ds-text-tertiary" : "border-slate-900 text-ds-text-secondary"}`}>
       <div className="flex flex-wrap items-center gap-1">
         <span>{row.file}</span>
         <ClassBadge classification={row.classification} />
@@ -153,27 +155,27 @@ export function ParquetPanel({
   return (
     <section className="rounded border border-slate-800 bg-slate-950">
       <header className="border-b border-slate-800 px-4 py-2">
-        <div className="flex items-center justify-between text-sm font-semibold text-slate-200">
+        <div className="flex items-center justify-between text-sm font-semibold text-ds-text-primary">
           <span>
             Required Parquet {dot(parquet.summary_level)}
             <ClassBadge classification="REQUIRED" />
           </span>
-          <span className="text-xs font-normal text-slate-500">
+          <span className="text-xs font-normal text-ds-text-tertiary">
             {parquet.live_count} live · {parquet.stale_count} stale · {parquet.missing_count} missing
           </span>
         </div>
       </header>
       <div className="space-y-2 p-3 text-xs font-mono">
         {parquet.stale_count > 0 ? (
-          <button type="button" onClick={onToggle} className="w-full rounded border border-amber-900/50 bg-amber-950/30 px-3 py-2 text-left text-amber-300">
+          <button type="button" onClick={onToggle} className="w-full rounded border border-amber-900/50 bg-amber-950/30 px-3 py-2 text-left text-ds-status-warning">
             REQUIRED STALE ({parquet.stale_count}) {expanded ? "▲" : "▼"}
           </button>
         ) : (
-          <div className="text-emerald-400">All required parquets live</div>
+          <div className="text-ds-status-healthy">All required parquets live</div>
         )}
         {expanded && parquet.stale_files.map((p) => <ParquetRowItem key={p.file} row={p} />)}
         {parquet.missing_count > 0 ? (
-          <div className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-red-300">
+          <div className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-ds-status-error">
             REQUIRED MISSING ({parquet.missing_count})
           </div>
         ) : null}
@@ -183,7 +185,7 @@ export function ParquetPanel({
             <button
               type="button"
               onClick={() => setShowOptional(!showOptional)}
-              className="w-full rounded border border-slate-800 px-3 py-2 text-left text-slate-500"
+              className="w-full rounded border border-slate-800 px-3 py-2 text-left text-ds-text-tertiary"
             >
               Optional parquets ({optional.length}) {showOptional ? "▲" : "▼"}
             </button>
@@ -202,7 +204,7 @@ export function ParquetPanel({
             <button
               type="button"
               onClick={() => setShowArchived(!showArchived)}
-              className="w-full rounded border border-slate-900 px-3 py-2 text-left text-slate-600"
+              className="w-full rounded border border-slate-900 px-3 py-2 text-left text-ds-text-tertiary"
             >
               Legacy / research / dormant ({archived.length}) — ignored by health {showArchived ? "▲" : "▼"}
             </button>
@@ -224,7 +226,7 @@ function CollectorRowItem({ row }: { row: CollectorRow }) {
   const muted = row.ignored_by_health;
   return (
     <div className={`flex items-center justify-between px-4 py-2 text-xs font-mono ${muted ? "opacity-60" : ""}`}>
-      <span className="text-slate-300">
+      <span className="text-ds-text-primary">
         {row.name}
         <ClassBadge classification={row.classification} />
       </span>
@@ -245,7 +247,7 @@ export function CollectorsPanel({ collectors }: { collectors: CollectorSummary }
 
   return (
     <section className="rounded border border-slate-800 bg-slate-950">
-      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-slate-200">
+      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-ds-text-primary">
         Collectors {dot(collectors.level)}
         <ClassBadge classification="REQUIRED" />
       </header>
@@ -260,7 +262,7 @@ export function CollectorsPanel({ collectors }: { collectors: CollectorSummary }
           <button
             type="button"
             onClick={() => setShowOptional(!showOptional)}
-            className="w-full px-4 py-2 text-left text-xs text-slate-500"
+            className="w-full px-4 py-2 text-left text-xs text-ds-text-tertiary"
           >
             Optional collectors ({optional.length}) {showOptional ? "▲" : "▼"}
           </button>
@@ -288,7 +290,7 @@ export function CollectorsPanel({ collectors }: { collectors: CollectorSummary }
 export function PipelinePanel({ pipeline }: { pipeline: PipelineSummary }) {
   return (
     <section className="rounded border border-slate-800 bg-slate-950">
-      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-slate-200">
+      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-ds-text-primary">
         Pipeline Status {dot(pipeline.heartbeat_level)}
       </header>
       <div className="grid grid-cols-2 gap-2 p-3 text-xs font-mono md:grid-cols-3">
@@ -306,8 +308,8 @@ export function PipelinePanel({ pipeline }: { pipeline: PipelineSummary }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded border border-slate-900 px-2 py-1.5">
-      <div className="text-slate-500">{label}</div>
-      <div className="text-slate-200">{value}</div>
+      <div className="text-ds-text-tertiary">{label}</div>
+      <div className="text-ds-text-primary">{value}</div>
     </div>
   );
 }
@@ -316,7 +318,7 @@ export function FeedConfidencePanel({ feed }: { feed: FeedConfidence }) {
   const signals = [feed.ws, feed.write, feed.consume];
   return (
     <section className="rounded border border-slate-800 bg-slate-950">
-      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-slate-200">
+      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-ds-text-primary">
         Feed Confidence {dot(feed.overall)}
       </header>
       <div className="space-y-2 p-3 text-xs font-mono">
@@ -325,7 +327,7 @@ export function FeedConfidencePanel({ feed }: { feed: FeedConfidence }) {
             <div className={`${levelClass(signal.level)}`}>
               {signal.label} {dot(signal.level)}
             </div>
-            <div className="mt-1 text-slate-500">{signal.reason}</div>
+            <div className="mt-1 text-ds-text-tertiary">{signal.reason}</div>
           </div>
         ))}
       </div>
@@ -342,7 +344,7 @@ function formatUptime(seconds: number | null | undefined): string {
 export function StabilityPanel({ stability }: { stability: StabilitySummary }) {
   return (
     <section className="rounded border border-slate-800 bg-slate-950">
-      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-slate-200">Stability History</header>
+      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-ds-text-primary">Stability History</header>
       <div className="grid grid-cols-2 gap-2 p-3 text-xs font-mono">
         <Metric label="Runtime uptime" value={formatUptime(stability.runtime_uptime_s)} />
         <Metric label="Collector uptime" value={formatUptime(stability.collector_uptime_s)} />
@@ -363,17 +365,17 @@ export function HealthPanel({ health }: { health: HealthSummary }) {
         <div className={`text-lg font-semibold ${levelClass(level)}`}>
           RUNTIME HEALTH: {health.level} {dot(level)}
         </div>
-        <div className="mt-1 text-sm text-slate-300">{health.primary_reason}</div>
-        <div className="text-[10px] text-slate-600">Manifest-scored · REQUIRED components only</div>
+        <div className="mt-1 text-sm text-ds-text-primary">{health.primary_reason}</div>
+        <div className="text-[10px] text-ds-text-tertiary">Manifest-scored · REQUIRED components only</div>
       </header>
       <div className="space-y-2 p-4 text-sm">
-        <div className="text-slate-400">Reason:</div>
-        <ul className="list-inside list-disc space-y-1 text-slate-300">
+        <div className="text-ds-text-secondary">Reason:</div>
+        <ul className="list-inside list-disc space-y-1 text-ds-text-primary">
           {health.reasons.map((reason) => (
             <li key={reason}>{reason}</li>
           ))}
         </ul>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono text-slate-500">
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono text-ds-text-tertiary">
           <span>CPU {health.cpu_percent.toFixed(0)}%</span>
           <span>MEM {health.memory_percent.toFixed(0)}%</span>
           <span>DISK {health.disk_percent.toFixed(0)}%</span>
@@ -406,33 +408,33 @@ export function AlertsPanel({
 
   return (
     <section className="rounded border border-slate-800 bg-slate-950">
-      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-slate-200">
+      <header className="border-b border-slate-800 px-4 py-2 text-sm font-semibold text-ds-text-primary">
         Actionable Alerts ({actionable.length})
       </header>
       <div className="max-h-72 space-y-2 overflow-auto p-3">
         {actionable.length === 0 ? (
-          <div className="text-xs text-emerald-400">No actionable alerts</div>
+          <div className="text-xs text-ds-status-healthy">No actionable alerts</div>
         ) : (
           actionable.map((alert) => (
             <div key={alert.id} className="rounded border border-slate-900 px-3 py-2 text-xs">
               <div className="flex items-center justify-between">
-                <span className={alert.severity === "CRITICAL" ? "text-red-400" : "text-amber-400"}>{alert.severity}</span>
-                <button type="button" onClick={() => onAck(alert.id)} className="text-slate-500 hover:text-slate-300">
+                <span className={alert.severity === "CRITICAL" ? "text-ds-status-error" : "text-ds-status-warning"}>{alert.severity}</span>
+                <button type="button" onClick={() => onAck(alert.id)} className="text-ds-text-tertiary hover:text-ds-text-primary">
                   ack
                 </button>
               </div>
-              <div className="mt-1 text-slate-300">{alert.message}</div>
+              <div className="mt-1 text-ds-text-primary">{alert.message}</div>
             </div>
           ))
         )}
         {informational.length > 0 ? (
           <div className="pt-2">
-            <button type="button" onClick={() => setShowInfo(!showInfo)} className="w-full text-left text-[10px] text-slate-600">
+            <button type="button" onClick={() => setShowInfo(!showInfo)} className="w-full text-left text-[10px] text-ds-text-tertiary">
               Informational ({informational.length}) {showInfo ? "▲" : "▼"}
             </button>
             {showInfo
               ? informational.map((alert) => (
-                  <div key={alert.id} className="mt-1 rounded border border-slate-900/60 px-2 py-1 text-[10px] text-slate-600">
+                  <div key={alert.id} className="mt-1 rounded border border-slate-900/60 px-2 py-1 text-[10px] text-ds-text-tertiary">
                     {alert.message}
                   </div>
                 ))

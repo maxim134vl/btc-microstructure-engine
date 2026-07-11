@@ -3,21 +3,30 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 import psutil
 
 from app.config import CANONICAL_PIPELINE
-from app.services.parquet_service import df_records, file_snapshot, read_parquet
+from app.services.monitoring_kpis import (
+    count_latest_status,
+    count_optional_latest_status,
+    derive_pipeline_heartbeat,
+)
+from app.services.parquet_service import _read_parquet_tail_sync, df_records, file_snapshot, read_parquet
+from app.services.pipeline_audit import read_pipeline_cycle_count
+from app.services.research_pipeline_service import build_research_pipeline_snapshot
 from app.services.required_manifest import (
     is_required_collector,
     is_required_engine,
     is_required_parquet,
     manifest_summary,
+    required_parquet,
     threshold,
 )
 from app.services.runtime_classification import (
@@ -27,22 +36,24 @@ from app.services.runtime_classification import (
     classify_parquet,
 )
 from ops_stability import update_stability
-from runtime_config import LEGACY_LIVE_FEED_PARQUET, LIVE_MARKET_FEED_PARQUET
-from storage.path_registry import PARQUET_REGISTRY, repo_root, resolve_read
+from app.pipeline_metadata import engine_process_type, engine_short_name
+from storage.path_registry import (
+    LEGACY_LIVE_FEED_PATH,
+    PARQUET_REGISTRY,
+    CANONICAL_LIVE_FEED_PATH,
+    repo_root,
+    resolve_read,
+)
 
-IN_PROCESS_ENGINES = {
-    "auction_convergence_engine_v1.py",
-    "auction_reinforcement_engine_v1.py",
-    "probabilistic_auction_engine_v1.py",
-    "adaptive_meta_cognition_engine_v1.py",
-    "stage2_cognition_runtime_v1.py",
-    "state_transition_engine_v1.py",
-}
+LIVE_MARKET_FEED_PARQUET = CANONICAL_LIVE_FEED_PATH
+LEGACY_LIVE_FEED_PARQUET = LEGACY_LIVE_FEED_PATH
 
 PARQUET_LIVE_SECONDS = 900
 PARQUET_DELAYED_SECONDS = 3600
 COLLECTOR_LIVE_SECONDS = 120
 ENGINE_STALE_SECONDS = 900
+RUNTIME_FAILURE_AUDIT_RELATIVE = os.path.join("reports", "runtime_failure_audit.jsonl")
+RUNTIME_SKIPPED_AUDIT_RELATIVE = os.path.join("reports", "runtime_skipped_engine_audit.jsonl")
 
 COLLECTOR_SOURCES = {
     "binance_live_feed": LIVE_MARKET_FEED_PARQUET,
@@ -53,6 +64,73 @@ COLLECTOR_SOURCES = {
 }
 
 HEARTBEAT_DIR = repo_root() / "data" / "live" / "collector_heartbeats"
+FAILURE_AUDIT_ACTIVE_WINDOW_S = 30 * 60
+
+
+def _to_utc_epoch(value: Any) -> float | None:
+    """Parse timestamps to UTC epoch seconds.
+
+    Timezone-aware values are converted to UTC.
+    Naive values are assumed UTC unless that places them in the future
+    (common when writers emit local wall-clock without tz) — then reinterpret
+    as local timezone and convert to UTC.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        ts = pd.to_datetime(value)
+        if pd.isna(ts):
+            return None
+        if getattr(ts, "tzinfo", None) is not None and ts.tzinfo is not None:
+            return float(ts.tz_convert("UTC").timestamp())
+
+        as_utc = float(ts.tz_localize("UTC").timestamp())
+        now = time.time()
+        # >30s in the future as UTC ⇒ almost certainly local-naive wall clock.
+        if as_utc - now > 30:
+            local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+            return float(ts.tz_localize(local_tz).tz_convert("UTC").timestamp())
+        return as_utc
+    except Exception:
+        return None
+
+
+def _format_utc_iso(value: Any) -> str | None:
+    """Normalize any timestamp to timezone-aware UTC ISO-8601."""
+    epoch = _to_utc_epoch(value)
+    if epoch is None:
+        return None
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def _age_seconds(value: Any, *, now: float | None = None) -> float | None:
+    epoch = _to_utc_epoch(value)
+    if epoch is None:
+        return None
+    age = (now if now is not None else time.time()) - epoch
+    if age < 0:
+        return 0.0
+    return age
+_LITE_SNAPSHOT_TTL = 5.0
+_FULL_SNAPSHOT_TTL = 3.0
+_RESEARCH_CACHE_TTL = 30.0
+_OPS_SNAPSHOT_CACHE: dict[str, dict[str, Any]] = {}
+_RESEARCH_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+
+
+async def _research_pipeline_cached(*, force: bool = False) -> dict[str, Any]:
+    now = time.time()
+    cached = _RESEARCH_CACHE.get("data")
+    if not force and cached is not None and now - float(_RESEARCH_CACHE.get("ts") or 0) < _RESEARCH_CACHE_TTL:
+        return cached
+    data = await build_research_pipeline_snapshot()
+    _RESEARCH_CACHE["ts"] = now
+    _RESEARCH_CACHE["data"] = data
+    return data
 
 
 def _read_collector_heartbeat(name: str) -> dict[str, Any] | None:
@@ -74,10 +152,7 @@ def _heartbeat_age(name: str = "binance_live_feed") -> tuple[float | None, dict[
     hb = _read_collector_heartbeat(name)
     if not hb or not hb.get("timestamp"):
         return None, hb
-    try:
-        return time.time() - pd.to_datetime(hb["timestamp"]).timestamp(), hb
-    except Exception:
-        return None, hb
+    return _age_seconds(hb["timestamp"]), hb
 
 
 def _ws_alive(collector_name: str = "binance_live_feed") -> tuple[bool, dict[str, Any] | None]:
@@ -152,8 +227,6 @@ def _required_parquet_freshness(snap: dict[str, Any], *, ws_alive: bool) -> str:
     delayed_t = _threshold("parquet_delayed", PARQUET_DELAYED_SECONDS)
     if age <= live_t:
         return "LIVE"
-    if snap["file"] == "live_market_feed.parquet" and ws_alive:
-        return "DELAYED"
     if age <= delayed_t:
         return "DELAYED"
     return "STALE"
@@ -226,6 +299,8 @@ def _resolve_engine_status(
 def _ago_label(seconds: float | None) -> str:
     if seconds is None:
         return "—"
+    if seconds < 0:
+        seconds = 0.0
     if seconds < 60:
         return f"{int(seconds)}s ago"
     if seconds < 3600:
@@ -299,7 +374,7 @@ def _collector_status(name: str, path: str) -> dict[str, Any]:
             target = alt
 
         if target.endswith(".parquet"):
-            df = pd.read_parquet(target)
+            df = _read_parquet_tail_sync(target, tail=1, columns=["timestamp"])
             if len(df) == 0:
                 entry["status"] = "DISCONNECTED"
                 return _finalize_collector_entry(name, entry)
@@ -326,11 +401,11 @@ def _collector_status(name: str, path: str) -> dict[str, Any]:
 
         hb = _read_collector_heartbeat(name)
         if hb and hb.get("timestamp"):
-            hb_age = now - pd.to_datetime(hb["timestamp"]).timestamp()
+            hb_age = _age_seconds(hb["timestamp"], now=now)
             entry["heartbeat"] = hb
-            entry["heartbeat_age_seconds"] = round(hb_age, 1)
-            ws_fresh = hb_age <= _threshold("collector_ws", COLLECTOR_LIVE_SECONDS)
-            ws_unstable = hb_age <= _threshold("collector_ws", COLLECTOR_LIVE_SECONDS) * 5
+            entry["heartbeat_age_seconds"] = round(hb_age, 1) if hb_age is not None else None
+            ws_fresh = hb_age is not None and hb_age <= _threshold("collector_ws", COLLECTOR_LIVE_SECONDS)
+            ws_unstable = hb_age is not None and hb_age <= _threshold("collector_ws", COLLECTOR_LIVE_SECONDS) * 5
             if ws_fresh:
                 entry["status"] = "CONNECTED"
                 entry["level"] = "GREEN"
@@ -379,10 +454,7 @@ async def build_engine_status(
 
         age_seconds = None
         if timestamp:
-            try:
-                age_seconds = now - pd.to_datetime(timestamp).timestamp()
-            except Exception:
-                age_seconds = None
+            age_seconds = _age_seconds(timestamp, now=now)
 
         if raw_status == "UNKNOWN" or (age_seconds is not None and age_seconds > stale_cutoff):
             raw_status = "STALE"
@@ -395,15 +467,15 @@ async def build_engine_status(
         rows.append(
             {
                 "engine": engine,
-                "short_name": engine.replace("_engine_v1.py", "").replace("_memory_v1.py", ""),
+                "short_name": engine_short_name(engine),
                 "status": display_status,
                 "raw_status": raw_status,
                 "classification": component_class,
                 "affects_health": health_required and display_status in ("FAILED", "TIMEOUT", "STALLED"),
-                "last_run": timestamp,
+                "last_run": _format_utc_iso(timestamp) or timestamp,
                 "last_run_ago": _ago_label(age_seconds),
                 "duration_s": duration,
-                "mode": "in-process" if engine in IN_PROCESS_ENGINES else "subprocess",
+                "mode": engine_process_type(engine),
                 "note": note,
                 "ignored_by_health": ignored,
             }
@@ -412,11 +484,14 @@ async def build_engine_status(
     return rows
 
 
-async def build_parquet_status(*, ws_alive: bool | None = None) -> dict[str, Any]:
+async def build_parquet_status(*, ws_alive: bool | None = None, registry_scope: str = "full") -> dict[str, Any]:
     if ws_alive is None:
         ws_alive, _ = _ws_alive()
 
-    registry_names = sorted(set(PARQUET_REGISTRY.keys()) | {"runtime_engine_state.parquet"})
+    if registry_scope == "required":
+        registry_names = sorted(set(required_parquet()) | {"runtime_engine_state.parquet"})
+    else:
+        registry_names = sorted(set(PARQUET_REGISTRY.keys()) | {"runtime_engine_state.parquet"})
     snapshots = [file_snapshot(name) for name in registry_names]
     grouped: list[dict[str, Any]] = []
 
@@ -461,7 +536,9 @@ async def build_parquet_status(*, ws_alive: bool | None = None) -> dict[str, Any
 
     if req_missing:
         summary_level = "RED"
-    elif req_stale or req_delayed:
+    elif req_stale:
+        summary_level = "RED"
+    elif req_delayed:
         summary_level = "YELLOW"
     else:
         summary_level = "GREEN"
@@ -531,6 +608,13 @@ def build_feed_confidence(
             if ws_alive
             else "parquet write delayed"
         )
+    elif feed.get("freshness") == "STALE":
+        write_level = "RED"
+        write_reason = (
+            "parquet persistence stale — no writes beyond delayed threshold"
+            if ws_alive
+            else "parquet persistence stale — no recent writes"
+        )
     else:
         write_level, write_reason = "RED", "parquet persistence stale — no recent writes"
 
@@ -555,28 +639,192 @@ def build_feed_confidence(
     }
 
 
-async def build_pipeline_status() -> dict[str, Any]:
-    try:
-        from src.btc_ml.runtime import pipeline as runtime_pipeline
+def _normalize_failure_audit_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "timestamp": record.get("timestamp") or record.get("created_at"),
+        "engine": record.get("engine"),
+        "status": record.get("status") or "FAILED",
+        "duration_s": record.get("duration") or record.get("duration_s"),
+        "error": record.get("error") or record.get("exception") or record.get("message"),
+        "exit_code": record.get("exit_code"),
+        "cycle": record.get("cycle"),
+    }
 
-        cycle = getattr(runtime_pipeline, "_CYCLE_COUNT", 0)
-    except Exception:
-        cycle = 0
+
+def read_runtime_failure_audit(limit: int = 20, *, failed_engine_count: int = 0) -> dict[str, Any]:
+    """Read best-effort runtime failure sidecar without touching runtime state schema."""
+
+    path = repo_root() / RUNTIME_FAILURE_AUDIT_RELATIVE
+    empty = {
+        "exists": False,
+        "path": RUNTIME_FAILURE_AUDIT_RELATIVE,
+        "total_count": 0,
+        "recent_count": 0,
+        "active_count": 0,
+        "historical_count": 0,
+        "status": "NONE",
+        "status_label": "No failure audit",
+        "affects_health": False,
+        "latest": None,
+        "recent": [],
+        "active": [],
+    }
+    if not path.exists():
+        return empty
+
+    recent: deque[dict[str, Any]] = deque(maxlen=limit)
+    total = 0
+    malformed = 0
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                total += 1
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    malformed += 1
+                    continue
+                if isinstance(parsed, dict):
+                    recent.append(_normalize_failure_audit_record(parsed))
+    except OSError as exc:
+        return {
+            **empty,
+            "exists": True,
+            "total_count": total,
+            "recent_count": len(recent),
+            "latest": recent[-1] if recent else None,
+            "recent": list(recent),
+            "error": str(exc),
+        }
+
+    records = list(recent)
+    now = time.time()
+    active = []
+    for record in records:
+        age = _age_seconds(record.get("timestamp"), now=now)
+        if age is not None and age <= FAILURE_AUDIT_ACTIVE_WINDOW_S:
+            active.append(record)
+
+    has_active = bool(active) and failed_engine_count > 0
+    # Historical sidecar alone must not degrade live health when pipeline is clean.
+    if failed_engine_count == 0 or not active:
+        status = "RECOVERED" if total > 0 else "NONE"
+        status_label = "No active failures" if total > 0 else "No failure audit"
+        affects_health = False
+    else:
+        status = "ACTIVE"
+        status_label = f"{len(active)} active failure(s)"
+        affects_health = True
+
+    return {
+        "exists": True,
+        "path": RUNTIME_FAILURE_AUDIT_RELATIVE,
+        "total_count": total,
+        "recent_count": len(records),
+        "active_count": len(active),
+        "historical_count": max(0, total - len(active)),
+        "malformed_count": malformed,
+        "status": status,
+        "status_label": status_label,
+        "affects_health": affects_health,
+        "latest": records[-1] if records else None,
+        "recent": records,
+        "active": active,
+    }
+
+
+def _normalize_skipped_audit_record(record: dict[str, Any]) -> dict[str, Any]:
+    dependencies = record.get("dependencies")
+    if not isinstance(dependencies, dict):
+        dependencies = {}
+
+    return {
+        "timestamp": record.get("timestamp") or record.get("created_at"),
+        "engine": record.get("engine"),
+        "status": record.get("status") or "SKIPPED",
+        "reason": record.get("reason") or record.get("message") or "dependencies unchanged",
+        "dependencies": dependencies,
+    }
+
+
+def read_runtime_skipped_engine_audit(limit: int = 20) -> dict[str, Any]:
+    """Read best-effort runtime skipped-engine sidecar without touching runtime state schema."""
+
+    path = repo_root() / RUNTIME_SKIPPED_AUDIT_RELATIVE
+    if not path.exists():
+        return {
+            "exists": False,
+            "path": RUNTIME_SKIPPED_AUDIT_RELATIVE,
+            "total_count": 0,
+            "recent_count": 0,
+            "latest": None,
+            "recent": [],
+        }
+
+    recent: deque[dict[str, Any]] = deque(maxlen=limit)
+    total = 0
+    malformed = 0
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                total += 1
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    malformed += 1
+                    continue
+                if isinstance(parsed, dict):
+                    recent.append(_normalize_skipped_audit_record(parsed))
+    except OSError as exc:
+        return {
+            "exists": True,
+            "path": RUNTIME_SKIPPED_AUDIT_RELATIVE,
+            "total_count": total,
+            "recent_count": len(recent),
+            "latest": recent[-1] if recent else None,
+            "recent": list(recent),
+            "error": str(exc),
+        }
+
+    records = list(recent)
+    return {
+        "exists": True,
+        "path": RUNTIME_SKIPPED_AUDIT_RELATIVE,
+        "total_count": total,
+        "recent_count": len(records),
+        "malformed_count": malformed,
+        "latest": records[-1] if records else None,
+        "recent": records,
+    }
+
+
+async def build_pipeline_status() -> dict[str, Any]:
+    cycle = read_pipeline_cycle_count()
 
     loop_audit = os.path.join("reports", "runtime_loop", "pipeline_cycle_audit.jsonl")
     if cycle == 0 and os.path.exists(loop_audit):
         with open(loop_audit, encoding="utf-8") as handle:
             cycle = sum(1 for line in handle if line.strip())
 
-    engine_state = await read_parquet("runtime_engine_state.parquet", tail=500)
+    engine_state = await read_parquet("runtime_engine_state.parquet", tail=2000)
     records = df_records(engine_state)
 
-    recent_cycle_records = records[-17 * 3 :] if records else []
+    recent_cycle_records = records[-len(CANONICAL_PIPELINE) * 3 :] if records else []
     durations = [float(r["duration"]) for r in recent_cycle_records if r.get("duration") is not None]
     avg_duration = round(sum(durations) / len(durations), 2) if durations else None
 
-    failed = sum(1 for r in records[-100:] if r.get("status") == "FAILED")
-    timeouts = sum(1 for r in records[-100:] if r.get("status") == "TIMEOUT")
+    failed_required = count_latest_status(records, "FAILED", is_required=is_required_engine)
+    failed_optional = count_optional_latest_status(records, "FAILED", is_required=is_required_engine)
+    timeouts_required = count_latest_status(records, "TIMEOUT", is_required=is_required_engine)
+    timeouts_optional = count_optional_latest_status(records, "TIMEOUT", is_required=is_required_engine)
 
     blocking_chain_path = os.path.join("reports", "runtime_blocking", "runtime_blocking_chain.json")
     stalled = 0
@@ -585,20 +833,41 @@ async def build_pipeline_status() -> dict[str, Any]:
             chain = json.load(handle).get("blocking_chain", [])
             stalled = sum(1 for e in chain[-50:] if e.get("event") in ("TIMEOUT", "STALL_DETECTED"))
 
-    heartbeat = "GREEN"
-    if timeouts or failed:
-        heartbeat = "YELLOW" if failed + timeouts < 3 else "RED"
+    cycling = cycle > 0
+    heartbeat = derive_pipeline_heartbeat(
+        failed_health=failed_required,
+        timeout_health=timeouts_required,
+        cycling=cycling,
+        cycle_count=cycle,
+    )
 
     return {
         "current_cycle": cycle,
         "average_cycle_duration_s": avg_duration,
         "uptime_seconds": round(time.time() - psutil.boot_time(), 1),
-        "failed_engine_count": failed,
-        "timeout_count": timeouts,
+        "failed_engine_count": failed_required,
+        "failed_required_engine_count": failed_required,
+        "failed_optional_engine_count": failed_optional,
+        "timeout_count": timeouts_required,
+        "timeout_optional_count": timeouts_optional,
         "stalled_engine_count": stalled,
         "heartbeat_level": heartbeat,
         "active_state": "CYCLING" if cycle > 0 else "IDLE",
     }
+
+
+def _cognition_layer_health() -> dict[str, Any]:
+    try:
+        import sys
+
+        root = str(repo_root())
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from cognition_layer_health import assess_cognition_layers
+
+        return assess_cognition_layers()
+    except Exception as exc:
+        return {"warnings": [], "stale_count": 0, "layers": [], "error": str(exc)}
 
 
 def _build_health_summary(
@@ -689,6 +958,10 @@ def _build_health_summary(
     if pipeline.get("timeout_count", 0) in (1, 2):
         degraded_reasons.append(f"Recent engine timeout(s): {pipeline['timeout_count']}")
 
+    cognition_health = _cognition_layer_health()
+    for warning in cognition_health.get("warnings", []):
+        degraded_reasons.append(f"Cognition lag: {warning}")
+
     optional_offline = sum(1 for c in collectors["collectors"] if c.get("status") == "OPTIONAL_OFFLINE")
 
     mem = psutil.virtual_memory().percent
@@ -741,7 +1014,7 @@ def _build_operational_alerts(
 ) -> dict[str, list[dict[str, Any]]]:
     actionable: list[dict[str, Any]] = []
     informational: list[dict[str, Any]] = []
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     for engine in engines:
         if not is_required_engine(engine["engine"]) or engine.get("ignored_by_health"):
@@ -809,6 +1082,24 @@ def _build_operational_alerts(
                 "timestamp": now,
                 "actionable": False,
                 "ignored_by_health": True,
+            }
+        )
+
+    cognition_health = _cognition_layer_health()
+    for layer in cognition_health.get("layers", []):
+        if not layer.get("stale"):
+            continue
+        actionable.append(
+            {
+                "id": f"cognition_lag:{layer['file']}",
+                "severity": "WARNING",
+                "type": "cognition_lag",
+                "message": (
+                    f"Cognition layer stale vs live candle: {layer['file']} "
+                    f"(lag {layer.get('lag_hours')}h)"
+                ),
+                "timestamp": now,
+                "actionable": True,
             }
         )
 
@@ -895,27 +1186,60 @@ def _ribbon(
     ]
 
 
-async def build_ops_snapshot(ws_connected: bool = True) -> dict[str, Any]:
+async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -> dict[str, Any]:
+    cache_key = "lite" if lite else "full"
+    cache_ttl = _LITE_SNAPSHOT_TTL if lite else _FULL_SNAPSHOT_TTL
+    now = time.time()
+    cached = _OPS_SNAPSHOT_CACHE.get(cache_key)
+    if cached and now - cached["ts"] < cache_ttl:
+        return cached["data"]
+
     ws_alive, _ = _ws_alive()
     collectors = await build_collector_status()
-    parquet = await build_parquet_status(ws_alive=ws_alive)
+    parquet = await build_parquet_status(
+        ws_alive=ws_alive,
+        registry_scope="required" if lite else "full",
+    )
     feed_confidence = build_feed_confidence(collectors, parquet)
     engines = await build_engine_status(parquet=parquet, collectors=collectors)
     pipeline = await build_pipeline_status()
+    runtime_failure_audit = read_runtime_failure_audit(
+        failed_engine_count=int(pipeline.get("failed_engine_count") or 0),
+    )
+    runtime_skipped_engine_audit = read_runtime_skipped_engine_audit()
 
     feed = next((p for p in parquet.get("required", []) if p["file"] == "live_market_feed.parquet"), None)
     parquet_writing = feed is not None and feed.get("freshness") in ("LIVE", "DELAYED")
     pipeline_cycling = pipeline.get("active_state") == "CYCLING"
 
-    stability = update_stability(
-        pipeline_cycle=pipeline.get("current_cycle", 0),
-        pipeline_cycling=pipeline_cycling,
-        collector_connected=collectors["level"] == "GREEN",
-        ws_connected=ws_alive,
-        parquet_writing=parquet_writing,
-        pipeline_timeout_count=pipeline.get("timeout_count", 0),
-        pipeline_stalled=not pipeline_cycling and pipeline.get("current_cycle", 0) == 0,
-    )
+    stability_warning = None
+    try:
+        stability = update_stability(
+            pipeline_cycle=pipeline.get("current_cycle", 0),
+            pipeline_cycling=pipeline_cycling,
+            collector_connected=collectors["level"] == "GREEN",
+            ws_connected=ws_alive,
+            parquet_writing=parquet_writing,
+            pipeline_timeout_count=pipeline.get("timeout_count", 0),
+            pipeline_stalled=not pipeline_cycling and pipeline.get("current_cycle", 0) == 0,
+        )
+    except OSError as exc:
+        stability_warning = f"ops stability cache unavailable: {exc}"
+        stability = {
+            "available": False,
+            "error": stability_warning,
+            "runtime_uptime_s": None,
+            "collector_uptime_s": None,
+            "websocket_uptime_s": None,
+            "last_disconnect": None,
+            "last_timeout": None,
+            "last_pipeline_stall": None,
+            "restart_count": 0,
+            "disconnect_count": 0,
+            "last_write_at": None,
+            "last_consume_at": None,
+            "recent_events": [],
+        }
 
     health = _build_health_summary(engines, parquet, collectors, pipeline, feed_confidence, ws_connected)
     orchestration_active = _orchestration_active(pipeline, engines)
@@ -948,6 +1272,8 @@ async def build_ops_snapshot(ws_connected: bool = True) -> dict[str, Any]:
 
     critical_alerts = [a for a in alert_groups["actionable"] if a["severity"] == "CRITICAL"]
 
+    research_pipeline = await _research_pipeline_cached(force=False)
+
     ribbon = _ribbon(
         runtime_level=runtime_level,
         feed_level=feed_level,
@@ -957,19 +1283,24 @@ async def build_ops_snapshot(ws_connected: bool = True) -> dict[str, Any]:
         alert_count=len(critical_alerts),
         health_level="GREEN" if health["level"] == "HEALTHY" else ("YELLOW" if health["level"] == "DEGRADED" else "RED"),
     )
+    ribbon.extend(research_pipeline.get("ribbon_extensions", []))
 
-    return {
-        "generated_at": datetime.now().isoformat(),
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "ribbon": ribbon,
+        "research_pipeline": research_pipeline,
         "engines": engines,
         "parquet": parquet,
         "collectors": collectors,
         "pipeline": pipeline,
+        "runtime_failure_audit": runtime_failure_audit,
+        "runtime_skipped_engine_audit": runtime_skipped_engine_audit,
         "feed_confidence": feed_confidence,
         "stability": stability,
         "health": health,
         "alerts": alert_groups["all"],
         "alert_groups": alert_groups,
+        "warnings": [stability_warning] if stability_warning else [],
         "manifest": manifest_summary(),
         "classification": {
             "required_only_health": True,
@@ -977,4 +1308,7 @@ async def build_ops_snapshot(ws_connected: bool = True) -> dict[str, Any]:
             "optional_offline_count": health.get("optional_offline_count", 0),
             "deferred_engine_count": health.get("deferred_engine_count", 0),
         },
+        "snapshot_mode": "lite" if lite else "full",
     }
+    _OPS_SNAPSHOT_CACHE[cache_key] = {"ts": now, "data": payload}
+    return payload

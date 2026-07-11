@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { connectOps, fetchDebugSnapshot, fetchOpsSnapshot } from "./api/client";
+import { connectOps, softFetchOpsSnapshot } from "./api/client";
+import { buildOpsFallbackSnapshot } from "./api/opsFallbackSnapshot";
 import {
   compareStage1Stage2,
   compareStage2_5VsOutcome,
@@ -16,101 +17,75 @@ import {
   runStage2_5Calibration,
   runValidationBenchmark,
 } from "./api/validationClient";
-import {
-  AlertsPanel,
-  CollectorsPanel,
-  EngineTable,
-  FeedConfidencePanel,
-  HealthPanel,
-  OpsRibbon,
-  ParquetPanel,
-  PipelinePanel,
-  StabilityPanel,
-} from "./components/ops/MonitorPanels";
+import { RuntimeActivityPanel } from "./components/runtime-activity/RuntimeActivityPanel";
+import { OpsDashboard } from "./components/ops/OpsDashboard";
+import { StatusSimulatorProvider } from "./components/status";
+import { AppHeader } from "./components/shell/AppHeader";
+import { AppSidebar } from "./components/shell/AppSidebar";
+import { MainContent } from "./components/shell/MainContent";
+import { isFullBleedView, viewFromHash, type ViewMode } from "./components/shell/navConfig";
 import { ValidationPanel } from "./components/validation/ValidationPanel";
-import { VisualCognitionPanel } from "./components/visual-cognition/VisualCognitionPanel";
 import { useMonitorStore } from "./store/monitorStore";
 import type { ValidationSnapshot } from "./types/validation";
-
-type ViewMode = "ops" | "debug" | "validation" | "visual-cognition";
+import { useTranslation } from "./i18n";
 
 function OpsMonitor() {
-  const snapshot = useMonitorStore((s) => s.snapshot);
-  const setSnapshot = useMonitorStore((s) => s.setSnapshot);
-  const setConnected = useMonitorStore((s) => s.setConnected);
+  const snapshot = useMonitorStore((s) => s.snapshot) ?? buildOpsFallbackSnapshot();
+  const connected = useMonitorStore((s) => s.connected);
   const acknowledged = useMonitorStore((s) => s.acknowledgedAlerts);
   const acknowledgeAlert = useMonitorStore((s) => s.acknowledgeAlert);
   const expandedGroups = useMonitorStore((s) => s.expandedGroups);
   const toggleGroup = useMonitorStore((s) => s.toggleGroup);
 
-  useEffect(() => {
-    fetchOpsSnapshot().then(setSnapshot).catch(console.error);
-    const socket = connectOps(setSnapshot, setConnected);
-    return () => socket.close();
-  }, [setSnapshot, setConnected]);
-
-  if (!snapshot) {
-    return <div className="flex h-64 items-center justify-center text-sm text-slate-500">Connecting to runtime monitor…</div>;
-  }
-
   return (
-    <div className="space-y-3">
-      <OpsRibbon items={snapshot.ribbon} />
-      <div className="grid gap-3 xl:grid-cols-12">
-        <div className="xl:col-span-7">
-          <EngineTable engines={snapshot.engines} />
+    <div className="relative min-h-full">
+      {!connected ? (
+        <div className="pointer-events-none absolute right-5 top-3 z-10 rounded-ds-pill border border-ds-border/70 bg-ds-surface/90 px-2.5 py-1 text-[10px] font-medium text-ds-text-secondary shadow-ds-sm backdrop-blur">
+          Live feed optional / offline
         </div>
-        <div className="space-y-3 xl:col-span-5">
-          <HealthPanel health={snapshot.health} />
-          {snapshot.feed_confidence ? <FeedConfidencePanel feed={snapshot.feed_confidence} /> : null}
-          <PipelinePanel pipeline={snapshot.pipeline} />
-          {snapshot.stability ? <StabilityPanel stability={snapshot.stability} /> : null}
-        </div>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <ParquetPanel
-          parquet={snapshot.parquet}
-          expanded={expandedGroups.has("stale_parquet")}
-          onToggle={() => toggleGroup("stale_parquet")}
-        />
-        <CollectorsPanel collectors={snapshot.collectors} />
-        <AlertsPanel
-          alerts={snapshot.alerts}
-          alertGroups={snapshot.alert_groups}
-          acknowledged={acknowledged}
-          onAck={acknowledgeAlert}
-        />
-      </div>
+      ) : null}
+      <OpsDashboard
+        snapshot={snapshot}
+        expandedStaleParquet={expandedGroups.has("stale_parquet")}
+        onToggleStaleParquet={() => toggleGroup("stale_parquet")}
+        acknowledged={acknowledged}
+        onAckAlert={acknowledgeAlert}
+      />
     </div>
   );
 }
 
-function DebugView() {
-  const [payload, setPayload] = useState<string>("Loading debug telemetry…");
-
-  useEffect(() => {
-    fetchDebugSnapshot()
-      .then((data) => setPayload(JSON.stringify(data, null, 2)))
-      .catch((error) => setPayload(String(error)));
-  }, []);
-
-  return (
-    <div className="rounded border border-slate-800 bg-slate-950 p-3">
-      <div className="mb-2 text-sm font-semibold text-amber-400">Debug Mode — cognition/ontology telemetry (not operational)</div>
-      <pre className="panel-scroll max-h-[80vh] overflow-auto text-[10px] text-slate-400">{payload}</pre>
-    </div>
-  );
+function RuntimeActivityView() {
+  return <RuntimeActivityPanel />;
 }
 
 function ValidationView() {
   const [snapshot, setSnapshot] = useState<ValidationSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const { t } = useTranslation();
 
   useEffect(() => {
-    fetchValidationSnapshot().then(setSnapshot).catch(console.error);
+    setLoading(true);
+    fetchValidationSnapshot()
+      .then(setSnapshot)
+      .catch(() => setSnapshot(null))
+      .finally(() => setLoading(false));
   }, []);
 
+  if (loading) {
+    return (
+      <div className="ops-surface flex h-64 items-center justify-center text-[15px] text-ds-text-secondary">
+        {t("validation.loading")}
+      </div>
+    );
+  }
+
   if (!snapshot) {
-    return <div className="text-sm text-slate-500">Loading validation framework…</div>;
+    return (
+      <div className="ops-surface flex h-64 items-center justify-center p-6 text-[15px] text-ds-text-secondary">
+        {t("validation.loadFailed")}
+      </div>
+    );
   }
 
   return (
@@ -157,16 +132,65 @@ function ValidationView() {
   );
 }
 
-function viewFromHash(): ViewMode {
-  const hash = window.location.hash.replace("#", "");
-  if (hash === "debug") return "debug";
-  if (hash === "validation") return "validation";
-  if (hash === "visual-cognition") return "visual-cognition";
-  return "ops";
+function renderView(view: ViewMode) {
+  switch (view) {
+    case "validation":
+      return <ValidationView />;
+    case "debug":
+      return <RuntimeActivityView />;
+    default:
+      return <OpsMonitor />;
+  }
 }
 
 export default function App() {
   const [view, setView] = useState<ViewMode>(viewFromHash);
+  const [shellNavExpanded, setShellNavExpanded] = useState(true);
+  const setSnapshot = useMonitorStore((s) => s.setSnapshot);
+  const setConnected = useMonitorStore((s) => s.setConnected);
+
+  useEffect(() => {
+    // Keep fallback UI immediately; upgrade to live when dashboard API is up.
+    // Direct :8080 (CORS) — no Vite proxy, so offline does not spam ECONNREFUSED.
+    let cancelled = false;
+    let socket: ReturnType<typeof connectOps> | null = null;
+
+    const attachLiveSocket = () => {
+      if (cancelled || socket) return;
+      socket = connectOps(
+        (live) => {
+          if (cancelled) return;
+          setSnapshot(live);
+        },
+        (ok) => {
+          if (cancelled) return;
+          setConnected(ok);
+        },
+      );
+    };
+
+    const tryLive = () =>
+      softFetchOpsSnapshot().then((live) => {
+        if (cancelled || !live) return false;
+        setSnapshot(live);
+        setConnected(true);
+        attachLiveSocket();
+        return true;
+      });
+
+    void tryLive();
+
+    const poll = window.setInterval(() => {
+      if (cancelled || useMonitorStore.getState().connected) return;
+      void tryLive();
+    }, 8_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+      socket?.close();
+    };
+  }, [setSnapshot, setConnected]);
 
   useEffect(() => {
     const sync = () => setView(viewFromHash());
@@ -175,41 +199,30 @@ export default function App() {
     return () => window.removeEventListener("hashchange", sync);
   }, []);
 
-  return (
-    <div className="min-h-screen bg-[#05080d] text-slate-200">
-      <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-        <div>
-          <h1 className="text-sm font-semibold tracking-[0.18em] text-slate-100">BTC-ML RUNTIME OPERATIONS MONITOR</h1>
-          <p className="text-[11px] text-slate-500">
-            {view === "validation"
-              ? "Perception · reasoning · integrated cognition validation"
-              : view === "visual-cognition"
-                ? "Stage 1 MTF visual cognition replay"
-                : "Infrastructure supervision · NOC view"}
-          </p>
+  const content = (
+    <div className="flex h-screen flex-col overflow-hidden bg-ds-background font-ds-text text-ds-text-primary">
+      <div className="flex min-h-0 flex-1">
+        <AppSidebar
+          view={view}
+          expanded={shellNavExpanded}
+          onToggleExpanded={() => setShellNavExpanded((open) => !open)}
+        />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <AppHeader view={view} />
+          <MainContent
+            fullBleed={isFullBleedView(view)}
+            nativeSurface={
+              view === "ops" ||
+              view === "debug" ||
+              view === "validation"
+            }
+          >
+            {renderView(view)}
+          </MainContent>
         </div>
-        <nav className="flex gap-3 text-xs font-mono text-slate-500">
-          <a href="#" className={view === "ops" ? "text-slate-200" : "hover:text-slate-300"}>ops</a>
-          <a href="#validation" className={view === "validation" ? "text-violet-300" : "hover:text-slate-300"}>
-            validation
-          </a>
-          <a href="#visual-cognition" className={view === "visual-cognition" ? "text-emerald-300" : "hover:text-slate-300"}>
-            visual-cognition
-          </a>
-          <a href="#debug" className={view === "debug" ? "text-amber-300" : "hover:text-slate-300"}>debug</a>
-        </nav>
-      </header>
-      <main className="p-3">
-        {view === "validation" ? (
-          <ValidationView />
-        ) : view === "visual-cognition" ? (
-          <VisualCognitionPanel />
-        ) : view === "debug" ? (
-          <DebugView />
-        ) : (
-          <OpsMonitor />
-        )}
-      </main>
+      </div>
     </div>
   );
+
+  return import.meta.env.DEV ? <StatusSimulatorProvider>{content}</StatusSimulatorProvider> : content;
 }

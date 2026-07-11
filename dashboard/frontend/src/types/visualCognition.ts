@@ -1,3 +1,22 @@
+export type VolumeClassLabel =
+  | "BUYING_CLIMAX"
+  | "SELLING_CLIMAX"
+  | "STOPPING_VOLUME"
+  | "HIGH_VARIANCE_VOLUME"
+  | "ABSORPTION"
+  | "NORMAL"
+  | "LOW_SMALL";
+
+export type MajorVolumeMarker = "BUYING_CLIMAX" | "SELLING_CLIMAX" | "STOPPING_VOLUME";
+
+export interface VolumeLocationMarker {
+  event: VolumeClassLabel;
+  price: number;
+  zone_low?: number;
+  zone_high?: number;
+  color?: string;
+}
+
 export interface CognitionBar {
   timestamp: string;
   open: number;
@@ -6,12 +25,33 @@ export interface CognitionBar {
   close: number;
   volume?: number;
   delta?: number | null;
-  initiative?: string;
-  behaviors?: string[];
-  primary_behavior?: string;
-  overlay_color?: string;
-  continuation_health?: number;
-  confidence?: number;
+  volume_class_raw?: string | null;
+  volume_class_label?: VolumeClassLabel;
+  volume_bar_color?: string;
+  volume_events?: VolumeClassLabel[];
+  major_volume_markers?: MajorVolumeMarker[];
+  volume_location_markers?: VolumeLocationMarker[];
+  primary_volume_event?: MajorVolumeMarker | null;
+  marker_color?: string;
+}
+
+export interface VolumeMarker {
+  timestamp: string;
+  bar_index: number;
+  volume_events: VolumeClassLabel[];
+  primary_volume_event?: MajorVolumeMarker | null;
+  marker_color?: string;
+  high?: number;
+  low?: number;
+}
+
+export interface ChartAnnotation {
+  timestamp: string;
+  bar_index: number;
+  label: string;
+  source: "stage2" | "stage2_5" | "stage1_benchmark" | string;
+  color?: string;
+  verdict?: string;
 }
 
 export interface MtfSection {
@@ -19,7 +59,9 @@ export interface MtfSection {
   bars: CognitionBar[];
   bar_count?: number;
   cursor_index?: number | null;
-  event_markers?: CognitionBar[];
+  marker_counts?: Record<string, number>;
+  volume_markers?: VolumeMarker[];
+  annotations?: ChartAnnotation[];
   start?: string;
   end?: string;
 }
@@ -53,7 +95,6 @@ export interface TimelineEvent {
   verdict?: string;
   source?: string;
   behaviors?: string[];
-  source?: string;
   confidence?: number;
   severity?: string;
   anchor_stage2_state?: string;
@@ -78,19 +119,71 @@ export interface VisualCognitionSnapshot {
     summary?: string;
   };
   timeline?: TimelineEvent[];
-  ontology_transitions?: { timestamp: string; label: string; transition_state?: string }[];
   interpretation?: string | null;
   colors?: Record<string, string>;
-  meta?: Record<string, number>;
+  candle_colors?: Record<string, string>;
+  volume_class_colors?: Record<string, string>;
+  volume_event_colors?: Record<string, string>;
+  annotation_colors?: Record<string, string>;
+  meta?: Record<string, number | string | boolean | string[]>;
+  stage1_stats?: Record<string, { bar_count: number; marker_counts: Record<string, number> }>;
+  validation?: Record<string, unknown>;
 }
 
-export const COGNITION_COLOR_LEGEND: { key: string; label: string; color: string }[] = [
-  { key: "buyer_initiative", label: "Buyer initiative", color: "#22c55e" },
-  { key: "seller_initiative", label: "Seller initiative", color: "#ef4444" },
-  { key: "instability", label: "Instability / deterioration", color: "#eab308" },
-  { key: "absorption", label: "Absorption / compression", color: "#06b6d4" },
-  { key: "climax", label: "Climax / exhaustion", color: "#f97316" },
-  { key: "contradiction", label: "Contradiction / conflict", color: "#a855f7" },
-  { key: "neutral_rotation", label: "Neutral rotation", color: "#f8fafc" },
-  { key: "dormant", label: "Dormant / low confidence", color: "#64748b" },
+export const VOLUME_CLASS_LEGEND: { key: VolumeClassLabel; label: string; color: string }[] = [
+  { key: "SELLING_CLIMAX", label: "SELLING_CLIMAX", color: "#ef4444" },
+  { key: "BUYING_CLIMAX", label: "BUYING_CLIMAX", color: "#22c55e" },
+  { key: "STOPPING_VOLUME", label: "STOPPING_VOLUME", color: "#eab308" },
+  { key: "HIGH_VARIANCE_VOLUME", label: "HIGH_AVERAGE_VOLUME", color: "#06b6d4" },
+  { key: "ABSORPTION", label: "ABSORPTION", color: "#a855f7" },
 ];
+
+export const ANNOTATION_LEGEND: { key: string; label: string; color: string }[] = [
+  { key: "stage2", label: "Stage 2 narrative", color: "#38bdf8" },
+];
+
+/** @deprecated use VOLUME_CLASS_LEGEND */
+export const VOLUME_EVENT_LEGEND = VOLUME_CLASS_LEGEND;
+
+export interface Stage1EventMapBar {
+  bar_index: number;
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+  volume_class_raw?: string;
+}
+
+export interface Stage1EventMapEvent {
+  bar_index: number;
+  timestamp: string;
+  volume_class: string;
+  event: VolumeClassLabel;
+  price: number;
+  zone_low?: number;
+  zone_high?: number;
+  color?: string;
+}
+
+export interface Stage1EventMapSummary {
+  climax: number;
+  stopping: number;
+  high_average: number;
+  low_small?: number;
+  total_bars: number;
+  total_markers: number;
+  climax_buying?: number;
+  climax_selling?: number;
+}
+
+export interface Stage1EventMapSnapshot {
+  status: string;
+  message?: string;
+  bars: Stage1EventMapBar[];
+  events: Stage1EventMapEvent[];
+  summary: Stage1EventMapSummary;
+  start?: string;
+  end?: string;
+}

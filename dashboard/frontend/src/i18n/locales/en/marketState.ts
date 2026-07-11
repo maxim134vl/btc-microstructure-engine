@@ -1,0 +1,17 @@
+export const enMarketState = {
+  loading: "Loading market state chart…",
+  loadFailed: "Market state snapshot could not be loaded.",
+  empty: "No market feed bars available.",
+  subtitle: "Runtime decision visualizer — read-only",
+  readOnly: "Read-only",
+  inspectorTitle: "Current State",
+  inspectorHint: "Latest merged runtime memories",
+  currentMarketState: "Current Market State",
+  currentTradingState: "Current Trading State",
+  currentRuleId: "Current Rule ID",
+  entryEligible: "Entry Eligible",
+  trendConfidence: "Trend Confidence",
+  marketConfidence: "Market Confidence",
+  cognitionState: "Cognition State",
+  lastDecisionTimestamp: "Last Decision Timestamp",
+};

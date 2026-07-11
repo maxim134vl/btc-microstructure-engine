@@ -1,0 +1,17 @@
+export const enMarketIntelligence = {
+  currentMarketState: "Current market state",
+  observed: "Observed {{time}}",
+  recentEvolution: "Recent evolution",
+  evolutionSubtitle: "State transitions and signal changes",
+  noEvolution: "No cognition shifts in the current lookback window.",
+  marketContext: "Market context",
+  contextSubtitle: "Supporting evidence behind the read",
+  priceStructure: "Price structure",
+  priceStructureSubtitle: "Execution map at selected timeframe",
+  activeSignals: "Active cognitive signals",
+  activeSignalsSubtitle: "What the model is weighing right now",
+  confidenceHigh: "High",
+  confidenceModerate: "Moderate",
+  confidenceLow: "Low",
+  noContext: "No supporting context in this window.",
+};
