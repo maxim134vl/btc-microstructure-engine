@@ -356,6 +356,60 @@ function trendLabel(value?: number | null): string {
   return value.toFixed(4);
 }
 
+function metricScopeLabel(scope?: string | null): string {
+  if (scope === "historical") return "historical";
+  if (scope === "missing") return "missing";
+  if (scope === "unknown") return "unknown";
+  return "current";
+}
+
+function FreshnessBadge({ freshness }: { freshness?: { is_stale?: boolean; freshness_status?: string } | null }) {
+  if (!freshness?.is_stale) return null;
+  return (
+    <span className="ml-1 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ds-status-warning ring-1 ring-ds-status-warning/40">
+      STALE
+    </span>
+  );
+}
+
+function FreshnessMeta({
+  freshness,
+  warning,
+  refreshHint,
+  asOfOverride,
+}: {
+  freshness?: {
+    source_timestamp?: string | null;
+    source_mtime?: string | null;
+    age_days?: number | null;
+    is_stale?: boolean;
+    metrics_scope?: string;
+    warning?: string | null;
+    refresh_hint?: string | null;
+  } | null;
+  warning?: string | null;
+  refreshHint?: string | null;
+  asOfOverride?: string | null;
+}) {
+  if (!freshness && !warning) return null;
+  const asOf = asOfOverride || freshness?.source_timestamp || freshness?.source_mtime;
+  const ageDays = freshness?.age_days;
+  const warn = warning || freshness?.warning;
+  const hint = refreshHint || freshness?.refresh_hint;
+  return (
+    <div className="space-y-1 px-2.5 py-2 text-[11px] text-ds-text-secondary">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {asOf ? <span>as of {formatShortTime(String(asOf))}</span> : null}
+        {ageDays != null ? <span>age: {ageDays} days</span> : null}
+        {freshness?.metrics_scope ? <span>scope: {metricScopeLabel(freshness.metrics_scope)}</span> : null}
+        <FreshnessBadge freshness={freshness} />
+      </div>
+      {warn ? <p className="text-ds-status-warning">{warn}</p> : null}
+      {hint && freshness?.is_stale ? <p>{hint}</p> : null}
+    </div>
+  );
+}
+
 function ResearchPipelineSection({ research }: { research: ResearchPipelineSnapshot }) {
   const { t } = useTranslation();
   const {
@@ -370,16 +424,41 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
   } = research;
 
   const decisionStatus = resolveDecisionStatus(decision_layer.level, decision_layer.status_label);
-  const governanceStatus = resolveGovernanceStatus(model_governance.level, model_governance.governance_status);
+  const governanceStatus = resolveGovernanceStatus(
+    model_governance.level,
+    model_governance.governance_status,
+    model_governance.freshness,
+  );
   const economicStatus = resolveEconomicStatus(
     economic_validation.level,
-    (economic_validation as { status?: string }).status,
+    economic_validation.status,
+    economic_validation.freshness,
   );
-  const shadowStatus = resolveShadowStatus(shadow_inference.level, shadow_inference.validation_status);
-  const toxicStatus = resolveToxicStatus(toxic_box.level, toxic_box.severity_label);
-  const driftStatus = resolveDriftStatus(drift_monitoring?.level ?? "GREY", drift_monitoring?.severity_label);
-  const summaryStatus = resolveModelSummaryStatus(model_summary?.level ?? "GREY", model_summary?.status);
+  const shadowStatus = resolveShadowStatus(
+    shadow_inference.level,
+    shadow_inference.validation_status,
+    shadow_inference.freshness,
+  );
+  const toxicStatus = resolveToxicStatus(toxic_box.level, toxic_box.severity_label, toxic_box.freshness);
+  const driftStatus = resolveDriftStatus(
+    drift_monitoring?.level ?? "GREY",
+    drift_monitoring?.severity_label,
+    drift_monitoring?.freshness,
+  );
+  const summaryStatus = resolveModelSummaryStatus(
+    model_summary?.level ?? "GREY",
+    model_summary?.status,
+    model_summary?.freshness,
+    model_summary?.attention_reason ?? model_summary?.status_reason,
+  );
   const pipelineStatus = resolvePipelineSyncStatus(pipeline.in_sync ? "GREEN" : "RED");
+
+  const activeModelLabel =
+    model_governance.active_model_display ?? model_governance.active_model ?? "MISSING";
+  const candidateModelLabel =
+    model_governance.candidate_model_display ?? model_governance.candidate_model ?? "MISSING";
+  const summaryModelLabel = model_summary?.model && model_summary.model !== "—" ? model_summary.model : "MISSING";
+  const historicalPrefix = (scope?: string | null) => (scope === "historical" ? "historical · " : "");
 
   return (
     <section className="space-y-4">
@@ -389,15 +468,31 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
         <PanelCard title={t("ops.modelSummary")} icon={SymbolLayers} status={summaryStatus}>
           <ListRow
             icon={SymbolLayers}
-            primary={model_summary.model ?? "—"}
+            primary={summaryModelLabel}
             secondary={`${t("ops.executiveStatus")}: ${model_summary.status ?? "—"} · ${model_summary.governance_status ?? "—"}`}
             status={summaryStatus}
           />
           <ListRow
             icon={SymbolLayers}
-            primary={`${t("ops.shadowMacroF1")}: ${formatMetric(model_summary.shadow_macro_f1)}`}
+            primary={`${historicalPrefix(model_summary.metrics_scope)}${t("ops.shadowMacroF1")}: ${formatMetric(model_summary.shadow_macro_f1)}`}
             secondary={`${t("ops.lossRecall")}: ${formatMetric(model_summary.loss_recall)} · ${t("ops.psi")}: ${formatMetric(model_summary.psi, 3)}`}
-            status={shadowStatus}
+            status={summaryStatus}
+          />
+          <ListRow
+            icon={SymbolClock}
+            primary={`${t("ops.lastValidation")}: ${formatShortTime(model_summary.last_validation_at ?? model_governance.last_validation_at)}`}
+            secondary={
+              model_summary.attention_reason || model_summary.status_reason
+                ? String(model_summary.attention_reason || model_summary.status_reason)
+                : undefined
+            }
+            status={summaryStatus}
+          />
+          <FreshnessMeta
+            freshness={model_summary.freshness}
+            warning={model_summary.stale_warning}
+            refreshHint={model_summary.refresh_hint}
+            asOfOverride={model_summary.last_validation_at}
           />
         </PanelCard>
       ) : null}
@@ -427,7 +522,7 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
         <PanelCard title={t("ops.economicValidation")} icon={SymbolLayers} status={economicStatus}>
           <ListRow
             icon={SymbolLayers}
-            primary={`${t("ops.winPct")} ${formatPct(economic_validation.win_pct)} · ${t("ops.neutralPct")} ${formatPct(economic_validation.neutral_pct)} · ${t("ops.lossPct")} ${formatPct(economic_validation.loss_pct)}`}
+            primary={`${historicalPrefix(economic_validation.metrics_scope)}${t("ops.winPct")} ${formatPct(economic_validation.win_pct)} · ${t("ops.neutralPct")} ${formatPct(economic_validation.neutral_pct)} · ${t("ops.lossPct")} ${formatPct(economic_validation.loss_pct)}`}
             secondary={
               economic_validation.rolling_window
                 ? `Rolling ${economic_validation.rolling_complete_count ?? 0} / ${economic_validation.rolling_window}`
@@ -440,12 +535,17 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
             primary={`${t("ops.completeCount")}: ${economic_validation.complete_h4h} · ${t("ops.pendingCount")}: ${economic_validation.pending_h4h ?? 0}`}
             status={economicStatus}
           />
+          <FreshnessMeta
+            freshness={economic_validation.freshness}
+            warning={economic_validation.stale_warning}
+            refreshHint={economic_validation.refresh_hint}
+          />
         </PanelCard>
 
         <PanelCard title={t("ops.shadowModel")} icon={SymbolWaveform} status={shadowStatus}>
           <ListRow
             icon={SymbolWaveform}
-            primary={`${t("ops.shadowMacroF1")}: ${formatMetric(shadow_inference.macro_f1)} · ${t("ops.balancedAccuracy")}: ${formatMetric(shadow_inference.balanced_accuracy)}`}
+            primary={`${historicalPrefix(shadow_inference.metrics_scope)}${t("ops.shadowMacroF1")}: ${formatMetric(shadow_inference.macro_f1)} · ${t("ops.balancedAccuracy")}: ${formatMetric(shadow_inference.balanced_accuracy)}`}
             secondary={`${t("ops.lossRecall")}: ${formatMetric(shadow_inference.loss_recall)} · ${t("ops.shadowEvaluated")}: ${shadow_inference.evaluated_rows}`}
             status={shadowStatus}
           />
@@ -455,18 +555,24 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
             secondary={`${t("ops.lastValidation")}: ${formatShortTime(shadow_inference.last_validation_time)}`}
             status={shadowStatus}
           />
+          <FreshnessMeta
+            freshness={shadow_inference.freshness}
+            warning={shadow_inference.stale_warning}
+            refreshHint={shadow_inference.refresh_hint}
+            asOfOverride={shadow_inference.last_validation_time}
+          />
         </PanelCard>
 
         <PanelCard title={t("ops.governance")} icon={SymbolLayers} status={governanceStatus}>
           <ListRow
             icon={SymbolLayers}
             primary={`${t("ops.governanceStatus")}: ${model_governance.governance_status ?? "—"}`}
-            secondary={`${t("ops.activeModel")}: ${model_governance.active_model ?? "—"}`}
+            secondary={`${t("ops.activeModel")}: ${activeModelLabel}`}
             status={governanceStatus}
           />
           <ListRow
             icon={SymbolLayers}
-            primary={`${t("ops.candidateModel")}: ${model_governance.candidate_model ?? "—"}`}
+            primary={`${t("ops.candidateModel")}: ${candidateModelLabel}`}
             secondary={`${t("ops.promotionEligible")}: ${model_governance.promotion_eligible_label ?? (model_governance.promotion_eligible ? "YES" : "NO")}`}
             status={governanceStatus}
           />
@@ -476,13 +582,19 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
             secondary={`${t("ops.modelAge")}: ${model_governance.active_model_age_days != null ? `${model_governance.active_model_age_days}d` : "—"} · ${t("ops.nextRetrain")}: ${model_governance.next_retrain_note ?? "—"}`}
             status={governanceStatus}
           />
+          <FreshnessMeta
+            freshness={model_governance.freshness}
+            warning={model_governance.stale_warning}
+            refreshHint={model_governance.refresh_hint}
+            asOfOverride={model_governance.last_validation_at}
+          />
         </PanelCard>
 
         {drift_monitoring ? (
           <PanelCard title={t("ops.driftMonitoring")} icon={SymbolBell} status={driftStatus}>
             <ListRow
               icon={SymbolBell}
-              primary={`${t("ops.psi")}: ${formatMetric(drift_monitoring.psi, 3)}`}
+              primary={`${historicalPrefix(drift_monitoring.metrics_scope)}${t("ops.psi")}: ${formatMetric(drift_monitoring.psi, 3)}`}
               secondary={`${t("ops.macroF1Trend")}: ${trendLabel(drift_monitoring.macro_f1_trend)} · ${t("ops.lossRecallTrend")}: ${trendLabel(drift_monitoring.loss_recall_trend)}`}
               status={driftStatus}
             />
@@ -491,6 +603,12 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
               primary={`Macro F1: ${formatMetric(drift_monitoring.macro_f1)} · ${t("ops.lossRecall")}: ${formatMetric(drift_monitoring.loss_recall)}`}
               secondary={drift_monitoring.last_monitoring_at ? formatShortTime(String(drift_monitoring.last_monitoring_at)) : undefined}
               status={driftStatus}
+            />
+            <FreshnessMeta
+              freshness={drift_monitoring.freshness}
+              warning={drift_monitoring.stale_warning}
+              refreshHint={drift_monitoring.refresh_hint}
+              asOfOverride={drift_monitoring.last_monitoring_at}
             />
           </PanelCard>
         ) : null}
@@ -504,9 +622,14 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
           />
           <ListRow
             icon={SymbolBell}
-            primary={`${t("ops.toxicTrend")}: ${toxic_box.trend ?? "—"}`}
+            primary={`${t("ops.toxicTrend")}: ${toxic_box.trend ?? "—"} · ${toxic_box.severity_label ?? "—"}`}
             secondary={toxic_box.latest_timestamp ? formatShortTime(String(toxic_box.latest_timestamp)) : undefined}
             status={toxicStatus}
+          />
+          <FreshnessMeta
+            freshness={toxic_box.freshness}
+            warning={toxic_box.stale_warning}
+            refreshHint={toxic_box.refresh_hint}
           />
         </PanelCard>
 

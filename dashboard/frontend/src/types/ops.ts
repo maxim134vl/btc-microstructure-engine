@@ -279,11 +279,29 @@ export interface DecisionLayerSnapshot {
   rows?: Record<string, number>;
 }
 
+export interface ArtifactFreshness {
+  source_path?: string | null;
+  source_timestamp?: string | null;
+  source_mtime?: string | null;
+  age_hours?: number | null;
+  age_days?: number | null;
+  is_stale?: boolean;
+  stale_reason?: string | null;
+  max_age_hours?: number;
+  freshness_status?: string;
+  metrics_scope?: "current" | "historical" | "missing" | "unknown" | string;
+  warning?: string | null;
+  refresh_hint?: string | null;
+}
+
 export interface ModelGovernanceSnapshot {
   level: OpsLevel;
   governance_status?: string;
+  governance_status_base?: string;
   active_model?: string;
   candidate_model?: string;
+  active_model_display?: string;
+  candidate_model_display?: string;
   shadow_model?: string;
   last_retrain_at?: string;
   last_validation_at?: string;
@@ -301,6 +319,10 @@ export interface ModelGovernanceSnapshot {
   active_model_registered_at?: string;
   active_model_age_days?: number | null;
   next_retrain_note?: string;
+  freshness?: ArtifactFreshness;
+  metrics_scope?: string;
+  stale_warning?: string | null;
+  refresh_hint?: string | null;
 }
 
 export interface EconomicValidationSnapshot {
@@ -320,6 +342,10 @@ export interface EconomicValidationSnapshot {
   loss_count?: number;
   outcome_distribution?: Record<string, number>;
   latest_completed_at?: string;
+  freshness?: ArtifactFreshness;
+  metrics_scope?: string;
+  stale_warning?: string | null;
+  refresh_hint?: string | null;
 }
 
 export interface ShadowInferenceSnapshot {
@@ -336,6 +362,10 @@ export interface ShadowInferenceSnapshot {
   model_version?: string;
   prediction_distribution?: Record<string, number>;
   latest_prediction_at?: string;
+  freshness?: ArtifactFreshness;
+  metrics_scope?: string;
+  stale_warning?: string | null;
+  refresh_hint?: string | null;
 }
 
 export interface ToxicBoxSnapshot {
@@ -355,6 +385,10 @@ export interface ToxicBoxSnapshot {
   trend?: string;
   type_distribution?: Record<string, number>;
   latest_timestamp?: string;
+  freshness?: ArtifactFreshness;
+  metrics_scope?: string;
+  stale_warning?: string | null;
+  refresh_hint?: string | null;
 }
 
 export interface DriftMonitoringSnapshot {
@@ -368,6 +402,10 @@ export interface DriftMonitoringSnapshot {
   loss_recall_trend?: number | null;
   last_monitoring_at?: string | null;
   monitoring_rows?: number;
+  freshness?: ArtifactFreshness;
+  metrics_scope?: string;
+  stale_warning?: string | null;
+  refresh_hint?: string | null;
 }
 
 export interface ModelSummarySnapshot {
@@ -378,4 +416,13 @@ export interface ModelSummarySnapshot {
   loss_recall?: number | null;
   psi?: number | null;
   governance_status?: string;
+  last_validation_at?: string | null;
+  attention_reason?: string | null;
+  status_reason?: string | null;
+  freshness_status?: string;
+  freshness?: ArtifactFreshness;
+  metrics_scope?: string;
+  stale_warning?: string | null;
+  refresh_hint?: string | null;
+  promotion_eligible_label?: string;
 }

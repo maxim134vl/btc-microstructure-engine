@@ -9,7 +9,27 @@ from typing import Any
 
 import pandas as pd
 
-from app.config import CANONICAL_PIPELINE, EXPECTED_CANONICAL_PIPELINE_STEP_COUNT, REPO_ROOT
+from app.config import (
+    CANONICAL_PIPELINE,
+    EXPECTED_CANONICAL_PIPELINE_STEP_COUNT,
+    MODEL_DRIFT_MAX_AGE_HOURS,
+    MODEL_ECONOMIC_MAX_AGE_HOURS,
+    MODEL_GOVERNANCE_MAX_AGE_HOURS,
+    MODEL_TOXIC_MAX_AGE_HOURS,
+    MODEL_VALIDATION_MAX_AGE_HOURS,
+    REPO_ROOT,
+)
+from app.services.dashboard_paths import resolve_dashboard_read
+from app.services.model_summary_freshness import (
+    STATUS_STALE_DRIFT,
+    STATUS_STALE_GOVERNANCE,
+    STATUS_STALE_VALIDATION,
+    apply_stale_block,
+    apply_stale_governance,
+    build_freshness,
+    build_model_summary_with_freshness,
+    resolve_existing_path,
+)
 from app.services.monitoring_kpis import (
     decision_level_and_label,
     drift_composite_level,
@@ -242,17 +262,30 @@ async def build_decision_layer_snapshot() -> dict[str, Any]:
 
 
 async def build_drift_monitoring_snapshot() -> dict[str, Any]:
+    monitoring_path = resolve_existing_path(resolve_dashboard_read("model_monitoring_memory.parquet"))
     monitoring = await read_parquet("model_monitoring_memory.parquet", tail=20)
     if len(monitoring) == 0:
-        return {
-            "level": "GREY",
-            "psi": None,
-            "macro_f1": None,
-            "loss_recall": None,
-            "macro_f1_trend": None,
-            "loss_recall_trend": None,
-            "monitoring_rows": 0,
-        }
+        freshness = build_freshness(
+            source_path=monitoring_path,
+            source_timestamp=None,
+            max_age_hours=MODEL_DRIFT_MAX_AGE_HOURS,
+            stale_status=STATUS_STALE_DRIFT,
+        )
+        return apply_stale_block(
+            {
+                "level": "GREY",
+                "psi": None,
+                "macro_f1": None,
+                "loss_recall": None,
+                "macro_f1_trend": None,
+                "loss_recall_trend": None,
+                "monitoring_rows": 0,
+                "severity_label": "Unknown",
+            },
+            freshness,
+            stale_status_field="severity_label",
+            stale_status_value=STATUS_STALE_DRIFT if freshness.get("is_stale") else "Unknown",
+        )
 
     latest = monitoring.iloc[-1]
     psi = _to_float(latest.get("psi_label"))
@@ -278,7 +311,13 @@ async def build_drift_monitoring_snapshot() -> dict[str, Any]:
         loss_recall_trend=loss_recall_trend,
     )
 
-    return {
+    freshness = build_freshness(
+        source_path=monitoring_path,
+        source_timestamp=latest.get("timestamp"),
+        max_age_hours=MODEL_DRIFT_MAX_AGE_HOURS,
+        stale_status=STATUS_STALE_DRIFT,
+    )
+    payload = {
         "level": level,
         "severity_label": severity_label,
         "psi": psi,
@@ -290,15 +329,19 @@ async def build_drift_monitoring_snapshot() -> dict[str, Any]:
         "last_monitoring_at": latest.get("timestamp"),
         "monitoring_rows": int(len(monitoring)),
     }
+    if freshness.get("is_stale"):
+        payload["severity_label"] = f"{severity_label}+STALE" if severity_label else STATUS_STALE_DRIFT
+    return apply_stale_block(payload, freshness)
 
 
 async def build_model_governance_snapshot() -> dict[str, Any]:
-    dashboard_path = _repo_path("exports/model_governance_dashboard.json")
+    dashboard_path = resolve_existing_path(_repo_path("exports/model_governance_dashboard.json"))
     governance: dict[str, Any] = {}
-    if os.path.exists(dashboard_path):
+    if dashboard_path:
         with open(dashboard_path, encoding="utf-8") as handle:
             governance = json.load(handle)
 
+    monitoring_path = resolve_existing_path(resolve_dashboard_read("model_monitoring_memory.parquet"))
     monitoring = await read_parquet("model_monitoring_memory.parquet", tail=20)
     latest_monitoring = latest_row(monitoring) or {}
     drift = await build_drift_monitoring_snapshot()
@@ -326,9 +369,9 @@ async def build_model_governance_snapshot() -> dict[str, Any]:
         loss_recall=eval_loss_recall,
     )
 
-    registry_path = _repo_path("model_registry.json")
+    registry_path = resolve_existing_path(_repo_path("model_registry.json"))
     active_registered_at = None
-    if os.path.exists(registry_path):
+    if registry_path:
         with open(registry_path, encoding="utf-8") as handle:
             registry = json.load(handle)
             for model in registry.get("models", []):
@@ -338,15 +381,23 @@ async def build_model_governance_snapshot() -> dict[str, Any]:
 
     active_since = governance.get("last_retrain_at") or active_registered_at
     active_model_age_days = governance_age_days(active_since)
+    last_validation_at = governance.get("last_validation_at") or latest_monitoring.get("timestamp")
 
-    return {
+    freshness = build_freshness(
+        source_path=dashboard_path or monitoring_path,
+        source_timestamp=last_validation_at,
+        max_age_hours=MODEL_GOVERNANCE_MAX_AGE_HOURS,
+        stale_status=STATUS_STALE_GOVERNANCE,
+    )
+
+    payload = {
         "level": governance_level,
         "governance_status": governance_status,
         "active_model": active_model,
         "candidate_model": candidate_model,
         "shadow_model": governance.get("shadow_model"),
         "last_retrain_at": governance.get("last_retrain_at"),
-        "last_validation_at": governance.get("last_validation_at") or latest_monitoring.get("timestamp"),
+        "last_validation_at": last_validation_at,
         "last_promotion_at": governance.get("last_promotion_at"),
         "active_model_registered_at": active_registered_at,
         "active_model_age_days": active_model_age_days,
@@ -365,6 +416,7 @@ async def build_model_governance_snapshot() -> dict[str, Any]:
         "promotion_reasons": latest_monitoring.get("promotion_reasons"),
         "monitoring_rows": len(monitoring),
     }
+    return apply_stale_governance(payload, freshness)
 
 
 async def build_economic_validation_snapshot() -> dict[str, Any]:
@@ -375,18 +427,30 @@ async def build_economic_validation_snapshot() -> dict[str, Any]:
     validation = await read_parquet("trading_state_validation_memory.parquet", tail=5000)
 
     if len(economic) == 0:
-        return {
-            "level": "GREY",
-            "status": "NOT_EVALUATED",
-            "rows": 0,
-            "complete_h4h": 0,
-            "pending_h4h": 0,
-            "rolling_window": ECONOMIC_ROLLING_WINDOW,
-            "win_pct": None,
-            "neutral_pct": None,
-            "loss_pct": None,
-            "outcome_distribution": {},
-        }
+        economic_path = resolve_existing_path(resolve_dashboard_read("economic_validation_memory.parquet"))
+        freshness = build_freshness(
+            source_path=economic_path,
+            source_timestamp=None,
+            max_age_hours=MODEL_ECONOMIC_MAX_AGE_HOURS,
+            stale_status=STATUS_STALE_VALIDATION,
+        )
+        return apply_stale_block(
+            {
+                "level": "GREY",
+                "status": "NOT_EVALUATED",
+                "rows": 0,
+                "complete_h4h": 0,
+                "pending_h4h": 0,
+                "rolling_window": ECONOMIC_ROLLING_WINDOW,
+                "win_pct": None,
+                "neutral_pct": None,
+                "loss_pct": None,
+                "outcome_distribution": {},
+            },
+            freshness,
+            stale_status_field="status",
+            stale_status_value=STATUS_STALE_VALIDATION if freshness.get("is_stale") else "NOT_EVALUATED",
+        )
 
     frame = economic.copy()
     if "validation_horizon" in frame.columns:
@@ -424,7 +488,24 @@ async def build_economic_validation_snapshot() -> dict[str, Any]:
     if "economic_outcome" in complete.columns:
         outcome_dist = complete["economic_outcome"].value_counts().head(8).astype(int).to_dict()
 
-    return {
+    latest_completed_at = complete.iloc[-1].get("completed_at") if len(complete) else None
+    if latest_completed_at is None or (isinstance(latest_completed_at, float) and pd.isna(latest_completed_at)):
+        latest_completed_at = complete.iloc[-1].get("timestamp") if len(complete) else None
+    if latest_completed_at is None or (isinstance(latest_completed_at, float) and pd.isna(latest_completed_at)):
+        latest_completed_at = (
+            economic.iloc[-1].get("lineage_propagation_timestamp")
+            if len(economic) and "lineage_propagation_timestamp" in economic.columns
+            else None
+        )
+
+    economic_path = resolve_existing_path(resolve_dashboard_read("economic_validation_memory.parquet"))
+    freshness = build_freshness(
+        source_path=economic_path,
+        source_timestamp=latest_completed_at,
+        max_age_hours=MODEL_ECONOMIC_MAX_AGE_HOURS,
+        stale_status=STATUS_STALE_VALIDATION,
+    )
+    payload = {
         "level": level,
         "status": status,
         "rows": int(len(economic)),
@@ -440,28 +521,55 @@ async def build_economic_validation_snapshot() -> dict[str, Any]:
         "neutral_count": neutral_count,
         "loss_count": loss_count,
         "outcome_distribution": outcome_dist,
-        "latest_completed_at": complete.iloc[-1].get("completed_at") if len(complete) else None,
+        "latest_completed_at": latest_completed_at,
     }
+    if freshness.get("is_stale"):
+        payload["status"] = STATUS_STALE_VALIDATION
+    return apply_stale_block(payload, freshness)
 
 
 async def build_shadow_inference_snapshot() -> dict[str, Any]:
     shadow = await read_parquet("shadow_inference_memory.parquet", tail=10000)
-    governance_path = _repo_path("exports/model_governance_dashboard.json")
+    governance_path = resolve_existing_path(_repo_path("exports/model_governance_dashboard.json"))
     shadow_metrics: dict[str, Any] = {}
     last_validation_time = None
-    if os.path.exists(governance_path):
+    if governance_path:
         with open(governance_path, encoding="utf-8") as handle:
             governance = json.load(handle)
             shadow_metrics = governance.get("shadow_metrics_last_5000") or {}
             last_validation_time = governance.get("last_validation_at")
 
-    if len(shadow) == 0 and not shadow_metrics:
-        return {
-            "level": "GREY",
-            "rows": 0,
-            "evaluated_rows": 0,
-            "validation_status": "NOT_EVALUATED",
+    monitoring_path = resolve_existing_path(resolve_dashboard_read("model_monitoring_memory.parquet"))
+    monitoring = await read_parquet("model_monitoring_memory.parquet", tail=1)
+    latest_monitoring = latest_row(monitoring) or {}
+    if last_validation_time is None:
+        last_validation_time = latest_monitoring.get("timestamp")
+    if not shadow_metrics and latest_monitoring:
+        shadow_metrics = {
+            "macro_f1": latest_monitoring.get("macro_f1"),
+            "balanced_accuracy": latest_monitoring.get("balanced_accuracy"),
+            "loss_recall": latest_monitoring.get("loss_recall"),
+            "rows": latest_monitoring.get("shadow_rows"),
         }
+    if len(shadow) == 0 and not shadow_metrics:
+        freshness = build_freshness(
+            source_path=governance_path or monitoring_path,
+            source_timestamp=last_validation_time,
+            max_age_hours=MODEL_VALIDATION_MAX_AGE_HOURS,
+            stale_status=STATUS_STALE_VALIDATION,
+        )
+        return apply_stale_block(
+            {
+                "level": "GREY",
+                "rows": 0,
+                "evaluated_rows": 0,
+                "validation_status": "NOT_EVALUATED",
+                "last_validation_time": last_validation_time,
+            },
+            freshness,
+            stale_status_field="validation_status",
+            stale_status_value=STATUS_STALE_VALIDATION if freshness.get("is_stale") else "NOT_EVALUATED",
+        )
 
     evaluated = shadow[shadow["evaluation_status"] == "COMPLETE"] if "evaluation_status" in shadow.columns else shadow.iloc[0:0]
     pred_dist: dict[str, int] = {}
@@ -482,7 +590,13 @@ async def build_shadow_inference_snapshot() -> dict[str, Any]:
     registry_id = shadow.iloc[-1].get("registry_id") if len(shadow) else None
     model_version = shadow.iloc[-1].get("model_version") if len(shadow) else None
 
-    return {
+    freshness = build_freshness(
+        source_path=governance_path or monitoring_path,
+        source_timestamp=last_validation_time,
+        max_age_hours=MODEL_VALIDATION_MAX_AGE_HOURS,
+        stale_status=STATUS_STALE_VALIDATION,
+    )
+    payload = {
         "level": level,
         "validation_status": validation_status,
         "rows": int(len(shadow)),
@@ -497,21 +611,35 @@ async def build_shadow_inference_snapshot() -> dict[str, Any]:
         "prediction_distribution": pred_dist,
         "latest_prediction_at": shadow.iloc[-1].get("prediction_timestamp") if len(shadow) else None,
     }
+    if freshness.get("is_stale"):
+        payload["validation_status"] = STATUS_STALE_VALIDATION
+        payload["level"] = "YELLOW"
+    return apply_stale_block(payload, freshness)
 
 
 async def build_toxic_box_snapshot() -> dict[str, Any]:
     toxic = await read_parquet("toxic_box_memory.parquet", tail=10000)
     if len(toxic) == 0:
-        return {
-            "level": "YELLOW",
-            "severity_label": "Unknown",
-            "rows": 0,
-            "events": 0,
-            "events_last_7d": 0,
-            "toxic_rate_7d": 0.0,
-            "trend": "STABLE",
-            "type_distribution": {},
-        }
+        toxic_path = resolve_existing_path(resolve_dashboard_read("toxic_box_memory.parquet"))
+        freshness = build_freshness(
+            source_path=toxic_path,
+            source_timestamp=None,
+            max_age_hours=MODEL_TOXIC_MAX_AGE_HOURS,
+            stale_status=STATUS_STALE_VALIDATION,
+        )
+        return apply_stale_block(
+            {
+                "level": "YELLOW",
+                "severity_label": "Unknown",
+                "rows": 0,
+                "events": 0,
+                "events_last_7d": 0,
+                "toxic_rate_7d": 0.0,
+                "trend": "STABLE",
+                "type_distribution": {},
+            },
+            freshness,
+        )
 
     frame = toxic.copy()
     now = pd.Timestamp.now(tz=timezone.utc)
@@ -576,7 +704,15 @@ async def build_toxic_box_snapshot() -> dict[str, Any]:
         is_bulk_backfill=bulk_backfill,
     )
 
-    return {
+    toxic_path = resolve_existing_path(resolve_dashboard_read("toxic_box_memory.parquet"))
+    freshness_ts = latest_routed if pd.notna(latest_routed) else frame.iloc[-1].get(t0_col)
+    freshness = build_freshness(
+        source_path=toxic_path,
+        source_timestamp=freshness_ts,
+        max_age_hours=MODEL_TOXIC_MAX_AGE_HOURS,
+        stale_status=STATUS_STALE_VALIDATION,
+    )
+    payload = {
         "level": level,
         "severity_label": severity_label,
         "rows": int(len(frame)),
@@ -595,6 +731,12 @@ async def build_toxic_box_snapshot() -> dict[str, Any]:
         "latest_timestamp": frame.iloc[-1].get(t0_col) if len(frame) else None,
         "latest_routed_at": latest_routed.isoformat() if pd.notna(latest_routed) else None,
     }
+    if freshness.get("is_stale"):
+        if severity_label == "Baseline loaded":
+            payload["severity_label"] = "Baseline loaded (STALE)"
+        else:
+            payload["severity_label"] = f"{severity_label}+STALE" if severity_label else "STALE"
+    return apply_stale_block(payload, freshness)
 
 
 async def build_model_summary_snapshot(
@@ -609,13 +751,13 @@ async def build_model_summary_snapshot(
     drift_level = drift.get("level", "GREY")
     drift_severity = drift.get("severity_label")
 
-    if shadow_status in {"MISSING", "NOT_EVALUATED"} and not governance.get("active_model"):
+    if shadow_status in {"MISSING", "NOT_EVALUATED", "MISSING_DATA"} and not governance.get("active_model"):
         status = "NOT_EVALUATED"
         level = "GREY"
-    elif shadow_status in {"MISSING", "NOT_EVALUATED"}:
+    elif shadow_status in {"MISSING", "NOT_EVALUATED", "MISSING_DATA"}:
         status = "NOT_EVALUATED"
         level = "GREY"
-    elif shadow_status == "WARNING" or drift_level == "RED":
+    elif shadow_status in {"WARNING", "STALE_VALIDATION"} or drift_level == "RED":
         status = "ATTENTION"
         level = "YELLOW"
     elif drift_level == "YELLOW":
@@ -629,7 +771,7 @@ async def build_model_summary_snapshot(
         status = "MONITOR"
         level = "YELLOW"
 
-    return {
+    base = {
         "level": level,
         "status": status,
         "model": governance.get("active_model"),
@@ -638,6 +780,12 @@ async def build_model_summary_snapshot(
         "psi": psi,
         "governance_status": governance.get("governance_status"),
     }
+    return build_model_summary_with_freshness(
+        governance=governance,
+        drift=drift,
+        shadow=shadow,
+        base_summary=base,
+    )
 
 
 async def build_research_pipeline_snapshot() -> dict[str, Any]:

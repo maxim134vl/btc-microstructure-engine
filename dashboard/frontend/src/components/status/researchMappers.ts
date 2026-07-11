@@ -1,4 +1,5 @@
 import type { ResolvedStatus, StatusTone } from "./types";
+import type { ArtifactFreshness } from "../../types/ops";
 
 const RESEARCH_RIBBON_KEYS = new Set([
   "decision_layer",
@@ -19,6 +20,19 @@ function levelToTone(level: string): StatusTone {
 
 function researchStatus(label: string, tone: StatusTone): ResolvedStatus {
   return { domain: "research", key: "semantic", label, tone };
+}
+
+function isStaleToken(value?: string | null, freshness?: ArtifactFreshness | null): boolean {
+  if (freshness?.is_stale) return true;
+  const token = (value || "").toUpperCase();
+  return (
+    token.includes("STALE") ||
+    token === "STALE_VALIDATION" ||
+    token === "STALE_GOVERNANCE_DATA" ||
+    token === "STALE_DRIFT_DATA" ||
+    token === "MISSING_DATA" ||
+    token === "UNKNOWN_FRESHNESS"
+  );
 }
 
 /** Decision Layer: business posture — RED only when memories are missing. */
@@ -48,13 +62,29 @@ export function resolveDecisionStatus(level: string, statusLabel?: string): Reso
 }
 
 /** ML Governance: display governance_status token directly. */
-export function resolveGovernanceStatus(level: string, governanceStatus?: string | null): ResolvedStatus {
-  const label = governanceStatus?.trim() || "UNKNOWN";
-  return researchStatus(label, levelToTone(level));
+export function resolveGovernanceStatus(
+  level: string,
+  governanceStatus?: string | null,
+  freshness?: ArtifactFreshness | null,
+): ResolvedStatus {
+  const raw = governanceStatus?.trim() || "UNKNOWN";
+  if (isStaleToken(raw, freshness)) {
+    const label = raw.includes("STALE") || freshness?.is_stale ? raw : `${raw}+STALE`;
+    return researchStatus(label, "degraded");
+  }
+  return researchStatus(raw, levelToTone(level));
 }
 
 /** Drift Monitoring: composite PSI + shadow performance severity. */
-export function resolveDriftStatus(level: string, severityLabel?: string | null): ResolvedStatus {
+export function resolveDriftStatus(
+  level: string,
+  severityLabel?: string | null,
+  freshness?: ArtifactFreshness | null,
+): ResolvedStatus {
+  if (isStaleToken(severityLabel, freshness)) {
+    const label = severityLabel?.trim() || "STALE_DRIFT_DATA";
+    return researchStatus(label, "degraded");
+  }
   const label = severityLabel?.trim() || (() => {
     const normalized = level.toUpperCase();
     if (normalized === "GREEN") return "Stable";
@@ -66,7 +96,14 @@ export function resolveDriftStatus(level: string, severityLabel?: string | null)
 }
 
 /** Toxic Box: rate-based severity labels. */
-export function resolveToxicStatus(level: string, severityLabel?: string | null): ResolvedStatus {
+export function resolveToxicStatus(
+  level: string,
+  severityLabel?: string | null,
+  freshness?: ArtifactFreshness | null,
+): ResolvedStatus {
+  if (isStaleToken(severityLabel, freshness)) {
+    return researchStatus(severityLabel?.trim() || "STALE", "degraded");
+  }
   const label = severityLabel?.trim() || (() => {
     const normalized = level.toUpperCase();
     if (normalized === "GREEN") return "Normal";
@@ -77,9 +114,16 @@ export function resolveToxicStatus(level: string, severityLabel?: string | null)
 }
 
 /** Economic Validation: outcome health labels. */
-export function resolveEconomicStatus(level: string, status?: string | null): ResolvedStatus {
+export function resolveEconomicStatus(
+  level: string,
+  status?: string | null,
+  freshness?: ArtifactFreshness | null,
+): ResolvedStatus {
   const normalized = level.toUpperCase();
   const statusToken = (status || "").toUpperCase();
+  if (isStaleToken(status, freshness)) {
+    return researchStatus(status?.trim() || "STALE_VALIDATION", "degraded");
+  }
   let label = "Review";
   if (normalized === "GREY" || statusToken === "NOT_EVALUATED" || statusToken === "NO_DATA") {
     label = "Not evaluated";
@@ -91,9 +135,16 @@ export function resolveEconomicStatus(level: string, status?: string | null): Re
   return researchStatus(label, levelToTone(level));
 }
 
-/** Shadow Model: validation_status PASS · REVIEW · FAIL · NOT_EVALUATED */
-export function resolveShadowStatus(level: string, validationStatus?: string | null): ResolvedStatus {
+/** Shadow Model: validation_status PASS · REVIEW · FAIL · NOT_EVALUATED · STALE_* */
+export function resolveShadowStatus(
+  level: string,
+  validationStatus?: string | null,
+  freshness?: ArtifactFreshness | null,
+): ResolvedStatus {
   const vs = (validationStatus || "").toUpperCase();
+  if (isStaleToken(validationStatus, freshness)) {
+    return researchStatus(validationStatus?.trim() || "STALE_VALIDATION", "degraded");
+  }
   let label = "REVIEW";
   if (vs === "PASS") label = "PASS";
   else if (vs === "WARNING") label = "REVIEW";
@@ -108,8 +159,22 @@ export function resolveShadowStatus(level: string, validationStatus?: string | n
 }
 
 /** Model Summary executive card. */
-export function resolveModelSummaryStatus(level: string, status?: string | null): ResolvedStatus {
+export function resolveModelSummaryStatus(
+  level: string,
+  status?: string | null,
+  freshness?: ArtifactFreshness | null,
+  attentionReason?: string | null,
+): ResolvedStatus {
   const token = (status || "").trim().toUpperCase();
+  if (isStaleToken(status, freshness) || token === "ATTENTION") {
+    const reason = attentionReason?.trim();
+    const label = reason
+      ? `ATTENTION · ${reason}`
+      : token === "ATTENTION"
+        ? "ATTENTION"
+        : status?.trim() || "STALE_VALIDATION";
+    return researchStatus(label, "degraded");
+  }
   let label = status?.trim() || "UNKNOWN";
   if (token === "MISSING" || token === "NOT_EVALUATED" || level.toUpperCase() === "GREY") {
     label = "Not evaluated";

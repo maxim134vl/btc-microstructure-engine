@@ -57,3 +57,11 @@ ONTOLOGY_EVENT_TYPES = (
 
 # Synced with app.pipeline_metadata (dashboard-local mirror of runtime pipeline)
 CANONICAL_PIPELINE = list(_CANONICAL_PIPELINE)
+
+# Model Summary / governance freshness thresholds (hours). Dashboard-only; no auto-retrain.
+MODEL_VALIDATION_MAX_AGE_HOURS = float(os.environ.get("DASHBOARD_MODEL_VALIDATION_MAX_AGE_HOURS", "168"))
+MODEL_GOVERNANCE_MAX_AGE_HOURS = float(os.environ.get("DASHBOARD_MODEL_GOVERNANCE_MAX_AGE_HOURS", "168"))
+MODEL_DRIFT_MAX_AGE_HOURS = float(os.environ.get("DASHBOARD_MODEL_DRIFT_MAX_AGE_HOURS", "168"))
+MODEL_TOXIC_MAX_AGE_HOURS = float(os.environ.get("DASHBOARD_MODEL_TOXIC_MAX_AGE_HOURS", "168"))
+MODEL_ECONOMIC_MAX_AGE_HOURS = float(os.environ.get("DASHBOARD_MODEL_ECONOMIC_MAX_AGE_HOURS", "48"))
+MODEL_BENCHMARK_MAX_AGE_HOURS = float(os.environ.get("DASHBOARD_MODEL_BENCHMARK_MAX_AGE_HOURS", "168"))
