@@ -52,6 +52,9 @@ export {
 } from "./mappers";
 
 export {
+  formatModelSummarySourceLines,
+  formatSourceTimestamp,
+  isLegacyJunePrimaryDate,
   isResearchRibbonKey,
   resolveDecisionStatus,
   resolveDriftStatus,

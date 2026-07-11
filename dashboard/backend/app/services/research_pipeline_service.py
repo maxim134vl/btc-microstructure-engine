@@ -21,6 +21,7 @@ from app.config import (
 )
 from app.services.dashboard_paths import resolve_dashboard_read
 from app.services.model_summary_freshness import (
+    STATUS_MISSING,
     STATUS_STALE_DRIFT,
     STATUS_STALE_GOVERNANCE,
     STATUS_STALE_VALIDATION,
@@ -29,6 +30,11 @@ from app.services.model_summary_freshness import (
     build_freshness,
     build_model_summary_with_freshness,
     resolve_existing_path,
+)
+from app.services.model_summary_sources import (
+    STATUS_GOVERNANCE_MISSING,
+    build_model_summary_sources,
+    drift_fields_from_diagnostics,
 )
 from app.services.monitoring_kpis import (
     decision_level_and_label,
@@ -261,102 +267,175 @@ async def build_decision_layer_snapshot() -> dict[str, Any]:
     }
 
 
-async def build_drift_monitoring_snapshot() -> dict[str, Any]:
-    monitoring_path = resolve_existing_path(resolve_dashboard_read("model_monitoring_memory.parquet"))
-    monitoring = await read_parquet("model_monitoring_memory.parquet", tail=20)
-    if len(monitoring) == 0:
-        freshness = build_freshness(
-            source_path=monitoring_path,
-            source_timestamp=None,
-            max_age_hours=MODEL_DRIFT_MAX_AGE_HOURS,
-            stale_status=STATUS_STALE_DRIFT,
-        )
-        return apply_stale_block(
-            {
-                "level": "GREY",
-                "psi": None,
-                "macro_f1": None,
-                "loss_recall": None,
-                "macro_f1_trend": None,
-                "loss_recall_trend": None,
-                "monitoring_rows": 0,
-                "severity_label": "Unknown",
-            },
-            freshness,
-            stale_status_field="severity_label",
-            stale_status_value=STATUS_STALE_DRIFT if freshness.get("is_stale") else "Unknown",
-        )
+async def build_drift_monitoring_snapshot(
+    sources: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    sources = sources or build_model_summary_sources()
+    diagnostics = sources.get("_diagnostics") or {}
+    legacy = sources.get("_legacy") or {}
+    metrics = sources.get("metrics") or {}
 
-    latest = monitoring.iloc[-1]
-    psi = _to_float(latest.get("psi_label"))
-    macro_f1 = _to_float(latest.get("macro_f1"))
-    loss_recall = _to_float(latest.get("loss_recall"))
+    psi_m = metrics.get("psi") or {}
+    macro_m = metrics.get("macro_f1") or {}
+    loss_m = metrics.get("loss_recall") or {}
 
-    first = monitoring.iloc[0]
-    macro_f1_trend = None
-    loss_recall_trend = None
-    if len(monitoring) >= 2:
-        first_macro = _to_float(first.get("macro_f1"))
-        first_loss = _to_float(first.get("loss_recall"))
-        if macro_f1 is not None and first_macro is not None:
-            macro_f1_trend = round(macro_f1 - first_macro, 4)
-        if loss_recall is not None and first_loss is not None:
-            loss_recall_trend = round(loss_recall - first_loss, 4)
+    psi = psi_m.get("value")
+    macro_f1 = macro_m.get("value")
+    loss_recall = loss_m.get("value")
 
-    level, severity_label = drift_composite_level(
-        psi=psi,
-        macro_f1=macro_f1,
-        loss_recall=loss_recall,
-        macro_f1_trend=macro_f1_trend,
-        loss_recall_trend=loss_recall_trend,
-    )
-
-    freshness = build_freshness(
-        source_path=monitoring_path,
-        source_timestamp=latest.get("timestamp"),
+    diag_fields = drift_fields_from_diagnostics(diagnostics)
+    freshness = diagnostics.get("freshness") or build_freshness(
+        source_path=diagnostics.get("source_path"),
+        source_timestamp=diagnostics.get("generated_at"),
         max_age_hours=MODEL_DRIFT_MAX_AGE_HOURS,
         stale_status=STATUS_STALE_DRIFT,
     )
+
+    # Classic ML metrics absent from benchmark → MISSING_DATA (not June legacy as current).
+    has_classic = any(v is not None for v in (psi, macro_f1, loss_recall))
+    if has_classic:
+        level, severity_label = drift_composite_level(
+            psi=psi,
+            macro_f1=macro_f1,
+            loss_recall=loss_recall,
+            macro_f1_trend=None,
+            loss_recall_trend=None,
+        )
+    elif diagnostics.get("payload") is not None:
+        severity = diag_fields.get("benchmark_drift_severity") or diag_fields.get("cognition_health") or "Unknown"
+        severity_u = str(severity).upper()
+        if severity_u in {"SEVERE", "CRITICAL", "FAIL", "RED"}:
+            level, severity_label = "RED", str(severity)
+        elif severity_u in {"WATCH", "DRIFTING", "WARNING", "NEEDS_REVIEW", "YELLOW"}:
+            level, severity_label = "YELLOW", str(severity)
+        elif severity_u in {"OK", "STABLE", "GREEN", "HEALTHY"}:
+            level, severity_label = "GREEN", str(severity)
+        else:
+            level, severity_label = "YELLOW", str(severity)
+    else:
+        # No fresh diagnostics — only then may legacy drive the block, marked legacy.
+        legacy_row = legacy.get("row") or {}
+        psi = _to_float(legacy_row.get("psi_label") if psi is None else psi)
+        macro_f1 = _to_float(legacy_row.get("macro_f1") if macro_f1 is None else macro_f1)
+        loss_recall = _to_float(legacy_row.get("loss_recall") if loss_recall is None else loss_recall)
+        freshness = legacy.get("freshness") or build_freshness(
+            source_path=legacy.get("source_path"),
+            source_timestamp=legacy.get("timestamp"),
+            max_age_hours=MODEL_DRIFT_MAX_AGE_HOURS,
+            stale_status=STATUS_STALE_DRIFT,
+        )
+        if any(v is not None for v in (psi, macro_f1, loss_recall)):
+            level, severity_label = drift_composite_level(
+                psi=psi,
+                macro_f1=macro_f1,
+                loss_recall=loss_recall,
+            )
+        else:
+            level, severity_label = "GREY", STATUS_MISSING
+
+    if freshness.get("is_stale") and severity_label not in {STATUS_MISSING, STATUS_STALE_DRIFT}:
+        severity_label = f"{severity_label}+STALE"
+
     payload = {
         "level": level,
         "severity_label": severity_label,
         "psi": psi,
-        "psi_feature_max": _to_float(latest.get("psi_feature_max")),
+        "psi_feature_max": None,
         "macro_f1": macro_f1,
         "loss_recall": loss_recall,
-        "macro_f1_trend": macro_f1_trend,
-        "loss_recall_trend": loss_recall_trend,
-        "last_monitoring_at": latest.get("timestamp"),
-        "monitoring_rows": int(len(monitoring)),
+        "macro_f1_trend": None,
+        "loss_recall_trend": None,
+        "last_monitoring_at": diagnostics.get("generated_at") or legacy.get("timestamp"),
+        "latest_diagnostics_at": diagnostics.get("generated_at"),
+        "monitoring_rows": 0 if not legacy.get("row") else 1,
+        "psi_meta": psi_m,
+        "macro_f1_meta": macro_m,
+        "loss_recall_meta": loss_m,
+        "benchmark_drift_severity": diag_fields.get("benchmark_drift_severity"),
+        "cognition_health": diag_fields.get("cognition_health"),
+        "metric_source": diagnostics.get("source_path_display") or diagnostics.get("source_path"),
+        "legacy_psi": (psi_m.get("legacy_value") if psi_m else None),
+        "legacy_source_timestamp": (psi_m.get("legacy_source_timestamp") if psi_m else legacy.get("timestamp")),
+        "legacy_is_stale": True if legacy.get("row") else None,
     }
-    if freshness.get("is_stale"):
-        payload["severity_label"] = f"{severity_label}+STALE" if severity_label else STATUS_STALE_DRIFT
+    if not has_classic and diagnostics.get("payload") is not None:
+        # Explicitly mark classic metrics missing while diagnostics are otherwise current.
+        for key in ("psi_meta", "macro_f1_meta", "loss_recall_meta"):
+            meta = payload.get(key) or {}
+            if meta.get("value") is None:
+                meta = {
+                    **meta,
+                    "status": STATUS_MISSING,
+                    "metric_freshness": STATUS_MISSING,
+                    "metric_is_legacy": False,
+                }
+                payload[key] = meta
     return apply_stale_block(payload, freshness)
 
 
-async def build_model_governance_snapshot() -> dict[str, Any]:
-    dashboard_path = resolve_existing_path(_repo_path("exports/model_governance_dashboard.json"))
-    governance: dict[str, Any] = {}
-    if dashboard_path:
-        with open(dashboard_path, encoding="utf-8") as handle:
-            governance = json.load(handle)
-
-    monitoring_path = resolve_existing_path(resolve_dashboard_read("model_monitoring_memory.parquet"))
-    monitoring = await read_parquet("model_monitoring_memory.parquet", tail=20)
-    latest_monitoring = latest_row(monitoring) or {}
-    drift = await build_drift_monitoring_snapshot()
-
-    rollback_warning = bool(latest_monitoring.get("rollback_warning")) if latest_monitoring else False
-    promotion_eligible = bool(latest_monitoring.get("promotion_eligible")) if latest_monitoring else False
-    shadow_metrics = governance.get("shadow_metrics_last_5000") or {}
-    shadow_macro_f1 = _to_float(shadow_metrics.get("macro_f1"))
-    shadow_loss_recall = _to_float(shadow_metrics.get("loss_recall"))
+async def build_model_governance_snapshot(
+    sources: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    sources = sources or build_model_summary_sources()
+    gov_src = sources.get("_governance") or {}
+    diagnostics = sources.get("_diagnostics") or {}
+    legacy = sources.get("_legacy") or {}
+    governance = gov_src.get("payload") or {}
 
     active_model = governance.get("active_model")
     candidate_model = governance.get("candidate_model")
-    psi = drift.get("psi")
-    eval_macro_f1 = drift.get("macro_f1") or shadow_macro_f1
-    eval_loss_recall = drift.get("loss_recall") or shadow_loss_recall
+
+    if gov_src.get("status") == STATUS_GOVERNANCE_MISSING or not gov_src.get("payload"):
+        freshness = gov_src.get("freshness") or build_freshness(
+            source_path=None,
+            source_timestamp=None,
+            max_age_hours=MODEL_GOVERNANCE_MAX_AGE_HOURS,
+            missing_status=STATUS_MISSING,
+        )
+        payload = {
+            "level": "YELLOW",
+            "governance_status": STATUS_GOVERNANCE_MISSING,
+            "active_model": None,
+            "candidate_model": None,
+            "active_model_display": "MISSING",
+            "candidate_model_display": "MISSING",
+            "shadow_model": None,
+            "last_retrain_at": None,
+            "last_validation_at": None,
+            "governance_validation_at": None,
+            "latest_diagnostics_at": diagnostics.get("generated_at"),
+            "last_promotion_at": None,
+            "active_model_registered_at": None,
+            "active_model_age_days": None,
+            "promotion_eligible": False,
+            "promotion_eligible_label": "NO",
+            "promotion_reasons": ["governance artifact missing"],
+            "missing_reason": "governance artifact missing",
+            "next_retrain_note": "Manual — scripts/retrain_models.py (weekly)",
+            "shadow_macro_f1": None,
+            "shadow_balanced_accuracy": None,
+            "shadow_loss_recall": None,
+            "shadow_rows": None,
+            "rollback_warning": False,
+            "rollback_reasons": None,
+            "monitoring_rows": 0,
+            "diagnostics_status": (sources.get("diagnostics_primary") or {}).get("freshness_status"),
+        }
+        out = apply_stale_governance(payload, freshness)
+        out["governance_status"] = STATUS_GOVERNANCE_MISSING
+        out["metrics_scope"] = "missing"
+        out["stale_warning"] = "Governance artifact missing. Promotion blocked."
+        out["refresh_hint"] = "Provide exports/model_governance_dashboard.json or run manual governance export."
+        return out
+
+    shadow_metrics = governance.get("shadow_metrics_last_5000") or {}
+    rollback_warning = bool(governance.get("rollback_warning"))
+    promotion_eligible = bool(governance.get("promotion_eligible"))
+    # Prefer governance JSON metrics; do not pull June legacy as current.
+    metrics = sources.get("metrics") or {}
+    psi = (metrics.get("psi") or {}).get("value")
+    eval_macro_f1 = _to_float(shadow_metrics.get("macro_f1")) or (metrics.get("macro_f1") or {}).get("value")
+    eval_loss_recall = _to_float(shadow_metrics.get("loss_recall")) or (metrics.get("loss_recall") or {}).get("value")
 
     governance_status, governance_level = _derive_governance_status(
         active_model=active_model,
@@ -364,7 +443,7 @@ async def build_model_governance_snapshot() -> dict[str, Any]:
         promotion_eligible=promotion_eligible,
         rollback_warning=rollback_warning,
         psi=psi,
-        rollback_reasons=latest_monitoring.get("rollback_reasons"),
+        rollback_reasons=governance.get("rollback_reasons"),
         macro_f1=eval_macro_f1,
         loss_recall=eval_loss_recall,
     )
@@ -381,10 +460,10 @@ async def build_model_governance_snapshot() -> dict[str, Any]:
 
     active_since = governance.get("last_retrain_at") or active_registered_at
     active_model_age_days = governance_age_days(active_since)
-    last_validation_at = governance.get("last_validation_at") or latest_monitoring.get("timestamp")
+    last_validation_at = governance.get("last_validation_at")
 
-    freshness = build_freshness(
-        source_path=dashboard_path or monitoring_path,
+    freshness = gov_src.get("freshness") or build_freshness(
+        source_path=gov_src.get("source_path"),
         source_timestamp=last_validation_at,
         max_age_hours=MODEL_GOVERNANCE_MAX_AGE_HOURS,
         stale_status=STATUS_STALE_GOVERNANCE,
@@ -398,6 +477,8 @@ async def build_model_governance_snapshot() -> dict[str, Any]:
         "shadow_model": governance.get("shadow_model"),
         "last_retrain_at": governance.get("last_retrain_at"),
         "last_validation_at": last_validation_at,
+        "governance_validation_at": last_validation_at,
+        "latest_diagnostics_at": diagnostics.get("generated_at"),
         "last_promotion_at": governance.get("last_promotion_at"),
         "active_model_registered_at": active_registered_at,
         "active_model_age_days": active_model_age_days,
@@ -411,10 +492,12 @@ async def build_model_governance_snapshot() -> dict[str, Any]:
         "shadow_loss_recall": _to_float(shadow_metrics.get("loss_recall")),
         "shadow_rows": shadow_metrics.get("rows"),
         "rollback_warning": rollback_warning,
-        "rollback_reasons": latest_monitoring.get("rollback_reasons"),
+        "rollback_reasons": governance.get("rollback_reasons"),
         "promotion_eligible": promotion_eligible,
-        "promotion_reasons": latest_monitoring.get("promotion_reasons"),
-        "monitoring_rows": len(monitoring),
+        "promotion_reasons": governance.get("promotion_reasons"),
+        "monitoring_rows": 1 if legacy.get("row") else 0,
+        "diagnostics_status": (sources.get("diagnostics_primary") or {}).get("freshness_status"),
+        "missing_reason": None,
     }
     return apply_stale_governance(payload, freshness)
 
@@ -446,10 +529,14 @@ async def build_economic_validation_snapshot() -> dict[str, Any]:
                 "neutral_pct": None,
                 "loss_pct": None,
                 "outcome_distribution": {},
+                "source_path": economic_path,
+                "missing_reason": "economic source missing" if economic_path is None else "economic data empty",
             },
             freshness,
             stale_status_field="status",
-            stale_status_value=STATUS_STALE_VALIDATION if freshness.get("is_stale") else "NOT_EVALUATED",
+            stale_status_value=STATUS_MISSING if economic_path is None else (
+                STATUS_STALE_VALIDATION if freshness.get("is_stale") else "NOT_EVALUATED"
+            ),
         )
 
     frame = economic.copy()
@@ -522,64 +609,99 @@ async def build_economic_validation_snapshot() -> dict[str, Any]:
         "loss_count": loss_count,
         "outcome_distribution": outcome_dist,
         "latest_completed_at": latest_completed_at,
+        "source_path": economic_path,
     }
     if freshness.get("is_stale"):
         payload["status"] = STATUS_STALE_VALIDATION
     return apply_stale_block(payload, freshness)
 
 
-async def build_shadow_inference_snapshot() -> dict[str, Any]:
+async def build_shadow_inference_snapshot(
+    sources: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    sources = sources or build_model_summary_sources()
+    diagnostics = sources.get("_diagnostics") or {}
+    gov_src = sources.get("_governance") or {}
+    legacy = sources.get("_legacy") or {}
+    metrics = sources.get("metrics") or {}
+    governance = gov_src.get("payload") or {}
+
     shadow = await read_parquet("shadow_inference_memory.parquet", tail=10000)
-    governance_path = resolve_existing_path(_repo_path("exports/model_governance_dashboard.json"))
-    shadow_metrics: dict[str, Any] = {}
-    last_validation_time = None
-    if governance_path:
-        with open(governance_path, encoding="utf-8") as handle:
-            governance = json.load(handle)
-            shadow_metrics = governance.get("shadow_metrics_last_5000") or {}
-            last_validation_time = governance.get("last_validation_at")
+    shadow_metrics = governance.get("shadow_metrics_last_5000") or {}
 
-    monitoring_path = resolve_existing_path(resolve_dashboard_read("model_monitoring_memory.parquet"))
-    monitoring = await read_parquet("model_monitoring_memory.parquet", tail=1)
-    latest_monitoring = latest_row(monitoring) or {}
-    if last_validation_time is None:
-        last_validation_time = latest_monitoring.get("timestamp")
-    if not shadow_metrics and latest_monitoring:
-        shadow_metrics = {
-            "macro_f1": latest_monitoring.get("macro_f1"),
-            "balanced_accuracy": latest_monitoring.get("balanced_accuracy"),
-            "loss_recall": latest_monitoring.get("loss_recall"),
-            "rows": latest_monitoring.get("shadow_rows"),
-        }
-    if len(shadow) == 0 and not shadow_metrics:
-        freshness = build_freshness(
-            source_path=governance_path or monitoring_path,
-            source_timestamp=last_validation_time,
-            max_age_hours=MODEL_VALIDATION_MAX_AGE_HOURS,
-            stale_status=STATUS_STALE_VALIDATION,
-        )
-        return apply_stale_block(
-            {
-                "level": "GREY",
-                "rows": 0,
-                "evaluated_rows": 0,
-                "validation_status": "NOT_EVALUATED",
-                "last_validation_time": last_validation_time,
-            },
-            freshness,
-            stale_status_field="validation_status",
-            stale_status_value=STATUS_STALE_VALIDATION if freshness.get("is_stale") else "NOT_EVALUATED",
-        )
+    macro_m = metrics.get("macro_f1") or {}
+    bal_m = metrics.get("balanced_accuracy") or {}
+    loss_m = metrics.get("loss_recall") or {}
 
-    evaluated = shadow[shadow["evaluation_status"] == "COMPLETE"] if "evaluation_status" in shadow.columns else shadow.iloc[0:0]
+    # Prefer governance JSON metrics, then fresh benchmark extraction — never June as current.
+    macro_f1 = _to_float(shadow_metrics.get("macro_f1"))
+    if macro_f1 is None:
+        macro_f1 = macro_m.get("value")
+    balanced_accuracy = _to_float(shadow_metrics.get("balanced_accuracy"))
+    if balanced_accuracy is None:
+        balanced_accuracy = bal_m.get("value")
+    loss_recall = _to_float(shadow_metrics.get("loss_recall"))
+    if loss_recall is None:
+        loss_recall = loss_m.get("value")
+
+    latest_diagnostics_at = diagnostics.get("generated_at")
+    last_validation_time = governance.get("last_validation_at") or latest_diagnostics_at
+
+    evaluated = (
+        shadow[shadow["evaluation_status"] == "COMPLETE"]
+        if "evaluation_status" in shadow.columns
+        else shadow.iloc[0:0]
+    )
     pred_dist: dict[str, int] = {}
     if "predicted_class" in evaluated.columns and len(evaluated):
         pred_dist = evaluated["predicted_class"].value_counts().astype(int).to_dict()
 
-    macro_f1 = _to_float(shadow_metrics.get("macro_f1"))
-    balanced_accuracy = _to_float(shadow_metrics.get("balanced_accuracy"))
-    loss_recall = _to_float(shadow_metrics.get("loss_recall"))
     evaluated_rows = int(shadow_metrics.get("rows") or len(evaluated))
+    metric_is_legacy = False
+
+    if macro_f1 is None and balanced_accuracy is None and loss_recall is None and not shadow_metrics:
+        # Metrics missing from fresh sources — expose legacy separately only.
+        legacy_row = legacy.get("row") or {}
+        legacy_macro = _to_float(legacy_row.get("macro_f1"))
+        freshness = diagnostics.get("freshness") or build_freshness(
+            source_path=diagnostics.get("source_path"),
+            source_timestamp=latest_diagnostics_at,
+            max_age_hours=MODEL_VALIDATION_MAX_AGE_HOURS,
+            stale_status=STATUS_STALE_VALIDATION,
+        )
+        validation_status = STATUS_MISSING if diagnostics.get("payload") is not None else "NOT_EVALUATED"
+        if diagnostics.get("payload") is not None and not diagnostics.get("is_stale"):
+            # Fresh diagnostics exist but classic shadow metrics are absent.
+            level = "YELLOW"
+            validation_status = STATUS_MISSING
+        elif diagnostics.get("is_stale"):
+            level = "YELLOW"
+            validation_status = STATUS_STALE_VALIDATION
+        else:
+            level = "GREY"
+        payload = {
+            "level": level,
+            "validation_status": validation_status,
+            "rows": int(len(shadow)),
+            "evaluated_rows": evaluated_rows,
+            "pending_rows": int(len(shadow) - len(evaluated)) if len(shadow) else 0,
+            "macro_f1": None,
+            "balanced_accuracy": None,
+            "loss_recall": None,
+            "last_validation_time": last_validation_time,
+            "latest_diagnostics_at": latest_diagnostics_at,
+            "registry_id": shadow.iloc[-1].get("registry_id") if len(shadow) else None,
+            "model_version": shadow.iloc[-1].get("model_version") if len(shadow) else None,
+            "prediction_distribution": pred_dist,
+            "latest_prediction_at": shadow.iloc[-1].get("prediction_timestamp") if len(shadow) else None,
+            "metric_is_legacy": False,
+            "legacy_macro_f1": legacy_macro,
+            "legacy_source_timestamp": legacy.get("timestamp"),
+            "legacy_is_stale": True if legacy_macro is not None else None,
+            "macro_f1_meta": macro_m,
+            "metric_source": diagnostics.get("source_path_display") or diagnostics.get("source_path"),
+        }
+        return apply_stale_block(payload, freshness)
 
     validation_status = "PASS" if macro_f1 is not None and macro_f1 >= SHADOW_MACRO_F1_PASS_THRESHOLD else "WARNING"
     level = "GREEN" if validation_status == "PASS" else "YELLOW"
@@ -587,15 +709,21 @@ async def build_shadow_inference_snapshot() -> dict[str, Any]:
         level = "GREY"
         validation_status = "NOT_EVALUATED"
 
-    registry_id = shadow.iloc[-1].get("registry_id") if len(shadow) else None
-    model_version = shadow.iloc[-1].get("model_version") if len(shadow) else None
-
-    freshness = build_freshness(
-        source_path=governance_path or monitoring_path,
-        source_timestamp=last_validation_time,
+    freshness = diagnostics.get("freshness") or build_freshness(
+        source_path=gov_src.get("source_path") or diagnostics.get("source_path"),
+        source_timestamp=last_validation_time or latest_diagnostics_at,
         max_age_hours=MODEL_VALIDATION_MAX_AGE_HOURS,
         stale_status=STATUS_STALE_VALIDATION,
     )
+    # When diagnostics are current, shadow block freshness follows diagnostics — not June legacy.
+    if diagnostics.get("payload") is not None and not diagnostics.get("is_stale"):
+        freshness = diagnostics["freshness"]
+        if validation_status not in {"PASS", "WARNING", "FAIL"}:
+            validation_status = validation_status
+    elif diagnostics.get("is_stale"):
+        validation_status = STATUS_STALE_VALIDATION
+        level = "YELLOW"
+
     payload = {
         "level": level,
         "validation_status": validation_status,
@@ -606,39 +734,49 @@ async def build_shadow_inference_snapshot() -> dict[str, Any]:
         "balanced_accuracy": balanced_accuracy,
         "loss_recall": loss_recall,
         "last_validation_time": last_validation_time,
-        "registry_id": registry_id,
-        "model_version": model_version,
+        "latest_diagnostics_at": latest_diagnostics_at,
+        "registry_id": shadow.iloc[-1].get("registry_id") if len(shadow) else None,
+        "model_version": shadow.iloc[-1].get("model_version") if len(shadow) else None,
         "prediction_distribution": pred_dist,
         "latest_prediction_at": shadow.iloc[-1].get("prediction_timestamp") if len(shadow) else None,
+        "metric_is_legacy": metric_is_legacy,
+        "legacy_macro_f1": (macro_m.get("legacy_value") if macro_m else None),
+        "legacy_source_timestamp": (macro_m.get("legacy_source_timestamp") if macro_m else legacy.get("timestamp")),
+        "legacy_is_stale": True if legacy.get("row") else None,
+        "macro_f1_meta": macro_m,
+        "metric_source": diagnostics.get("source_path_display") or diagnostics.get("source_path"),
     }
-    if freshness.get("is_stale"):
-        payload["validation_status"] = STATUS_STALE_VALIDATION
-        payload["level"] = "YELLOW"
     return apply_stale_block(payload, freshness)
 
 
 async def build_toxic_box_snapshot() -> dict[str, Any]:
+    toxic_path = resolve_existing_path(resolve_dashboard_read("toxic_box_memory.parquet"))
     toxic = await read_parquet("toxic_box_memory.parquet", tail=10000)
-    if len(toxic) == 0:
-        toxic_path = resolve_existing_path(resolve_dashboard_read("toxic_box_memory.parquet"))
+    if len(toxic) == 0 or toxic_path is None:
         freshness = build_freshness(
             source_path=toxic_path,
             source_timestamp=None,
             max_age_hours=MODEL_TOXIC_MAX_AGE_HOURS,
             stale_status=STATUS_STALE_VALIDATION,
+            missing_status=STATUS_MISSING,
         )
         return apply_stale_block(
             {
-                "level": "YELLOW",
-                "severity_label": "Unknown",
+                "level": "GREY",
+                "severity_label": STATUS_MISSING,
+                "status": STATUS_MISSING,
                 "rows": 0,
                 "events": 0,
                 "events_last_7d": 0,
                 "toxic_rate_7d": 0.0,
                 "trend": "STABLE",
                 "type_distribution": {},
+                "source_path": toxic_path,
+                "missing_reason": "toxic source missing" if toxic_path is None else "toxic data empty",
             },
             freshness,
+            stale_status_field="severity_label",
+            stale_status_value=STATUS_MISSING,
         )
 
     frame = toxic.copy()
@@ -704,7 +842,6 @@ async def build_toxic_box_snapshot() -> dict[str, Any]:
         is_bulk_backfill=bulk_backfill,
     )
 
-    toxic_path = resolve_existing_path(resolve_dashboard_read("toxic_box_memory.parquet"))
     freshness_ts = latest_routed if pd.notna(latest_routed) else frame.iloc[-1].get(t0_col)
     freshness = build_freshness(
         source_path=toxic_path,
@@ -730,12 +867,16 @@ async def build_toxic_box_snapshot() -> dict[str, Any]:
         "type_distribution": type_dist,
         "latest_timestamp": frame.iloc[-1].get(t0_col) if len(frame) else None,
         "latest_routed_at": latest_routed.isoformat() if pd.notna(latest_routed) else None,
+        "source_path": toxic_path,
     }
     if freshness.get("is_stale"):
         if severity_label == "Baseline loaded":
             payload["severity_label"] = "Baseline loaded (STALE)"
         else:
             payload["severity_label"] = f"{severity_label}+STALE" if severity_label else "STALE"
+    elif not toxic_path:
+        payload["severity_label"] = STATUS_MISSING
+        payload["status"] = STATUS_MISSING
     return apply_stale_block(payload, freshness)
 
 
@@ -743,60 +884,46 @@ async def build_model_summary_snapshot(
     governance: dict[str, Any],
     drift: dict[str, Any],
     shadow: dict[str, Any],
+    sources: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    macro_f1 = shadow.get("macro_f1") or governance.get("shadow_macro_f1")
-    loss_recall = shadow.get("loss_recall") or governance.get("shadow_loss_recall")
-    psi = drift.get("psi")
-    shadow_status = str(shadow.get("validation_status") or "NOT_EVALUATED").upper()
-    drift_level = drift.get("level", "GREY")
-    drift_severity = drift.get("severity_label")
+    sources = sources or build_model_summary_sources()
+    metrics = sources.get("metrics") or {}
+    macro_f1 = (metrics.get("macro_f1") or {}).get("value")
+    loss_recall = (metrics.get("loss_recall") or {}).get("value")
+    psi = (metrics.get("psi") or {}).get("value")
 
-    if shadow_status in {"MISSING", "NOT_EVALUATED", "MISSING_DATA"} and not governance.get("active_model"):
-        status = "NOT_EVALUATED"
-        level = "GREY"
-    elif shadow_status in {"MISSING", "NOT_EVALUATED", "MISSING_DATA"}:
-        status = "NOT_EVALUATED"
-        level = "GREY"
-    elif shadow_status in {"WARNING", "STALE_VALIDATION"} or drift_level == "RED":
-        status = "ATTENTION"
-        level = "YELLOW"
-    elif drift_level == "YELLOW":
-        status = "MONITOR"
-        level = "YELLOW"
-    else:
-        status = "HEALTHY"
-        level = "GREEN"
-
-    if drift_level == "RED" and drift_severity == "Critical" and shadow_status == "PASS":
-        status = "MONITOR"
-        level = "YELLOW"
+    diagnostics_status = (sources.get("diagnostics_primary") or {}).get("freshness_status")
+    gov_status = str(governance.get("governance_status") or STATUS_GOVERNANCE_MISSING)
 
     base = {
-        "level": level,
-        "status": status,
+        "level": "YELLOW",
+        "status": "ATTENTION",
         "model": governance.get("active_model"),
         "shadow_macro_f1": macro_f1,
         "loss_recall": loss_recall,
         "psi": psi,
-        "governance_status": governance.get("governance_status"),
+        "governance_status": gov_status,
+        "diagnostics_status": diagnostics_status,
     }
     return build_model_summary_with_freshness(
         governance=governance,
         drift=drift,
         shadow=shadow,
         base_summary=base,
+        sources=sources,
     )
 
 
 async def build_research_pipeline_snapshot() -> dict[str, Any]:
+    sources = build_model_summary_sources()
     pipeline = await build_pipeline_sync_status()
     decision = await build_decision_layer_snapshot()
-    drift = await build_drift_monitoring_snapshot()
-    governance = await build_model_governance_snapshot()
+    drift = await build_drift_monitoring_snapshot(sources)
+    governance = await build_model_governance_snapshot(sources)
     economic = await build_economic_validation_snapshot()
-    shadow = await build_shadow_inference_snapshot()
+    shadow = await build_shadow_inference_snapshot(sources)
     toxic = await build_toxic_box_snapshot()
-    model_summary = await build_model_summary_snapshot(governance, drift, shadow)
+    model_summary = await build_model_summary_snapshot(governance, drift, shadow, sources)
 
     ribbon_extensions = [
         {
@@ -843,6 +970,7 @@ async def build_research_pipeline_snapshot() -> dict[str, Any]:
 
     return {
         "generated_at": datetime.now().isoformat(),
+        "model_summary_source_version": model_summary.get("model_summary_source_version"),
         "pipeline": pipeline,
         "decision_layer": decision,
         "model_governance": governance,

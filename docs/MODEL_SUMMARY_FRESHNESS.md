@@ -1,106 +1,77 @@
 # Model Summary Freshness Guard
 
 Dashboard-only layer that distinguishes **current**, **stale**, and **missing**
-model governance / validation diagnostics. It does **not** retrain models,
-change the active model, mutate the pipeline, or touch execution / market-context
-lifecycle logic.
+diagnostics. Stage 11: **benchmark/conformance reports are primary**; legacy
+`data/ml/model_monitoring_memory.parquet` is fallback only.
+
+It does **not** retrain models, change the active model, mutate the pipeline,
+or touch execution / market-context lifecycle logic. It does **not** generate
+benchmark files.
 
 ## Sources the dashboard reads
 
-| Model Summary field | Primary source | Fallback |
-|---|---|---|
-| Shadow macro F1 | `exports/model_governance_dashboard.json` → `shadow_metrics_last_5000.macro_f1` | latest row of `data/ml/model_monitoring_memory.parquet` (`macro_f1`) |
-| Balanced accuracy | governance JSON `shadow_metrics_last_5000.balanced_accuracy` | monitoring parquet `balanced_accuracy` |
-| Loss recall | governance JSON / monitoring parquet `loss_recall` | — |
-| PSI | monitoring parquet `psi_label` (Drift Monitoring) | — |
-| Last validation | governance JSON `last_validation_at` | monitoring parquet `timestamp` |
-| Governance status | derived from monitoring + governance JSON | annotated with `+STALE` when stale |
-| Active model | governance JSON `active_model` | shown as `MISSING` when empty |
-| Candidate model | governance JSON `candidate_model` | shown as `MISSING` when empty |
-| Promotion eligible | monitoring / governance rules | forced `NO` when governance is stale |
-| Toxic Box baseline / events | `toxic_box_memory.parquet` | — |
-| Economic Validation rolling / pending / complete | `economic_validation_memory.parquet` (+ trading validation memory for row counts) | — |
+See also [MODEL_SUMMARY_SOURCES.md](./MODEL_SUMMARY_SOURCES.md).
 
-Resolved via `dashboard/backend/app/services/research_pipeline_service.py` and
-path aliases in `dashboard_paths.py`.
+| Field | Primary | Fallback / notes |
+|---|---|---|
+| Latest diagnostics | `benchmark/conformance/reports/latest_conformance.json` `generated_at` | then `latest_integrated.json` |
+| Shadow macro F1 / balanced accuracy / loss recall / PSI | nested keys in conformance / integrated / stage2 / latest summaries | **not** June parquet as current; legacy values under `legacy_*` only |
+| Governance status / active / candidate / promotion | `exports/model_governance_dashboard.json` | if missing → `GOVERNANCE_MISSING`, promotion `NO` |
+| Legacy model monitoring | `data/ml/model_monitoring_memory.parquet` | shown STALE / `used_as_primary=false` when benchmark fresh |
+| Toxic Box | `toxic_box_memory.parquet` (resolved path) | missing → `MISSING_DATA` (no “Baseline loaded” without source/freshness) |
+| Economic Validation | `data/diagnostics/economic_validation_memory.parquet` | `source_path` exposed; 48h threshold |
 
 ## Freshness thresholds
 
 Configured in `dashboard/backend/app/config.py` (env-overridable):
 
-| Block | Env var | Default `max_age_hours` |
-|---|---|---|
-| Governance / model validation | `DASHBOARD_MODEL_GOVERNANCE_MAX_AGE_HOURS` / `DASHBOARD_MODEL_VALIDATION_MAX_AGE_HOURS` | **168** (7 days) |
-| Drift monitoring | `DASHBOARD_MODEL_DRIFT_MAX_AGE_HOURS` | **168** |
-| Toxic box | `DASHBOARD_MODEL_TOXIC_MAX_AGE_HOURS` | **168** |
-| Economic validation (live rolling) | `DASHBOARD_MODEL_ECONOMIC_MAX_AGE_HOURS` | **48** |
-| Benchmark reports | `DASHBOARD_MODEL_BENCHMARK_MAX_AGE_HOURS` | **168** |
+| Block | Default `max_age_hours` |
+|---|---|
+| Benchmark / conformance diagnostics | **168** |
+| Governance artifact | **168** |
+| Drift monitoring (follows diagnostics) | **168** |
+| Toxic box | **168** |
+| Economic validation (live rolling) | **48** |
+| Legacy monitoring (when used alone) | **168** |
 
-Timestamp preference:
+## Freshness / attention statuses
 
-1. Artifact timestamp inside the file / JSON (`last_validation_at`, monitoring `timestamp`, toxic routed time, economic `completed_at`, …)
-2. Else file `mtime`
-3. Else `MISSING_DATA` / `UNKNOWN_FRESHNESS`
+- `CURRENT` — diagnostics within threshold
+- `STALE_VALIDATION` / `STALE_DRIFT_DATA` / `STALE_GOVERNANCE_DATA`
+- `MISSING_DATA` / `GOVERNANCE_MISSING` / `UNKNOWN_FRESHNESS`
 
-## Freshness statuses
+Top Model Summary:
 
-- `CURRENT` — within threshold
-- `STALE_VALIDATION` — validation / economic / shadow older than threshold
-- `STALE_GOVERNANCE_DATA` — governance block stale
-- `STALE_DRIFT_DATA` — drift / PSI block stale
-- `MISSING_DATA` — artifact absent
-- `UNKNOWN_FRESHNESS` — path exists but no usable timestamp/mtime
+- fresh benchmark + missing governance → **ATTENTION** ·
+  `governance artifact missing; benchmark diagnostics current`
+- stale benchmark → **ATTENTION** · `benchmark diagnostics stale`
 
-Each block also exposes:
+## How to interpret metrics
 
-```text
-freshness:
-  source_path, source_timestamp, source_mtime,
-  age_hours, age_days, is_stale, stale_reason, max_age_hours
-```
+- Metrics from fresh reports → `metrics_scope=current` (or MISSING if key absent)
+- June parquet metrics → `legacy_value` / `legacy_is_stale=true` / not primary
+- Empty active/candidate → **MISSING**
+- Promotion eligible → **NO** when governance missing or stale
 
-plus `metrics_scope` (`current` | `historical` | `missing` | `unknown`).
-
-## How to interpret stale metrics
-
-- Metrics may still be shown, but only as **historical**.
-- Do not treat PASS / MONITOR / REVIEW as live health without the stale warning.
-- Model Summary top status becomes **ATTENTION** with reason
-  `model validation data stale`.
-- Governance shows base status plus `+STALE` (e.g. `DRIFT_WARNING+STALE`).
-- `promotion_eligible` is forced to **NO**.
-- Empty active/candidate model strings render as **MISSING**, not `—`.
-- Toxic “Baseline loaded” becomes **Baseline loaded (STALE)** when stale.
-
-Example warning copy:
-
-> Data is stale. Last validation was 2026-06-14. Metrics are historical.
-
-## How to refresh validation manually
+## How to refresh manually
 
 The dashboard **never** starts retrain or validation by itself.
 
-Manual options (operator-run):
+1. Refresh diagnostics: run existing benchmark/conformance jobs (operators), which
+   update `benchmark/**/latest_*.json` — dashboard only reads them.
+2. Refresh governance: produce `exports/model_governance_dashboard.json` via the
+   existing governance export / `scripts/retrain_models.py` when available.
+3. Legacy parquet remains optional historical context.
 
-1. Preferred when present in the repo: `scripts/retrain_models.py`
-   (referenced by the Governance card as the weekly manual retrain note).
-2. If that script is not checked in yet, refresh the upstream artifacts that the
-   dashboard reads:
-   - regenerate / update `data/ml/model_monitoring_memory.parquet`
-   - regenerate `exports/model_governance_dashboard.json` (if used)
-   - update toxic / economic validation memories via the existing offline
-     validation / monitoring jobs used by the research stack
-3. Related offline tooling lives under `scripts/replay_validation/` and
-   benchmark runners (`scripts/run_*_benchmark.py`) — these are research /
-   conformance jobs, not live promotion.
+## Runtime note (Stage 11.1)
 
-After artifacts are refreshed within the thresholds above, Model Summary returns
-to non-stale statuses without any dashboard code change.
+`make runtime-stack` refreshes dashboard API + Vite UI on every start so this
+code path is loaded. Endpoint: `GET /api/v1/ops/snapshot` →
+`research_pipeline.model_summary` with `model_summary_source_version:
+benchmark_primary_v1`.
 
 ## Why the dashboard does not auto-retrain
 
-- Retrain and promotion are **governance decisions**, not UI side effects.
-- Auto-retrain from a monitoring panel would mutate model artifacts and risk
-  silent promotion eligibility changes.
-- Stage 10 only adds a **freshness guard** so June (or older) diagnostics cannot
-  be mistaken for July (current) health.
+Retrain and promotion are governance decisions. Auto-retrain from a monitoring
+panel would mutate model artifacts. Freshness + source priority only prevent
+stale or missing artifacts from looking like live health.

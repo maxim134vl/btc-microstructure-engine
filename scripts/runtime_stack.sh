@@ -7,6 +7,9 @@
 #   dashboard/scripts/start_dashboard.sh   → API :8080 + UI :5173
 # Docker equivalent (when deploy/ present): make up / make down / make ps
 #
+# Dashboard API/UI are always refreshed on start (not adopted) so Model Summary
+# source-priority code changes load without a separate restart.
+#
 # Does NOT change engine/runtime logic — orchestration only.
 set -euo pipefail
 
@@ -296,20 +299,23 @@ PY
 }
 
 start_dashboard_api() {
+  # Always refresh API on stack start so dashboard code changes are loaded.
+  # Adopting a long-lived :8080 process was keeping Stage 10 payloads in memory
+  # after Stage 11 source-priority changes.
   local listener existing
   listener="$(port_pids "$API_PORT" | head -1 || true)"
   if pid_alive "$listener"; then
-    write_pid "$API_PID_FILE" "$listener"
-    echo "  [adopt] dashboard_api via :$API_PORT pid=$listener"
-    return 0
+    echo "  [refresh] stopping existing dashboard_api on :$API_PORT pid=$listener"
+    kill_pid_tree "$listener"
   fi
   existing="$(first_repo_pid "run_api\\.py")"
   if pid_alive "$existing"; then
-    # Process exists but not listening yet / crashed — replace
+    echo "  [refresh] stopping existing run_api.py pid=$existing"
     kill_pid_tree "$existing"
   fi
-
+  clear_pid "$API_PID_FILE"
   free_port_if_needed "$API_PORT"
+
   : >"$API_LOG"
   echo "  [start] dashboard API :$API_PORT"
   (
@@ -335,19 +341,21 @@ start_dashboard_api() {
 }
 
 start_dashboard_ui() {
+  # Always refresh UI on stack start so Vite serves current src (not a stale process).
   local listener existing
   listener="$(port_pids "$UI_PORT" | head -1 || true)"
   if pid_alive "$listener"; then
-    write_pid "$UI_PID_FILE" "$listener"
-    echo "  [adopt] dashboard_ui via :$UI_PORT pid=$listener"
-    return 0
+    echo "  [refresh] stopping existing dashboard_ui on :$UI_PORT pid=$listener"
+    kill_pid_tree "$listener"
   fi
   existing="$(first_repo_pid "vite")"
   if pid_alive "$existing"; then
+    echo "  [refresh] stopping existing vite pid=$existing"
     kill_pid_tree "$existing"
   fi
-
+  clear_pid "$UI_PID_FILE"
   free_port_if_needed "$UI_PORT"
+
   : >"$UI_LOG"
   echo "  [start] dashboard UI http://${UI_HOST}:${UI_PORT}"
   if [[ ! -d "$ROOT/dashboard/frontend/node_modules" ]]; then
@@ -366,7 +374,7 @@ start_dashboard_ui() {
   for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if [[ -n "$(port_pids "$UI_PORT")" ]]; then
       write_pid "$UI_PID_FILE" "$(port_pids "$UI_PORT" | head -1)"
-      echo "  [ok] dashboard UI listening on :$UI_PORT"
+      echo "  [ok] dashboard UI listening on :$UI_PORT (vite dev / src)"
       return 0
     fi
     if ! pid_alive "$(read_pid "$UI_PID_FILE")"; then

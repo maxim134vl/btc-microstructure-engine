@@ -47,6 +47,7 @@ import {
   resolvePipelineSyncStatus,
   resolveShadowStatus,
   resolveToxicStatus,
+  formatModelSummarySourceLines,
   useSimulatedStatus,
   statusStripeClass,
   type ResolvedStatus,
@@ -472,27 +473,53 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
             secondary={`${t("ops.executiveStatus")}: ${model_summary.status ?? "—"} · ${model_summary.governance_status ?? "—"}`}
             status={summaryStatus}
           />
+          {formatModelSummarySourceLines(model_summary.model_summary_sources, {
+            version: model_summary.model_summary_source_version ?? "benchmark_primary_v1",
+            promotionEligible:
+              model_summary.promotion_eligible_label ??
+              model_governance.promotion_eligible_label ??
+              "NO",
+            reason: model_summary.attention_reason ?? model_summary.status_reason ?? null,
+          }).map((line) => (
+            <ListRow key={line} icon={SymbolClock} primary={line} status={summaryStatus} />
+          ))}
           <ListRow
             icon={SymbolLayers}
-            primary={`${historicalPrefix(model_summary.metrics_scope)}${t("ops.shadowMacroF1")}: ${formatMetric(model_summary.shadow_macro_f1)}`}
-            secondary={`${t("ops.lossRecall")}: ${formatMetric(model_summary.loss_recall)} · ${t("ops.psi")}: ${formatMetric(model_summary.psi, 3)}`}
-            status={summaryStatus}
-          />
-          <ListRow
-            icon={SymbolClock}
-            primary={`${t("ops.lastValidation")}: ${formatShortTime(model_summary.last_validation_at ?? model_governance.last_validation_at)}`}
+            primary={`Current PSI: ${formatMetric(model_summary.psi, 3)} · Macro F1: ${formatMetric(model_summary.shadow_macro_f1)} · Loss recall: ${formatMetric(model_summary.loss_recall)}`}
             secondary={
-              model_summary.attention_reason || model_summary.status_reason
-                ? String(model_summary.attention_reason || model_summary.status_reason)
+              model_summary.psi == null && model_summary.shadow_macro_f1 == null
+                ? "Classic ML metrics MISSING_DATA in fresh benchmark (not using June legacy as current)"
                 : undefined
             }
             status={summaryStatus}
           />
+          {model_summary.legacy_metrics?.psi != null || model_summary.psi_meta?.legacy_value != null ? (
+            <ListRow
+              icon={SymbolBell}
+              primary={`Legacy / Historical PSI: ${formatMetric(
+                model_summary.legacy_metrics?.psi ?? model_summary.psi_meta?.legacy_value,
+                3,
+              )} · STALE · not primary`}
+              secondary={
+                model_summary.legacy_metrics?.source_timestamp ||
+                model_summary.model_summary_sources?.legacy_monitoring?.timestamp
+                  ? formatShortTime(
+                      String(
+                        model_summary.legacy_metrics?.source_timestamp ??
+                          model_summary.model_summary_sources?.legacy_monitoring?.timestamp,
+                      ),
+                    )
+                  : undefined
+              }
+              status={summaryStatus}
+              muted
+            />
+          ) : null}
           <FreshnessMeta
             freshness={model_summary.freshness}
             warning={model_summary.stale_warning}
             refreshHint={model_summary.refresh_hint}
-            asOfOverride={model_summary.last_validation_at}
+            asOfOverride={model_summary.latest_diagnostics_at}
           />
         </PanelCard>
       ) : null}
@@ -552,7 +579,7 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
           <ListRow
             icon={SymbolWaveform}
             primary={`${t("ops.shadowStatus")}: ${shadow_inference.validation_status ?? "—"}`}
-            secondary={`${t("ops.lastValidation")}: ${formatShortTime(shadow_inference.last_validation_time)}`}
+            secondary={`Latest diagnostics: ${formatShortTime(shadow_inference.latest_diagnostics_at ?? shadow_inference.last_validation_time)}`}
             status={shadowStatus}
           />
           <FreshnessMeta
@@ -578,15 +605,24 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
           />
           <ListRow
             icon={SymbolLayers}
-            primary={`${t("ops.lastRetrain")}: ${formatShortTime(model_governance.last_retrain_at)} · ${t("ops.lastValidation")}: ${formatShortTime(model_governance.last_validation_at)}`}
+            primary={`Latest diagnostics: ${formatShortTime(model_governance.latest_diagnostics_at ?? model_summary?.latest_diagnostics_at)}`}
+            secondary={`Governance validation: ${formatShortTime(model_governance.governance_validation_at ?? model_governance.last_validation_at)}`}
+            status={governanceStatus}
+          />
+          <ListRow
+            icon={SymbolLayers}
+            primary={`${t("ops.lastRetrain")}: ${formatShortTime(model_governance.last_retrain_at)}`}
             secondary={`${t("ops.modelAge")}: ${model_governance.active_model_age_days != null ? `${model_governance.active_model_age_days}d` : "—"} · ${t("ops.nextRetrain")}: ${model_governance.next_retrain_note ?? "—"}`}
             status={governanceStatus}
           />
+          {model_governance.missing_reason ? (
+            <div className="px-2.5 py-2 text-[11px] text-ds-status-warning">{model_governance.missing_reason}</div>
+          ) : null}
           <FreshnessMeta
             freshness={model_governance.freshness}
             warning={model_governance.stale_warning}
             refreshHint={model_governance.refresh_hint}
-            asOfOverride={model_governance.last_validation_at}
+            asOfOverride={model_governance.governance_validation_at ?? model_governance.last_validation_at}
           />
         </PanelCard>
 
@@ -601,10 +637,25 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
             <ListRow
               icon={SymbolBell}
               primary={`Macro F1: ${formatMetric(drift_monitoring.macro_f1)} · ${t("ops.lossRecall")}: ${formatMetric(drift_monitoring.loss_recall)}`}
-              secondary={drift_monitoring.last_monitoring_at ? formatShortTime(String(drift_monitoring.last_monitoring_at)) : undefined}
+              secondary={
+                drift_monitoring.latest_diagnostics_at || drift_monitoring.last_monitoring_at
+                  ? `Latest diagnostics: ${formatShortTime(String(drift_monitoring.latest_diagnostics_at ?? drift_monitoring.last_monitoring_at))}`
+                  : undefined
+              }
               status={driftStatus}
             />
-            <FreshnessMeta
+            {drift_monitoring.legacy_psi != null ? (
+              <ListRow
+                icon={SymbolBell}
+                primary={`Legacy PSI: ${formatMetric(drift_monitoring.legacy_psi, 3)} · STALE · not primary`}
+                secondary={
+                  drift_monitoring.legacy_source_timestamp
+                    ? formatShortTime(String(drift_monitoring.legacy_source_timestamp))
+                    : undefined
+                }
+                status={driftStatus}
+              />
+            ) : null}            <FreshnessMeta
               freshness={drift_monitoring.freshness}
               warning={drift_monitoring.stale_warning}
               refreshHint={drift_monitoring.refresh_hint}

@@ -294,6 +294,41 @@ export interface ArtifactFreshness {
   refresh_hint?: string | null;
 }
 
+export interface ModelSummarySources {
+  diagnostics_primary?: {
+    source_path?: string | null;
+    generated_at?: string | null;
+    freshness_status?: string;
+    age_hours?: number | null;
+    age_days?: number | null;
+    is_stale?: boolean;
+    used_as_primary?: boolean;
+  };
+  governance?: {
+    source_path?: string | null;
+    status?: string;
+    missing_reason?: string | null;
+  };
+  legacy_monitoring?: {
+    source_path?: string | null;
+    timestamp?: string | null;
+    age_days?: number | null;
+    used_as_primary?: boolean;
+    is_stale?: boolean;
+    freshness_status?: string;
+  };
+}
+
+export interface MetricSourceMeta {
+  metric_source?: string | null;
+  metric_freshness?: string;
+  metric_is_legacy?: boolean;
+  status?: string;
+  legacy_value?: number | null;
+  legacy_source_timestamp?: string | null;
+  legacy_is_stale?: boolean;
+}
+
 export interface ModelGovernanceSnapshot {
   level: OpsLevel;
   governance_status?: string;
@@ -305,6 +340,10 @@ export interface ModelGovernanceSnapshot {
   shadow_model?: string;
   last_retrain_at?: string;
   last_validation_at?: string;
+  governance_validation_at?: string | null;
+  latest_diagnostics_at?: string | null;
+  diagnostics_status?: string;
+  missing_reason?: string | null;
   shadow_macro_f1?: number;
   shadow_balanced_accuracy?: number;
   shadow_loss_recall?: number;
@@ -342,6 +381,8 @@ export interface EconomicValidationSnapshot {
   loss_count?: number;
   outcome_distribution?: Record<string, number>;
   latest_completed_at?: string;
+  source_path?: string | null;
+  missing_reason?: string | null;
   freshness?: ArtifactFreshness;
   metrics_scope?: string;
   stale_warning?: string | null;
@@ -358,10 +399,16 @@ export interface ShadowInferenceSnapshot {
   balanced_accuracy?: number | null;
   loss_recall?: number | null;
   last_validation_time?: string | null;
+  latest_diagnostics_at?: string | null;
   registry_id?: string;
   model_version?: string;
   prediction_distribution?: Record<string, number>;
   latest_prediction_at?: string;
+  metric_is_legacy?: boolean;
+  legacy_macro_f1?: number | null;
+  legacy_source_timestamp?: string | null;
+  legacy_is_stale?: boolean | null;
+  metric_source?: string | null;
   freshness?: ArtifactFreshness;
   metrics_scope?: string;
   stale_warning?: string | null;
@@ -371,6 +418,7 @@ export interface ShadowInferenceSnapshot {
 export interface ToxicBoxSnapshot {
   level: OpsLevel;
   severity_label?: string;
+  status?: string;
   rows: number;
   events: number;
   events_last_7d?: number;
@@ -385,6 +433,8 @@ export interface ToxicBoxSnapshot {
   trend?: string;
   type_distribution?: Record<string, number>;
   latest_timestamp?: string;
+  source_path?: string | null;
+  missing_reason?: string | null;
   freshness?: ArtifactFreshness;
   metrics_scope?: string;
   stale_warning?: string | null;
@@ -401,7 +451,14 @@ export interface DriftMonitoringSnapshot {
   macro_f1_trend?: number | null;
   loss_recall_trend?: number | null;
   last_monitoring_at?: string | null;
+  latest_diagnostics_at?: string | null;
   monitoring_rows?: number;
+  metric_source?: string | null;
+  legacy_psi?: number | null;
+  legacy_source_timestamp?: string | null;
+  legacy_is_stale?: boolean | null;
+  benchmark_drift_severity?: string | null;
+  cognition_health?: string | null;
   freshness?: ArtifactFreshness;
   metrics_scope?: string;
   stale_warning?: string | null;
@@ -417,6 +474,9 @@ export interface ModelSummarySnapshot {
   psi?: number | null;
   governance_status?: string;
   last_validation_at?: string | null;
+  latest_diagnostics_at?: string | null;
+  governance_validation_at?: string | null;
+  diagnostics_status?: string;
   attention_reason?: string | null;
   status_reason?: string | null;
   freshness_status?: string;
@@ -424,5 +484,18 @@ export interface ModelSummarySnapshot {
   metrics_scope?: string;
   stale_warning?: string | null;
   refresh_hint?: string | null;
+  promotion_eligible?: boolean;
   promotion_eligible_label?: string;
+  model_summary_source_version?: string;
+  model_summary_sources?: ModelSummarySources;
+  psi_meta?: MetricSourceMeta;
+  macro_f1_meta?: MetricSourceMeta;
+  loss_recall_meta?: MetricSourceMeta;
+  legacy_metrics?: {
+    psi?: number | null;
+    macro_f1?: number | null;
+    loss_recall?: number | null;
+    source_timestamp?: string | null;
+    is_stale?: boolean | null;
+  };
 }

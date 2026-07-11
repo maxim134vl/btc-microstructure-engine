@@ -31,7 +31,8 @@ function isStaleToken(value?: string | null, freshness?: ArtifactFreshness | nul
     token === "STALE_GOVERNANCE_DATA" ||
     token === "STALE_DRIFT_DATA" ||
     token === "MISSING_DATA" ||
-    token === "UNKNOWN_FRESHNESS"
+    token === "UNKNOWN_FRESHNESS" ||
+    token === "GOVERNANCE_MISSING"
   );
 }
 
@@ -68,6 +69,10 @@ export function resolveGovernanceStatus(
   freshness?: ArtifactFreshness | null,
 ): ResolvedStatus {
   const raw = governanceStatus?.trim() || "UNKNOWN";
+  const upper = raw.toUpperCase();
+  if (upper === "GOVERNANCE_MISSING" || upper === "MISSING_DATA" || upper === "MISSING") {
+    return researchStatus(upper === "GOVERNANCE_MISSING" ? "GOVERNANCE_MISSING" : "MISSING", "degraded");
+  }
   if (isStaleToken(raw, freshness)) {
     const label = raw.includes("STALE") || freshness?.is_stale ? raw : `${raw}+STALE`;
     return researchStatus(label, "degraded");
@@ -85,13 +90,15 @@ export function resolveDriftStatus(
     const label = severityLabel?.trim() || "STALE_DRIFT_DATA";
     return researchStatus(label, "degraded");
   }
-  const label = severityLabel?.trim() || (() => {
-    const normalized = level.toUpperCase();
-    if (normalized === "GREEN") return "Stable";
-    if (normalized === "RED") return "Critical";
-    if (normalized === "GREY") return "Unknown";
-    return "Warning";
-  })();
+  const label =
+    severityLabel?.trim() ||
+    (() => {
+      const normalized = level.toUpperCase();
+      if (normalized === "GREEN") return "Stable";
+      if (normalized === "RED") return "Critical";
+      if (normalized === "GREY") return "Unknown";
+      return "Warning";
+    })();
   return researchStatus(label, levelToTone(level));
 }
 
@@ -104,12 +111,14 @@ export function resolveToxicStatus(
   if (isStaleToken(severityLabel, freshness)) {
     return researchStatus(severityLabel?.trim() || "STALE", "degraded");
   }
-  const label = severityLabel?.trim() || (() => {
-    const normalized = level.toUpperCase();
-    if (normalized === "GREEN") return "Normal";
-    if (normalized === "RED") return "Critical";
-    return "Elevated";
-  })();
+  const label =
+    severityLabel?.trim() ||
+    (() => {
+      const normalized = level.toUpperCase();
+      if (normalized === "GREEN") return "Normal";
+      if (normalized === "RED") return "Critical";
+      return "Elevated";
+    })();
   return researchStatus(label, levelToTone(level));
 }
 
@@ -149,7 +158,7 @@ export function resolveShadowStatus(
   if (vs === "PASS") label = "PASS";
   else if (vs === "WARNING") label = "REVIEW";
   else if (vs === "NOT_EVALUATED" || vs === "NO_DATA" || vs === "UNAVAILABLE") label = "Not evaluated";
-  else if (vs === "MISSING") label = "Not evaluated";
+  else if (vs === "MISSING" || vs === "MISSING_DATA") label = "MISSING_DATA";
   else if (vs === "FAIL") label = "FAIL";
   else if (level.toUpperCase() === "GREY") label = "Not evaluated";
   else if (level.toUpperCase() === "GREEN") label = "PASS";
@@ -215,4 +224,79 @@ export function resolveResearchRibbonItem(item: {
     default:
       return resolveDecisionStatus(item.level);
   }
+}
+
+export function formatSourceTimestamp(value?: string | null): string {
+  if (!value) return "MISSING";
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return String(value);
+  return new Date(parsed).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** True when a date string is the June legacy monitoring stamp. */
+export function isLegacyJunePrimaryDate(value?: string | null): boolean {
+  if (!value) return false;
+  const normalized = String(value);
+  return /2026-06-14/.test(normalized) || /Jun\s*14/i.test(normalized);
+}
+
+/** Display lines for Model Summary source priority (benchmark primary / governance / legacy). */
+export function formatModelSummarySourceLines(
+  sources?: {
+    diagnostics_primary?: {
+      generated_at?: string | null;
+      freshness_status?: string;
+      source_path?: string | null;
+      used_as_primary?: boolean;
+    } | null;
+    governance?: {
+      status?: string;
+      missing_reason?: string | null;
+      source_path?: string | null;
+    } | null;
+    legacy_monitoring?: {
+      timestamp?: string | null;
+      used_as_primary?: boolean;
+      is_stale?: boolean;
+      freshness_status?: string;
+      source_path?: string | null;
+    } | null;
+  } | null,
+  options?: {
+    version?: string | null;
+    promotionEligible?: string | null;
+    reason?: string | null;
+  },
+): string[] {
+  const diagnostics = sources?.diagnostics_primary;
+  const governance = sources?.governance;
+  const legacy = sources?.legacy_monitoring;
+
+  const diagStatus = (diagnostics?.freshness_status || "MISSING").toUpperCase();
+  const govRaw = (governance?.status || "MISSING").toUpperCase();
+  const govStatus =
+    govRaw === "GOVERNANCE_MISSING" || govRaw === "MISSING_DATA" ? "GOVERNANCE_MISSING" : govRaw;
+  const legacyStatus =
+    legacy?.is_stale || (legacy?.freshness_status || "").toUpperCase().includes("STALE")
+      ? "STALE"
+      : (legacy?.freshness_status || "MISSING").toUpperCase();
+
+  const lines = [
+    `Data source: ${options?.version || "benchmark_primary_v1"}`,
+    `Latest diagnostics: ${formatSourceTimestamp(diagnostics?.generated_at ?? null)} · ${diagStatus}`,
+    `Source: ${diagnostics?.source_path || "MISSING"}`,
+    `Governance: ${govStatus}`,
+    `Legacy monitoring: ${formatSourceTimestamp(legacy?.timestamp ?? null)} · ${legacyStatus} · ${
+      legacy?.used_as_primary ? "primary" : "not primary"
+    }`,
+    `Promotion eligible: ${options?.promotionEligible || "NO"}`,
+  ];
+  if (options?.reason) {
+    lines.push(`Reason: ${options.reason}`);
+  }
+  return lines;
 }
