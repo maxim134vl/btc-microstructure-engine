@@ -66,6 +66,40 @@ METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "drift_severity": ("severity",),
 }
 
+# Keys that count as *toxic monitoring* metrics in benchmark reports.
+# cognition_health / failed_cognition alone do NOT qualify as toxic metrics.
+TOXIC_PRESENCE_KEYS: frozenset[str] = frozenset(
+    {
+        "toxic",
+        "toxic_box",
+        "toxic_events",
+        "toxic_rate",
+        "toxic_rate_7d",
+        "toxic_rate_30d",
+        "toxic_periods",
+        "toxic_7d",
+        "toxic_30d",
+        "toxic_trend",
+        "toxic_count",
+        "n_toxic",
+    }
+)
+
+TOXIC_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "events": ("toxic_events", "toxic_count", "n_toxic"),
+    "events_last_7d": ("events_last_7d", "toxic_7d", "toxic_events_7d"),
+    "toxic_rate_7d": ("toxic_rate_7d", "toxic_rate", "toxic_7d_rate"),
+    "toxic_rate_30d": ("toxic_rate_30d", "toxic_30d", "toxic_30d_rate"),
+    "trend": ("toxic_trend",),
+}
+
+STATUS_LEGACY_ONLY = "LEGACY_ONLY"
+STATUS_MISSING_DATA = "MISSING_DATA"
+TOXIC_LEGACY_REASON = (
+    "current toxic metrics are not present in benchmark_primary_v1; "
+    "showing historical toxic baseline"
+)
+
 
 def _repo_join(relative: str) -> Path:
     return Path(REPO_ROOT) / relative
@@ -335,6 +369,142 @@ def extract_metric_from_reports(
     return None
 
 
+def _key_is_toxic_presence(key: str) -> bool:
+    lower = str(key).lower()
+    if lower in {"cognition_health", "failed_cognition"}:
+        return False
+    if lower in TOXIC_PRESENCE_KEYS:
+        return True
+    return lower.startswith("toxic_")
+
+
+def payload_has_toxic_metrics(payload: Any) -> bool:
+    """True when report payload contains toxic monitoring fields (not cognition_health alone)."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if _key_is_toxic_presence(str(key)):
+                if isinstance(value, dict) and value:
+                    return True
+                if isinstance(value, list) and value:
+                    return True
+                if value is not None and not isinstance(value, (dict, list)):
+                    return True
+            if payload_has_toxic_metrics(value):
+                return True
+    elif isinstance(payload, list):
+        for item in payload[:50]:
+            if payload_has_toxic_metrics(item):
+                return True
+    return False
+
+
+def extract_toxic_metrics_from_payload(payload: Any) -> dict[str, Any]:
+    """Pull known toxic metric aliases from a single report payload."""
+    out: dict[str, Any] = {}
+    for name, aliases in TOXIC_METRIC_ALIASES.items():
+        hit = find_metric_ci(payload, aliases)
+        if hit is None:
+            continue
+        value, dotted = hit
+        numeric = _to_float(value)
+        out[name] = {
+            "value": numeric if numeric is not None else value,
+            "metric_path": dotted,
+        }
+    return out
+
+
+def extract_toxic_metrics_from_reports(
+    reports: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """First report (priority order) that contains toxic monitoring metrics."""
+    for report in reports:
+        payload = report.get("payload")
+        if not payload_has_toxic_metrics(payload):
+            continue
+        metrics = extract_toxic_metrics_from_payload(payload)
+        return {
+            "source_path": report.get("source_path_display") or report.get("source_path"),
+            "generated_at": report.get("generated_at"),
+            "metrics": metrics,
+            "metrics_available": True,
+        }
+    return None
+
+
+def resolve_toxic_monitoring_sources(
+    *,
+    now: datetime | None = None,
+    historical_source_path: str | None = None,
+    historical_timestamp: Any = None,
+    historical_age_days: float | None = None,
+    historical_metrics_available: bool = False,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve current vs historical toxic sources without promoting June parquet.
+
+    Fresh July diagnostics without toxic fields → LEGACY_ONLY + MISSING_DATA current.
+    """
+    now_utc = now or datetime.now(timezone.utc)
+    diagnostics = diagnostics if diagnostics is not None else pick_primary_diagnostics(now=now_utc)
+    reports = diagnostics.get("reports") or []
+    if not reports:
+        reports = load_diagnostics_reports()
+
+    extracted = extract_toxic_metrics_from_reports(reports)
+    diagnostics_status = diagnostics.get("freshness_status") or STATUS_MISSING
+    if diagnostics.get("payload") is not None and not diagnostics.get("is_stale"):
+        diagnostics_status = STATUS_CURRENT
+
+    hist_path = _rel_display(historical_source_path) or historical_source_path
+    hist_ts = historical_timestamp
+    if hist_ts is not None:
+        parsed = parse_timestamp(hist_ts)
+        hist_ts = _iso(parsed) if parsed is not None else hist_ts
+
+    historical: dict[str, Any] = {
+        "status": "STALE" if historical_metrics_available else STATUS_MISSING_DATA,
+        "source_path": hist_path,
+        "timestamp": hist_ts,
+        "age_days": historical_age_days,
+        "metrics_available": bool(historical_metrics_available),
+    }
+
+    if extracted is not None and diagnostics_status == STATUS_CURRENT:
+        return {
+            "current": {
+                "status": STATUS_CURRENT,
+                "source_path": extracted.get("source_path"),
+                "generated_at": extracted.get("generated_at"),
+                "metrics_available": True,
+                "metrics": extracted.get("metrics") or {},
+            },
+            "historical": historical,
+            "display_status": STATUS_CURRENT,
+            "display_reason": "current toxic metrics loaded from benchmark_primary_v1",
+            "diagnostics_status": diagnostics_status,
+        }
+
+    return {
+        "current": {
+            "status": STATUS_MISSING_DATA,
+            "source_path": None,
+            "generated_at": None,
+            "metrics_available": False,
+            "metrics": {},
+        },
+        "historical": historical,
+        "display_status": STATUS_LEGACY_ONLY if historical_metrics_available else STATUS_MISSING_DATA,
+        "display_reason": TOXIC_LEGACY_REASON
+        if historical_metrics_available
+        else (
+            "current toxic metrics are not present in benchmark_primary_v1; "
+            "historical toxic baseline missing"
+        ),
+        "diagnostics_status": diagnostics_status,
+    }
+
+
 def extract_legacy_metric(legacy: dict[str, Any], metric_name: str) -> dict[str, Any] | None:
     row = legacy.get("row") or {}
     aliases = METRIC_ALIASES.get(metric_name, (metric_name,))
@@ -527,6 +697,21 @@ def build_model_summary_from_sources(
     summary["model"] = missing_label(summary.get("model") or governance.get("active_model"))
     summary["governance_status"] = governance_status
     summary["promotion_eligible_label"] = governance.get("promotion_eligible_label") or "NO"
+    summary["source_freshness"] = diagnostics_status if diagnostics_status == STATUS_CURRENT else (
+        "STALE" if diagnostics.get("is_stale") else diagnostics_status
+    )
+    has_current_metrics = any(
+        (metrics.get(name) or {}).get("value") is not None for name in ("psi", "macro_f1", "loss_recall")
+    )
+    summary["metric_availability"] = (
+        "AVAILABLE"
+        if has_current_metrics
+        else (
+            "LEGACY_ONLY"
+            if any((metrics.get(name) or {}).get("legacy_value") is not None for name in ("psi", "macro_f1", "loss_recall"))
+            else "MISSING_DATA"
+        )
+    )
 
     psi_m = metrics.get("psi") or {}
     macro_m = metrics.get("macro_f1") or {}

@@ -40,14 +40,16 @@ import {
   translateValidationLevel,
   isResearchRibbonKey,
   resolveDecisionStatus,
-  resolveDriftStatus,
   resolveEconomicStatus,
   resolveGovernanceStatus,
+  resolveLocalTokenStatus,
   resolveModelSummaryStatus,
   resolvePipelineSyncStatus,
-  resolveShadowStatus,
   resolveToxicStatus,
   formatModelSummarySourceLines,
+  formatDriftLegacyPsiLine,
+  formatToxicBoxDisplay,
+  formatSourceTimestamp,
   useSimulatedStatus,
   statusStripeClass,
   type ResolvedStatus,
@@ -276,7 +278,7 @@ function ListRow({
   primary: string;
   secondary?: string;
   icon: SymbolComponent;
-  status: ResolvedStatus;
+  status?: ResolvedStatus;
   muted?: boolean;
 }) {
   return (
@@ -294,7 +296,7 @@ function ListRow({
           {secondary ? <div className="mt-0.5 truncate text-[11px] text-ds-text-secondary">{secondary}</div> : null}
         </div>
       </div>
-      <StatusIndicator status={status} icon={Icon} size="sm" />
+      {status ? <StatusIndicator status={status} icon={Icon} size="sm" /> : null}
     </div>
   );
 }
@@ -378,6 +380,7 @@ function FreshnessMeta({
   warning,
   refreshHint,
   asOfOverride,
+  showScope = true,
 }: {
   freshness?: {
     source_timestamp?: string | null;
@@ -391,6 +394,7 @@ function FreshnessMeta({
   warning?: string | null;
   refreshHint?: string | null;
   asOfOverride?: string | null;
+  showScope?: boolean;
 }) {
   if (!freshness && !warning) return null;
   const asOf = asOfOverride || freshness?.source_timestamp || freshness?.source_mtime;
@@ -402,11 +406,13 @@ function FreshnessMeta({
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         {asOf ? <span>as of {formatShortTime(String(asOf))}</span> : null}
         {ageDays != null ? <span>age: {ageDays} days</span> : null}
-        {freshness?.metrics_scope ? <span>scope: {metricScopeLabel(freshness.metrics_scope)}</span> : null}
+        {showScope && freshness?.metrics_scope ? (
+          <span>scope: {metricScopeLabel(freshness.metrics_scope)}</span>
+        ) : null}
         <FreshnessBadge freshness={freshness} />
       </div>
       {warn ? <p className="text-ds-status-warning">{warn}</p> : null}
-      {hint && freshness?.is_stale ? <p>{hint}</p> : null}
+      {hint && (freshness?.is_stale || warn) ? <p>{hint}</p> : null}
     </div>
   );
 }
@@ -435,24 +441,12 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
     economic_validation.status,
     economic_validation.freshness,
   );
-  const shadowStatus = resolveShadowStatus(
-    shadow_inference.level,
-    shadow_inference.validation_status,
-    shadow_inference.freshness,
-  );
-  const toxicStatus = resolveToxicStatus(toxic_box.level, toxic_box.severity_label, toxic_box.freshness);
-  const driftStatus = resolveDriftStatus(
-    drift_monitoring?.level ?? "GREY",
-    drift_monitoring?.severity_label,
-    drift_monitoring?.freshness,
-  );
+  const pipelineStatus = resolvePipelineSyncStatus(pipeline.in_sync ? "GREEN" : "RED");
   const summaryStatus = resolveModelSummaryStatus(
     model_summary?.level ?? "GREY",
     model_summary?.status,
     model_summary?.freshness,
-    model_summary?.attention_reason ?? model_summary?.status_reason,
   );
-  const pipelineStatus = resolvePipelineSyncStatus(pipeline.in_sync ? "GREEN" : "RED");
 
   const activeModelLabel =
     model_governance.active_model_display ?? model_governance.active_model ?? "MISSING";
@@ -461,66 +455,92 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
   const summaryModelLabel = model_summary?.model && model_summary.model !== "—" ? model_summary.model : "MISSING";
   const historicalPrefix = (scope?: string | null) => (scope === "historical" ? "historical · " : "");
 
+  const attentionReason = model_summary?.attention_reason ?? model_summary?.status_reason ?? null;
+  const sourceLines = formatModelSummarySourceLines(model_summary?.model_summary_sources, {
+    version: model_summary?.model_summary_source_version ?? "benchmark_primary_v1",
+    promotionEligible:
+      model_summary?.promotion_eligible_label ?? model_governance.promotion_eligible_label ?? "NO",
+  });
+  const currentToken = resolveLocalTokenStatus(
+    model_summary?.metric_availability === "AVAILABLE" ? "AVAILABLE" : "MISSING_DATA",
+  );
+  const legacyToken = resolveLocalTokenStatus("HISTORICAL");
+  const currentTokenDrift = resolveLocalTokenStatus(
+    drift_monitoring?.metric_availability === "AVAILABLE"
+      ? "AVAILABLE"
+      : drift_monitoring?.severity_label || "MISSING_DATA",
+  );
+  const shadowMetricToken = resolveLocalTokenStatus(
+    shadow_inference.metric_availability || shadow_inference.validation_status || "MISSING_DATA",
+  );
+  const shadowSourceToken = resolveLocalTokenStatus(
+    shadow_inference.source_freshness || (shadow_inference.freshness?.is_stale ? "STALE" : "CURRENT"),
+  );
+
   return (
     <section className="space-y-4">
       <SectionLabel>{t("ops.researchPipeline")}</SectionLabel>
 
       {model_summary ? (
         <PanelCard title={t("ops.modelSummary")} icon={SymbolLayers} status={summaryStatus}>
+          <div className="space-y-1 px-2.5 py-2.5">
+            <div className="text-[13px] font-medium text-ds-text-primary">
+              {summaryModelLabel} · {model_summary.status ?? "ATTENTION"}
+            </div>
+            {attentionReason ? (
+              <p className="text-[12px] text-ds-status-warning">Reason: {attentionReason}</p>
+            ) : null}
+          </div>
+          {sourceLines.map((line) => {
+            const local = line.includes("GOVERNANCE_MISSING")
+              ? resolveLocalTokenStatus("GOVERNANCE_MISSING")
+              : line.includes("STALE")
+                ? resolveLocalTokenStatus("STALE")
+                : line.includes("Promotion")
+                  ? resolveLocalTokenStatus("NO")
+                  : resolveLocalTokenStatus("CURRENT");
+            return <ListRow key={line} icon={SymbolClock} primary={line} status={local} />;
+          })}
+          <div className="px-2.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-ds-text-tertiary">
+            Current ML metrics
+          </div>
           <ListRow
             icon={SymbolLayers}
-            primary={summaryModelLabel}
-            secondary={`${t("ops.executiveStatus")}: ${model_summary.status ?? "—"} · ${model_summary.governance_status ?? "—"}`}
-            status={summaryStatus}
-          />
-          {formatModelSummarySourceLines(model_summary.model_summary_sources, {
-            version: model_summary.model_summary_source_version ?? "benchmark_primary_v1",
-            promotionEligible:
-              model_summary.promotion_eligible_label ??
-              model_governance.promotion_eligible_label ??
-              "NO",
-            reason: model_summary.attention_reason ?? model_summary.status_reason ?? null,
-          }).map((line) => (
-            <ListRow key={line} icon={SymbolClock} primary={line} status={summaryStatus} />
-          ))}
-          <ListRow
-            icon={SymbolLayers}
-            primary={`Current PSI: ${formatMetric(model_summary.psi, 3)} · Macro F1: ${formatMetric(model_summary.shadow_macro_f1)} · Loss recall: ${formatMetric(model_summary.loss_recall)}`}
+            primary={`PSI: ${formatMetric(model_summary.psi, 3)} · Macro F1: ${formatMetric(model_summary.shadow_macro_f1)} · Loss recall: ${formatMetric(model_summary.loss_recall)}`}
             secondary={
-              model_summary.psi == null && model_summary.shadow_macro_f1 == null
-                ? "Classic ML metrics MISSING_DATA in fresh benchmark (not using June legacy as current)"
-                : undefined
+              model_summary.metric_availability === "AVAILABLE"
+                ? undefined
+                : "Status: MISSING_DATA · Classic ML metrics missing in current benchmark."
             }
-            status={summaryStatus}
+            status={currentToken}
           />
-          {model_summary.legacy_metrics?.psi != null || model_summary.psi_meta?.legacy_value != null ? (
-            <ListRow
-              icon={SymbolBell}
-              primary={`Legacy / Historical PSI: ${formatMetric(
-                model_summary.legacy_metrics?.psi ?? model_summary.psi_meta?.legacy_value,
-                3,
-              )} · STALE · not primary`}
-              secondary={
-                model_summary.legacy_metrics?.source_timestamp ||
-                model_summary.model_summary_sources?.legacy_monitoring?.timestamp
-                  ? formatShortTime(
-                      String(
-                        model_summary.legacy_metrics?.source_timestamp ??
-                          model_summary.model_summary_sources?.legacy_monitoring?.timestamp,
-                      ),
-                    )
-                  : undefined
-              }
-              status={summaryStatus}
-              muted
-            />
-          ) : null}
-          <FreshnessMeta
-            freshness={model_summary.freshness}
-            warning={model_summary.stale_warning}
-            refreshHint={model_summary.refresh_hint}
-            asOfOverride={model_summary.latest_diagnostics_at}
-          />
+          {(model_summary.legacy_metrics?.psi != null || model_summary.psi_meta?.legacy_value != null) && (
+            <>
+              <div className="px-2.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-ds-text-tertiary">
+                Legacy / Historical
+              </div>
+              <ListRow
+                icon={SymbolBell}
+                primary={`PSI: ${formatMetric(
+                  model_summary.legacy_metrics?.psi ?? model_summary.psi_meta?.legacy_value,
+                  3,
+                )} · STALE · not primary`}
+                secondary={
+                  model_summary.legacy_metrics?.source_timestamp ||
+                  model_summary.model_summary_sources?.legacy_monitoring?.timestamp
+                    ? formatShortTime(
+                        String(
+                          model_summary.legacy_metrics?.source_timestamp ??
+                            model_summary.model_summary_sources?.legacy_monitoring?.timestamp,
+                        ),
+                      )
+                    : undefined
+                }
+                status={legacyToken}
+                muted
+              />
+            </>
+          )}
         </PanelCard>
       ) : null}
 
@@ -569,120 +589,147 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
           />
         </PanelCard>
 
-        <PanelCard title={t("ops.shadowModel")} icon={SymbolWaveform} status={shadowStatus}>
+        <PanelCard title={t("ops.shadowModel")} icon={SymbolWaveform} status={shadowMetricToken}>
           <ListRow
             icon={SymbolWaveform}
-            primary={`${historicalPrefix(shadow_inference.metrics_scope)}${t("ops.shadowMacroF1")}: ${formatMetric(shadow_inference.macro_f1)} · ${t("ops.balancedAccuracy")}: ${formatMetric(shadow_inference.balanced_accuracy)}`}
-            secondary={`${t("ops.lossRecall")}: ${formatMetric(shadow_inference.loss_recall)} · ${t("ops.shadowEvaluated")}: ${shadow_inference.evaluated_rows}`}
-            status={shadowStatus}
+            primary={`Classic shadow metrics: ${
+              shadow_inference.macro_f1 == null && shadow_inference.loss_recall == null
+                ? "missing in current benchmark"
+                : `${formatMetric(shadow_inference.macro_f1)} / ${formatMetric(shadow_inference.loss_recall)}`
+            }`}
+            secondary={`${t("ops.shadowEvaluated")}: ${shadow_inference.evaluated_rows} · Legacy metrics are not used as current.`}
+            status={shadowMetricToken}
           />
           <ListRow
-            icon={SymbolWaveform}
-            primary={`${t("ops.shadowStatus")}: ${shadow_inference.validation_status ?? "—"}`}
-            secondary={`Latest diagnostics: ${formatShortTime(shadow_inference.latest_diagnostics_at ?? shadow_inference.last_validation_time)}`}
-            status={shadowStatus}
-          />
-          <FreshnessMeta
-            freshness={shadow_inference.freshness}
-            warning={shadow_inference.stale_warning}
-            refreshHint={shadow_inference.refresh_hint}
-            asOfOverride={shadow_inference.last_validation_time}
+            icon={SymbolClock}
+            primary={`Latest diagnostics: ${formatShortTime(shadow_inference.latest_diagnostics_at)} · ${
+              shadow_inference.source_freshness || "CURRENT"
+            }`}
+            secondary={`Metric availability: ${shadow_inference.metric_availability || shadow_inference.validation_status || "MISSING_DATA"}`}
+            status={shadowSourceToken}
           />
         </PanelCard>
 
         <PanelCard title={t("ops.governance")} icon={SymbolLayers} status={governanceStatus}>
           <ListRow
             icon={SymbolLayers}
-            primary={`${t("ops.governanceStatus")}: ${model_governance.governance_status ?? "—"}`}
-            secondary={`${t("ops.activeModel")}: ${activeModelLabel}`}
-            status={governanceStatus}
+            primary={`${t("ops.activeModel")}: ${activeModelLabel}`}
+            secondary={`${t("ops.candidateModel")}: ${candidateModelLabel}`}
+            status={resolveLocalTokenStatus(activeModelLabel === "MISSING" ? "MISSING" : "CURRENT")}
           />
           <ListRow
             icon={SymbolLayers}
-            primary={`${t("ops.candidateModel")}: ${candidateModelLabel}`}
-            secondary={`${t("ops.promotionEligible")}: ${model_governance.promotion_eligible_label ?? (model_governance.promotion_eligible ? "YES" : "NO")}`}
-            status={governanceStatus}
+            primary={`${t("ops.promotionEligible")}: ${model_governance.promotion_eligible_label ?? "NO"}`}
+            secondary={model_governance.missing_reason ? `Reason: ${model_governance.missing_reason}` : undefined}
+            status={resolveLocalTokenStatus("NO")}
           />
-          <ListRow
-            icon={SymbolLayers}
-            primary={`Latest diagnostics: ${formatShortTime(model_governance.latest_diagnostics_at ?? model_summary?.latest_diagnostics_at)}`}
-            secondary={`Governance validation: ${formatShortTime(model_governance.governance_validation_at ?? model_governance.last_validation_at)}`}
-            status={governanceStatus}
-          />
-          <ListRow
-            icon={SymbolLayers}
-            primary={`${t("ops.lastRetrain")}: ${formatShortTime(model_governance.last_retrain_at)}`}
-            secondary={`${t("ops.modelAge")}: ${model_governance.active_model_age_days != null ? `${model_governance.active_model_age_days}d` : "—"} · ${t("ops.nextRetrain")}: ${model_governance.next_retrain_note ?? "—"}`}
-            status={governanceStatus}
-          />
-          {model_governance.missing_reason ? (
-            <div className="px-2.5 py-2 text-[11px] text-ds-status-warning">{model_governance.missing_reason}</div>
-          ) : null}
-          <FreshnessMeta
-            freshness={model_governance.freshness}
-            warning={model_governance.stale_warning}
-            refreshHint={model_governance.refresh_hint}
-            asOfOverride={model_governance.governance_validation_at ?? model_governance.last_validation_at}
-          />
+          {(model_governance.action || model_governance.refresh_hint || model_governance.missing_reason) && (
+            <div className="space-y-1 px-2.5 py-2 text-[11px] text-ds-text-secondary">
+              <p>
+                Action:{" "}
+                {model_governance.action ||
+                  model_governance.refresh_hint ||
+                  "Provide exports/model_governance_dashboard.json or run manual governance export."}
+              </p>
+            </div>
+          )}
         </PanelCard>
 
         {drift_monitoring ? (
-          <PanelCard title={t("ops.driftMonitoring")} icon={SymbolBell} status={driftStatus}>
+          <PanelCard title={t("ops.driftMonitoring")} icon={SymbolBell} status={currentTokenDrift}>
             <ListRow
               icon={SymbolBell}
-              primary={`${historicalPrefix(drift_monitoring.metrics_scope)}${t("ops.psi")}: ${formatMetric(drift_monitoring.psi, 3)}`}
-              secondary={`${t("ops.macroF1Trend")}: ${trendLabel(drift_monitoring.macro_f1_trend)} · ${t("ops.lossRecallTrend")}: ${trendLabel(drift_monitoring.loss_recall_trend)}`}
-              status={driftStatus}
-            />
-            <ListRow
-              icon={SymbolBell}
-              primary={`Macro F1: ${formatMetric(drift_monitoring.macro_f1)} · ${t("ops.lossRecall")}: ${formatMetric(drift_monitoring.loss_recall)}`}
+              primary={`Current PSI: ${formatMetric(drift_monitoring.psi, 3)} · Macro F1: ${formatMetric(drift_monitoring.macro_f1)} · Loss recall: ${formatMetric(drift_monitoring.loss_recall)}`}
               secondary={
-                drift_monitoring.latest_diagnostics_at || drift_monitoring.last_monitoring_at
-                  ? `Latest diagnostics: ${formatShortTime(String(drift_monitoring.latest_diagnostics_at ?? drift_monitoring.last_monitoring_at))}`
-                  : undefined
+                drift_monitoring.status_note ||
+                (drift_monitoring.psi == null
+                  ? "Current drift metrics are not present in benchmark_primary_v1."
+                  : undefined)
               }
-              status={driftStatus}
+              status={currentTokenDrift}
             />
-            {drift_monitoring.legacy_psi != null ? (
-              <ListRow
-                icon={SymbolBell}
-                primary={`Legacy PSI: ${formatMetric(drift_monitoring.legacy_psi, 3)} · STALE · not primary`}
-                secondary={
-                  drift_monitoring.legacy_source_timestamp
-                    ? formatShortTime(String(drift_monitoring.legacy_source_timestamp))
-                    : undefined
-                }
-                status={driftStatus}
-              />
-            ) : null}            <FreshnessMeta
-              freshness={drift_monitoring.freshness}
-              warning={drift_monitoring.stale_warning}
-              refreshHint={drift_monitoring.refresh_hint}
-              asOfOverride={drift_monitoring.last_monitoring_at}
-            />
+            {(() => {
+              const legacyLine = formatDriftLegacyPsiLine({
+                legacyPsi: drift_monitoring.legacy_psi,
+                legacyTimestamp: drift_monitoring.legacy_source_timestamp
+                  ? String(drift_monitoring.legacy_source_timestamp)
+                  : null,
+              });
+              return legacyLine ? (
+                <ListRow
+                  icon={SymbolBell}
+                  primary={legacyLine}
+                  status={resolveLocalTokenStatus("not primary")}
+                  muted
+                />
+              ) : null;
+            })()}
           </PanelCard>
         ) : null}
 
-        <PanelCard title={t("ops.toxicBoxCard")} icon={SymbolBell} status={toxicStatus}>
-          <ListRow
-            icon={SymbolBell}
-            primary={`${t("ops.toxicEvents")}: ${toxic_box.events}`}
-            secondary={`7d: ${toxic_box.events_last_7d ?? 0} · ${t("ops.toxicRate7d")}: ${formatMetric(toxic_box.toxic_rate_7d, 2)}/d · 30d: ${formatMetric(toxic_box.toxic_rate_30d, 2)}/d`}
-            status={toxicStatus}
-          />
-          <ListRow
-            icon={SymbolBell}
-            primary={`${t("ops.toxicTrend")}: ${toxic_box.trend ?? "—"} · ${toxic_box.severity_label ?? "—"}`}
-            secondary={toxic_box.latest_timestamp ? formatShortTime(String(toxic_box.latest_timestamp)) : undefined}
-            status={toxicStatus}
-          />
-          <FreshnessMeta
-            freshness={toxic_box.freshness}
-            warning={toxic_box.stale_warning}
-            refreshHint={toxic_box.refresh_hint}
-          />
-        </PanelCard>
+        {(() => {
+          const toxicDisplay = formatToxicBoxDisplay({
+            displayStatus: toxic_box.display_status,
+            severityLabel: toxic_box.severity_label,
+            events: toxic_box.events,
+            eventsLast7d: toxic_box.events_last_7d,
+            toxicRate7d: toxic_box.toxic_rate_7d,
+            toxicRate30d: toxic_box.toxic_rate_30d,
+            trend: toxic_box.trend,
+            sourcePath: toxic_box.source_path,
+            asOf: toxic_box.freshness?.source_timestamp
+              ? formatSourceTimestamp(String(toxic_box.freshness.source_timestamp))
+              : toxic_box.latest_timestamp
+                ? formatSourceTimestamp(String(toxic_box.latest_timestamp))
+                : null,
+            ageDays: toxic_box.historical_age_days ?? toxic_box.freshness?.age_days ?? null,
+            isStale: Boolean(toxic_box.freshness?.is_stale) || toxic_box.display_status === "LEGACY_ONLY",
+            staleWarning: toxic_box.stale_warning,
+            refreshHint: toxic_box.refresh_hint,
+            currentStatus: toxic_box.current?.status,
+            currentSourcePath: toxic_box.current?.source_path,
+            currentGeneratedAt: toxic_box.current?.generated_at,
+            historicalSourcePath:
+              toxic_box.historical?.source_path || toxic_box.historical_source_path || toxic_box.source_path,
+            historicalTimestamp:
+              toxic_box.historical?.timestamp || toxic_box.historical_timestamp || toxic_box.freshness?.source_timestamp,
+            historicalAgeDays: toxic_box.historical?.age_days ?? toxic_box.historical_age_days ?? null,
+          });
+          const toxicHeader = resolveToxicStatus(
+            toxic_box.level,
+            toxic_box.severity_label,
+            toxic_box.freshness,
+            toxic_box.display_status,
+          );
+          return (
+            <PanelCard title={t("ops.toxicBoxCard")} icon={SymbolBell} status={toxicHeader}>
+              {toxicDisplay.currentLine ? (
+                <div className="px-2.5 py-2 text-[12px] text-ds-text-secondary">{toxicDisplay.currentLine}</div>
+              ) : null}
+              {toxicDisplay.baselineLine ? (
+                <div className="px-2.5 py-2 text-[12px] text-ds-text-secondary">{toxicDisplay.baselineLine}</div>
+              ) : null}
+              <ListRow
+                icon={SymbolBell}
+                primary={toxicDisplay.eventsLine}
+                secondary={toxicDisplay.ratesLine}
+                status={toxicDisplay.showRowBadges ? resolveLocalTokenStatus("CURRENT") : undefined}
+                muted={!toxicDisplay.showRowBadges}
+              />
+              <ListRow
+                icon={SymbolBell}
+                primary={toxicDisplay.trendLine}
+                status={undefined}
+              />
+              <div className="space-y-1 px-2.5 py-2 text-[11px] text-ds-text-secondary">
+                {toxicDisplay.sourceLine ? <p>{toxicDisplay.sourceLine}</p> : null}
+                {toxicDisplay.asOfLine ? <p>{toxicDisplay.asOfLine}</p> : null}
+                {toxicDisplay.historicalSourceLine ? <p>{toxicDisplay.historicalSourceLine}</p> : null}
+                {toxicDisplay.actionLine ? <p>{toxicDisplay.actionLine}</p> : null}
+              </div>
+            </PanelCard>
+          );
+        })()}
 
         <PanelCard title={t("ops.pipelineCard")} icon={SymbolPipeline} status={pipelineStatus}>
           <ListRow

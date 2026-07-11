@@ -56,7 +56,6 @@ def test_real_research_pipeline_payload_benchmark_primary_v1() -> None:
 
 
 def test_frontend_mapper_lines_do_not_primary_june() -> None:
-    # Mirror frontend formatModelSummarySourceLines contract in Python for CI without node.
     sources = {
         "diagnostics_primary": {
             "generated_at": "2026-07-11T07:53:14.559449",
@@ -85,7 +84,6 @@ def test_frontend_mapper_lines_do_not_primary_june() -> None:
         f"Governance: {sources['governance']['status']}",
         "Legacy monitoring: 2026-06-14 · STALE · not primary",
         "Promotion eligible: NO",
-        f"Reason: {reason}",
     ]
     joined = "\n".join(lines)
     assert "benchmark_primary_v1" in joined
@@ -93,5 +91,27 @@ def test_frontend_mapper_lines_do_not_primary_june() -> None:
     assert "GOVERNANCE_MISSING" in joined
     assert "not primary" in joined
     assert "Last validation: 14 Jun" not in joined
-    # June may appear only as legacy line
     assert "Legacy monitoring: 2026-06-14" in joined
+    # Stage 11.2: global reason is header-only, not repeated in source lines.
+    assert sum(1 for line in lines if reason in line) == 0
+
+
+def test_real_toxic_box_legacy_only_when_no_fresh_toxic_metrics() -> None:
+    snap = asyncio.run(build_research_pipeline_snapshot())
+    toxic = snap["toxic_box"]
+    ms = snap["model_summary"]
+
+    assert toxic.get("display_status") == "LEGACY_ONLY"
+    assert (toxic.get("current") or {}).get("status") == "MISSING_DATA"
+    assert (toxic.get("current") or {}).get("metrics_available") is False
+    hist = toxic.get("historical") or {}
+    assert hist.get("status") == "STALE"
+    assert "toxic_box_memory.parquet" in str(hist.get("source_path") or "")
+    assert "2026-06-14" in str(hist.get("timestamp") or "")
+    assert "LEGACY_ONLY" in str(toxic.get("severity_label") or "")
+
+    # Model Summary still July CURRENT + benchmark_primary_v1.
+    assert ms.get("model_summary_source_version") == MODEL_SUMMARY_SOURCE_VERSION
+    diag = ms["model_summary_sources"]["diagnostics_primary"]
+    assert diag["freshness_status"] == "CURRENT"
+    assert str(diag["generated_at"]).startswith("2026-07-11")

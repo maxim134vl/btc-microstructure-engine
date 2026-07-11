@@ -33,7 +33,43 @@ parquet as primary, so June timestamps looked “current”. Stage 11 keeps the
 parquet visible as **legacy**, but primary freshness follows July
 `generated_at` from conformance/integrated reports.
 
-## Runtime wiring (Stage 11.1)
+## UI semantics (Stage 11.2)
+
+- Global `ATTENTION` reason appears **once** in the Model Summary header.
+- Source lines use local tokens only (`CURRENT`, `GOVERNANCE_MISSING`, `STALE`, …).
+- `source_freshness` and `metric_availability` are separate:
+  - diagnostics source can be `CURRENT` while classic ML metrics are `MISSING_DATA`.
+- Drift Monitoring with missing classic PSI/F1 is `MISSING_DATA`, not `SEVERE`.
+- Toxic stale copy refers to toxic/economic artifacts, not model governance.
+
+## UI semantics (Stage 11.3)
+
+- Toxic Box is compact: header `STALE / HISTORICAL`, one baseline line, Trend without
+  status echo, Source / As of / Action each once.
+- Dedup helpers (`dedupeRepeatedPhrases`, `formatToxicBoxDisplay`,
+  `formatDriftLegacyPsiLine`) prevent repeated "Baseline loaded" / action text.
+- Drift legacy metrics are a single line:
+  `Legacy PSI: … · HISTORICAL · STALE · not primary · <date>`
+  (no standalone `HISTORICAL` badge line).
+
+## Toxic source truth (Stage 11.4)
+
+July `benchmark_primary_v1` reports currently contain **no toxic monitoring metrics**
+(`cognition_health` alone does not count). Toxic Box therefore resolves as:
+
+- `display_status = LEGACY_ONLY`
+- `current.status = MISSING_DATA`
+- `historical` = `toxic_box_memory.parquet` (June) · STALE
+
+UI must not show standalone `CURRENT` / `STABLE` badges, must label trend/source/as-of
+as **Historical**, and must not use July diagnostics `generated_at` as Toxic Box as-of
+unless toxic fields are present in those reports.
+
+When a report includes toxic fields (`toxic_box`, `toxic_events`, `toxic_rate_*`, …):
+
+- `display_status = CURRENT`
+- primary source = conformance/integrated path + July `generated_at`
+- parquet remains historical / not primary
 
 End-to-end path:
 

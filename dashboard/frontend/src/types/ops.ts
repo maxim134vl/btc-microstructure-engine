@@ -358,6 +358,7 @@ export interface ModelGovernanceSnapshot {
   active_model_registered_at?: string;
   active_model_age_days?: number | null;
   next_retrain_note?: string;
+  action?: string | null;
   freshness?: ArtifactFreshness;
   metrics_scope?: string;
   stale_warning?: string | null;
@@ -413,6 +414,9 @@ export interface ShadowInferenceSnapshot {
   metrics_scope?: string;
   stale_warning?: string | null;
   refresh_hint?: string | null;
+  source_freshness?: string;
+  metric_availability?: string;
+  status_note?: string | null;
 }
 
 export interface ToxicBoxSnapshot {
@@ -439,6 +443,24 @@ export interface ToxicBoxSnapshot {
   metrics_scope?: string;
   stale_warning?: string | null;
   refresh_hint?: string | null;
+  display_status?: string;
+  display_reason?: string | null;
+  current?: {
+    status?: string;
+    source_path?: string | null;
+    generated_at?: string | null;
+    metrics_available?: boolean;
+  };
+  historical?: {
+    status?: string;
+    source_path?: string | null;
+    timestamp?: string | null;
+    age_days?: number | null;
+    metrics_available?: boolean;
+  };
+  historical_source_path?: string | null;
+  historical_timestamp?: string | null;
+  historical_age_days?: number | null;
 }
 
 export interface DriftMonitoringSnapshot {
@@ -463,6 +485,9 @@ export interface DriftMonitoringSnapshot {
   metrics_scope?: string;
   stale_warning?: string | null;
   refresh_hint?: string | null;
+  source_freshness?: string;
+  metric_availability?: string;
+  status_note?: string | null;
 }
 
 export interface ModelSummarySnapshot {
@@ -498,4 +523,6 @@ export interface ModelSummarySnapshot {
     source_timestamp?: string | null;
     is_stale?: boolean | null;
   };
+  source_freshness?: string;
+  metric_availability?: string;
 }

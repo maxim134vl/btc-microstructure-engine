@@ -21,6 +21,7 @@ from app.config import (
 )
 from app.services.dashboard_paths import resolve_dashboard_read
 from app.services.model_summary_freshness import (
+    STATUS_CURRENT,
     STATUS_MISSING,
     STATUS_STALE_DRIFT,
     STATUS_STALE_GOVERNANCE,
@@ -33,8 +34,11 @@ from app.services.model_summary_freshness import (
 )
 from app.services.model_summary_sources import (
     STATUS_GOVERNANCE_MISSING,
+    STATUS_LEGACY_ONLY,
+    STATUS_MISSING_DATA,
     build_model_summary_sources,
     drift_fields_from_diagnostics,
+    resolve_toxic_monitoring_sources,
 )
 from app.services.monitoring_kpis import (
     decision_level_and_label,
@@ -292,6 +296,8 @@ async def build_drift_monitoring_snapshot(
     )
 
     # Classic ML metrics absent from benchmark → MISSING_DATA (not June legacy as current).
+    # Cognition/benchmark severity is informational only when classic drift metrics are missing;
+    # missing PSI/F1 must not become SEVERE.
     has_classic = any(v is not None for v in (psi, macro_f1, loss_recall))
     if has_classic:
         level, severity_label = drift_composite_level(
@@ -302,16 +308,7 @@ async def build_drift_monitoring_snapshot(
             loss_recall_trend=None,
         )
     elif diagnostics.get("payload") is not None:
-        severity = diag_fields.get("benchmark_drift_severity") or diag_fields.get("cognition_health") or "Unknown"
-        severity_u = str(severity).upper()
-        if severity_u in {"SEVERE", "CRITICAL", "FAIL", "RED"}:
-            level, severity_label = "RED", str(severity)
-        elif severity_u in {"WATCH", "DRIFTING", "WARNING", "NEEDS_REVIEW", "YELLOW"}:
-            level, severity_label = "YELLOW", str(severity)
-        elif severity_u in {"OK", "STABLE", "GREEN", "HEALTHY"}:
-            level, severity_label = "GREEN", str(severity)
-        else:
-            level, severity_label = "YELLOW", str(severity)
+        level, severity_label = "YELLOW", STATUS_MISSING
     else:
         # No fresh diagnostics — only then may legacy drive the block, marked legacy.
         legacy_row = legacy.get("row") or {}
@@ -333,8 +330,24 @@ async def build_drift_monitoring_snapshot(
         else:
             level, severity_label = "GREY", STATUS_MISSING
 
-    if freshness.get("is_stale") and severity_label not in {STATUS_MISSING, STATUS_STALE_DRIFT}:
+    if (
+        freshness.get("is_stale")
+        and severity_label not in {STATUS_MISSING, STATUS_STALE_DRIFT}
+        and has_classic
+    ):
         severity_label = f"{severity_label}+STALE"
+
+    source_freshness = (
+        STATUS_CURRENT
+        if diagnostics.get("payload") is not None and not diagnostics.get("is_stale")
+        else ("STALE" if diagnostics.get("is_stale") else (freshness.get("freshness_status") or STATUS_MISSING))
+    )
+    if has_classic:
+        metric_availability = "AVAILABLE"
+    elif diagnostics.get("payload") is not None:
+        metric_availability = "LEGACY_ONLY" if psi_m.get("legacy_value") is not None else "MISSING_DATA"
+    else:
+        metric_availability = "LEGACY_ONLY" if legacy.get("row") else STATUS_MISSING
 
     payload = {
         "level": level,
@@ -357,9 +370,15 @@ async def build_drift_monitoring_snapshot(
         "legacy_psi": (psi_m.get("legacy_value") if psi_m else None),
         "legacy_source_timestamp": (psi_m.get("legacy_source_timestamp") if psi_m else legacy.get("timestamp")),
         "legacy_is_stale": True if legacy.get("row") else None,
+        "source_freshness": source_freshness,
+        "metric_availability": metric_availability,
+        "status_note": (
+            "Current drift metrics are not present in benchmark_primary_v1."
+            if not has_classic and diagnostics.get("payload") is not None
+            else None
+        ),
     }
     if not has_classic and diagnostics.get("payload") is not None:
-        # Explicitly mark classic metrics missing while diagnostics are otherwise current.
         for key in ("psi_meta", "macro_f1_meta", "loss_recall_meta"):
             meta = payload.get(key) or {}
             if meta.get("value") is None:
@@ -370,7 +389,14 @@ async def build_drift_monitoring_snapshot(
                     "metric_is_legacy": False,
                 }
                 payload[key] = meta
-    return apply_stale_block(payload, freshness)
+    out = apply_stale_block(payload, freshness)
+    if not has_classic and diagnostics.get("payload") is not None:
+        out["severity_label"] = STATUS_MISSING
+        out["level"] = "YELLOW"
+        out["metrics_scope"] = "missing"
+        out["stale_warning"] = None
+        out["refresh_hint"] = None
+    return out
 
 
 async def build_model_governance_snapshot(
@@ -424,8 +450,11 @@ async def build_model_governance_snapshot(
         out = apply_stale_governance(payload, freshness)
         out["governance_status"] = STATUS_GOVERNANCE_MISSING
         out["metrics_scope"] = "missing"
-        out["stale_warning"] = "Governance artifact missing. Promotion blocked."
-        out["refresh_hint"] = "Provide exports/model_governance_dashboard.json or run manual governance export."
+        out["stale_warning"] = "governance artifact missing"
+        out["refresh_hint"] = (
+            "Provide exports/model_governance_dashboard.json or run manual governance export."
+        )
+        out["action"] = out["refresh_hint"]
         return out
 
     shadow_metrics = governance.get("shadow_metrics_last_5000") or {}
@@ -700,8 +729,19 @@ async def build_shadow_inference_snapshot(
             "legacy_is_stale": True if legacy_macro is not None else None,
             "macro_f1_meta": macro_m,
             "metric_source": diagnostics.get("source_path_display") or diagnostics.get("source_path"),
+            "source_freshness": (
+                STATUS_CURRENT
+                if diagnostics.get("payload") is not None and not diagnostics.get("is_stale")
+                else ("STALE" if diagnostics.get("is_stale") else STATUS_MISSING)
+            ),
+            "metric_availability": STATUS_MISSING,
+            "status_note": "Classic shadow metrics are not present in current benchmark payload.",
         }
-        return apply_stale_block(payload, freshness)
+        out = apply_stale_block(payload, freshness)
+        out["metrics_scope"] = "missing"
+        out["stale_warning"] = None
+        out["refresh_hint"] = None
+        return out
 
     validation_status = "PASS" if macro_f1 is not None and macro_f1 >= SHADOW_MACRO_F1_PASS_THRESHOLD else "WARNING"
     level = "GREEN" if validation_status == "PASS" else "YELLOW"
@@ -749,9 +789,83 @@ async def build_shadow_inference_snapshot(
     return apply_stale_block(payload, freshness)
 
 
-async def build_toxic_box_snapshot() -> dict[str, Any]:
+async def build_toxic_box_snapshot(sources: dict[str, Any] | None = None) -> dict[str, Any]:
+    sources = sources or build_model_summary_sources()
+    diagnostics = sources.get("_diagnostics")
     toxic_path = resolve_existing_path(resolve_dashboard_read("toxic_box_memory.parquet"))
     toxic = await read_parquet("toxic_box_memory.parquet", tail=10000)
+
+    def _attach_source_truth(
+        payload: dict[str, Any],
+        *,
+        historical_available: bool,
+        historical_ts: Any = None,
+        historical_age_days: float | None = None,
+    ) -> dict[str, Any]:
+        truth = resolve_toxic_monitoring_sources(
+            diagnostics=diagnostics,
+            historical_source_path=toxic_path,
+            historical_timestamp=historical_ts,
+            historical_age_days=historical_age_days,
+            historical_metrics_available=historical_available,
+        )
+        payload["current"] = truth["current"]
+        payload["historical"] = truth["historical"]
+        payload["display_status"] = truth["display_status"]
+        payload["display_reason"] = truth["display_reason"]
+
+        current = truth["current"]
+        historical = truth["historical"]
+        display_status = truth["display_status"]
+
+        if display_status == STATUS_CURRENT and current.get("metrics_available"):
+            metrics = current.get("metrics") or {}
+            def _m(name: str) -> Any:
+                entry = metrics.get(name) or {}
+                return entry.get("value")
+
+            if _m("events") is not None:
+                payload["events"] = int(_m("events"))
+            if _m("events_last_7d") is not None:
+                payload["events_last_7d"] = int(_m("events_last_7d"))
+            if _m("toxic_rate_7d") is not None:
+                payload["toxic_rate_7d"] = float(_m("toxic_rate_7d"))
+            if _m("toxic_rate_30d") is not None:
+                payload["toxic_rate_30d"] = float(_m("toxic_rate_30d"))
+            if _m("trend") is not None:
+                payload["trend"] = str(_m("trend"))
+            payload["source_path"] = current.get("source_path")
+            payload["severity_label"] = STATUS_CURRENT
+            payload["status"] = STATUS_CURRENT
+            payload["metrics_scope"] = "current"
+            payload["stale_warning"] = None
+            payload["refresh_hint"] = None
+            # Keep historical parquet path for UI "Historical source" line.
+            payload["historical_source_path"] = historical.get("source_path")
+            payload["historical_timestamp"] = historical.get("timestamp")
+            payload["historical_age_days"] = historical.get("age_days")
+        else:
+            payload["severity_label"] = (
+                f"{STATUS_LEGACY_ONLY} / STALE"
+                if display_status == STATUS_LEGACY_ONLY
+                else STATUS_MISSING_DATA
+            )
+            payload["status"] = display_status
+            payload["metrics_scope"] = "historical" if historical_available else "missing"
+            payload["source_path"] = historical.get("source_path") or toxic_path
+            payload["historical_source_path"] = historical.get("source_path") or toxic_path
+            payload["historical_timestamp"] = historical.get("timestamp")
+            payload["historical_age_days"] = historical.get("age_days")
+            if display_status == STATUS_LEGACY_ONLY:
+                payload["stale_warning"] = (
+                    "Historical toxic baseline is stale. "
+                    "Refresh toxic/economic validation artifacts if current toxic monitoring is required."
+                )
+                payload["refresh_hint"] = (
+                    "Refresh toxic/economic validation artifacts if current toxic monitoring is required."
+                )
+        return payload
+
     if len(toxic) == 0 or toxic_path is None:
         freshness = build_freshness(
             source_path=toxic_path,
@@ -760,7 +874,7 @@ async def build_toxic_box_snapshot() -> dict[str, Any]:
             stale_status=STATUS_STALE_VALIDATION,
             missing_status=STATUS_MISSING,
         )
-        return apply_stale_block(
+        base = apply_stale_block(
             {
                 "level": "GREY",
                 "severity_label": STATUS_MISSING,
@@ -778,6 +892,7 @@ async def build_toxic_box_snapshot() -> dict[str, Any]:
             stale_status_field="severity_label",
             stale_status_value=STATUS_MISSING,
         )
+        return _attach_source_truth(base, historical_available=False)
 
     frame = toxic.copy()
     now = pd.Timestamp.now(tz=timezone.utc)
@@ -869,15 +984,15 @@ async def build_toxic_box_snapshot() -> dict[str, Any]:
         "latest_routed_at": latest_routed.isoformat() if pd.notna(latest_routed) else None,
         "source_path": toxic_path,
     }
-    if freshness.get("is_stale"):
-        if severity_label == "Baseline loaded":
-            payload["severity_label"] = "Baseline loaded (STALE)"
-        else:
-            payload["severity_label"] = f"{severity_label}+STALE" if severity_label else "STALE"
-    elif not toxic_path:
-        payload["severity_label"] = STATUS_MISSING
-        payload["status"] = STATUS_MISSING
-    return apply_stale_block(payload, freshness)
+    out = apply_stale_block(payload, freshness)
+    age_days = freshness.get("age_days")
+    out = _attach_source_truth(
+        out,
+        historical_available=True,
+        historical_ts=freshness_ts,
+        historical_age_days=float(age_days) if age_days is not None else None,
+    )
+    return out
 
 
 async def build_model_summary_snapshot(
@@ -922,7 +1037,7 @@ async def build_research_pipeline_snapshot() -> dict[str, Any]:
     governance = await build_model_governance_snapshot(sources)
     economic = await build_economic_validation_snapshot()
     shadow = await build_shadow_inference_snapshot(sources)
-    toxic = await build_toxic_box_snapshot()
+    toxic = await build_toxic_box_snapshot(sources)
     model_summary = await build_model_summary_snapshot(governance, drift, shadow, sources)
 
     ribbon_extensions = [

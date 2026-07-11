@@ -114,7 +114,7 @@ def test_missing_governance_json(isolated_repo: Path) -> None:
         sources = build_model_summary_sources(now=NOW)
         return await build_model_governance_snapshot(sources)
 
-    out = asyncio.get_event_loop().run_until_complete(_run())
+    out = asyncio.run(_run())
     assert out["governance_status"] == STATUS_GOVERNANCE_MISSING
     assert out["active_model_display"] == "MISSING"
     assert out["candidate_model_display"] == "MISSING"
@@ -228,8 +228,10 @@ def test_legacy_exposed_not_primary_when_benchmark_fresh(isolated_repo: Path) ->
 def test_toxic_missing_no_baseline_without_source(isolated_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
     from app.services import research_pipeline_service as rps
+    from app.services.model_summary_sources import STATUS_MISSING_DATA
 
     monkeypatch.setattr(rps, "REPO_ROOT", isolated_repo)
+    monkeypatch.setattr(sources_mod, "REPO_ROOT", isolated_repo)
     monkeypatch.setattr(
         rps,
         "resolve_dashboard_read",
@@ -241,10 +243,11 @@ def test_toxic_missing_no_baseline_without_source(isolated_repo: Path, monkeypat
 
     monkeypatch.setattr(rps, "read_parquet", _fake_read)
 
-    out = asyncio.get_event_loop().run_until_complete(build_toxic_box_snapshot())
-    assert out["severity_label"] == STATUS_MISSING
-    assert out.get("status") == STATUS_MISSING
+    out = asyncio.run(build_toxic_box_snapshot())
+    assert out.get("display_status") == STATUS_MISSING_DATA
+    assert (out.get("current") or {}).get("status") == STATUS_MISSING_DATA
     assert "Baseline loaded" not in str(out.get("severity_label"))
+    assert "LEGACY_ONLY" not in str(out.get("display_status") or "")
 
 
 def test_frontend_mapper_source_lines() -> None:
@@ -294,3 +297,82 @@ def test_extract_metric_nested_case_insensitive(isolated_repo: Path) -> None:
     assert hit is not None
     assert hit["value"] == pytest.approx(0.19)
     assert hit["metric_is_legacy"] is False
+
+
+def test_fresh_benchmark_without_toxic_is_legacy_only(isolated_repo: Path) -> None:
+    from app.services.model_summary_sources import (
+        STATUS_LEGACY_ONLY,
+        STATUS_MISSING_DATA,
+        payload_has_toxic_metrics,
+        resolve_toxic_monitoring_sources,
+    )
+
+    _write_json(
+        isolated_repo / "benchmark/conformance/reports/latest_conformance.json",
+        {
+            "generated_at": "2026-07-11T08:35:21",
+            "summary": {"cognition_health": "DRIFTING"},
+            "cognition_health": "DRIFTING",
+        },
+    )
+    payload = {
+        "generated_at": "2026-07-11T08:35:21",
+        "summary": {"cognition_health": "DRIFTING"},
+        "cognition_health": "DRIFTING",
+    }
+    assert payload_has_toxic_metrics(payload) is False
+
+    truth = resolve_toxic_monitoring_sources(
+        now=NOW,
+        historical_source_path=str(isolated_repo / "toxic_box_memory.parquet"),
+        historical_timestamp="2026-06-14T12:45:56Z",
+        historical_age_days=26.84,
+        historical_metrics_available=True,
+    )
+    assert truth["display_status"] == STATUS_LEGACY_ONLY
+    assert truth["current"]["status"] == STATUS_MISSING_DATA
+    assert truth["current"]["metrics_available"] is False
+    assert truth["historical"]["status"] == "STALE"
+    assert "toxic_box_memory.parquet" in str(truth["historical"]["source_path"])
+    assert "2026-06-14" in str(truth["historical"]["timestamp"])
+    assert "benchmark_primary_v1" in truth["display_reason"]
+
+
+def test_fresh_benchmark_with_toxic_is_current(isolated_repo: Path) -> None:
+    from app.services.model_summary_sources import (
+        STATUS_CURRENT,
+        payload_has_toxic_metrics,
+        resolve_toxic_monitoring_sources,
+    )
+
+    _write_json(
+        isolated_repo / "benchmark/conformance/reports/latest_conformance.json",
+        {
+            "generated_at": "2026-07-11T08:35:21",
+            "toxic_box": {
+                "toxic_events": 12,
+                "toxic_rate_7d": 0.4,
+                "toxic_rate_30d": 0.3,
+                "toxic_trend": "STABLE",
+            },
+        },
+    )
+    assert payload_has_toxic_metrics(
+        {
+            "toxic_box": {"toxic_events": 12, "toxic_rate_7d": 0.4},
+        }
+    )
+    truth = resolve_toxic_monitoring_sources(
+        now=NOW,
+        historical_source_path=str(isolated_repo / "toxic_box_memory.parquet"),
+        historical_timestamp="2026-06-14T12:45:56Z",
+        historical_age_days=26.84,
+        historical_metrics_available=True,
+    )
+    assert truth["display_status"] == STATUS_CURRENT
+    assert truth["current"]["status"] == STATUS_CURRENT
+    assert truth["current"]["metrics_available"] is True
+    assert "latest_conformance" in str(truth["current"]["source_path"])
+    assert str(truth["current"]["generated_at"]).startswith("2026-07-11")
+    assert truth["historical"]["metrics_available"] is True
+    assert truth["historical"]["status"] == "STALE"
