@@ -19,15 +19,102 @@ const state = {
   dragging: false,
   dragStartX: 0,
   dragStartVisibleStart: 0,
+  lastVisualTimestamp: null,
+  pollTimer: null,
 };
 
+const POLL_INTERVAL_MS = 60_000;
+const STALE_THRESHOLD_MINUTES = 30;
+
+const viewerRoot = document.getElementById("viewerRoot");
+const errorPanel = document.getElementById("viewerErrorPanel");
 const canvas = document.getElementById("lifecycleCanvas");
-const ctx = canvas.getContext("2d");
 const statusLine = document.getElementById("statusLine");
 const sourceLine = document.getElementById("sourceLine");
 const hoverReadout = document.getElementById("hoverReadout");
 const rangeSelect = document.getElementById("rangeSelect");
+const ctx = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
 
+function showViewerError(message) {
+  const text = String(message || "Unknown viewer error");
+  if (errorPanel) {
+    errorPanel.textContent = text;
+    errorPanel.classList.remove("hidden");
+  }
+  if (statusLine) statusLine.textContent = text;
+  if (viewerRoot) viewerRoot.setAttribute("data-viewer-error", "1");
+  console.error("[lifecycle viewer]", text);
+}
+
+function clearViewerError() {
+  if (errorPanel) {
+    errorPanel.textContent = "";
+    errorPanel.classList.add("hidden");
+  }
+  if (viewerRoot) viewerRoot.removeAttribute("data-viewer-error");
+}
+
+window.addEventListener("error", (event) => {
+  const detail = event?.error?.message || event?.message || "Script error";
+  showViewerError(`Viewer runtime error: ${detail}`);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event?.reason;
+  const detail = reason?.message || String(reason || "Unhandled promise rejection");
+  showViewerError(`Viewer promise error: ${detail}`);
+});
+
+function ensureRefreshLine() {
+  let refreshLine = document.getElementById("refreshLine");
+  if (refreshLine) return refreshLine;
+  const meta = document.querySelector(".lifecycle-status-meta");
+  refreshLine = document.createElement("span");
+  refreshLine.id = "refreshLine";
+  refreshLine.className = "lifecycle-refresh-line";
+  refreshLine.textContent = "AUTO-REFRESH";
+  if (meta) {
+    meta.insertBefore(refreshLine, meta.firstChild);
+  } else if (statusLine && statusLine.parentElement) {
+    statusLine.parentElement.appendChild(refreshLine);
+  } else if (viewerRoot) {
+    viewerRoot.insertBefore(refreshLine, viewerRoot.firstChild);
+  }
+  return refreshLine;
+}
+
+function cacheBust(path) {
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}v=${Date.now()}`;
+}
+
+function parseLatestTimestamp(latest) {
+  if (!latest) return null;
+  const raw = latest.timestamp || latest.generated_at || latest.as_of;
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function updateRefreshLine() {
+  const refreshLine = ensureRefreshLine();
+  if (!refreshLine) return;
+  const latest = state.latest || {};
+  const tsMs = parseLatestTimestamp(latest);
+  const now = Date.now();
+  let lagMinutes = null;
+  let stale = true;
+  if (tsMs != null) {
+    lagMinutes = Math.max(0, (now - tsMs) / 60_000);
+    stale = lagMinutes > STALE_THRESHOLD_MINUTES;
+  }
+  const stamp = tsMs != null ? formatTime(Math.floor(tsMs / 1000)) : "—";
+  const lagText = lagMinutes == null ? "—" : `${lagMinutes.toFixed(0)} min`;
+  const mode = stale ? "VISUAL DATA STALE" : "LIVE SNAPSHOT / AUTO-REFRESH";
+  refreshLine.textContent = `${mode} · Last visual refresh: ${stamp} · Live lag: ${lagText}`;
+  refreshLine.classList.toggle("is-stale", stale);
+  refreshLine.classList.toggle("is-live", !stale);
+}
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -57,6 +144,7 @@ function actionLabel(allowed) {
 }
 
 function updateStatusLine() {
+  if (!statusLine || !sourceLine) return;
   const latest = state.latest || {};
   if (latest.status_line) {
     statusLine.textContent = `Current: ${latest.status_line}`;
@@ -76,12 +164,15 @@ function updateStatusLine() {
       statusLine.textContent = `Current: ${context} · ${lifecycle} · age ${age} bars · ${actionLabel(Boolean(latest.action_allowed))}`;
     }
   }
-  const blocks = latest.context_blocks_count ?? state.episodes.filter((ep) => ep.context === "LONG_CONTEXT" || ep.context === "SHORT_CONTEXT").length;
+  const episodes = Array.isArray(state.episodes) ? state.episodes : [];
+  const blocks = latest.context_blocks_count ?? episodes.filter((ep) => ep.context === "LONG_CONTEXT" || ep.context === "SHORT_CONTEXT").length;
   sourceLine.textContent = `source: lifecycle episodes · ${blocks} context blocks`;
+  updateRefreshLine();
 }
 
 function applyRange(resetViewport = true) {
-  const rows = state.candles.filter((row) => row.time && row.open != null);
+  const candleRows = Array.isArray(state.candles) ? state.candles : [];
+  const rows = candleRows.filter((row) => row && row.time && row.open != null);
   if (!rows.length) {
     state.selected = [];
     state.visibleStart = 0;
@@ -174,7 +265,9 @@ function episodeFill(episode) {
 }
 
 function drawLifecycleBands(bounds, visibleStartTime, visibleEndTime, xForTime) {
-  state.episodes.forEach((episode) => {
+  if (!ctx) return;
+  const episodes = Array.isArray(state.episodes) ? state.episodes : [];
+  episodes.forEach((episode) => {
     const fill = episodeFill(episode);
     if (!fill) return;
     const start = episode.start_time_unix;
@@ -295,6 +388,10 @@ function updateHover(rows, bounds, xForTime) {
 }
 
 function renderChart() {
+  if (!canvas || !ctx) {
+    showViewerError("Chart canvas unavailable — page shell is still visible.");
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   const width = rect.width;
   const height = rect.height;
@@ -304,7 +401,8 @@ function renderChart() {
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const rows = state.selected.slice(state.visibleStart, state.visibleEnd);
+  const selected = Array.isArray(state.selected) ? state.selected : [];
+  const rows = selected.slice(state.visibleStart, state.visibleEnd);
   if (rows.length < 2) {
     ctx.fillStyle = "#8b919a";
     ctx.textAlign = "center";
@@ -382,30 +480,83 @@ function onMouseMove(event) {
 }
 
 async function loadJson(path) {
-  const response = await fetch(path, { cache: "no-store" });
+  const response = await fetch(cacheBust(path), { cache: "no-store" });
   if (!response.ok) throw new Error(`${path} → ${response.status}`);
   return response.json();
 }
 
-async function init() {
+async function loadAllVisualData() {
+  const [candlesPayload, episodes, latest] = await Promise.all([
+    loadJson("./data/lifecycle_candles.json"),
+    loadJson("./data/lifecycle_context_episodes.json"),
+    loadJson("./data/lifecycle_latest.json"),
+  ]);
+  const candleRows = Array.isArray(candlesPayload?.rows)
+    ? candlesPayload.rows
+    : Array.isArray(candlesPayload)
+      ? candlesPayload
+      : [];
+  state.candles = candleRows;
+  state.episodes = Array.isArray(episodes)
+    ? episodes
+    : Array.isArray(episodes?.episodes)
+      ? episodes.episodes
+      : [];
+  state.latest = latest && typeof latest === "object" ? latest : {};
+  if (!state.latest.timestamp && !state.latest.generated_at && !state.latest.as_of) {
+    showViewerError("lifecycle_latest.json is missing timestamp fields; chart may still render.");
+  } else {
+    clearViewerError();
+  }
+  state.lastVisualTimestamp = state.latest.timestamp || state.latest.generated_at || null;
+  updateStatusLine();
+  applyRange(false);
+  renderChart();
+}
+
+async function pollLatest() {
   try {
-    const [candlesPayload, episodes, latest] = await Promise.all([
-      loadJson("./data/lifecycle_candles.json"),
-      loadJson("./data/lifecycle_context_episodes.json"),
-      loadJson("./data/lifecycle_latest.json"),
-    ]);
-    state.candles = candlesPayload.rows || [];
-    state.episodes = Array.isArray(episodes) ? episodes : [];
-    state.latest = latest || {};
-    updateStatusLine();
+    const latest = await loadJson("./data/lifecycle_latest.json");
+    const nextTs = latest?.timestamp || latest?.generated_at || null;
+    if (nextTs && nextTs !== state.lastVisualTimestamp) {
+      await loadAllVisualData();
+      return;
+    }
+    // Even without data change, refresh stale/live badge vs wall clock.
+    if (latest) state.latest = { ...(state.latest || {}), ...latest };
+    updateRefreshLine();
+  } catch (_error) {
+    // Keep last good chart; badge can show stale on next successful poll.
+  }
+}
+
+function startAutoRefresh() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(pollLatest, POLL_INTERVAL_MS);
+}
+
+async function init() {
+  if (!canvas || !ctx) {
+    showViewerError("Chart library/canvas not loaded — cannot draw lifecycle chart.");
+    return;
+  }
+  if (!statusLine || !sourceLine) {
+    showViewerError("Viewer shell is incomplete — status elements missing.");
+    return;
+  }
+  try {
+    await loadAllVisualData();
     applyRange(true);
     renderChart();
+    startAutoRefresh();
 
-    rangeSelect.addEventListener("change", () => {
-      state.range = rangeSelect.value;
-      applyRange(true);
-      renderChart();
-    });
+    if (rangeSelect) {
+      rangeSelect.addEventListener("change", () => {
+        state.range = rangeSelect.value;
+        applyRange(true);
+        renderChart();
+      });
+    }
     window.addEventListener("resize", renderChart);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("mousedown", onMouseDown);
@@ -413,15 +564,21 @@ async function init() {
     canvas.addEventListener("mouseleave", () => {
       state.pointer = null;
       state.dragging = false;
-      hoverReadout.classList.add("hidden");
+      if (hoverReadout) hoverReadout.classList.add("hidden");
       renderChart();
     });
     window.addEventListener("mouseup", () => {
       state.dragging = false;
     });
   } catch (error) {
-    statusLine.textContent = `Unable to load lifecycle visual data: ${error.message}`;
-    sourceLine.textContent = "Run: python3 generate_lifecycle_context_data.py";
+    const message = error?.message || String(error);
+    showViewerError(`Unable to load lifecycle visual data: ${message}`);
+    if (sourceLine) sourceLine.textContent = "Run shadow-chain refresher or generate_lifecycle_context_data.py";
+    const refreshLine = ensureRefreshLine();
+    if (refreshLine) {
+      refreshLine.textContent = "VISUAL DATA STALE · awaiting shadow-chain refresh";
+      refreshLine.classList.add("is-stale");
+    }
   }
 }
 

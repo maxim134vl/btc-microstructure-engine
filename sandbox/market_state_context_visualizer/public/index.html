@@ -8,10 +8,12 @@
     <link rel="stylesheet" href="./lifecycle.css" />
   </head>
   <body class="lifecycle-surface">
-    <div class="lifecycle-shell">
+    <div class="lifecycle-shell" id="viewerRoot">
+      <div id="viewerErrorPanel" class="lifecycle-error-panel hidden" role="alert" aria-live="assertive"></div>
       <header class="lifecycle-status" aria-label="Current lifecycle context">
         <div class="lifecycle-status-main" id="statusLine">Loading lifecycle context…</div>
         <div class="lifecycle-status-meta">
+          <span id="refreshLine" class="lifecycle-refresh-line">AUTO-REFRESH</span>
           <span id="sourceLine">source: lifecycle episodes</span>
           <label class="lifecycle-range">
             Range
@@ -41,6 +43,6 @@
         </div>
       </main>
     </div>
-    <script src="./lifecycle_app.js"></script>
+    <script src="./lifecycle_app.js?v=stage14"></script>
   </body>
 </html>

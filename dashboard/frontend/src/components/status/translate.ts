@@ -35,7 +35,8 @@ export const translateFeedConnection = resolveCollectorStatus;
 export const translateEngineState = resolveEngineStatus;
 
 /** YELLOW | WARNING | DEGRADED (validation) → Attention Required */
-export const translateValidationLevel = (level: string) => resolveOpsLevel(level, "validation");
+export const translateValidationLevel = (level?: string | null) =>
+  resolveOpsLevel(level || "UNKNOWN", "validation");
 
 /** WARNING → Degraded (system) · CRITICAL → Critical */
 export const translateAlertSeverity = resolveAlertSeverity;
@@ -60,6 +61,6 @@ export const translateResearchRibbonItem = resolveResearchRibbonItem;
 export const translateActiveService = resolveActiveService;
 
 /** Convenience: pick translator by domain */
-export function translateByDomain(level: string, domain: StatusDomain) {
-  return resolveOpsLevel(level, domain);
+export function translateByDomain(level?: string | null, domain: StatusDomain = "system") {
+  return resolveOpsLevel(level || "UNKNOWN", domain);
 }

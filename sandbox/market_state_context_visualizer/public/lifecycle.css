@@ -55,6 +55,38 @@ body.lifecycle-surface {
   flex-shrink: 0;
 }
 
+.lifecycle-refresh-line {
+  max-width: 34rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.01em;
+}
+
+.lifecycle-refresh-line.is-live {
+  color: #7dcea0;
+}
+
+.lifecycle-refresh-line.is-stale {
+  color: #e0a86c;
+}
+
+.lifecycle-error-panel {
+  margin: 0.75rem 1rem 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(224, 168, 108, 0.45);
+  border-radius: 8px;
+  background: rgba(224, 168, 108, 0.12);
+  color: #f0d2a8;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.lifecycle-error-panel.hidden {
+  display: none;
+}
+
 .lifecycle-range {
   display: inline-flex;
   align-items: center;

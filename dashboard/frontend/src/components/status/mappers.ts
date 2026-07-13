@@ -18,11 +18,15 @@ function validation(key: ResolvedStatus["key"], tone: StatusTone): ResolvedStatu
   return { domain: "validation", key, label: labelFor("validation", key), tone };
 }
 
-function opsLevelTone(level: string): StatusTone {
-  const normalized = level.toUpperCase();
-  if (normalized === "GREEN" || normalized === "HEALTHY") return "operational";
-  if (normalized === "YELLOW" || normalized === "DEGRADED" || normalized === "DEFERRED") return "degraded";
-  if (normalized === "GREY") return "offline";
+function opsLevelTone(level?: string | null): StatusTone {
+  const normalized = (level || "UNKNOWN").toUpperCase();
+  if (normalized === "GREEN" || normalized === "HEALTHY" || normalized === "OPERATIONAL") return "operational";
+  if (normalized === "YELLOW" || normalized === "DEGRADED" || normalized === "DEFERRED" || normalized === "ATTENTION") {
+    return "degraded";
+  }
+  if (normalized === "GREY" || normalized === "UNKNOWN" || normalized === "MISSING_DATA" || normalized === "") {
+    return "offline";
+  }
   return "critical";
 }
 
@@ -60,36 +64,40 @@ function opsLevelToValidation(level: string): ResolvedStatus {
   return validation("failing", "critical");
 }
 
-export function resolveHealthLevel(level: string, displayStatus?: string | null): ResolvedStatus {
+export function resolveHealthLevel(level?: string | null, displayStatus?: string | null): ResolvedStatus {
   const display = (displayStatus || "").toUpperCase();
   if (display === "OPERATIONAL_WITH_WARNINGS") {
     return { domain: "system", key: "degraded", label: "Operational · Resource Warning", tone: "degraded" };
   }
-  const normalized = level.toUpperCase();
+  const normalized = (level || "UNKNOWN").toUpperCase();
   if (normalized === "HEALTHY") return system("operational", "operational");
   if (normalized === "DEGRADED") return system("degraded", "degraded");
   if (normalized === "CRITICAL") return system("critical", "critical");
+  if (!level) return system("offline", "offline");
   return opsLevelToSystem(level);
 }
 
-export function resolveResourceUsage(percent: number): ResolvedStatus {
-  if (percent >= 90) return system("critical", "critical");
-  if (percent >= 75) return system("degraded", "degraded");
+export function resolveResourceUsage(percent?: number | null): ResolvedStatus {
+  const value = Number(percent);
+  if (!Number.isFinite(value)) return system("offline", "offline");
+  if (value >= 90) return system("critical", "critical");
+  if (value >= 75) return system("degraded", "degraded");
   return system("operational", "operational");
 }
 
-export function resolveEngineStatus(status: string): ResolvedStatus {
-  const normalized = status.toUpperCase();
+export function resolveEngineStatus(status?: string | null): ResolvedStatus {
+  const normalized = (status || "UNKNOWN").toUpperCase();
   if (normalized === "HEALTHY") return engine("running", "operational");
   if (normalized === "FAILED") return engine("failed", "critical");
   if (normalized === "DEFERRED" || normalized === "STALLED" || normalized === "TIMEOUT") {
     return engine("lagging", "degraded");
   }
+  if (normalized === "UNKNOWN" || !status) return engine("running", "offline");
   return engine("running", "offline");
 }
 
-export function resolveCollectorStatus(status: string): ResolvedStatus {
-  const normalized = status.toUpperCase();
+export function resolveCollectorStatus(status?: string | null): ResolvedStatus {
+  const normalized = (status || "UNKNOWN").toUpperCase();
   if (normalized === "CONNECTED") return feed("receiving_data", "operational");
   if (normalized === "DEGRADED") return feed("delayed", "degraded");
   if (normalized === "DISCONNECTED") return feed("disconnected", "critical");
@@ -99,32 +107,35 @@ export function resolveCollectorStatus(status: string): ResolvedStatus {
   return feed("disconnected", "offline");
 }
 
-export function resolveFreshness(freshness: string): ResolvedStatus {
-  const normalized = freshness.toUpperCase();
+export function resolveFreshness(freshness?: string | null): ResolvedStatus {
+  const normalized = (freshness || "UNKNOWN").toUpperCase();
   if (normalized === "LIVE") return feed("receiving_data", "operational");
   if (normalized === "DELAYED" || normalized === "STALE") return feed("delayed", "degraded");
   if (normalized === "MISSING") return feed("disconnected", "critical");
   return feed("disconnected", "offline");
 }
 
-export function resolvePipelineState(state: string): ResolvedStatus {
-  const normalized = state.toUpperCase();
+export function resolvePipelineState(state?: string | null): ResolvedStatus {
+  const normalized = (state || "UNKNOWN").toUpperCase();
   if (normalized.includes("FAIL")) return engine("failed", "critical");
   if (normalized.includes("STALL") || normalized.includes("TIMEOUT")) return engine("lagging", "degraded");
-  if (normalized.includes("IDLE") || normalized.includes("WAIT")) return engine("running", "offline");
+  if (normalized.includes("IDLE") || normalized.includes("WAIT") || normalized === "UNKNOWN") {
+    return engine("running", "offline");
+  }
   return engine("running", "operational");
 }
 
-export function resolveOpsLevel(level: string, domain: StatusDomain = "system"): ResolvedStatus {
+export function resolveOpsLevel(level?: string | null, domain: StatusDomain = "system"): ResolvedStatus {
+  const token = level || "UNKNOWN";
   switch (domain) {
     case "feed":
-      return opsLevelToFeed(level);
+      return opsLevelToFeed(token);
     case "engine":
-      return opsLevelToEngineFromLevel(level);
+      return opsLevelToEngineFromLevel(token);
     case "validation":
-      return opsLevelToValidation(level);
+      return opsLevelToValidation(token);
     default:
-      return opsLevelToSystem(level);
+      return opsLevelToSystem(token);
   }
 }
 
@@ -136,41 +147,26 @@ function opsLevelToEngineFromLevel(level: string): ResolvedStatus {
   return engine("failed", "critical");
 }
 
-export function resolveAlertSeverity(severity: string): ResolvedStatus {
-  const normalized = severity.toUpperCase();
+export function resolveAlertSeverity(severity?: string | null): ResolvedStatus {
+  const normalized = (severity || "UNKNOWN").toUpperCase();
   if (normalized === "CRITICAL") return system("critical", "critical");
   if (normalized === "WARNING") return system("degraded", "degraded");
+  if (normalized === "UNKNOWN" || !severity) return system("offline", "offline");
   return system("operational", "operational");
 }
 
-export function resolveFailedEngineCount(count: number): ResolvedStatus {
-  return count > 0 ? engine("failed", "critical") : engine("running", "operational");
+export function resolveFailedEngineCount(count?: number | null): ResolvedStatus {
+  return Number(count || 0) > 0 ? engine("failed", "critical") : engine("running", "operational");
 }
 
-export function resolveStallCount(count: number): ResolvedStatus {
-  return count > 0 ? engine("lagging", "degraded") : engine("running", "operational");
-}
-
-/** Runtime stability — current stalls only (historical stalls are informational). */
-export function resolveRuntimeStability(input: {
-  currentStalls?: number;
-  restartCount?: number;
-  runtimeStatus?: string | null;
-}): ResolvedStatus {
-  const current = Number(input.currentStalls || 0);
-  if (current > 0 || String(input.runtimeStatus || "").toUpperCase() === "DEGRADED") {
-    return system("degraded", "degraded");
-  }
-  if (String(input.runtimeStatus || "").toUpperCase() === "CRITICAL") {
-    return system("critical", "critical");
-  }
-  return system("operational", "operational");
+export function resolveStallCount(count?: number | null): ResolvedStatus {
+  return Number(count || 0) > 0 ? engine("lagging", "degraded") : engine("running", "operational");
 }
 
 export function resolveHealthDimensionStatus(status?: string | null): ResolvedStatus {
   const token = (status || "UNKNOWN").toUpperCase();
-  if (token === "OPERATIONAL" || token === "HEALTHY" || token === "INFORMATIONAL") {
-    return system(token === "INFORMATIONAL" ? "operational" : "operational", "operational");
+  if (token === "OPERATIONAL" || token === "HEALTHY" || token === "INFORMATIONAL" || token === "UNKNOWN") {
+    return system("operational", "operational");
   }
   if (token === "OPERATIONAL_WITH_WARNINGS") {
     return system("degraded", "degraded");
@@ -179,6 +175,21 @@ export function resolveHealthDimensionStatus(status?: string | null): ResolvedSt
     return system("degraded", "degraded");
   }
   if (token === "CRITICAL") return system("critical", "critical");
+  return system("operational", "operational");
+}
+
+export function resolveRuntimeStability(input?: {
+  currentStalls?: number;
+  restartCount?: number;
+  runtimeStatus?: string | null;
+} | null): ResolvedStatus {
+  const current = Number(input?.currentStalls || 0);
+  if (current > 0 || String(input?.runtimeStatus || "").toUpperCase() === "DEGRADED") {
+    return system("degraded", "degraded");
+  }
+  if (String(input?.runtimeStatus || "").toUpperCase() === "CRITICAL") {
+    return system("critical", "critical");
+  }
   return system("operational", "operational");
 }
 
@@ -194,7 +205,7 @@ export function resolveParquetSummary(missing: number, stale: number): ResolvedS
   return feed("receiving_data", "operational");
 }
 
-export function resolveStabilityRestarts(restarts: number): ResolvedStatus {
+export function resolveStabilityRestarts(_restarts: number): ResolvedStatus {
   // Restart history alone is not current runtime degradation (Stage 13).
   return system("operational", "operational");
 }

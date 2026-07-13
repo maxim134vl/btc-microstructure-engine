@@ -1,4 +1,4 @@
-import { Children, useState, type ComponentType, type ReactNode } from "react";
+import { Children, Component, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import { useTranslation } from "../../i18n";
 import {
   SymbolAntenna,
@@ -91,6 +91,41 @@ function SectionLabel({ children }: { children: ReactNode }) {
       {children}
     </h2>
   );
+}
+
+type SectionErrorBoundaryProps = {
+  title: string;
+  children: ReactNode;
+};
+
+type SectionErrorBoundaryState = {
+  error: Error | null;
+};
+
+/** Keeps the page visible when one ops section throws. */
+class SectionErrorBoundary extends Component<SectionErrorBoundaryProps, SectionErrorBoundaryState> {
+  state: SectionErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): SectionErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(`[OpsDashboard] section "${this.props.title}" failed`, error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <Card className="border border-ds-status-warning/40 p-4">
+          <h3 className="text-[14px] font-semibold text-ds-text-primary">Section unavailable</h3>
+          <p className="mt-1 text-[12px] text-ds-text-secondary">{this.props.title}</p>
+          <p className="mt-2 text-[12px] text-ds-status-warning">{this.state.error.message || "Render failed"}</p>
+        </Card>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -1051,39 +1086,57 @@ export function OpsDashboard({
     health_dimensions: topHealthDimensions,
   } = snapshot;
 
-  const dimensions = topHealthDimensions || health.health_dimensions;
-  const runtimeRibbon = ribbon.filter((item) => !isResearchRibbonKey(item.key));
-  const researchRibbon = ribbon.filter((item) => isResearchRibbonKey(item.key) && item.key !== "pipeline_sync");
-  const pipelineSyncRibbon = ribbon.filter((item) => item.key === "pipeline_sync");
+  const safeHealth = health || ({
+    level: "UNKNOWN",
+    memory_percent: 0,
+    cpu_percent: 0,
+    disk_percent: 0,
+    reasons: [],
+    primary_reason: "MISSING_DATA",
+  } as OpsSnapshot["health"]);
+  const safePipeline = pipeline || ({
+    active_state: "UNKNOWN",
+    current_cycle: 0,
+    failed_engine_count: 0,
+    heartbeat_level: "GREY",
+  } as OpsSnapshot["pipeline"]);
+  const safeRibbon = Array.isArray(ribbon) ? ribbon : [];
+  const safeEngines = Array.isArray(engines) ? engines : [];
+  const safeAlerts = Array.isArray(alerts) ? alerts : [];
+  const safeCollectors = collectors || ({ level: "GREY" } as OpsSnapshot["collectors"]);
 
-  const actionableAlerts = (alert_groups?.actionable ?? alerts.filter((a) => a.actionable !== false && !a.ignored_by_health)).filter(
+  const dimensions = topHealthDimensions || safeHealth.health_dimensions;
+  const runtimeRibbon = safeRibbon.filter((item) => !isResearchRibbonKey(item.key));
+  const researchRibbon = safeRibbon.filter((item) => isResearchRibbonKey(item.key) && item.key !== "pipeline_sync");
+  const pipelineSyncRibbon = safeRibbon.filter((item) => item.key === "pipeline_sync");
+
+  const actionableAlerts = (alert_groups?.actionable ?? safeAlerts.filter((a) => a.actionable !== false && !a.ignored_by_health)).filter(
     (a) => !acknowledged.has(a.id),
   );
 
-  const healthStatus = translateSystemHealth(health.level, health.display_status);
-  const memoryStatus = translateResourceUsage(health.memory_percent);
-  const pipelineStatus = translatePipelineState(pipeline.active_state);
+  const healthStatus = translateSystemHealth(safeHealth.level, safeHealth.display_status);
+  const memoryStatus = translateResourceUsage(safeHealth.memory_percent);
+  const pipelineStatus = translatePipelineState(safePipeline.active_state);
   const alertsStatus = translateOpenAlerts(
     actionableAlerts.length,
     actionableAlerts.some((a) => a.severity === "CRITICAL"),
   );
   const currentStallCount =
-    pipeline.current_stalls_timeouts ??
-    (pipeline.current_stalled_engine_count ?? pipeline.stalled_engine_count ?? 0) + (pipeline.timeout_count ?? 0);
+    safePipeline.current_stalls_timeouts ??
+    (safePipeline.current_stalled_engine_count ?? safePipeline.stalled_engine_count ?? 0) + (safePipeline.timeout_count ?? 0);
   const historicalStallCount =
-    pipeline.historical_stalls_timeouts ?? pipeline.historical_stalled_engine_count ?? 0;
+    safePipeline.historical_stalls_timeouts ?? safePipeline.historical_stalled_engine_count ?? 0;
   const runtimeStabilityStatus = translateRuntimeStability({
     currentStalls: currentStallCount,
     restartCount: stability?.restart_count,
-    runtimeStatus: dimensions?.runtime.status,
+    runtimeStatus: dimensions?.runtime?.status,
   });
-  const healthDisplay = useSimulatedStatus(healthStatus);
   const { t } = useTranslation();
 
-  const researchStatus = dimensions
+  const researchStatus = dimensions?.research_validation?.status
     ? translateHealthDimensionStatus(dimensions.research_validation.status)
     : translateValidationLevel("YELLOW");
-  const historicalStatus = dimensions
+  const historicalStatus = dimensions?.historical_audit?.status
     ? translateHealthDimensionStatus(dimensions.historical_audit.status)
     : translateHealthDimensionStatus("INFORMATIONAL");
 
@@ -1095,9 +1148,9 @@ export function OpsDashboard({
             title={t("ops.systemHealth")}
             icon={SymbolHeart}
             status={healthStatus}
-            hint={health.primary_reason}
+            hint={safeHealth.primary_reason || "Partial ops payload"}
             renderVisual={(tone) => (
-              <RingGauge value={healthScore(health.level)} tone={tone} size={100}>
+              <RingGauge value={healthScore(safeHealth.level || "UNKNOWN")} tone={tone} size={100}>
                 <StatusOrb tone={tone} size="lg" />
               </RingGauge>
             )}
@@ -1107,11 +1160,14 @@ export function OpsDashboard({
             title={t("ops.memoryUsage")}
             icon={SymbolMemory}
             status={memoryStatus}
-            hint={t("ops.resourceHint", { cpu: health.cpu_percent.toFixed(0), disk: health.disk_percent.toFixed(0) })}
+            hint={t("ops.resourceHint", {
+              cpu: Number(safeHealth.cpu_percent || 0).toFixed(0),
+              disk: Number(safeHealth.disk_percent || 0).toFixed(0),
+            })}
             renderVisual={(tone) => (
-              <RingGauge value={health.memory_percent} tone={tone} size={100}>
+              <RingGauge value={Number(safeHealth.memory_percent || 0)} tone={tone} size={100}>
                 <span className="font-ds-display text-[26px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {health.memory_percent.toFixed(0)}%
+                  {Number(safeHealth.memory_percent || 0).toFixed(0)}%
                 </span>
               </RingGauge>
             )}
@@ -1122,14 +1178,14 @@ export function OpsDashboard({
             icon={SymbolPipeline}
             status={pipelineStatus}
             hint={
-              pipeline.average_cycle_duration_s != null
-                ? t("ops.cycleHintWithAvg", { cycle: pipeline.current_cycle, avg: pipeline.average_cycle_duration_s })
-                : t("ops.cycleHint", { cycle: pipeline.current_cycle })
+              safePipeline.average_cycle_duration_s != null
+                ? t("ops.cycleHintWithAvg", { cycle: safePipeline.current_cycle, avg: safePipeline.average_cycle_duration_s })
+                : t("ops.cycleHint", { cycle: safePipeline.current_cycle ?? 0 })
             }
             renderVisual={() => (
               <div className="text-center">
                 <p className="font-ds-display text-[48px] font-semibold leading-none tabular-nums tracking-tight text-ds-text-primary">
-                  {pipeline.current_cycle}
+                  {safePipeline.current_cycle ?? 0}
                 </p>
                 <p className="mt-1.5 text-[11px] text-ds-text-secondary">{t("ops.currentCycle")}</p>
               </div>
@@ -1153,6 +1209,7 @@ export function OpsDashboard({
           />
         </div>
 
+        <SectionErrorBoundary title="Resources">
         <section className="space-y-2.5">
           <SectionLabel>{t("ops.resources")}</SectionLabel>
           <div className="grid gap-3.5 lg:grid-cols-3">
@@ -1164,15 +1221,15 @@ export function OpsDashboard({
                   <h3 className="text-[14px] font-semibold text-ds-text-primary">{t("ops.resources")}</h3>
                 </div>
                 <div className="grid gap-5 sm:grid-cols-3">
-                  <ProgressBar value={health.cpu_percent} label={t("ops.cpu")} icon={SymbolCpu} />
-                  <ProgressBar value={health.memory_percent} label={t("ops.memory")} icon={SymbolMemory} />
-                  <ProgressBar value={health.disk_percent} label={t("ops.disk")} icon={SymbolDatabase} />
+                  <ProgressBar value={Number(safeHealth.cpu_percent || 0)} label={t("ops.cpu")} icon={SymbolCpu} />
+                  <ProgressBar value={Number(safeHealth.memory_percent || 0)} label={t("ops.memory")} icon={SymbolMemory} />
+                  <ProgressBar value={Number(safeHealth.disk_percent || 0)} label={t("ops.disk")} icon={SymbolDatabase} />
                 </div>
-                {(dimensions?.resources.reason || health.reasons[0]) ? (
+                {(dimensions?.resources?.reason || safeHealth.reasons?.[0]) ? (
                   <ul className="mt-4 space-y-1.5 border-t border-ds-border/30 pt-3.5">
                     <li className="flex gap-2 text-[12px] text-ds-text-secondary">
                       <StatusDot tone={memoryStatus.tone} className="mt-1.5 h-2 w-2 shrink-0" />
-                      <span>{dimensions?.resources.reason || health.reasons[0]}</span>
+                      <span>{dimensions?.resources?.reason || safeHealth.reasons?.[0]}</span>
                     </li>
                   </ul>
                 ) : null}
@@ -1188,7 +1245,7 @@ export function OpsDashboard({
 
           {feed_confidence ? (
             <div className="grid gap-3.5 md:grid-cols-3">
-              {[feed_confidence.ws, feed_confidence.write, feed_confidence.consume].map((signal) => (
+              {[feed_confidence.ws, feed_confidence.write, feed_confidence.consume].filter(Boolean).map((signal) => (
                 <RibbonTile
                   key={signal.label}
                   icon={SymbolWifi}
@@ -1199,7 +1256,9 @@ export function OpsDashboard({
             </div>
           ) : null}
         </section>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary title="Runtime Health">
         <section className="space-y-2.5">
           <SectionLabel>Runtime Health</SectionLabel>
           <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
@@ -1223,14 +1282,16 @@ export function OpsDashboard({
               key="current-failures"
               icon={SymbolEngine}
               label="CURRENT FAILURES"
-              status={translateFailedEngineCount(dimensions?.runtime.current_failures_count ?? 0)}
+              status={translateFailedEngineCount(dimensions?.runtime?.current_failures_count ?? 0)}
             />
           </div>
-          {dimensions?.runtime.reason ? (
+          {dimensions?.runtime?.reason ? (
             <p className="px-0.5 text-[11px] text-ds-text-secondary">{dimensions.runtime.reason}</p>
           ) : null}
         </section>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary title="Research / Validation">
         <section className="space-y-2.5">
           <SectionLabel>Research / Validation</SectionLabel>
           <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
@@ -1243,13 +1304,15 @@ export function OpsDashboard({
               />
             ))}
           </div>
-          {dimensions?.research_validation.reason ? (
+          {dimensions?.research_validation?.reason ? (
             <p className="px-0.5 text-[11px] text-ds-text-secondary">
               {dimensions.research_validation.status}: {dimensions.research_validation.reason}
             </p>
           ) : null}
         </section>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary title="Historical Audit">
         <section className="space-y-2.5">
           <SectionLabel>Historical Audit</SectionLabel>
           <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
@@ -1258,7 +1321,7 @@ export function OpsDashboard({
               icon={SymbolEngine}
               value={
                 <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {dimensions?.historical_audit.historical_failures_count ??
+                  {dimensions?.historical_audit?.historical_failures_count ??
                     runtime_failure_audit?.historical_count ??
                     runtime_failure_audit?.total_count ??
                     0}
@@ -1271,17 +1334,17 @@ export function OpsDashboard({
               icon={SymbolBell}
               value={
                 <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {dimensions?.runtime.current_failures_count ?? runtime_failure_audit?.active_count ?? 0}
+                  {dimensions?.runtime?.current_failures_count ?? runtime_failure_audit?.active_count ?? 0}
                 </p>
               }
-              status={translateFailedEngineCount(dimensions?.runtime.current_failures_count ?? 0)}
+              status={translateFailedEngineCount(dimensions?.runtime?.current_failures_count ?? 0)}
             />
             <MetricTile
               label="Historical stalls/timeouts"
               icon={SymbolWaveform}
               value={
                 <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {dimensions?.historical_audit.historical_stalls_count ?? historicalStallCount}
+                  {dimensions?.historical_audit?.historical_stalls_count ?? historicalStallCount}
                 </p>
               }
               status={historicalStatus}
@@ -1289,16 +1352,18 @@ export function OpsDashboard({
             <StatusTile label="Historical Audit" icon={SymbolClock} status={historicalStatus} />
           </div>
           <p className="px-0.5 text-[11px] text-ds-text-secondary">
-            {dimensions?.historical_audit.reason || "Informational historical events only"}
-            {dimensions?.historical_audit.latest_historical_failure_at
+            {dimensions?.historical_audit?.reason || "Informational historical events only"}
+            {dimensions?.historical_audit?.latest_historical_failure_at
               ? ` · Latest historical failure: ${formatSourceTimestamp(String(dimensions.historical_audit.latest_historical_failure_at))}`
               : ""}
-            {dimensions?.historical_audit.latest_historical_stall_at
+            {dimensions?.historical_audit?.latest_historical_stall_at
               ? ` · Latest historical stall: ${formatSourceTimestamp(String(dimensions.historical_audit.latest_historical_stall_at))}`
               : ""}
           </p>
         </section>
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary title="Pipeline Status">
         <section className="space-y-2.5">
           <SectionLabel>{t("ops.pipelineStatus")}</SectionLabel>
           <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
@@ -1307,10 +1372,10 @@ export function OpsDashboard({
               icon={SymbolEngine}
               value={
                 <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {pipeline.failed_engine_count}
+                  {safePipeline.failed_engine_count ?? 0}
                 </p>
               }
-              status={translateFailedEngineCount(pipeline.failed_engine_count)}
+              status={translateFailedEngineCount(safePipeline.failed_engine_count ?? 0)}
             />
             <MetricTile
               label="Current stalls/timeouts"
@@ -1325,7 +1390,7 @@ export function OpsDashboard({
             <StatusTile
               label={t("ops.heartbeat")}
               icon={SymbolWaveform}
-              status={translateOpsLevel(pipeline.heartbeat_level, "engine")}
+              status={translateOpsLevel(safePipeline.heartbeat_level, "engine")}
             />
             <StatusTile
               label="Runtime Stability"
@@ -1335,22 +1400,30 @@ export function OpsDashboard({
             <StatusTile
               label={t("ops.collectors")}
               icon={SymbolAntenna}
-              status={translateOpsLevel(collectors.level, "feed")}
+              status={translateOpsLevel(safeCollectors.level, "feed")}
             />
           </div>
 
           <div className="grid gap-3.5 xl:grid-cols-2">
-            <EngineList engines={engines} />
-            <CollectorsCard collectors={collectors} />
+            <EngineList engines={safeEngines} />
+            <CollectorsCard collectors={safeCollectors} />
           </div>
         </section>
+        </SectionErrorBoundary>
 
-        {research_pipeline ? <ResearchPipelineSection research={research_pipeline} /> : null}
+        <SectionErrorBoundary title="Research Pipeline">
+          {research_pipeline ? <ResearchPipelineSection research={research_pipeline} /> : null}
+        </SectionErrorBoundary>
 
+        <SectionErrorBoundary title="Runtime Activity">
         <section className="space-y-2.5">
           <SectionLabel>{t("ops.systemActivity")}</SectionLabel>
           <div className="grid gap-3.5 xl:grid-cols-3">
-            <ParquetCard parquet={parquet} expanded={expandedStaleParquet} onToggle={onToggleStaleParquet} />
+            {parquet ? (
+              <ParquetCard parquet={parquet} expanded={expandedStaleParquet} onToggle={onToggleStaleParquet} />
+            ) : (
+              <Card className="p-4 text-[12px] text-ds-text-secondary">Parquet summary unavailable</Card>
+            )}
             {stability ? (
               <PanelCard title={t("ops.stability")} icon={SymbolClock} status={runtimeStabilityStatus}>
                 <ListRow
@@ -1374,17 +1447,18 @@ export function OpsDashboard({
                 <div className="space-y-1 px-2.5 py-2 text-[11px] text-ds-text-secondary">
                   <p>Current stalls/timeouts: {currentStallCount}</p>
                   <p>Historical stalls/timeouts: {historicalStallCount}</p>
-                  {pipeline.latest_historical_stall_at ? (
-                    <p>Latest historical stall: {formatSourceTimestamp(String(pipeline.latest_historical_stall_at))}</p>
+                  {safePipeline.latest_historical_stall_at ? (
+                    <p>Latest historical stall: {formatSourceTimestamp(String(safePipeline.latest_historical_stall_at))}</p>
                   ) : null}
                 </div>
               </PanelCard>
             ) : null}
             <RuntimeFailureAuditCard audit={runtime_failure_audit} />
             <RuntimeSkippedEngineAuditCard audit={runtime_skipped_engine_audit} />
-            <AlertsCard alerts={alerts} alertGroups={alert_groups} acknowledged={acknowledged} onAck={onAckAlert} />
+            <AlertsCard alerts={safeAlerts} alertGroups={alert_groups} acknowledged={acknowledged} onAck={onAckAlert} />
           </div>
         </section>
+        </SectionErrorBoundary>
       </div>
     </div>
   );
