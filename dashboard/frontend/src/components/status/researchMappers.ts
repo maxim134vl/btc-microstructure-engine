@@ -156,8 +156,15 @@ export function resolveEconomicStatus(
 ): ResolvedStatus {
   const normalized = level.toUpperCase();
   const statusToken = (status || "").toUpperCase();
-  if (isStaleToken(status, freshness)) {
-    return researchStatus(status?.trim() || "STALE_VALIDATION", "degraded");
+  if (
+    statusToken.includes("STALE_VALIDATION") ||
+    statusToken.includes("HISTORICAL") ||
+    isStaleToken(status, freshness)
+  ) {
+    return researchStatus(
+      status?.includes("HISTORICAL") ? status.trim() : "STALE_VALIDATION / HISTORICAL",
+      "degraded",
+    );
   }
   let label = "Review";
   if (normalized === "GREY" || statusToken === "NOT_EVALUATED" || statusToken === "NO_DATA") {
@@ -265,7 +272,7 @@ export function resolveResearchRibbonItem(item: {
     case "shadow_inference":
       return resolveShadowStatus(item.level, item.value);
     case "toxic_box":
-      return resolveToxicStatus(item.level);
+      return resolveToxicStatus(item.level, item.value, null, item.value);
     case "pipeline_sync":
       return resolvePipelineSyncStatus(item.level);
     default:

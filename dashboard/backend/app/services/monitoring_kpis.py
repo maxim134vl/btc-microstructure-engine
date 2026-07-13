@@ -8,6 +8,9 @@ from typing import Any, Callable
 SHADOW_MACRO_F1_HEALTHY = 0.50
 SHADOW_LOSS_RECALL_HEALTHY = 0.80
 
+# Current stall/timeout window for runtime stability (Stage 13).
+CURRENT_STALL_WINDOW_S = 15 * 60
+
 WATCH_TRADING_STATES = frozenset({"REVERSAL_WATCH", "OBSERVE", "STAND_ASIDE"})
 NO_ENTRY_POSTURES = frozenset(
     {
@@ -200,3 +203,173 @@ def governance_age_days(iso_timestamp: str | None) -> int | None:
         return max(0, delta.days)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_event_epoch(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.astimezone(timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_blocking_stalls(
+    chain_events: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+    window_s: float = CURRENT_STALL_WINDOW_S,
+    lookback: int = 50,
+) -> dict[str, Any]:
+    """Split TIMEOUT/STALL_DETECTED into current vs historical."""
+    now_ts = now if now is not None else datetime.now(timezone.utc).timestamp()
+    events = [
+        e
+        for e in (chain_events[-lookback:] if lookback else chain_events)
+        if isinstance(e, dict) and e.get("event") in ("TIMEOUT", "STALL_DETECTED")
+    ]
+    current: list[dict[str, Any]] = []
+    historical: list[dict[str, Any]] = []
+    for event in events:
+        age = None
+        epoch = _parse_event_epoch(event.get("timestamp"))
+        if epoch is not None:
+            age = now_ts - epoch
+        if age is not None and age <= window_s:
+            current.append(event)
+        else:
+            historical.append(event)
+
+    latest_hist = None
+    if historical:
+        latest_hist = max(
+            historical,
+            key=lambda e: _parse_event_epoch(e.get("timestamp")) or 0.0,
+        ).get("timestamp")
+
+    latest_cur = None
+    if current:
+        latest_cur = max(
+            current,
+            key=lambda e: _parse_event_epoch(e.get("timestamp")) or 0.0,
+        ).get("timestamp")
+
+    return {
+        "current_count": len(current),
+        "historical_count": len(historical),
+        "latest_current_at": latest_cur,
+        "latest_historical_at": latest_hist,
+        "current_events": current,
+        "historical_events": historical,
+    }
+
+
+def resource_health_status(
+    *,
+    cpu_pct: float,
+    memory_pct: float,
+    disk_pct: float,
+) -> dict[str, Any]:
+    """Resource card status — separate from runtime infrastructure health."""
+    reasons: list[str] = []
+    status = "OPERATIONAL"
+    if memory_pct > 95 or disk_pct > 95 or cpu_pct > 95:
+        status = "CRITICAL"
+    elif memory_pct >= 75 or disk_pct >= 90 or cpu_pct >= 90:
+        status = "DEGRADED"
+
+    if memory_pct >= 75:
+        reasons.append(f"Resource warning: memory {memory_pct:.0f}%")
+    if disk_pct >= 90:
+        reasons.append(f"Resource warning: disk {disk_pct:.0f}%")
+    if cpu_pct >= 90:
+        reasons.append(f"Resource warning: cpu {cpu_pct:.0f}%")
+
+    return {
+        "status": status,
+        "cpu_pct": round(float(cpu_pct), 1),
+        "memory_pct": round(float(memory_pct), 1),
+        "disk_pct": round(float(disk_pct), 1),
+        "reason": reasons[0] if reasons else "Resources nominal",
+        "reasons": reasons,
+    }
+
+
+def build_health_dimensions(
+    *,
+    runtime_status: str,
+    runtime_reason: str,
+    current_failures_count: int,
+    failed_engine_count: int,
+    required_datasets_stale_count: int,
+    collectors_status: str,
+    websocket_status: str,
+    pipeline_status: str,
+    resources: dict[str, Any],
+    research_status: str,
+    research_reason: str,
+    governance_status: str,
+    economic_status: str,
+    shadow_status: str,
+    toxic_status: str,
+    historical_failures_count: int,
+    historical_stalls_count: int,
+    latest_historical_failure_at: str | None,
+    latest_historical_stall_at: str | None,
+    historical_reason: str,
+) -> dict[str, Any]:
+    """Three-layer health: runtime / research_validation / historical_audit + resources."""
+    hist_status = "INFORMATIONAL"
+    return {
+        "runtime": {
+            "status": runtime_status,
+            "reason": runtime_reason,
+            "current_failures_count": int(current_failures_count),
+            "failed_engine_count": int(failed_engine_count),
+            "required_datasets_stale_count": int(required_datasets_stale_count),
+            "collectors_status": collectors_status,
+            "websocket_status": websocket_status,
+            "pipeline_status": pipeline_status,
+        },
+        "resources": resources,
+        "research_validation": {
+            "status": research_status,
+            "reason": research_reason,
+            "governance_status": governance_status,
+            "economic_status": economic_status,
+            "shadow_status": shadow_status,
+            "toxic_status": toxic_status,
+        },
+        "historical_audit": {
+            "status": hist_status,
+            "historical_failures_count": int(historical_failures_count),
+            "historical_stalls_count": int(historical_stalls_count),
+            "latest_historical_failure_at": latest_historical_failure_at,
+            "latest_historical_stall_at": latest_historical_stall_at,
+            "reason": historical_reason,
+        },
+    }
+
+
+def derive_system_health_level(
+    *,
+    runtime_status: str,
+    resources_status: str,
+) -> tuple[str, str | None]:
+    """Top System Health from runtime + critical resources only.
+
+    Returns (level, display_suffix) where level is HEALTHY|DEGRADED|CRITICAL
+    and display_suffix may be OPERATIONAL_WITH_WARNINGS.
+    """
+    rt = runtime_status.upper()
+    res = resources_status.upper()
+    if rt == "CRITICAL" or res == "CRITICAL":
+        return "CRITICAL", None
+    if rt == "DEGRADED":
+        return "DEGRADED", None
+    if res == "DEGRADED":
+        return "HEALTHY", "OPERATIONAL_WITH_WARNINGS"
+    return "HEALTHY", None

@@ -36,6 +36,8 @@ import {
   translateResearchRibbonItem,
   translateStabilityRestarts,
   translateStallCount,
+  translateRuntimeStability,
+  translateHealthDimensionStatus,
   translateSystemHealth,
   translateValidationLevel,
   isResearchRibbonKey,
@@ -65,6 +67,7 @@ import type {
   RuntimeFailureAuditSummary,
   RuntimeSkippedEngineAuditSummary,
   RibbonItem,
+  HealthDimensions,
 } from "../../types/ops";
 import { RingGauge, StatusOrb } from "./OpsVisuals";
 
@@ -1045,24 +1048,44 @@ export function OpsDashboard({
     research_pipeline,
     runtime_failure_audit,
     runtime_skipped_engine_audit,
+    health_dimensions: topHealthDimensions,
   } = snapshot;
 
-  const validationLevel = validationRibbonLevel(ribbon);
-  const validationItem = ribbon.find((r) => /validation/i.test(r.label));
+  const dimensions = topHealthDimensions || health.health_dimensions;
+  const runtimeRibbon = ribbon.filter((item) => !isResearchRibbonKey(item.key));
+  const researchRibbon = ribbon.filter((item) => isResearchRibbonKey(item.key) && item.key !== "pipeline_sync");
+  const pipelineSyncRibbon = ribbon.filter((item) => item.key === "pipeline_sync");
+
   const actionableAlerts = (alert_groups?.actionable ?? alerts.filter((a) => a.actionable !== false && !a.ignored_by_health)).filter(
     (a) => !acknowledged.has(a.id),
   );
 
-  const healthStatus = translateSystemHealth(health.level);
+  const healthStatus = translateSystemHealth(health.level, health.display_status);
   const memoryStatus = translateResourceUsage(health.memory_percent);
   const pipelineStatus = translatePipelineState(pipeline.active_state);
   const alertsStatus = translateOpenAlerts(
     actionableAlerts.length,
     actionableAlerts.some((a) => a.severity === "CRITICAL"),
   );
-  const stallCount = pipeline.stalled_engine_count + (pipeline.timeout_count ?? 0);
+  const currentStallCount =
+    pipeline.current_stalls_timeouts ??
+    (pipeline.current_stalled_engine_count ?? pipeline.stalled_engine_count ?? 0) + (pipeline.timeout_count ?? 0);
+  const historicalStallCount =
+    pipeline.historical_stalls_timeouts ?? pipeline.historical_stalled_engine_count ?? 0;
+  const runtimeStabilityStatus = translateRuntimeStability({
+    currentStalls: currentStallCount,
+    restartCount: stability?.restart_count,
+    runtimeStatus: dimensions?.runtime.status,
+  });
   const healthDisplay = useSimulatedStatus(healthStatus);
   const { t } = useTranslation();
+
+  const researchStatus = dimensions
+    ? translateHealthDimensionStatus(dimensions.research_validation.status)
+    : translateValidationLevel("YELLOW");
+  const historicalStatus = dimensions
+    ? translateHealthDimensionStatus(dimensions.historical_audit.status)
+    : translateHealthDimensionStatus("INFORMATIONAL");
 
   return (
     <div className="ops-surface min-h-full">
@@ -1131,7 +1154,7 @@ export function OpsDashboard({
         </div>
 
         <section className="space-y-2.5">
-          <SectionLabel>{t("ops.runtimeHealth")}</SectionLabel>
+          <SectionLabel>{t("ops.resources")}</SectionLabel>
           <div className="grid gap-3.5 lg:grid-cols-3">
             <Card className="relative col-span-2 overflow-hidden p-4">
               <div className="ops-card-shimmer" aria-hidden />
@@ -1145,23 +1168,21 @@ export function OpsDashboard({
                   <ProgressBar value={health.memory_percent} label={t("ops.memory")} icon={SymbolMemory} />
                   <ProgressBar value={health.disk_percent} label={t("ops.disk")} icon={SymbolDatabase} />
                 </div>
-                {health.reasons.length > 0 ? (
+                {(dimensions?.resources.reason || health.reasons[0]) ? (
                   <ul className="mt-4 space-y-1.5 border-t border-ds-border/30 pt-3.5">
-                    {health.reasons.slice(0, 3).map((reason) => (
-                      <li key={reason} className="flex gap-2 text-[12px] text-ds-text-secondary">
-                        <StatusDot tone={healthDisplay.tone} className="mt-1.5 h-2 w-2 shrink-0" />
-                        <span>{reason}</span>
-                      </li>
-                    ))}
+                    <li className="flex gap-2 text-[12px] text-ds-text-secondary">
+                      <StatusDot tone={memoryStatus.tone} className="mt-1.5 h-2 w-2 shrink-0" />
+                      <span>{dimensions?.resources.reason || health.reasons[0]}</span>
+                    </li>
                   </ul>
                 ) : null}
               </div>
             </Card>
 
             <StatusTile
-              label={t("ops.validation")}
+              label="Research / Validation"
               icon={SymbolLayers}
-              status={translateValidationLevel(validationLevel)}
+              status={researchStatus}
             />
           </div>
 
@@ -1180,6 +1201,105 @@ export function OpsDashboard({
         </section>
 
         <section className="space-y-2.5">
+          <SectionLabel>Runtime Health</SectionLabel>
+          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+            {runtimeRibbon.map((item) => (
+              <RibbonTile
+                key={item.key}
+                icon={ribbonIcon(item)}
+                label={item.label}
+                status={translateRibbonItem(item)}
+              />
+            ))}
+            {pipelineSyncRibbon.map((item) => (
+              <RibbonTile
+                key={item.key}
+                icon={ribbonIcon(item)}
+                label={item.label}
+                status={translateResearchRibbonItem(item)}
+              />
+            ))}
+            <RibbonTile
+              key="current-failures"
+              icon={SymbolEngine}
+              label="CURRENT FAILURES"
+              status={translateFailedEngineCount(dimensions?.runtime.current_failures_count ?? 0)}
+            />
+          </div>
+          {dimensions?.runtime.reason ? (
+            <p className="px-0.5 text-[11px] text-ds-text-secondary">{dimensions.runtime.reason}</p>
+          ) : null}
+        </section>
+
+        <section className="space-y-2.5">
+          <SectionLabel>Research / Validation</SectionLabel>
+          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+            {researchRibbon.map((item) => (
+              <RibbonTile
+                key={item.key}
+                icon={ribbonIcon(item)}
+                label={item.label}
+                status={translateResearchRibbonItem(item)}
+              />
+            ))}
+          </div>
+          {dimensions?.research_validation.reason ? (
+            <p className="px-0.5 text-[11px] text-ds-text-secondary">
+              {dimensions.research_validation.status}: {dimensions.research_validation.reason}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="space-y-2.5">
+          <SectionLabel>Historical Audit</SectionLabel>
+          <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricTile
+              label="Historical failures"
+              icon={SymbolEngine}
+              value={
+                <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
+                  {dimensions?.historical_audit.historical_failures_count ??
+                    runtime_failure_audit?.historical_count ??
+                    runtime_failure_audit?.total_count ??
+                    0}
+                </p>
+              }
+              status={historicalStatus}
+            />
+            <MetricTile
+              label="Active failures"
+              icon={SymbolBell}
+              value={
+                <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
+                  {dimensions?.runtime.current_failures_count ?? runtime_failure_audit?.active_count ?? 0}
+                </p>
+              }
+              status={translateFailedEngineCount(dimensions?.runtime.current_failures_count ?? 0)}
+            />
+            <MetricTile
+              label="Historical stalls/timeouts"
+              icon={SymbolWaveform}
+              value={
+                <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
+                  {dimensions?.historical_audit.historical_stalls_count ?? historicalStallCount}
+                </p>
+              }
+              status={historicalStatus}
+            />
+            <StatusTile label="Historical Audit" icon={SymbolClock} status={historicalStatus} />
+          </div>
+          <p className="px-0.5 text-[11px] text-ds-text-secondary">
+            {dimensions?.historical_audit.reason || "Informational historical events only"}
+            {dimensions?.historical_audit.latest_historical_failure_at
+              ? ` · Latest historical failure: ${formatSourceTimestamp(String(dimensions.historical_audit.latest_historical_failure_at))}`
+              : ""}
+            {dimensions?.historical_audit.latest_historical_stall_at
+              ? ` · Latest historical stall: ${formatSourceTimestamp(String(dimensions.historical_audit.latest_historical_stall_at))}`
+              : ""}
+          </p>
+        </section>
+
+        <section className="space-y-2.5">
           <SectionLabel>{t("ops.pipelineStatus")}</SectionLabel>
           <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
             <MetricTile
@@ -1193,19 +1313,24 @@ export function OpsDashboard({
               status={translateFailedEngineCount(pipeline.failed_engine_count)}
             />
             <MetricTile
-              label={t("ops.stallsTimeouts")}
+              label="Current stalls/timeouts"
               icon={SymbolWaveform}
               value={
                 <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {stallCount}
+                  {currentStallCount}
                 </p>
               }
-              status={translateStallCount(stallCount)}
+              status={translateStallCount(currentStallCount)}
             />
             <StatusTile
               label={t("ops.heartbeat")}
               icon={SymbolWaveform}
               status={translateOpsLevel(pipeline.heartbeat_level, "engine")}
+            />
+            <StatusTile
+              label="Runtime Stability"
+              icon={SymbolClock}
+              status={runtimeStabilityStatus}
             />
             <StatusTile
               label={t("ops.collectors")}
@@ -1220,27 +1345,6 @@ export function OpsDashboard({
           </div>
         </section>
 
-        <section className="space-y-2.5">
-          <SectionLabel>{t("ops.validationStatus")}</SectionLabel>
-          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-            {ribbon.map((item) => (
-              <RibbonTile
-                key={item.key}
-                icon={ribbonIcon(item)}
-                label={item.label}
-                status={
-                  isResearchRibbonKey(item.key)
-                    ? translateResearchRibbonItem(item)
-                    : translateRibbonItem(item)
-                }
-              />
-            ))}
-          </div>
-          {validationItem?.value && !RAW_STATUS_PATTERN.test(validationItem.value) ? (
-            <p className="px-0.5 text-[11px] text-ds-text-secondary">{validationItem.value}</p>
-          ) : null}
-        </section>
-
         {research_pipeline ? <ResearchPipelineSection research={research_pipeline} /> : null}
 
         <section className="space-y-2.5">
@@ -1248,12 +1352,12 @@ export function OpsDashboard({
           <div className="grid gap-3.5 xl:grid-cols-3">
             <ParquetCard parquet={parquet} expanded={expandedStaleParquet} onToggle={onToggleStaleParquet} />
             {stability ? (
-              <PanelCard title={t("ops.stability")} icon={SymbolClock} status={translateStabilityRestarts(stability.restart_count)}>
+              <PanelCard title={t("ops.stability")} icon={SymbolClock} status={runtimeStabilityStatus}>
                 <ListRow
                   icon={SymbolEngine}
                   primary={t("ops.runtime")}
                   secondary={formatUptime(stability.runtime_uptime_s)}
-                  status={translateEngineState("HEALTHY")}
+                  status={runtimeStabilityStatus}
                 />
                 <ListRow
                   icon={SymbolAntenna}
@@ -1267,6 +1371,13 @@ export function OpsDashboard({
                   secondary={formatUptime(stability.websocket_uptime_s)}
                   status={translateActiveService()}
                 />
+                <div className="space-y-1 px-2.5 py-2 text-[11px] text-ds-text-secondary">
+                  <p>Current stalls/timeouts: {currentStallCount}</p>
+                  <p>Historical stalls/timeouts: {historicalStallCount}</p>
+                  {pipeline.latest_historical_stall_at ? (
+                    <p>Latest historical stall: {formatSourceTimestamp(String(pipeline.latest_historical_stall_at))}</p>
+                  ) : null}
+                </div>
               </PanelCard>
             ) : null}
             <RuntimeFailureAuditCard audit={runtime_failure_audit} />

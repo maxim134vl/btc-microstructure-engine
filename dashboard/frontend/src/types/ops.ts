@@ -14,6 +14,7 @@ export interface OpsSnapshot {
   feed_confidence?: FeedConfidence;
   stability?: StabilitySummary;
   health: HealthSummary;
+  health_dimensions?: HealthDimensions;
   alerts: OpsAlert[];
   alert_groups?: AlertGroups;
   manifest?: ManifestSummary;
@@ -210,6 +211,12 @@ export interface PipelineSummary {
   timeout_count?: number;
   timeout_optional_count?: number;
   stalled_engine_count: number;
+  current_stalled_engine_count?: number;
+  historical_stalled_engine_count?: number;
+  latest_historical_stall_at?: string | null;
+  latest_current_stall_at?: string | null;
+  current_stalls_timeouts?: number;
+  historical_stalls_timeouts?: number;
   heartbeat_level: OpsLevel;
   active_state: string;
 }
@@ -225,6 +232,48 @@ export interface HealthSummary {
   disk_percent: number;
   deferred_engine_count?: number;
   optional_offline_count?: number;
+  display_status?: string;
+  health_dimensions?: HealthDimensions;
+  resources?: ResourceHealthDimension;
+}
+
+export interface ResourceHealthDimension {
+  status: string;
+  cpu_pct: number;
+  memory_pct: number;
+  disk_pct: number;
+  reason: string;
+  reasons?: string[];
+}
+
+export interface HealthDimensions {
+  runtime: {
+    status: string;
+    reason: string;
+    current_failures_count: number;
+    failed_engine_count: number;
+    required_datasets_stale_count: number;
+    collectors_status: string;
+    websocket_status: string;
+    pipeline_status: string;
+  };
+  resources: ResourceHealthDimension;
+  research_validation: {
+    status: string;
+    reason: string;
+    governance_status: string;
+    economic_status: string;
+    shadow_status: string;
+    toxic_status: string;
+  };
+  historical_audit: {
+    status: string;
+    historical_failures_count: number;
+    historical_stalls_count: number;
+    latest_historical_failure_at?: string | null;
+    latest_historical_stall_at?: string | null;
+    reason: string;
+  };
 }
 
 export interface OpsAlert {

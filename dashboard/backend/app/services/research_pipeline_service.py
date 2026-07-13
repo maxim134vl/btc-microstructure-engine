@@ -851,6 +851,8 @@ async def build_toxic_box_snapshot(sources: dict[str, Any] | None = None) -> dic
                 else STATUS_MISSING_DATA
             )
             payload["status"] = display_status
+            # Do not keep rate-based Elevated/Critical when only legacy baseline exists.
+            payload["level"] = "GREY" if display_status == STATUS_LEGACY_ONLY else "GREY"
             payload["metrics_scope"] = "historical" if historical_available else "missing"
             payload["source_path"] = historical.get("source_path") or toxic_path
             payload["historical_source_path"] = historical.get("source_path") or toxic_path
@@ -1058,22 +1060,33 @@ async def build_research_pipeline_snapshot() -> dict[str, Any]:
             "label": "ECONOMIC",
             "level": economic["level"],
             "value": (
-                f"W{economic.get('win_pct')}% N{economic.get('neutral_pct')}% L{economic.get('loss_pct')}%"
-                if economic.get("win_pct") is not None
-                else str(economic.get("status") or f"complete {economic.get('complete_h4h', 0)}")
+                "STALE_VALIDATION / HISTORICAL"
+                if (
+                    (economic.get("freshness") or {}).get("is_stale")
+                    or "STALE" in str(economic.get("status") or "").upper()
+                )
+                else (
+                    f"W{economic.get('win_pct')}% N{economic.get('neutral_pct')}% L{economic.get('loss_pct')}%"
+                    if economic.get("win_pct") is not None
+                    else str(economic.get("status") or f"complete {economic.get('complete_h4h', 0)}")
+                )
             ),
         },
         {
             "key": "shadow_inference",
             "label": "SHADOW",
             "level": shadow["level"],
-            "value": str(shadow.get("validation_status") or "—"),
+            "value": str(shadow.get("validation_status") or shadow.get("metric_availability") or "—"),
         },
         {
             "key": "toxic_box",
             "label": "TOXIC",
             "level": toxic["level"],
-            "value": f"{toxic.get('events_last_7d', 0)}/7d",
+            "value": str(
+                toxic.get("severity_label")
+                or toxic.get("display_status")
+                or f"{toxic.get('events_last_7d', 0)}/7d"
+            ),
         },
         {
             "key": "pipeline_sync",

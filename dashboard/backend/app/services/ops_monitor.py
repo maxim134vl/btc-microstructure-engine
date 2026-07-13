@@ -14,9 +14,13 @@ import psutil
 
 from app.config import CANONICAL_PIPELINE
 from app.services.monitoring_kpis import (
+    build_health_dimensions,
+    classify_blocking_stalls,
     count_latest_status,
     count_optional_latest_status,
     derive_pipeline_heartbeat,
+    derive_system_health_level,
+    resource_health_status,
 )
 from app.services.parquet_service import _read_parquet_tail_sync, df_records, file_snapshot, read_parquet
 from app.services.pipeline_audit import read_pipeline_cycle_count
@@ -65,6 +69,7 @@ COLLECTOR_SOURCES = {
 
 HEARTBEAT_DIR = repo_root() / "data" / "live" / "collector_heartbeats"
 FAILURE_AUDIT_ACTIVE_WINDOW_S = 30 * 60
+CURRENT_STALL_WINDOW_S = 15 * 60
 
 
 def _to_utc_epoch(value: Any) -> float | None:
@@ -827,11 +832,20 @@ async def build_pipeline_status() -> dict[str, Any]:
     timeouts_optional = count_optional_latest_status(records, "TIMEOUT", is_required=is_required_engine)
 
     blocking_chain_path = os.path.join("reports", "runtime_blocking", "runtime_blocking_chain.json")
-    stalled = 0
+    stall_class = {
+        "current_count": 0,
+        "historical_count": 0,
+        "latest_current_at": None,
+        "latest_historical_at": None,
+    }
     if os.path.exists(blocking_chain_path):
         with open(blocking_chain_path, encoding="utf-8") as handle:
             chain = json.load(handle).get("blocking_chain", [])
-            stalled = sum(1 for e in chain[-50:] if e.get("event") in ("TIMEOUT", "STALL_DETECTED"))
+            stall_class = classify_blocking_stalls(chain, window_s=CURRENT_STALL_WINDOW_S)
+
+    # Current stalls only — historical TIMEOUT/STALL do not count as live lagging.
+    stalled_current = int(stall_class.get("current_count") or 0)
+    stalled_historical = int(stall_class.get("historical_count") or 0)
 
     cycling = cycle > 0
     heartbeat = derive_pipeline_heartbeat(
@@ -850,7 +864,13 @@ async def build_pipeline_status() -> dict[str, Any]:
         "failed_optional_engine_count": failed_optional,
         "timeout_count": timeouts_required,
         "timeout_optional_count": timeouts_optional,
-        "stalled_engine_count": stalled,
+        "stalled_engine_count": stalled_current,
+        "current_stalled_engine_count": stalled_current,
+        "historical_stalled_engine_count": stalled_historical,
+        "latest_historical_stall_at": stall_class.get("latest_historical_at"),
+        "latest_current_stall_at": stall_class.get("latest_current_at"),
+        "current_stalls_timeouts": stalled_current + timeouts_required,
+        "historical_stalls_timeouts": stalled_historical,
         "heartbeat_level": heartbeat,
         "active_state": "CYCLING" if cycle > 0 else "IDLE",
     }
@@ -966,14 +986,15 @@ def _build_health_summary(
 
     mem = psutil.virtual_memory().percent
     disk = psutil.disk_usage("/").percent
+    cpu = psutil.cpu_percent(interval=0.05)
+    # Soft resource pressure belongs to the Resources dimension, not Runtime Health.
+    # Only critical host pressure can escalate System Health.
     if mem > 95:
         critical_reasons.append(f"Host memory critical ({mem:.0f}%)")
-    elif mem > 90:
-        degraded_reasons.append(f"Host memory elevated ({mem:.0f}%)")
     if disk > 95:
         critical_reasons.append(f"Host disk critical ({disk:.0f}%)")
-    elif disk > 90:
-        degraded_reasons.append(f"Host disk elevated ({disk:.0f}%)")
+
+    resources = resource_health_status(cpu_pct=cpu, memory_pct=mem, disk_pct=disk)
 
     if critical_reasons:
         level = "CRITICAL"
@@ -994,11 +1015,12 @@ def _build_health_summary(
         "reasons": reasons,
         "critical_reasons": critical_reasons,
         "degraded_reasons": degraded_reasons,
-        "cpu_percent": psutil.cpu_percent(interval=0.05),
+        "cpu_percent": cpu,
         "memory_percent": mem,
         "disk_percent": disk,
         "deferred_engine_count": len(deferred),
         "optional_offline_count": optional_offline,
+        "resources": resources,
     }
 
 
@@ -1186,6 +1208,127 @@ def _ribbon(
     ]
 
 
+def _compose_health_dimensions(
+    *,
+    health: dict[str, Any],
+    pipeline: dict[str, Any],
+    collectors: dict[str, Any],
+    parquet: dict[str, Any],
+    feed_confidence: dict[str, Any],
+    ws_alive: bool,
+    runtime_failure_audit: dict[str, Any],
+    research_pipeline: dict[str, Any],
+    critical_alert_count: int,
+) -> dict[str, Any]:
+    """Assemble Stage 13 health_dimensions from already-built snapshot pieces."""
+    level = str(health.get("level") or "HEALTHY").upper()
+    runtime_status = {
+        "HEALTHY": "OPERATIONAL",
+        "DEGRADED": "DEGRADED",
+        "CRITICAL": "CRITICAL",
+    }.get(level, "OPERATIONAL")
+
+    current_failures = int(runtime_failure_audit.get("active_count") or 0)
+    if runtime_failure_audit.get("affects_health"):
+        # Active unresolved failures keep runtime degraded/critical already via engines.
+        pass
+    else:
+        current_failures = 0
+
+    current_stalls = int(pipeline.get("current_stalls_timeouts") or pipeline.get("stalled_engine_count") or 0)
+    if current_stalls > 0 and runtime_status == "OPERATIONAL":
+        runtime_status = "DEGRADED"
+
+    resources = health.get("resources") or resource_health_status(
+        cpu_pct=float(health.get("cpu_percent") or 0),
+        memory_pct=float(health.get("memory_percent") or 0),
+        disk_pct=float(health.get("disk_percent") or 0),
+    )
+
+    gov = research_pipeline.get("model_governance") or {}
+    economic = research_pipeline.get("economic_validation") or {}
+    shadow = research_pipeline.get("shadow_inference") or {}
+    toxic = research_pipeline.get("toxic_box") or {}
+    model_summary = research_pipeline.get("model_summary") or {}
+
+    gov_status = str(gov.get("governance_status") or "UNKNOWN")
+    eco_status = str(economic.get("status") or "UNKNOWN")
+    if economic.get("freshness", {}).get("is_stale") or "STALE" in eco_status.upper():
+        eco_status = "STALE_VALIDATION / HISTORICAL"
+    shadow_status = str(shadow.get("validation_status") or shadow.get("metric_availability") or "UNKNOWN")
+    if shadow_status.upper() in {"MISSING", "MISSING_DATA"}:
+        shadow_status = "MISSING_DATA"
+    toxic_status = str(
+        toxic.get("display_status")
+        or toxic.get("severity_label")
+        or toxic.get("status")
+        or "UNKNOWN"
+    )
+    if "LEGACY" in toxic_status.upper():
+        toxic_status = "LEGACY_ONLY / STALE"
+
+    research_bits: list[str] = []
+    if "MISSING" in gov_status.upper():
+        research_bits.append("governance artifact missing")
+    if "STALE" in eco_status.upper():
+        research_bits.append("economic validation stale")
+    if shadow_status == "MISSING_DATA":
+        research_bits.append("shadow metrics missing")
+    if "LEGACY" in toxic_status.upper() or "MISSING" in toxic_status.upper():
+        research_bits.append("toxic monitoring legacy/missing")
+    if str(model_summary.get("promotion_eligible_label") or "NO").upper() == "NO":
+        research_bits.append("promotion not eligible")
+
+    research_status = "ATTENTION" if research_bits else "OPERATIONAL"
+    if not research_bits and (
+        "STALE" in eco_status.upper() or shadow_status == "MISSING_DATA" or "LEGACY" in toxic_status.upper()
+    ):
+        research_status = "STALE" if "STALE" in eco_status.upper() else "MISSING_DATA"
+
+    hist_failures = int(runtime_failure_audit.get("historical_count") or 0)
+    if hist_failures == 0 and runtime_failure_audit.get("total_count"):
+        # When no active failures, remaining totals are historical.
+        hist_failures = int(runtime_failure_audit.get("total_count") or 0) - int(
+            runtime_failure_audit.get("active_count") or 0
+        )
+    hist_stalls = int(pipeline.get("historical_stalls_timeouts") or pipeline.get("historical_stalled_engine_count") or 0)
+    latest_fail = (runtime_failure_audit.get("latest") or {}).get("timestamp")
+    latest_stall = pipeline.get("latest_historical_stall_at")
+
+    collectors_label = "Receiving Data" if collectors.get("level") == "GREEN" else str(collectors.get("level"))
+    ws_label = "Receiving Data" if ws_alive else "Disconnected"
+    pipe_label = "Running" if pipeline.get("active_state") == "CYCLING" else str(pipeline.get("active_state") or "Idle")
+
+    stale_required = len(parquet.get("stale_files") or [])
+
+    return build_health_dimensions(
+        runtime_status=runtime_status,
+        runtime_reason=str(health.get("primary_reason") or "Runtime nominal"),
+        current_failures_count=current_failures,
+        failed_engine_count=int(pipeline.get("failed_engine_count") or 0),
+        required_datasets_stale_count=stale_required,
+        collectors_status=collectors_label,
+        websocket_status=ws_label,
+        pipeline_status=pipe_label,
+        resources=resources,
+        research_status=research_status,
+        research_reason="; ".join(research_bits) if research_bits else "Research validation complete",
+        governance_status=gov_status,
+        economic_status=eco_status,
+        shadow_status=shadow_status,
+        toxic_status=toxic_status,
+        historical_failures_count=max(0, hist_failures),
+        historical_stalls_count=hist_stalls,
+        latest_historical_failure_at=latest_fail,
+        latest_historical_stall_at=latest_stall,
+        historical_reason=(
+            "Historical events present; no active runtime failures"
+            if hist_failures or hist_stalls
+            else "No historical audit events"
+        ),
+    )
+
+
 async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -> dict[str, Any]:
     cache_key = "lite" if lite else "full"
     cache_ttl = _LITE_SNAPSHOT_TTL if lite else _FULL_SNAPSHOT_TTL
@@ -1273,6 +1416,38 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
     critical_alerts = [a for a in alert_groups["actionable"] if a["severity"] == "CRITICAL"]
 
     research_pipeline = await _research_pipeline_cached(force=False)
+    health_dimensions = _compose_health_dimensions(
+        health=health,
+        pipeline=pipeline,
+        collectors=collectors,
+        parquet=parquet,
+        feed_confidence=feed_confidence,
+        ws_alive=ws_alive,
+        runtime_failure_audit=runtime_failure_audit,
+        research_pipeline=research_pipeline,
+        critical_alert_count=len(critical_alerts),
+    )
+
+    # Top System Health: runtime + critical resources only (not research/historical).
+    system_level, display_suffix = derive_system_health_level(
+        runtime_status=health_dimensions["runtime"]["status"],
+        resources_status=health_dimensions["resources"]["status"],
+    )
+    health["level"] = system_level
+    health["display_status"] = display_suffix or (
+        "OPERATIONAL" if system_level == "HEALTHY" else system_level
+    )
+    health["health_dimensions"] = health_dimensions
+    if display_suffix == "OPERATIONAL_WITH_WARNINGS":
+        resource_reason = health_dimensions["resources"].get("reason")
+        if resource_reason:
+            health["primary_reason"] = resource_reason
+            health["reasons"] = [resource_reason] + [
+                r for r in health.get("reasons", []) if r != resource_reason
+            ]
+
+    # Recompute runtime ribbon after system-level finalization.
+    runtime_level = "RED" if required_failed else ("YELLOW" if health["level"] == "DEGRADED" else "GREEN")
 
     ribbon = _ribbon(
         runtime_level=runtime_level,
@@ -1298,6 +1473,7 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         "feed_confidence": feed_confidence,
         "stability": stability,
         "health": health,
+        "health_dimensions": health_dimensions,
         "alerts": alert_groups["all"],
         "alert_groups": alert_groups,
         "warnings": [stability_warning] if stability_warning else [],

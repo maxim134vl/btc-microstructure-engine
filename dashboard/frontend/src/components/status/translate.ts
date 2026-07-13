@@ -20,6 +20,8 @@ import {
   resolveRibbonItem,
   resolveStabilityRestarts,
   resolveStallCount,
+  resolveRuntimeStability,
+  resolveHealthDimensionStatus,
 } from "./mappers";
 import { resolveResearchRibbonItem } from "./researchMappers";
 
@@ -49,6 +51,8 @@ export const translateStallCount = resolveStallCount;
 export const translateOpenAlerts = resolveOpenAlerts;
 export const translateParquetSummary = resolveParquetSummary;
 export const translateStabilityRestarts = resolveStabilityRestarts;
+export const translateRuntimeStability = resolveRuntimeStability;
+export const translateHealthDimensionStatus = resolveHealthDimensionStatus;
 export const translateConnectionLive = resolveConnectionLive;
 export const translateRibbonItem = resolveRibbonItem;
 export const translateResearchRibbonItem = resolveResearchRibbonItem;

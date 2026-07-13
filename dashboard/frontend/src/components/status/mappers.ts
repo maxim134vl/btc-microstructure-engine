@@ -60,7 +60,11 @@ function opsLevelToValidation(level: string): ResolvedStatus {
   return validation("failing", "critical");
 }
 
-export function resolveHealthLevel(level: string): ResolvedStatus {
+export function resolveHealthLevel(level: string, displayStatus?: string | null): ResolvedStatus {
+  const display = (displayStatus || "").toUpperCase();
+  if (display === "OPERATIONAL_WITH_WARNINGS") {
+    return { domain: "system", key: "degraded", label: "Operational · Resource Warning", tone: "degraded" };
+  }
   const normalized = level.toUpperCase();
   if (normalized === "HEALTHY") return system("operational", "operational");
   if (normalized === "DEGRADED") return system("degraded", "degraded");
@@ -147,6 +151,37 @@ export function resolveStallCount(count: number): ResolvedStatus {
   return count > 0 ? engine("lagging", "degraded") : engine("running", "operational");
 }
 
+/** Runtime stability — current stalls only (historical stalls are informational). */
+export function resolveRuntimeStability(input: {
+  currentStalls?: number;
+  restartCount?: number;
+  runtimeStatus?: string | null;
+}): ResolvedStatus {
+  const current = Number(input.currentStalls || 0);
+  if (current > 0 || String(input.runtimeStatus || "").toUpperCase() === "DEGRADED") {
+    return system("degraded", "degraded");
+  }
+  if (String(input.runtimeStatus || "").toUpperCase() === "CRITICAL") {
+    return system("critical", "critical");
+  }
+  return system("operational", "operational");
+}
+
+export function resolveHealthDimensionStatus(status?: string | null): ResolvedStatus {
+  const token = (status || "UNKNOWN").toUpperCase();
+  if (token === "OPERATIONAL" || token === "HEALTHY" || token === "INFORMATIONAL") {
+    return system(token === "INFORMATIONAL" ? "operational" : "operational", "operational");
+  }
+  if (token === "OPERATIONAL_WITH_WARNINGS") {
+    return system("degraded", "degraded");
+  }
+  if (token === "ATTENTION" || token === "STALE" || token === "MISSING_DATA" || token === "DEGRADED") {
+    return system("degraded", "degraded");
+  }
+  if (token === "CRITICAL") return system("critical", "critical");
+  return system("operational", "operational");
+}
+
 export function resolveOpenAlerts(count: number, hasCritical: boolean): ResolvedStatus {
   if (count === 0) return system("operational", "operational");
   if (hasCritical) return system("critical", "critical");
@@ -160,7 +195,8 @@ export function resolveParquetSummary(missing: number, stale: number): ResolvedS
 }
 
 export function resolveStabilityRestarts(restarts: number): ResolvedStatus {
-  return restarts > 0 ? system("degraded", "degraded") : system("operational", "operational");
+  // Restart history alone is not current runtime degradation (Stage 13).
+  return system("operational", "operational");
 }
 
 export function resolveConnectionLive(connected: boolean): ResolvedStatus {
