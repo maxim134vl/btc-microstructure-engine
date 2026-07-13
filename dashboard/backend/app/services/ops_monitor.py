@@ -987,13 +987,7 @@ def _build_health_summary(
     mem = psutil.virtual_memory().percent
     disk = psutil.disk_usage("/").percent
     cpu = psutil.cpu_percent(interval=0.05)
-    # Soft resource pressure belongs to the Resources dimension, not Runtime Health.
-    # Only critical host pressure can escalate System Health.
-    if mem > 95:
-        critical_reasons.append(f"Host memory critical ({mem:.0f}%)")
-    if disk > 95:
-        critical_reasons.append(f"Host disk critical ({disk:.0f}%)")
-
+    # CPU / memory / disk are Resources-dimension only — never roll into System/Runtime health.
     resources = resource_health_status(cpu_pct=cpu, memory_pct=mem, disk_pct=disk)
 
     if critical_reasons:
@@ -1428,7 +1422,7 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         critical_alert_count=len(critical_alerts),
     )
 
-    # Top System Health: runtime + critical resources only (not research/historical).
+    # Top System Health: runtime only (resources never roll up).
     system_level, display_suffix = derive_system_health_level(
         runtime_status=health_dimensions["runtime"]["status"],
         resources_status=health_dimensions["resources"]["status"],
@@ -1438,13 +1432,7 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         "OPERATIONAL" if system_level == "HEALTHY" else system_level
     )
     health["health_dimensions"] = health_dimensions
-    if display_suffix == "OPERATIONAL_WITH_WARNINGS":
-        resource_reason = health_dimensions["resources"].get("reason")
-        if resource_reason:
-            health["primary_reason"] = resource_reason
-            health["reasons"] = [resource_reason] + [
-                r for r in health.get("reasons", []) if r != resource_reason
-            ]
+    # Keep runtime/infrastructure primary_reason — never replace with resource warnings.
 
     # Recompute runtime ribbon after system-level finalization.
     runtime_level = "RED" if required_failed else ("YELLOW" if health["level"] == "DEGRADED" else "GREEN")

@@ -33,8 +33,9 @@ def test_runtime_healthy_research_attention() -> None:
     assert dims["runtime"]["status"] in {"OPERATIONAL", "DEGRADED", "CRITICAL"}
     if gov == "GOVERNANCE_MISSING" and dims["runtime"]["failed_engine_count"] == 0:
         assert dims["runtime"]["status"] == "OPERATIONAL"
-        if dims["resources"]["status"] != "CRITICAL":
-            assert snap["health"]["level"] == "HEALTHY"
+        assert snap["health"]["level"] == "HEALTHY"
+        assert str(snap["health"].get("display_status") or "OPERATIONAL").upper() == "OPERATIONAL"
+        assert not str(snap["health"].get("primary_reason") or "").startswith("Resource warning:")
         assert dims["research_validation"]["status"] == "ATTENTION"
 
 

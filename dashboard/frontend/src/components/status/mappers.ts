@@ -66,8 +66,10 @@ function opsLevelToValidation(level: string): ResolvedStatus {
 
 export function resolveHealthLevel(level?: string | null, displayStatus?: string | null): ResolvedStatus {
   const display = (displayStatus || "").toUpperCase();
-  if (display === "OPERATIONAL_WITH_WARNINGS") {
-    return { domain: "system", key: "degraded", label: "Operational · Resource Warning", tone: "degraded" };
+  // Legacy OPERATIONAL_WITH_WARNINGS was resource rollup — treat as Operational.
+  // Resource warnings stay on resource cards via resolveResourceUsage.
+  if (display === "OPERATIONAL_WITH_WARNINGS" || display === "OPERATIONAL") {
+    return system("operational", "operational");
   }
   const normalized = (level || "UNKNOWN").toUpperCase();
   if (normalized === "HEALTHY") return system("operational", "operational");
@@ -168,11 +170,20 @@ export function resolveHealthDimensionStatus(status?: string | null): ResolvedSt
   if (token === "OPERATIONAL" || token === "HEALTHY" || token === "INFORMATIONAL" || token === "UNKNOWN") {
     return system("operational", "operational");
   }
-  if (token === "OPERATIONAL_WITH_WARNINGS") {
-    return system("degraded", "degraded");
+  // Research incompleteness / stale artifacts → ATTENTION|INCOMPLETE, never "Degraded".
+  if (
+    token === "ATTENTION" ||
+    token === "INCOMPLETE" ||
+    token === "STALE" ||
+    token === "MISSING_DATA" ||
+    token === "OPERATIONAL_WITH_WARNINGS"
+  ) {
+    const label = token === "INCOMPLETE" ? "INCOMPLETE" : "ATTENTION";
+    return { domain: "validation", key: "attention_required", label, tone: "degraded" };
   }
-  if (token === "ATTENTION" || token === "STALE" || token === "MISSING_DATA" || token === "DEGRADED") {
-    return system("degraded", "degraded");
+  // Research must not surface the word Degraded for artifact gaps.
+  if (token === "DEGRADED") {
+    return { domain: "validation", key: "attention_required", label: "ATTENTION", tone: "degraded" };
   }
   if (token === "CRITICAL") return system("critical", "critical");
   return system("operational", "operational");

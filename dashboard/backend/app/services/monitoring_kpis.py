@@ -357,19 +357,18 @@ def build_health_dimensions(
 def derive_system_health_level(
     *,
     runtime_status: str,
-    resources_status: str,
+    resources_status: str = "OPERATIONAL",
 ) -> tuple[str, str | None]:
-    """Top System Health from runtime + critical resources only.
+    """Top System Health from runtime only.
 
-    Returns (level, display_suffix) where level is HEALTHY|DEGRADED|CRITICAL
-    and display_suffix may be OPERATIONAL_WITH_WARNINGS.
+    CPU / memory / disk stay on the Resources dimension and never roll up into
+    System Health, Runtime Health, research, or validation status.
+    ``resources_status`` is accepted for call-site compatibility and ignored.
     """
+    _ = resources_status  # intentionally unused — resources are display-only
     rt = runtime_status.upper()
-    res = resources_status.upper()
-    if rt == "CRITICAL" or res == "CRITICAL":
+    if rt == "CRITICAL":
         return "CRITICAL", None
     if rt == "DEGRADED":
         return "DEGRADED", None
-    if res == "DEGRADED":
-        return "HEALTHY", "OPERATIONAL_WITH_WARNINGS"
     return "HEALTHY", None
