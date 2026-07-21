@@ -14,15 +14,15 @@ STATUS_MAPPERS = FRONTEND / "components" / "status" / "mappers.ts"
 STATUS_TRANSLATE = FRONTEND / "components" / "status" / "translate.ts"
 LIFECYCLE_APP = (
     ROOT
-    / "sandbox"
-    / "market_state_context_visualizer"
+    / "apps"
+    / "context_visualizer"
     / "public"
     / "lifecycle_app.js"
 )
 LIFECYCLE_INDEX = (
     ROOT
-    / "sandbox"
-    / "market_state_context_visualizer"
+    / "apps"
+    / "context_visualizer"
     / "public"
     / "index.html"
 )

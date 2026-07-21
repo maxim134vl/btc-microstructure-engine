@@ -36,8 +36,8 @@ LIVE_FEED_CANDIDATES = (
 )
 LIFECYCLE_LATEST = (
     ROOT
-    / "sandbox"
-    / "market_state_context_visualizer"
+    / "apps"
+    / "context_visualizer"
     / "public"
     / "data"
     / "lifecycle_latest.json"

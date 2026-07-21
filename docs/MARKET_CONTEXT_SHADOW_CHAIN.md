@@ -45,7 +45,7 @@ PASS writes:
 ## How to run the sandbox
 
 ```bash
-cd /Users/fontecrypto/btc-ml/sandbox/market_state_context_visualizer/public
+cd /Users/fontecrypto/btc-ml/apps/context_visualizer/public
 python3 -m http.server 8765
 ```
 

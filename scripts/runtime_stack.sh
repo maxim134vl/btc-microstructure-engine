@@ -29,23 +29,33 @@ RUNTIME_PID_FILE="$STACK_DIR/runtime.pid"
 RUNTIME_PID_COMPAT="$ROOT/runtime.pid"
 API_PID_FILE="$STACK_DIR/dashboard_api.pid"
 UI_PID_FILE="$STACK_DIR/dashboard_ui.pid"
+CONTEXT_VISUAL_REFRESHER_PID_FILE="$STACK_DIR/context_visual_refresher.pid"
+CONTEXT_VISUAL_REFRESHER_PID_COMPAT="$ROOT/runtime_context_visual_refresher.pid"
+CONTEXT_VISUAL_REFRESHER_LOCK="$ROOT/runtime_context_visual_refresher.lock"
+CONTEXT_VISUAL_VIEWER_PID_FILE="$STACK_DIR/context_visual_viewer.pid"
 
 WATCHDOG_LOG="$STACK_DIR/collector_watchdog.log"
 RUNTIME_LOG="$STACK_DIR/runtime.log"
 API_LOG="$STACK_DIR/dashboard_api.log"
 UI_LOG="$STACK_DIR/dashboard_ui.log"
+CONTEXT_VISUAL_REFRESHER_LOG="$ROOT/logs/market_context_visual_refresher.log"
+CONTEXT_VISUAL_VIEWER_LOG="$STACK_DIR/context_visual_viewer.log"
+CONTEXT_VISUAL_STATUS_JSON="$ROOT/data/cognition/market_context_visual_refresher_status.json"
 
 API_PORT="${DASHBOARD_PORT:-8080}"
 UI_PORT="${DASHBOARD_UI_PORT:-5173}"
 UI_HOST="${DASHBOARD_UI_HOST:-127.0.0.1}"
+CONTEXT_VISUAL_PORT="${CONTEXT_VISUAL_PORT:-8765}"
+CONTEXT_VISUAL_INTERVAL_SECONDS="${CONTEXT_VISUAL_INTERVAL_SECONDS:-180}"
+CONTEXT_VISUAL_PUBLIC="$ROOT/apps/context_visualizer/public"
 
 usage() {
   cat <<EOF
 Usage: $(basename "$0") {start|stop|status|restart}
 
-  start    Start collector watchdog, runtime, dashboard API, dashboard UI
+  start    Start collector watchdog, runtime, dashboard, context visual refresher
   stop     Stop stack processes managed by this launcher
-  status   Show process / port / feed health
+  status   Show process / port / feed / context visual health
   restart  stop + start
 
 Makefile:
@@ -386,6 +396,95 @@ start_dashboard_ui() {
   echo "  [warn] dashboard UI started but :$UI_PORT not listening yet — see $UI_LOG"
 }
 
+stop_context_visual_refresher() {
+  local pid
+  pid="$(read_pid "$CONTEXT_VISUAL_REFRESHER_PID_FILE")"
+  if pid_alive "$pid"; then
+    echo "  [stop] context_visual_refresher pid=$pid"
+    kill_pid_tree "$pid"
+  fi
+  pid="$(read_pid "$CONTEXT_VISUAL_REFRESHER_PID_COMPAT")"
+  if pid_alive "$pid"; then
+    echo "  [stop] context_visual_refresher (compat) pid=$pid"
+    kill_pid_tree "$pid"
+  fi
+  stop_matching "context_visual_refresher" "run_market_context_visual_refresher\\.py"
+  clear_pid "$CONTEXT_VISUAL_REFRESHER_PID_FILE"
+  clear_pid "$CONTEXT_VISUAL_REFRESHER_PID_COMPAT"
+  rm -f "$CONTEXT_VISUAL_REFRESHER_LOCK"
+}
+
+start_context_visual_refresher() {
+  # Never silently adopt an old refresher — always restart fresh (like dashboard API).
+  echo "  [context-visual-refresher] starting"
+  stop_context_visual_refresher
+
+  mkdir -p "$ROOT/logs" "$(dirname "$CONTEXT_VISUAL_STATUS_JSON")"
+  : >>"$CONTEXT_VISUAL_REFRESHER_LOG"
+
+  # Immediate one-shot so the chart is fresh before the loop settles.
+  echo "  [context-visual-refresher] immediate refresh (--once)"
+  (
+    cd "$ROOT"
+    "$PYTHON" scripts/research/run_market_context_visual_refresher.py --once \
+      >>"$CONTEXT_VISUAL_REFRESHER_LOG" 2>&1 || true
+  )
+
+  detach_start "$CONTEXT_VISUAL_REFRESHER_PID_FILE" "$CONTEXT_VISUAL_REFRESHER_LOG" \
+    "$PYTHON" scripts/research/run_market_context_visual_refresher.py \
+    --interval-seconds "$CONTEXT_VISUAL_INTERVAL_SECONDS" >/dev/null
+
+  local pid
+  pid="$(read_pid "$CONTEXT_VISUAL_REFRESHER_PID_FILE")"
+  write_pid "$CONTEXT_VISUAL_REFRESHER_PID_COMPAT" "$pid"
+  echo "  [context-visual-refresher] pid=$pid"
+  if [[ -f "$CONTEXT_VISUAL_STATUS_JSON" ]]; then
+    "$PYTHON" - <<'PY' 2>/dev/null || true
+import json
+from pathlib import Path
+p = Path("data/cognition/market_context_visual_refresher_status.json")
+data = json.loads(p.read_text(encoding="utf-8"))
+print(f"  [context-visual-refresher] latest_visual={data.get('latest_visual_timestamp')}")
+print(f"  [context-visual-refresher] lag_min={data.get('live_to_visual_lag_minutes')} stale={data.get('visual_data_stale')}")
+PY
+  fi
+}
+
+start_context_visual_viewer() {
+  # Static sandbox viewer for lifecycle JSON (http://127.0.0.1:8765/).
+  local listener existing
+  listener="$(port_pids "$CONTEXT_VISUAL_PORT" | head -1 || true)"
+  if pid_alive "$listener"; then
+    echo "  [refresh] stopping existing context_visual_viewer on :$CONTEXT_VISUAL_PORT pid=$listener"
+    kill_pid_tree "$listener"
+  fi
+  existing="$(first_repo_pid "http\\.server ${CONTEXT_VISUAL_PORT}")"
+  if pid_alive "$existing"; then
+    echo "  [refresh] stopping existing http.server :$CONTEXT_VISUAL_PORT pid=$existing"
+    kill_pid_tree "$existing"
+  fi
+  clear_pid "$CONTEXT_VISUAL_VIEWER_PID_FILE"
+  free_port_if_needed "$CONTEXT_VISUAL_PORT"
+
+  : >"$CONTEXT_VISUAL_VIEWER_LOG"
+  echo "  [start] context visual viewer http://127.0.0.1:${CONTEXT_VISUAL_PORT}/"
+  (
+    cd "$CONTEXT_VISUAL_PUBLIC"
+    STACK_CWD="$PWD" detach_start "$CONTEXT_VISUAL_VIEWER_PID_FILE" "$CONTEXT_VISUAL_VIEWER_LOG" \
+      "$PYTHON" -m http.server "$CONTEXT_VISUAL_PORT" --bind 127.0.0.1 >/dev/null
+  )
+  local i
+  for i in 1 2 3 4 5 6 7 8; do
+    if [[ -n "$(port_pids "$CONTEXT_VISUAL_PORT")" ]]; then
+      write_pid "$CONTEXT_VISUAL_VIEWER_PID_FILE" "$(port_pids "$CONTEXT_VISUAL_PORT" | head -1)"
+      echo "  [ok] context visual viewer listening on :$CONTEXT_VISUAL_PORT"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "  [warn] context visual viewer not listening yet — see $CONTEXT_VISUAL_VIEWER_LOG"
+}
+
 cmd_start() {
   echo "BTC-ML runtime stack — start"
   echo "Root: $ROOT"
@@ -395,6 +494,8 @@ cmd_start() {
   start_runtime
   start_dashboard_api
   start_dashboard_ui
+  start_context_visual_refresher
+  start_context_visual_viewer
   echo
   cmd_status
 }
@@ -402,6 +503,10 @@ cmd_start() {
 cmd_stop() {
   echo "BTC-ML runtime stack — stop"
   echo
+  stop_pid_file "context_visual_viewer" "$CONTEXT_VISUAL_VIEWER_PID_FILE"
+  stop_matching "context_visual_viewer" "http\\.server ${CONTEXT_VISUAL_PORT}"
+  free_port_if_needed "$CONTEXT_VISUAL_PORT"
+  stop_context_visual_refresher
   stop_pid_file "dashboard_ui" "$UI_PID_FILE"
   stop_matching "dashboard_ui" "vite"
   stop_pid_file "dashboard_api" "$API_PID_FILE"
@@ -458,6 +563,34 @@ api_health() {
   fi
 }
 
+context_visual_status() {
+  local pid status="STOPPED"
+  pid="$(read_pid "$CONTEXT_VISUAL_REFRESHER_PID_FILE")"
+  if ! pid_alive "$pid"; then
+    pid="$(read_pid "$CONTEXT_VISUAL_REFRESHER_PID_COMPAT")"
+  fi
+  if pid_alive "$pid"; then
+    status="RUNNING"
+  fi
+  echo "Context Visual Refresher: $status${pid:+  pid=$pid}"
+  if [[ -f "$CONTEXT_VISUAL_STATUS_JSON" ]]; then
+    "$PYTHON" - <<'PY' 2>/dev/null || true
+import json
+from pathlib import Path
+p = Path("data/cognition/market_context_visual_refresher_status.json")
+data = json.loads(p.read_text(encoding="utf-8"))
+print(f"  last_success_at: {data.get('last_success_at')}")
+print(f"  latest_visual_timestamp: {data.get('latest_visual_timestamp')}")
+print(f"  latest_live_timestamp: {data.get('latest_live_timestamp')}")
+print(f"  live_to_visual_lag_minutes: {data.get('live_to_visual_lag_minutes')}")
+print(f"  visual_data_stale: {data.get('visual_data_stale')}")
+print(f"  refresher_status: {data.get('status')}")
+PY
+  else
+    echo "  status json: missing"
+  fi
+}
+
 cmd_status() {
   echo "BTC-ML runtime stack — status"
   echo "Root: $ROOT"
@@ -466,6 +599,11 @@ cmd_status() {
   component_line "runtime (run.py)" "$RUNTIME_PID_FILE"
   component_line "dashboard_api" "$API_PID_FILE" "  :${API_PORT}"
   component_line "dashboard_ui" "$UI_PID_FILE" "  :${UI_PORT}"
+  component_line "context_visual_refresher" "$CONTEXT_VISUAL_REFRESHER_PID_FILE"
+  component_line "context_visual_viewer" "$CONTEXT_VISUAL_VIEWER_PID_FILE" "  :${CONTEXT_VISUAL_PORT}"
+
+  echo
+  context_visual_status
 
   echo
   echo "Collectors (data/live/collector_pids.json):"
@@ -489,11 +627,13 @@ PY
 
   echo
   echo "Ports:"
-  local p api_listed=0 ui_listed=0
+  local p api_listed=0 ui_listed=0 cv_listed=0
   for p in $(port_pids "$API_PORT"); do echo "  :$API_PORT LISTEN pid=$p"; api_listed=1; done
   for p in $(port_pids "$UI_PORT"); do echo "  :$UI_PORT LISTEN pid=$p"; ui_listed=1; done
+  for p in $(port_pids "$CONTEXT_VISUAL_PORT"); do echo "  :$CONTEXT_VISUAL_PORT LISTEN pid=$p"; cv_listed=1; done
   [[ "$api_listed" -eq 0 ]] && echo "  :$API_PORT (free)"
   [[ "$ui_listed" -eq 0 ]] && echo "  :$UI_PORT (free)"
+  [[ "$cv_listed" -eq 0 ]] && echo "  :$CONTEXT_VISUAL_PORT (free)"
 
   echo
   echo "Dashboard API /health: $(api_health)"

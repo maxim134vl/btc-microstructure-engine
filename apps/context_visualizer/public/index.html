@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BTC-ML Live Context + Paper Trades</title>
+    <script>
+      (function () {
+        try {
+          var KEY = "btcml-context-visual-theme";
+          var mode = localStorage.getItem(KEY) || "system";
+          var resolved = mode;
+          if (mode === "system") {
+            resolved = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (_e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./lifecycle.css?v=ops-style-polish" />
+  </head>
+  <body class="lifecycle-surface ops-surface">
+    <div class="lifecycle-shell" id="viewerRoot">
+      <div id="viewerErrorPanel" class="lifecycle-error-panel hidden" role="alert" aria-live="assertive"></div>
+      <header class="lifecycle-status" aria-label="Current lifecycle context">
+        <div class="lifecycle-status-left">
+          <div class="lifecycle-status-main" id="statusLine">Current context</div>
+          <div class="lifecycle-chip-row" id="statusChips" aria-label="Status chips"></div>
+        </div>
+        <div class="lifecycle-status-center">
+          <span id="refreshLine" class="lifecycle-refresh-line" title="Visual freshness">SOURCE…</span>
+          <span id="sourceLine" class="lifecycle-source-line" hidden>source</span>
+        </div>
+        <div class="lifecycle-status-right">
+          <label class="lifecycle-range">
+            Range
+            <select id="rangeSelect" aria-label="Visible range">
+              <option value="latest500" selected>Last 500 bars</option>
+              <option value="latest100">Latest 100</option>
+              <option value="latest1000">Latest 1000</option>
+              <option value="last7d">Last 7 days</option>
+              <option value="last14d">Last 14 days</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <label class="lifecycle-theme-toggle">
+            Theme
+            <select id="themeSelect" class="lifecycle-theme-select" aria-label="Theme">
+              <option value="system">System</option>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </label>
+          <button type="button" id="sidebarToggle" class="lifecycle-btn lifecycle-sidebar-toggle" aria-expanded="true">
+            Panels
+          </button>
+          <a class="lifecycle-debug-link" href="./debug.html">Debug</a>
+        </div>
+      </header>
+
+      <main class="lifecycle-main lifecycle-main-split">
+        <div class="lifecycle-chart-wrap">
+          <canvas id="lifecycleCanvas"></canvas>
+          <div id="hoverReadout" class="lifecycle-hover-readout hidden" aria-live="polite"></div>
+        </div>
+        <aside class="lifecycle-side" id="lifecycleSide" aria-label="Paper trade inspector">
+          <div class="lifecycle-side-block">
+            <h2>Inspector</h2>
+            <div id="inspectorPanel" class="lifecycle-card-body">
+              <p class="lifecycle-empty">Click an entry/exit marker or trade shape.</p>
+            </div>
+          </div>
+          <div class="lifecycle-side-block">
+            <h2>Controller actions</h2>
+            <div id="controllerTimeline" class="lifecycle-timeline lifecycle-card-body"></div>
+          </div>
+          <div class="lifecycle-side-block" id="paperTradeResultBlock">
+            <h2>Paper trade result</h2>
+            <div id="paperTradeResultPanel" class="lifecycle-card-body">
+              <p class="lifecycle-empty">No closed paper trade yet.</p>
+            </div>
+          </div>
+          <div class="lifecycle-side-block" id="paperPnlBlock">
+            <h2>Paper PnL</h2>
+            <div id="paperPnlPanel" class="lifecycle-card-body">
+              <p class="lifecycle-empty">Loading…</p>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+    <script src="./lifecycle_app.js?v=ops-style-polish"></script>
+  </body>
+</html>

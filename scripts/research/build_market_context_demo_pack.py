@@ -17,7 +17,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 COGNITION = ROOT / "data" / "cognition"
-VISUAL_DATA = ROOT / "sandbox" / "market_state_context_visualizer" / "public" / "data"
+VISUAL_DATA = ROOT / "apps" / "context_visualizer" / "public" / "data"
 
 AUCTION_PATH = COGNITION / "auction_episode_memory.parquet"
 COGNITIVE_PATH = COGNITION / "cognitive_market_state_memory.parquet"

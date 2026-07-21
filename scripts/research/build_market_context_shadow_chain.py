@@ -54,25 +54,25 @@ CHAIN_STEPS: list[dict[str, Any]] = [
     {
         "name": "lifecycle_visual_data",
         "script": ROOT
-        / "sandbox"
-        / "market_state_context_visualizer"
+        / "apps"
+        / "context_visualizer"
         / "generate_lifecycle_context_data.py",
         "outputs": [
             ROOT
-            / "sandbox"
-            / "market_state_context_visualizer"
+            / "apps"
+            / "context_visualizer"
             / "public"
             / "data"
             / "lifecycle_candles.json",
             ROOT
-            / "sandbox"
-            / "market_state_context_visualizer"
+            / "apps"
+            / "context_visualizer"
             / "public"
             / "data"
             / "lifecycle_context_episodes.json",
             ROOT
-            / "sandbox"
-            / "market_state_context_visualizer"
+            / "apps"
+            / "context_visualizer"
             / "public"
             / "data"
             / "lifecycle_latest.json",
@@ -90,20 +90,20 @@ SHADOW_PARQUET_LAYERS = [
 
 VISUAL_JSON_PATHS = [
     ROOT
-    / "sandbox"
-    / "market_state_context_visualizer"
+    / "apps"
+    / "context_visualizer"
     / "public"
     / "data"
     / "lifecycle_candles.json",
     ROOT
-    / "sandbox"
-    / "market_state_context_visualizer"
+    / "apps"
+    / "context_visualizer"
     / "public"
     / "data"
     / "lifecycle_context_episodes.json",
     ROOT
-    / "sandbox"
-    / "market_state_context_visualizer"
+    / "apps"
+    / "context_visualizer"
     / "public"
     / "data"
     / "lifecycle_latest.json",
@@ -318,8 +318,8 @@ def validate_cross_checks() -> tuple[dict[str, bool], dict[str, Any], int, int]:
     life_ep_path = ROOT / "data" / "cognition" / "market_context_lifecycle_episodes.parquet"
     visual_latest_path = (
         ROOT
-        / "sandbox"
-        / "market_state_context_visualizer"
+        / "apps"
+        / "context_visualizer"
         / "public"
         / "data"
         / "lifecycle_latest.json"

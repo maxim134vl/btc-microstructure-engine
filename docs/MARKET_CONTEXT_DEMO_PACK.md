@@ -27,7 +27,7 @@ Show, for each recent active context episode:
 
 Also checks sandbox visual JSON under:
 
-- `sandbox/market_state_context_visualizer/public/data/lifecycle_*.json`
+- `apps/context_visualizer/public/data/lifecycle_*.json`
 
 ## Outputs
 

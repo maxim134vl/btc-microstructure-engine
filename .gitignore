@@ -24,3 +24,26 @@ reports/*
 !reports/.gitkeep
 replays/*
 !replays/.gitkeep
+
+# Runtime / refresher process files
+logs/
+runtime*.pid
+runtime*.log
+runtime*.lock
+runtime_context_visual_refresher.pid
+runtime_context_visual_refresher.lock
+
+# Market context shadow / visual generated artifacts
+data/cognition/auction_episode_memory.parquet
+data/cognition/cognitive_market_state_memory.parquet
+data/cognition/final_market_context_memory.parquet
+data/cognition/final_market_context_episodes.parquet
+data/cognition/market_context_lifecycle_memory.parquet
+data/cognition/market_context_lifecycle_episodes.parquet
+data/cognition/market_context_shadow_chain_status.json
+data/cognition/market_context_visual_refresher_status.json
+data/cognition/market_context_demo_pack.json
+
+apps/context_visualizer/public/data/*
+!apps/context_visualizer/public/data/.gitkeep
+sandbox/market_state_context_visualizer/public/data/*

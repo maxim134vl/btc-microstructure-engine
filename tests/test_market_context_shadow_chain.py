@@ -187,7 +187,7 @@ def test_chain_calls_steps_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # Patch path lists used by validate_cross_checks
     cognition = tmp_path / "data" / "cognition"
-    visual = tmp_path / "sandbox" / "market_state_context_visualizer" / "public" / "data"
+    visual = tmp_path / "apps" / "context_visualizer" / "public" / "data"
     monkeypatch.setattr(
         mod,
         "SHADOW_PARQUET_LAYERS",
@@ -243,7 +243,7 @@ def test_empty_artifact_fails(tmp_path: Path):
 
 def test_latest_lifecycle_matches_visual_latest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cognition = tmp_path / "data" / "cognition"
-    visual = tmp_path / "sandbox" / "market_state_context_visualizer" / "public" / "data"
+    visual = tmp_path / "apps" / "context_visualizer" / "public" / "data"
     monkeypatch.setattr(mod, "ROOT", tmp_path)
     monkeypatch.setattr(
         mod,
@@ -359,7 +359,7 @@ def test_visual_json_forbids_arbitration_fields():
 
 def test_action_allowed_must_remain_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cognition = tmp_path / "data" / "cognition"
-    visual = tmp_path / "sandbox" / "market_state_context_visualizer" / "public" / "data"
+    visual = tmp_path / "apps" / "context_visualizer" / "public" / "data"
     monkeypatch.setattr(mod, "ROOT", tmp_path)
     monkeypatch.setattr(
         mod,

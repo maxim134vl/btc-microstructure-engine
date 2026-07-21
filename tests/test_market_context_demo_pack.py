@@ -32,7 +32,7 @@ def _json(path: Path, payload) -> None:
 
 def _minimal_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, action_allowed: bool = False) -> dict:
     cognition = tmp_path / "data" / "cognition"
-    visual = tmp_path / "sandbox" / "market_state_context_visualizer" / "public" / "data"
+    visual = tmp_path / "apps" / "context_visualizer" / "public" / "data"
 
     monkeypatch.setattr(mod, "ROOT", tmp_path)
     monkeypatch.setattr(mod, "COGNITION", cognition)
