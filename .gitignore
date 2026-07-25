@@ -47,3 +47,25 @@ data/cognition/market_context_demo_pack.json
 apps/context_visualizer/public/data/*
 !apps/context_visualizer/public/data/.gitkeep
 sandbox/market_state_context_visualizer/public/data/*
+
+# Benchmark runtime outputs (timestamped audits / exports / visuals)
+benchmark/exports/
+benchmark/reports/
+benchmark/**/exports/
+benchmark/**/history/
+benchmark/**/reports/
+benchmark/**/visuals/
+benchmark/memory/datasets/
+benchmark/memory/exports/
+benchmark/memory/history/
+benchmark/memory/reports/
+benchmark/memory/index.json
+benchmark/**/latest*.json
+benchmark/**/latest*.csv
+
+# Local training / process / build scratch
+catboost_info/
+run/
+*.tsbuildinfo
+*.parquet.meta.json
+changed_since_last_commit*
