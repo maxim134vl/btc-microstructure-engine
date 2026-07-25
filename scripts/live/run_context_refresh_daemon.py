@@ -21,12 +21,13 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Line-buffered stdout for Docker-ready logs.
 try:
@@ -97,11 +98,93 @@ DEFAULT_PID = ROOT / "run" / "context_refresh_daemon.pid"
 DEFAULT_STATUS = ROOT / "data" / "live" / "context_refresh_daemon_status.json"
 
 _STOP = False
+_STOP_EVENT = threading.Event()
 _LOCK_HELD: Path | None = None
+
+# Injected in tests; production uses monotonic + Event.wait.
+MonotonicFn = Callable[[], float]
+WaitFn = Callable[[float], bool]
 
 
 def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+@dataclass(frozen=True)
+class ScheduleWaitPlan:
+    """Post-cycle wait plan derived from a monotonic deadline grid."""
+
+    sleep_seconds: float
+    next_deadline_mono: float
+    cycle_duration_seconds: float
+    configured_interval_seconds: float
+    missed_intervals: int
+    overrun: bool
+    next_deadline_in_seconds: float
+
+
+def plan_schedule_wait(
+    *,
+    cycle_started_mono: float,
+    now_mono: float,
+    slot_deadline_mono: float,
+    interval_s: float,
+) -> ScheduleWaitPlan:
+    """Advance from the completed slot to the next future monotonic deadline.
+
+    Contract:
+    - negative sleep is impossible by construction (sleep_seconds >= 0)
+    - missed slots are skipped (no catch-up storm)
+    - overrun is non-fatal and reported via fields
+    """
+    interval = float(interval_s)
+    if interval <= 0:
+        raise ValueError(f"interval_s must be positive, got {interval_s!r}")
+
+    cycle_duration = max(0.0, float(now_mono) - float(cycle_started_mono))
+    next_deadline = float(slot_deadline_mono) + interval
+    missed = 0
+    # Strict '>' so finishing exactly on the next slot yields sleep_seconds == 0
+    # (immediate next iteration) rather than skipping an extra full interval.
+    if float(now_mono) > next_deadline:
+        missed = int((float(now_mono) - next_deadline) // interval) + 1
+        next_deadline += missed * interval
+
+    sleep_seconds = next_deadline - float(now_mono)
+    if sleep_seconds < 0:
+        # Floating-point guard: snap to a future slot rather than negative sleep.
+        missed += 1
+        next_deadline += interval
+        sleep_seconds = max(0.0, next_deadline - float(now_mono))
+
+    return ScheduleWaitPlan(
+        sleep_seconds=float(sleep_seconds),
+        next_deadline_mono=float(next_deadline),
+        cycle_duration_seconds=float(cycle_duration),
+        configured_interval_seconds=interval,
+        missed_intervals=int(missed),
+        overrun=bool(missed > 0 or cycle_duration > interval),
+        next_deadline_in_seconds=max(0.0, float(sleep_seconds)),
+    )
+
+
+def interruptible_wait(
+    sleep_seconds: float,
+    *,
+    stop_event: threading.Event | None = None,
+    wait_fn: WaitFn | None = None,
+) -> bool:
+    """Wait up to sleep_seconds or until stop. Never passes negative timeout.
+
+    Returns True if stop was signaled (or wait_fn reports stopped).
+    """
+    timeout = float(sleep_seconds)
+    if timeout <= 0:
+        return bool(stop_event.is_set()) if stop_event is not None else False
+    if wait_fn is not None:
+        return bool(wait_fn(timeout))
+    event = stop_event if stop_event is not None else _STOP_EVENT
+    return bool(event.wait(timeout))
 
 
 def _iso(ts: Any) -> str | None:
@@ -338,6 +421,7 @@ def write_status(path: Path, payload: dict[str, Any]) -> None:
 def _request_stop(signum: int, _frame: Any) -> None:
     global _STOP
     _STOP = True
+    _STOP_EVENT.set()
     emit(
         "CONTEXT_REFRESH_STOP",
         level="INFO",
@@ -488,7 +572,10 @@ def daemon_loop(
     pid_path: Path,
     status_path: Path,
     require_flag: bool = True,
+    monotonic_fn: MonotonicFn | None = None,
+    wait_fn: WaitFn | None = None,
 ) -> int:
+    global _STOP
     flag = os.environ.get("BTC_ML_CONTEXT_REFRESH_DAEMON", "0").strip()
     if require_flag and flag != "1":
         emit(
@@ -502,6 +589,10 @@ def daemon_loop(
     # Safety rails
     os.environ.setdefault("BTC_ML_CONTINUATION_PROGRESSION", "0")
     os.environ.setdefault("PRICE_GATE", "OFF")
+
+    mono = monotonic_fn or time.monotonic
+    _STOP = False
+    _STOP_EVENT.clear()
 
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
@@ -519,13 +610,30 @@ def daemon_loop(
         interpreter=sys.executable,
         argv0=sys.argv[0] if sys.argv else "",
         dry_run=dry_run,
+        scheduler="monotonic_deadline",
     )
 
     cycle_n = 0
     exit_code = 0
+    # First cycle runs immediately on the current monotonic slot.
+    next_deadline = float(mono())
     while not _STOP:
+        now = float(mono())
+        if now < next_deadline:
+            early_sleep = next_deadline - now
+            stopped = interruptible_wait(
+                early_sleep,
+                stop_event=_STOP_EVENT,
+                wait_fn=wait_fn,
+            )
+            if stopped or _STOP:
+                break
+            now = float(mono())
+
+        slot_deadline = next_deadline
         cycle_n += 1
         cycle_id = f"{_utc_now().strftime('%Y%m%dT%H%M%SZ')}-{cycle_n}"
+        cycle_started = float(mono())
         if not acquire_lock(lock_path, pid=os.getpid()):
             emit(
                 "LOCK_BUSY",
@@ -543,10 +651,59 @@ def daemon_loop(
 
         if once or _STOP:
             break
-        # Interruptible sleep
-        end = time.time() + float(interval_s)
-        while time.time() < end and not _STOP:
-            time.sleep(min(0.5, end - time.time()))
+
+        finished = float(mono())
+        try:
+            plan = plan_schedule_wait(
+                cycle_started_mono=cycle_started,
+                now_mono=finished,
+                slot_deadline_mono=slot_deadline,
+                interval_s=interval_s,
+            )
+        except Exception as exc:
+            emit(
+                "SCHEDULER_ERROR",
+                level="ERROR",
+                cycle_id=cycle_id,
+                message="scheduler_calculation_error",
+                error=str(exc),
+            )
+            # Fail closed on scheduler arithmetic: stop rather than busy-loop.
+            exit_code = 1
+            break
+
+        next_deadline = plan.next_deadline_mono
+        if plan.overrun:
+            emit(
+                "REFRESH_INTERVAL_OVERRUN",
+                level="WARN",
+                cycle_id=cycle_id,
+                message="refresh_exceeded_interval_skipped_missed_slots",
+                cycle_duration_seconds=round(plan.cycle_duration_seconds, 6),
+                configured_interval_seconds=plan.configured_interval_seconds,
+                missed_intervals=plan.missed_intervals,
+                next_deadline_in_seconds=round(plan.next_deadline_in_seconds, 6),
+            )
+
+        # Negative sleep must be impossible by construction.
+        if plan.sleep_seconds < 0:
+            emit(
+                "SCHEDULER_ERROR",
+                level="ERROR",
+                cycle_id=cycle_id,
+                message="negative_sleep_impossible_violation",
+                sleep_seconds=plan.sleep_seconds,
+            )
+            exit_code = 1
+            break
+
+        stopped = interruptible_wait(
+            plan.sleep_seconds,
+            stop_event=_STOP_EVENT,
+            wait_fn=wait_fn,
+        )
+        if stopped or _STOP:
+            break
 
     emit("CONTEXT_REFRESH_STOP", message="daemon_exit", exit_code=exit_code, cycles=cycle_n)
     clear_pid(pid_path)
