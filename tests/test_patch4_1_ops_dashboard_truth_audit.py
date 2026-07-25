@@ -156,9 +156,11 @@ def test_22_deprecated_oi_not_active_failure(candidate):
 def test_23_overall_health_with_known_limitations(candidate):
     assert candidate["overall_health"] in {
         "HEALTHY",
+        "OPERATIONAL_WITH_LIMITATIONS",
         "HEALTHY_WITH_KNOWN_LIMITATIONS",
         "DEGRADED",
         "BROKEN",
+        "FAILED",
         "UNKNOWN",
     }
     # with current live topology expect known limitations, not broken from D1/synthesis alone
@@ -173,7 +175,7 @@ def test_24_25_feed_pipeline_down_rules():
         {"process_id": "PAPER_CONTROLLER", "health": "RUNNING"},
     ]
     overall, _, alerts = audit.compute_overall_health(procs_down, {}, {}, {})
-    assert overall == "BROKEN"
+    assert overall in {"FAILED", "BROKEN"}
     assert any(a["alert_id"] == "FEED_DOWN" for a in alerts)
     procs_pipe = [
         {"process_id": "FEED", "health": "RUNNING"},
@@ -182,7 +184,7 @@ def test_24_25_feed_pipeline_down_rules():
         {"process_id": "PAPER_CONTROLLER", "health": "RUNNING"},
     ]
     overall2, _, alerts2 = audit.compute_overall_health(procs_pipe, {}, {}, {})
-    assert overall2 == "BROKEN"
+    assert overall2 in {"FAILED", "BROKEN"}
     assert any(a["alert_id"] == "PIPELINE_DOWN" for a in alerts2)
 
 

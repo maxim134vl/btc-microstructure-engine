@@ -1,107 +1,143 @@
 # Ops Health Semantics
 
-Stage 13 separates three independent status layers so research gaps and
-historical audits no longer paint current Runtime Health as degraded.
+OPS dashboard separates three independent status planes so research gaps and
+historical audits no longer paint current live operational health as failed.
 
-## Layers
+## Planes
 
-### A. Runtime Health
+### A. Live Operational Health
 
-Current infrastructure only:
+Answers only: is the paper trading runtime working right now?
 
-- runtime / API / feed / websocket / collectors
-- pipeline cycling
-- failed engines (required)
-- **current** stalls/timeouts (last 15 minutes)
-- active runtime failures
-- required datasets live
+- required processes (feed, pipeline, context, manager, M15/M30/H1/H4 traders)
+- command bus / positions / risk
+- active failures and current stalls
+- required dataset freshness (with event-driven `CURRENT_UNCHANGED`)
 - actionable alerts
+- resources (display); sustained critical resource pressure may escalate
 
-Statuses: `OPERATIONAL` | `DEGRADED` | `CRITICAL`
+Top System Health statuses:
 
-### B. Research / Validation Completeness
+```text
+OPERATIONAL
+OPERATIONAL_WITH_LIMITATIONS
+DEGRADED
+FAILED
+```
 
-Does **not** degrade Runtime Health:
+### B. Known Limitations
 
-- `GOVERNANCE_MISSING` / promotion NO
-- economic `STALE_VALIDATION / HISTORICAL`
-- shadow `MISSING_DATA`
-- toxic `LEGACY_ONLY / STALE`
-- missing classic ML metrics
-- benchmark diagnostics can still be CURRENT
+Non-alarms that describe expected gaps:
 
-Status: `OPERATIONAL` | `ATTENTION` | `STALE` | `MISSING_DATA`
+- `D1_NOT_LIVE` / `EXPECTED`
+- `AUCTION_SYNTHESIS` / `NON_REQUIRED`
+- legacy paper controller `MIGRATED` / `NOT_REQUIRED`
+- research readiness incomplete
+- Toxic Box historical-only
 
-### C. Historical Audit
+These never create Active Alerts and do not degrade live health by themselves.
 
-Informational:
+### C. Research / Historical
 
-- historical failure counts
-- historical stalls/timeouts (older than 15 minutes)
-- latest historical failure / stall timestamps
-- dependency skip history
+Non-blocking:
 
-Status: `INFORMATIONAL` | `ATTENTION`
+- governance missing
+- economic validation historical/stale
+- shadow unavailable
+- drift current metrics unavailable
+- Toxic Box historical baseline (3,879 events retained)
+- historical failures / stalls (audit only)
 
-## System Health
+Statuses include `RESEARCH_INCOMPLETE`, `MISSING_NON_BLOCKING`, `HISTORICAL_ONLY`,
+`NON_BLOCKING`.
 
-Top System Health uses **runtime + critical resources only**.
+## Active Alerts
 
-- Soft memory pressure (e.g. 84%) → Resource Warning / `OPERATIONAL_WITH_WARNINGS`
-- Does **not** become degraded because governance is missing
-- Does **not** become degraded because toxic is legacy-only
-- Does **not** become degraded because economic validation is stale
-- Does **not** become degraded because shadow metrics are missing
-- Does **not** become degraded because historical failures exist
+Only actionable live problems. Explicitly excluded:
 
-## Current vs historical stalls
+- D1 not live
+- auction synthesis non-required
+- missing governance
+- stale economic validation
+- missing shadow
+- historical Toxic Box
+- phantom / excluded modules
+- historical failures / stalls
 
-| Class | Rule |
-|---|---|
-| Current | TIMESTAMP within 15 minutes, or live required engine TIMEOUT count |
-| Historical | Older TIMEOUT / STALL_DETECTED in blocking chain |
+## Paper Controller
 
-UI:
+After S4 cutover:
 
-- `Current stalls/timeouts: 0` → Runtime Stability Operational
-- `Historical stalls/timeouts: 1` → Historical Audit only
-- Never show `Stalls & timeouts 1 Lagging` for historical-only events
+```text
+Legacy Paper Controller
+MIGRATED · NOT REQUIRED
+Replaced by independent M15, M30, H1 and H4 traders
+```
 
-## Toxic top status
+Absence is not a failure.
 
-- `ELEVATED` only when **current** toxic metrics exist and breach rate thresholds
-- `LEGACY_ONLY / STALE` when benchmark has no toxic fields and parquet baseline is historical
-- Legacy baseline alone must never show `TOXIC Elevated`
+## Phantom / Excluded Modules
 
-## Economic / Shadow / Governance
+Shown only under Legacy / Excluded Modules with:
 
-| Signal | Layer | Runtime impact |
-|---|---|---|
-| Economic stale | Research | none |
-| Shadow MISSING_DATA | Research | none |
-| Governance missing | Research (blocks promotion) | none |
+```text
+NOT_IN_CANONICAL_RUNTIME
+DEPRECATED
+HISTORICAL_ONLY
+REMOVED
+```
 
-## Resource Warning
+Never `Running` / `Receiving Data` / `Failed`. Excluded from engine totals.
 
-Resources card may show Memory Degraded at ≥75% memory.
+## Probabilistic parquet
 
-That is a **resource** warning, separate from Runtime Health Operational.
+Event-driven writers may report:
+
+```text
+CURRENT
+CURRENT_UNCHANGED
+DELAYED
+STALE
+```
+
+`CURRENT_UNCHANGED` means the engine ran, inputs were unchanged, and the last
+valid state remains current — not delayed solely by mtime.
+
+## Resources
+
+```text
+NORMAL      < 70% sustained
+WARNING     70–85% sustained
+CRITICAL    > 85% sustained
+```
+
+Memory WARNING (e.g. 84%) is not FAILED and does not degrade System Health alone.
+Brief CPU peaks do not degrade System Health; sustained critical CPU may.
+
+Runtime Stability:
+
+```text
+STABLE
+STABLE_WITH_WARNINGS
+DEGRADED
+```
 
 ## Payload
 
 `GET /api/v1/ops/snapshot` includes:
 
 ```text
-health_dimensions:
-  runtime: { status, reason, current_failures_count, ... }
-  resources: { status, cpu_pct, memory_pct, disk_pct, reason }
-  research_validation: { status, governance_status, economic_status, shadow_status, toxic_status, reason }
-  historical_audit: { status, historical_failures_count, historical_stalls_count, ... }
+overall_health / health.display_status
+status_planes.live_operational_health
+status_planes.known_limitations
+status_planes.research_validation
+status_planes.historical_audit
+health_dimensions.runtime | resources | research_validation | historical_audit
+runtime_stability
 ```
 
 ## Non-goals
 
-- no model / retrain / pipeline / execution changes
-- no market-context refresher changes
-- no benchmark producer changes
-- does not hide real current failures
+- no trading model / auction / cognition / MTF / manager / trader changes
+- no Toxic Box rebuild, Outcome Intelligence, governance implementation, promotion
+- no artificial green artifacts for research/historical planes

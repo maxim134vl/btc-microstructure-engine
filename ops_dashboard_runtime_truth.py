@@ -377,6 +377,9 @@ def build_multi_timeframe() -> list[dict[str, Any]]:
                     "support": "RESEARCH_ONLY_NOT_LIVE",
                     "availability_status": row.get("availability_status") or "TIMEFRAME_NOT_LIVE",
                     "availability_reason": row.get("availability_reason") or "NO_LIVE_STAGE2_WRITER",
+                    "display_status": "NOT_LIVE",
+                    "requirement": "EXPECTED",
+                    "detail": "No live Stage-2 writer · No D1 timeframe trader",
                     "state_asof": None,
                     "source_state_timestamp": None,
                     "source_bar_close": None,
@@ -742,23 +745,27 @@ def compute_overall_health(
             "alert_id": "D1_NOT_LIVE",
             "severity": "INFO",
             "component": "multi_timeframe.D1",
-            "message": "D1 TIMEFRAME_NOT_LIVE / NO_LIVE_STAGE2_WRITER",
+            "message": "D1 NOT LIVE / EXPECTED — no live Stage-2 writer, no D1 timeframe trader",
             "reason_code": "D1_NOT_LIVE",
             "started_at": utc_now(),
             "last_seen": utc_now(),
             "active": True,
+            "actionable": False,
+            "known_limitation": True,
         }
     )
     alerts.append(
         {
             "alert_id": "AUCTION_SYNTHESIS_BROKEN_NON_REQUIRED",
-            "severity": "WARNING",
+            "severity": "INFO",
             "component": "auction_synthesis_memory",
-            "message": "auction_synthesis ACTIVE_BROKEN / writer disconnected; non-required",
+            "message": "Auction Synthesis KNOWN LIMITATION / NON-REQUIRED — frozen output, not on context truth path",
             "reason_code": "AUCTION_SYNTHESIS_BROKEN_NON_REQUIRED",
             "started_at": utc_now(),
             "last_seen": utc_now(),
             "active": True,
+            "actionable": False,
+            "known_limitation": True,
         }
     )
     if paper.get("representation") == "RUNNING_NO_ELIGIBLE_TRADE":
@@ -791,13 +798,13 @@ def compute_overall_health(
         return "UNKNOWN", "critical source unknown", alerts
 
     if any(a["severity"] == "CRITICAL" for a in alerts):
-        return "BROKEN", "critical process down", alerts
+        return "FAILED", "critical process down", alerts
     if any(a["reason_code"] == "DECISION_STALE" for a in alerts):
         return "DEGRADED", "decision materially stale", alerts
     if any(a["severity"] == "ERROR" for a in alerts):
         return "DEGRADED", "required support process down", alerts
     return (
-        "HEALTHY_WITH_KNOWN_LIMITATIONS",
+        "OPERATIONAL_WITH_LIMITATIONS",
         "core processes running; D1 not live; auction_synthesis broken/non-required",
         alerts,
     )
@@ -835,12 +842,17 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             if timeframe_traders["activated"]:
                 # Expected after the S4.1 cutover: execution moved to timeframe traders.
                 paper["representation"] = "MIGRATED_TO_TIMEFRAME_TRADERS"
+                paper["display_status"] = "MIGRATED"
+                paper["requirement"] = "NOT_REQUIRED"
                 paper["health"] = "HEALTHY"
                 paper["is_controller_failure"] = False
                 paper["health_reason"] = "legacy_global_controller_stopped_at_s4_1_cutover"
                 paper["legacy_ledger_role"] = "READ_ONLY_HISTORICAL_BOOK"
+                paper["detail"] = "Replaced by independent M15, M30, H1 and H4 traders"
             else:
                 paper["representation"] = "STOPPED"
+                paper["display_status"] = "FAILED"
+                paper["requirement"] = "REQUIRED"
                 paper["health"] = "BROKEN"
                 paper["is_controller_failure"] = True
     context_chain = build_context_chain()
@@ -858,15 +870,40 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         {
             "id": "D1_NOT_LIVE",
             "entity_type": "UNSUPPORTED_CAPABILITY",
-            "detail": "D1 has no live Stage-2 writer",
+            "display_status": "NOT_LIVE",
+            "requirement": "EXPECTED",
+            "detail": "No live Stage-2 writer · No D1 timeframe trader",
         },
         {
             "id": "AUCTION_SYNTHESIS_ACTIVE_BROKEN",
             "entity_type": "DATASET",
-            "classification": "ACTIVE_BROKEN",
+            "classification": "KNOWN_LIMITATION",
+            "display_status": "KNOWN_LIMITATION",
+            "requirement": "NON_REQUIRED",
             "required_by_current_runtime": False,
             "reason": "WRITER_DISCONNECTED",
-            "detail": "auction_synthesis tip frozen; not on context truth path",
+            "detail": "Frozen output · Not used by canonical context truth path",
+        },
+        {
+            "id": "LEGACY_PAPER_CONTROLLER_MIGRATED",
+            "entity_type": "PROCESS",
+            "display_status": "MIGRATED",
+            "requirement": "NOT_REQUIRED",
+            "detail": "Replaced by independent M15, M30, H1 and H4 traders",
+        },
+        {
+            "id": "RESEARCH_READINESS_INCOMPLETE",
+            "entity_type": "RESEARCH",
+            "display_status": "RESEARCH_INCOMPLETE",
+            "requirement": "NON_BLOCKING",
+            "detail": "Governance / economic / shadow research artifacts incomplete for promotion",
+        },
+        {
+            "id": "TOXIC_BOX_HISTORICAL",
+            "entity_type": "RESEARCH",
+            "display_status": "HISTORICAL_ONLY",
+            "requirement": "NON_BLOCKING",
+            "detail": "Legacy toxic baseline retained; not connected to current S4 trades",
         },
     ]
     legacy_components = [
@@ -874,8 +911,10 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "component_id": eng,
             "entity_type": "LEGACY_COMPONENT",
             "classification": "PHANTOM",
+            "display_status": "NOT_IN_CANONICAL_RUNTIME",
             "active": False,
             "reason": "NOT_PRESENT_IN_CANONICAL_RUNTIME",
+            "process_badge": None,
         }
         for eng in PHANTOM_ENGINES
     ]
@@ -885,8 +924,10 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
                 "component_id": name,
                 "entity_type": "LEGACY_COMPONENT",
                 "classification": "INACTIVE_DEPRECATED",
+                "display_status": "DEPRECATED",
                 "active": False,
                 "required_by_current_runtime": False,
+                "process_badge": None,
             }
         )
 
@@ -925,10 +966,15 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
 
 
 def overall_health_to_ops_level(overall: str) -> str:
-    if overall in {"HEALTHY", "HEALTHY_WITH_KNOWN_LIMITATIONS"}:
+    if overall in {
+        "HEALTHY",
+        "OPERATIONAL",
+        "HEALTHY_WITH_KNOWN_LIMITATIONS",
+        "OPERATIONAL_WITH_LIMITATIONS",
+    }:
         return "GREEN"
     if overall == "DEGRADED":
         return "YELLOW"
-    if overall == "BROKEN":
+    if overall in {"BROKEN", "FAILED"}:
         return "RED"
     return "GREY"

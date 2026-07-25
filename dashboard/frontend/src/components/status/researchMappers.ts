@@ -71,11 +71,14 @@ export function resolveGovernanceStatus(
   const raw = governanceStatus?.trim() || "UNKNOWN";
   const upper = raw.toUpperCase();
   if (upper === "GOVERNANCE_MISSING" || upper === "MISSING_DATA" || upper === "MISSING") {
-    return researchStatus(upper === "GOVERNANCE_MISSING" ? "GOVERNANCE_MISSING" : "MISSING", "degraded");
+    return researchStatus(
+      upper === "GOVERNANCE_MISSING" ? "MISSING — NON-BLOCKING" : "MISSING — NON-BLOCKING",
+      "offline",
+    );
   }
   if (isStaleToken(raw, freshness)) {
     const label = raw.includes("STALE") || freshness?.is_stale ? raw : `${raw}+STALE`;
-    return researchStatus(label, "degraded");
+    return researchStatus(label, "offline");
   }
   return researchStatus(raw, levelToTone(level));
 }
@@ -118,11 +121,16 @@ export function resolveToxicStatus(
   if (ds === "CURRENT" || ds.startsWith("CURRENT")) {
     return researchStatus("CURRENT", "operational");
   }
-  if (ds.includes("LEGACY_ONLY") || ds === "LEGACY_ONLY / STALE") {
-    return researchStatus("LEGACY_ONLY / STALE", "degraded");
+  if (
+    ds.includes("HISTORICAL_ONLY") ||
+    ds.includes("LEGACY_ONLY") ||
+    ds.includes("LEGACY_BASELINE") ||
+    ds.includes("NON_BLOCKING")
+  ) {
+    return researchStatus("HISTORICAL ONLY — NON-BLOCKING", "offline");
   }
   if (ds.includes("MISSING")) {
-    return researchStatus("MISSING_DATA", "degraded");
+    return researchStatus("NOT AVAILABLE — NON-BLOCKING", "offline");
   }
   const raw = (severityLabel || "").trim();
   const upper = raw.toUpperCase();
@@ -130,12 +138,13 @@ export function resolveToxicStatus(
     freshness?.is_stale ||
     upper.includes("STALE") ||
     upper.includes("BASELINE LOADED") ||
-    upper.includes("LEGACY")
+    upper.includes("LEGACY") ||
+    upper.includes("HISTORICAL")
   ) {
-    return researchStatus("LEGACY_ONLY / STALE", "degraded");
+    return researchStatus("HISTORICAL ONLY — NON-BLOCKING", "offline");
   }
   if (isStaleToken(severityLabel, freshness)) {
-    return researchStatus("LEGACY_ONLY / STALE", "degraded");
+    return researchStatus("HISTORICAL ONLY — NON-BLOCKING", "offline");
   }
   const label =
     severityLabel?.trim() ||
@@ -162,8 +171,8 @@ export function resolveEconomicStatus(
     isStaleToken(status, freshness)
   ) {
     return researchStatus(
-      status?.includes("HISTORICAL") ? status.trim() : "STALE_VALIDATION / HISTORICAL",
-      "degraded",
+      status?.includes("HISTORICAL") ? status.trim() : "HISTORICAL / STALE — NON-BLOCKING",
+      "offline",
     );
   }
   let label = "Review";
@@ -208,8 +217,8 @@ export function resolveModelSummaryStatus(
   _attentionReason?: string | null,
 ): ResolvedStatus {
   const token = (status || "").trim().toUpperCase();
-  if (token === "ATTENTION" || isStaleToken(status, freshness)) {
-    return researchStatus(token === "ATTENTION" ? "ATTENTION" : status?.trim() || "ATTENTION", "degraded");
+  if (token === "ATTENTION" || token === "INCOMPLETE" || isStaleToken(status, freshness)) {
+    return researchStatus("INCOMPLETE — NON-BLOCKING", "offline");
   }
   let label = status?.trim() || "UNKNOWN";
   if (token === "MISSING" || token === "NOT_EVALUATED" || level.toUpperCase() === "GREY") {
@@ -374,19 +383,20 @@ export function dedupeRepeatedPhrases(lines: string[]): string[] {
 }
 
 const TOXIC_ACTION =
-  "Refresh toxic/economic validation artifacts if current toxic monitoring is required.";
+  "Future work: connect current context and trade outcome intelligence.";
 
-/** Prefer a single toxic action; never governance/retrain copy. */
+/** Prefer a single toxic action; never governance/retrain / runtime-degraded copy. */
 export function pickToxicAction(warning?: string | null, refreshHint?: string | null): string | null {
   const candidates = [warning, refreshHint].filter(Boolean).map((s) => String(s).trim());
   for (const text of candidates) {
-    if (/model governance|retrain/i.test(text)) continue;
-    if (/toxic|economic validation artifacts/i.test(text)) {
-      // Normalize to one canonical action sentence.
-      if (/refresh toxic\/economic/i.test(text)) return TOXIC_ACTION;
-      // If warning is the long historical sentence, still return action once.
-      if (/historical toxic baseline is stale/i.test(text)) return TOXIC_ACTION;
+    if (/model governance|retrain|refresh immediately|action required|runtime degraded/i.test(text)) {
+      continue;
+    }
+    if (/future work|not connected|outcome intelligence|s4 trades are not classified/i.test(text)) {
       return text;
+    }
+    if (/toxic|economic validation artifacts/i.test(text)) {
+      return TOXIC_ACTION;
     }
   }
   return candidates.length ? TOXIC_ACTION : null;
@@ -398,7 +408,8 @@ export function isToxicHistoricalBaseline(severityLabel?: string | null, isStale
     isStale ||
       upper.includes("STALE") ||
       upper.includes("BASELINE") ||
-      upper.includes("LEGACY_ONLY"),
+      upper.includes("LEGACY_ONLY") ||
+      upper.includes("HISTORICAL_ONLY"),
   );
 }
 
@@ -454,22 +465,24 @@ export function formatToxicBoxDisplay(input: {
   const headerStatus = isCurrent
     ? "CURRENT"
     : legacyOnly
-      ? "LEGACY_ONLY / STALE"
-      : input.severityLabel?.trim() || "MISSING_DATA";
+      ? "HISTORICAL ONLY — NON-BLOCKING"
+      : input.severityLabel?.trim() || "NOT AVAILABLE";
 
-  const currentLine = legacyOnly ? "Current toxic monitoring: MISSING_DATA" : null;
+  const currentLine = legacyOnly
+    ? "Current S4 trades are not classified by this legacy Toxic Box. Zero recent events means that current monitoring is not connected, not that current toxic activity equals zero."
+    : null;
   const baselineLine = isCurrent
     ? "Current toxic monitoring loaded"
     : legacyOnly
       ? "Historical toxic baseline loaded"
       : null;
 
-  const eventsLine = `Toxic events: ${input.events ?? 0}`;
-  const ratesLine = `7d: ${input.eventsLast7d ?? 0} · 7d toxic rate: ${
-    input.toxicRate7d != null ? input.toxicRate7d.toFixed(2) : "0.00"
-  }/d · 30d: ${input.toxicRate30d != null ? input.toxicRate30d.toFixed(2) : "0.00"}/d`;
+  const eventsLine = `Toxic events: ${(input.events ?? 0).toLocaleString()}`;
+  const ratesLine = `7d events: ${input.eventsLast7d ?? 0} · 30d rate: ${
+    input.toxicRate30d != null ? input.toxicRate30d.toFixed(0) : "0"
+  } · Historical trend: ${input.trend || "STABLE"}`;
 
-  const trendValue = input.trend || "—";
+  const trendValue = input.trend || "STABLE";
   const trendLine = legacyOnly ? `Historical trend: ${trendValue}` : `Trend: ${trendValue}`;
 
   let sourceLine: string | null = null;

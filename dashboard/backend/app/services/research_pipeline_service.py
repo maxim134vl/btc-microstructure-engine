@@ -1094,12 +1094,15 @@ async def build_toxic_box_snapshot(sources: dict[str, Any] | None = None) -> dic
             payload["historical_timestamp"] = historical.get("timestamp")
             payload["historical_age_days"] = historical.get("age_days")
             if display_status == STATUS_LEGACY_ONLY:
+                payload["display_status"] = "HISTORICAL_ONLY"
+                payload["severity_label"] = "HISTORICAL_ONLY / NON_BLOCKING"
                 payload["stale_warning"] = (
-                    "Historical toxic baseline is stale. "
-                    "Refresh toxic/economic validation artifacts if current toxic monitoring is required."
+                    "Current S4 trades are not classified by this legacy Toxic Box. "
+                    "Zero recent events means that current monitoring is not connected, "
+                    "not that current toxic activity equals zero."
                 )
                 payload["refresh_hint"] = (
-                    "Refresh toxic/economic validation artifacts if current toxic monitoring is required."
+                    "Future work: connect current context and trade outcome intelligence."
                 )
         return payload
 

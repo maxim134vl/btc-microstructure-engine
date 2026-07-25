@@ -49,7 +49,7 @@ export function buildOpsFallbackSnapshot(): OpsSnapshot {
       affects_health: false,
       last_run: now,
       last_run_ago: "—",
-      duration_s: null,
+      duration_s: undefined,
       mode: "inprocess",
       note: "offline fallback — UNKNOWN (not healthy)",
       ignored_by_health: true,

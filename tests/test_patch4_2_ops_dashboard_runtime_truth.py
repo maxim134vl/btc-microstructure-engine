@@ -256,7 +256,7 @@ def test_23_context_failure_degraded_or_broken():
         {"process_id": "paper_controller", "health": "RUNNING"},
     ]
     overall, _, alerts = truth.compute_overall_health(procs, {"representation": "RUNNING_NO_ELIGIBLE_TRADE"})
-    assert overall in {"DEGRADED", "BROKEN"}
+    assert overall in {"DEGRADED", "FAILED", "BROKEN"}
     assert any(a["reason_code"] == "CONTEXT_CHAIN_STALE" for a in alerts)
 
 
@@ -283,19 +283,29 @@ def test_25_deprecated_oi_non_required(snapshot):
 
 def test_26_overall_known_limitations(snapshot):
     assert snapshot["overall_health"] in {
+        "OPERATIONAL_WITH_LIMITATIONS",
         "HEALTHY_WITH_KNOWN_LIMITATIONS",
         "HEALTHY",
         "DEGRADED",
         "BROKEN",
+        "FAILED",
         "UNKNOWN",
     }
     # With live runtime up, expected production state is known-limitations.
+    required_ids = {"live_feed", "canonical_pipeline", "context_refresher"}
+    if any(p["process_id"] == "timeframe_manager" for p in snapshot["processes"]):
+        required_ids |= {"timeframe_manager", "trader_M15", "trader_M30", "trader_H1", "trader_H4"}
+    else:
+        required_ids.add("paper_controller")
     if all(
         p.get("health") == "RUNNING"
         for p in snapshot["processes"]
-        if p["process_id"] in {"live_feed", "canonical_pipeline", "context_refresher", "paper_controller"}
+        if p["process_id"] in required_ids
     ):
-        assert snapshot["overall_health"] == "HEALTHY_WITH_KNOWN_LIMITATIONS"
+        assert snapshot["overall_health"] in {
+            "OPERATIONAL_WITH_LIMITATIONS",
+            "HEALTHY_WITH_KNOWN_LIMITATIONS",
+        }
 
 
 def test_27_feed_down_broken():
@@ -306,7 +316,7 @@ def test_27_feed_down_broken():
         {"process_id": "paper_controller", "health": "RUNNING"},
     ]
     overall, _, alerts = truth.compute_overall_health(procs, {"representation": "RUNNING_NO_ELIGIBLE_TRADE"})
-    assert overall == "BROKEN"
+    assert overall == "FAILED"
     assert any(a["reason_code"] == "FEED_DOWN" for a in alerts)
 
 
@@ -318,7 +328,7 @@ def test_28_pipeline_down_broken():
         {"process_id": "paper_controller", "health": "RUNNING"},
     ]
     overall, _, _ = truth.compute_overall_health(procs, {"representation": "RUNNING_NO_ELIGIBLE_TRADE"})
-    assert overall == "BROKEN"
+    assert overall == "FAILED"
 
 
 def test_29_decision_stale_degraded_contract():
@@ -378,7 +388,7 @@ def test_31_api_schema_keys(snapshot):
 
 def test_32_frontend_handles_null_fields_contract():
     dash = (ROOT / "dashboard/frontend/src/components/ops/OpsDashboard.tsx").read_text(encoding="utf-8")
-    assert "RuntimeTruthSection" in dash
+    assert "LiveOperationalTruth" in dash or "RuntimeTruthSection" in dash
     assert "overall_health" in dash
     # Safe optional chaining / fallbacks present
     assert "??" in dash or "||" in dash or "?." in dash
@@ -468,7 +478,7 @@ def test_css_visual_baseline_untouched():
 def test_ops_monitor_wires_runtime_truth():
     ops = (ROOT / "dashboard/backend/app/services/ops_monitor.py").read_text(encoding="utf-8")
     assert "build_runtime_truth_snapshot" in ops
-    assert "ops_snapshot_v2_runtime_truth" in ops
+    assert "ops_snapshot_v2_runtime_truth" in ops or "ops_snapshot_v3_live_research_historical" in ops
     assert "pipeline_engines" in ops
 
 

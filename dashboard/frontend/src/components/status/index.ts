@@ -51,6 +51,7 @@ export {
   resolveStallCount,
   resolveRuntimeStability,
   resolveHealthDimensionStatus,
+  resolveUnknownNeutral,
 } from "./mappers";
 
 export {

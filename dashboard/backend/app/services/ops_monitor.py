@@ -60,6 +60,13 @@ ENGINE_STALE_SECONDS = 900
 RUNTIME_FAILURE_AUDIT_RELATIVE = os.path.join("reports", "runtime_failure_audit.jsonl")
 RUNTIME_SKIPPED_AUDIT_RELATIVE = os.path.join("reports", "runtime_skipped_engine_audit.jsonl")
 
+# Event-driven writers: mtime alone is not stale when last engine result is unchanged.
+EVENT_DRIVEN_UNCHANGED_PARQUETS = {
+    "probabilistic_auction_memory.parquet": "probabilistic_auction_engine_v1.py",
+}
+_CPU_SAMPLE_HISTORY: deque[float] = deque(maxlen=8)
+_CPU_SAMPLER_PRIMED = False
+
 COLLECTOR_SOURCES = {
     "binance_live_feed": LIVE_MARKET_FEED_PARQUET,
     "live_feed_legacy_mirror": LEGACY_LIVE_FEED_PARQUET,
@@ -225,14 +232,72 @@ def _no_live_ingestion(ws_alive: bool, feed: dict[str, Any] | None) -> bool:
     return False
 
 
-def _required_parquet_freshness(snap: dict[str, Any], *, ws_alive: bool) -> str:
+def _sample_cpu_usage() -> tuple[float, float]:
+    """Return (instant_pct, sustained_pct). Brief peaks do not equal sustained critical."""
+    global _CPU_SAMPLER_PRIMED
+    if not _CPU_SAMPLER_PRIMED:
+        # Discard the first non-blocking zero reading from a fresh counter.
+        psutil.cpu_percent(interval=None)
+        _CPU_SAMPLER_PRIMED = True
+    # Short blocking sample for a truthful instantaneous reading.
+    instant = float(psutil.cpu_percent(interval=0.05))
+    _CPU_SAMPLE_HISTORY.append(instant)
+    sustained = sum(_CPU_SAMPLE_HISTORY) / max(1, len(_CPU_SAMPLE_HISTORY))
+    return instant, sustained
+
+
+def _engine_last_result_map() -> dict[str, str]:
+    """Latest engine result from runtime_engine_state (best-effort, sync)."""
+    try:
+        path = resolve_read("runtime_engine_state.parquet")
+        if not os.path.exists(path):
+            return {}
+        df = _read_parquet_tail_sync(path, tail=400, columns=["engine", "status", "result", "timestamp"])
+        if df is None or getattr(df, "empty", True):
+            return {}
+        latest: dict[str, str] = {}
+        for row in df_records(df):
+            eng = str(row.get("engine") or "")
+            if not eng:
+                continue
+            latest[eng] = str(row.get("status") or row.get("result") or "").upper()
+        return latest
+    except Exception:
+        return {}
+
+
+def _event_driven_unchanged(file_name: str, engine_results: dict[str, str]) -> bool:
+    engine = EVENT_DRIVEN_UNCHANGED_PARQUETS.get(file_name)
+    if not engine:
+        return False
+    result = engine_results.get(engine, "")
+    return result in {
+        "SUCCESS",
+        "SUCCESS_NO_NEW_OUTPUT",
+        "NO_NEW_OUTPUT",
+        "EVENT_SPARSE_NO_EVENT",
+        "EVENT_SPARSE",
+        "SKIPPED",
+        "SKIPPED_BY_DESIGN",
+        "OK",
+    }
+
+
+def _required_parquet_freshness(
+    snap: dict[str, Any],
+    *,
+    ws_alive: bool,
+    engine_results: dict[str, str] | None = None,
+) -> str:
     if not snap.get("exists"):
         return "MISSING"
     age = float(snap.get("age_seconds") or 0)
     live_t = _threshold("parquet_live", PARQUET_LIVE_SECONDS)
     delayed_t = _threshold("parquet_delayed", PARQUET_DELAYED_SECONDS)
     if age <= live_t:
-        return "LIVE"
+        return "CURRENT" if snap["file"] in EVENT_DRIVEN_UNCHANGED_PARQUETS else "LIVE"
+    if _event_driven_unchanged(snap["file"], engine_results or {}):
+        return "CURRENT_UNCHANGED"
     if age <= delayed_t:
         return "DELAYED"
     return "STALE"
@@ -241,7 +306,7 @@ def _required_parquet_freshness(snap: dict[str, Any], *, ws_alive: bool) -> str:
 def _freshness_level(freshness: str, *, health_scope: bool) -> str:
     if not health_scope:
         return "GREY"
-    if freshness == "LIVE":
+    if freshness in {"LIVE", "CURRENT", "CURRENT_UNCHANGED"}:
         return "GREEN"
     if freshness == "DELAYED":
         return "YELLOW"
@@ -499,6 +564,7 @@ async def build_parquet_status(*, ws_alive: bool | None = None, registry_scope: 
     else:
         registry_names = sorted(set(PARQUET_REGISTRY.keys()) | {"runtime_engine_state.parquet"})
     snapshots = [file_snapshot(name) for name in registry_names]
+    engine_results = _engine_last_result_map()
     grouped: list[dict[str, Any]] = []
 
     for snap in snapshots:
@@ -507,7 +573,9 @@ async def build_parquet_status(*, ws_alive: bool | None = None, registry_scope: 
         ignored = component_class in ARCHIVED_CLASSES or not health_scope
 
         if health_scope:
-            freshness = _required_parquet_freshness(snap, ws_alive=ws_alive)
+            freshness = _required_parquet_freshness(
+                snap, ws_alive=ws_alive, engine_results=engine_results
+            )
         elif not snap["exists"]:
             freshness = "MISSING"
         elif snap.get("stale"):
@@ -516,6 +584,9 @@ async def build_parquet_status(*, ws_alive: bool | None = None, registry_scope: 
             freshness = "LIVE"
 
         level = _freshness_level(freshness, health_scope=health_scope)
+        note = None
+        if freshness == "CURRENT_UNCHANGED":
+            note = "State unchanged · Last valid probabilistic state remains current"
 
         grouped.append(
             {
@@ -523,11 +594,12 @@ async def build_parquet_status(*, ws_alive: bool | None = None, registry_scope: 
                 "freshness": freshness,
                 "level": level,
                 "classification": component_class,
-                "affects_health": health_scope,
-                "ignored_by_health": ignored,
+                "affects_health": health_scope and freshness not in {"CURRENT", "CURRENT_UNCHANGED", "LIVE"},
+                "ignored_by_health": ignored or freshness == "CURRENT_UNCHANGED",
                 "mtime": snap.get("mtime"),
                 "age_seconds": snap.get("age_seconds"),
                 "row_count": snap.get("row_count"),
+                "freshness_note": note,
             }
         )
 
@@ -538,7 +610,11 @@ async def build_parquet_status(*, ws_alive: bool | None = None, registry_scope: 
     req_stale = [p for p in required if p["freshness"] == "STALE"]
     req_delayed = [p for p in required if p["freshness"] == "DELAYED"]
     req_missing = [p for p in required if p["freshness"] == "MISSING"]
-    req_live = [p for p in required if p["freshness"] == "LIVE"]
+    req_live = [
+        p
+        for p in required
+        if p["freshness"] in {"LIVE", "CURRENT", "CURRENT_UNCHANGED"}
+    ]
 
     if req_missing:
         summary_level = "RED"
@@ -970,6 +1046,10 @@ def _build_health_summary(
             if tier == "DEGRADED":
                 degraded_reasons.append(f"Required parquet stale (>2h): {p['file']}")
     for p in parquet.get("delayed_files", []):
+        if p.get("freshness") in {"CURRENT", "CURRENT_UNCHANGED", "LIVE"}:
+            continue
+        if p.get("ignored_by_health"):
+            continue
         if p["file"] != "live_market_feed.parquet" or not ws_alive:
             degraded_reasons.append(f"Required parquet delayed: {p['file']}")
     if feed_stale and ws_alive:
@@ -987,9 +1067,14 @@ def _build_health_summary(
 
     mem = psutil.virtual_memory().percent
     disk = psutil.disk_usage("/").percent
-    cpu = psutil.cpu_percent(interval=0.05)
-    # CPU / memory / disk are Resources-dimension only — never roll into System/Runtime health.
-    resources = resource_health_status(cpu_pct=cpu, memory_pct=mem, disk_pct=disk)
+    cpu, sustained_cpu = _sample_cpu_usage()
+    # Soft resource warnings stay on Resources; only sustained critical may escalate later.
+    resources = resource_health_status(
+        cpu_pct=cpu,
+        memory_pct=mem,
+        disk_pct=disk,
+        sustained_cpu_pct=sustained_cpu,
+    )
 
     if critical_reasons:
         level = "CRITICAL"
@@ -1259,8 +1344,8 @@ def _compose_health_dimensions(
         or toxic.get("status")
         or "UNKNOWN"
     )
-    if "LEGACY" in toxic_status.upper():
-        toxic_status = "LEGACY_ONLY / STALE"
+    if "LEGACY" in toxic_status.upper() or "HISTORICAL" in toxic_status.upper():
+        toxic_status = "HISTORICAL_ONLY / NON_BLOCKING"
 
     research_bits: list[str] = []
     if "MISSING" in gov_status.upper():
@@ -1274,11 +1359,10 @@ def _compose_health_dimensions(
     if str(model_summary.get("promotion_eligible_label") or "NO").upper() == "NO":
         research_bits.append("promotion not eligible")
 
-    research_status = "ATTENTION" if research_bits else "OPERATIONAL"
-    if not research_bits and (
-        "STALE" in eco_status.upper() or shadow_status == "MISSING_DATA" or "LEGACY" in toxic_status.upper()
-    ):
-        research_status = "STALE" if "STALE" in eco_status.upper() else "MISSING_DATA"
+    # Research incompleteness is non-blocking for live operational health.
+    research_status = "RESEARCH_INCOMPLETE" if research_bits else "OPERATIONAL"
+    if research_bits:
+        research_status = "RESEARCH_INCOMPLETE"
 
     hist_failures = int(runtime_failure_audit.get("historical_count") or 0)
     if hist_failures == 0 and runtime_failure_audit.get("total_count"):
@@ -1307,7 +1391,11 @@ def _compose_health_dimensions(
         pipeline_status=pipe_label,
         resources=resources,
         research_status=research_status,
-        research_reason="; ".join(research_bits) if research_bits else "Research validation complete",
+        research_reason=(
+            ("INCOMPLETE — NON-BLOCKING; " + "; ".join(research_bits))
+            if research_bits
+            else "Research validation complete"
+        ),
         governance_status=gov_status,
         economic_status=eco_status,
         shadow_status=shadow_status,
@@ -1424,32 +1512,6 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         critical_alert_count=len(critical_alerts),
     )
 
-    # Top System Health: runtime only (resources never roll up).
-    system_level, display_suffix = derive_system_health_level(
-        runtime_status=health_dimensions["runtime"]["status"],
-        resources_status=health_dimensions["resources"]["status"],
-    )
-    health["level"] = system_level
-    health["display_status"] = display_suffix or (
-        "OPERATIONAL" if system_level == "HEALTHY" else system_level
-    )
-    health["health_dimensions"] = health_dimensions
-    # Keep runtime/infrastructure primary_reason — never replace with resource warnings.
-
-    # Recompute runtime ribbon after system-level finalization.
-    runtime_level = "RED" if required_failed else ("YELLOW" if health["level"] == "DEGRADED" else "GREEN")
-
-    ribbon = _ribbon(
-        runtime_level=runtime_level,
-        feed_level=feed_level,
-        pipeline_level=pipeline_level,
-        collectors_level=collectors["level"],
-        parquet_level=parquet_level,
-        alert_count=len(critical_alerts),
-        health_level="GREEN" if health["level"] == "HEALTHY" else ("YELLOW" if health["level"] == "DEGRADED" else "RED"),
-    )
-    ribbon.extend(research_pipeline.get("ribbon_extensions", []))
-
     # Patch 4.2 — canonical runtime truth (read-only). Fail-closed to UNKNOWN, never invent HEALTHY.
     runtime_truth: dict[str, Any] | None = None
     runtime_truth_warning = None
@@ -1460,31 +1522,8 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         )
 
         runtime_truth = build_runtime_truth_snapshot()
-        overall = str(runtime_truth.get("overall_health") or "UNKNOWN")
-        health["runtime_truth_overall"] = overall
-        health["runtime_truth_reason"] = runtime_truth.get("overall_reason")
-        # Preserve existing health.level for required-engine CRITICAL paths, but surface
-        # known-limitations overall as non-broken when runtime truth is healthy-with-limits.
-        if overall == "HEALTHY_WITH_KNOWN_LIMITATIONS" and health.get("level") != "CRITICAL":
-            health["display_status"] = "HEALTHY_WITH_KNOWN_LIMITATIONS"
-            health["level"] = "HEALTHY"
-            # Re-color system ribbon from runtime truth (known limitations are not RED).
-            for item in ribbon:
-                if item.get("key") in {"system_health", "health", "runtime"}:
-                    item["level"] = overall_health_to_ops_level(overall)
-                    if item.get("key") == "system_health":
-                        item["value"] = "LIMITATIONS"
-        elif overall == "BROKEN":
-            health["level"] = "CRITICAL"
-            health["display_status"] = "BROKEN"
-        elif overall == "DEGRADED" and health.get("level") != "CRITICAL":
-            health["level"] = "DEGRADED"
-            health["display_status"] = "DEGRADED"
-        elif overall == "UNKNOWN" and health.get("level") == "HEALTHY":
-            # Never promote unknown critical truth to healthy.
-            health["level"] = "DEGRADED"
-            health["display_status"] = "UNKNOWN"
     except Exception as exc:  # noqa: BLE001
+        overall_health_to_ops_level = lambda overall: "GREY"  # noqa: E731
         runtime_truth_warning = f"runtime_truth_unavailable: {type(exc).__name__}: {exc}"
         runtime_truth = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1504,13 +1543,117 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
             "error": runtime_truth_warning,
         }
 
+    overall = str((runtime_truth or {}).get("overall_health") or "UNKNOWN")
+    known_limits = bool((runtime_truth or {}).get("known_limitations"))
+    resources_dim = health_dimensions.get("resources") or {}
+    sustained_critical = bool(resources_dim.get("sustained_critical"))
+
+    # Top System Health: live runtime + known limitations; soft resources never roll up.
+    system_level, display_suffix = derive_system_health_level(
+        runtime_status=health_dimensions["runtime"]["status"],
+        resources_status=resources_dim.get("status") or "OPERATIONAL",
+        known_limitations=known_limits
+        or overall
+        in {"HEALTHY_WITH_KNOWN_LIMITATIONS", "OPERATIONAL_WITH_LIMITATIONS"},
+        sustained_resource_critical=sustained_critical,
+    )
+    health["level"] = system_level
+    health["display_status"] = display_suffix or (
+        "OPERATIONAL" if system_level == "HEALTHY" else system_level
+    )
+    health["health_dimensions"] = health_dimensions
+    health["runtime_truth_overall"] = overall
+    health["runtime_truth_reason"] = (runtime_truth or {}).get("overall_reason")
+
+    if overall in {"HEALTHY_WITH_KNOWN_LIMITATIONS", "OPERATIONAL_WITH_LIMITATIONS"} and health.get(
+        "level"
+    ) != "CRITICAL":
+        health["display_status"] = "OPERATIONAL_WITH_LIMITATIONS"
+        health["level"] = "HEALTHY"
+    elif overall == "BROKEN":
+        health["level"] = "CRITICAL"
+        health["display_status"] = "FAILED"
+    elif overall == "DEGRADED" and health.get("level") != "CRITICAL":
+        health["level"] = "DEGRADED"
+        health["display_status"] = "DEGRADED"
+    elif overall == "UNKNOWN" and health.get("level") == "HEALTHY":
+        health["level"] = "DEGRADED"
+        health["display_status"] = "UNKNOWN"
+
+    # Recompute runtime ribbon after system-level finalization.
+    runtime_level = "RED" if required_failed else ("YELLOW" if health["level"] == "DEGRADED" else "GREEN")
+
+    ribbon = _ribbon(
+        runtime_level=runtime_level,
+        feed_level=feed_level,
+        pipeline_level=pipeline_level,
+        collectors_level=collectors["level"],
+        parquet_level=parquet_level,
+        alert_count=len(critical_alerts),
+        health_level="GREEN" if health["level"] == "HEALTHY" else ("YELLOW" if health["level"] == "DEGRADED" else "RED"),
+    )
+    ribbon.extend(research_pipeline.get("ribbon_extensions", []))
+    if health.get("display_status") == "OPERATIONAL_WITH_LIMITATIONS":
+        for item in ribbon:
+            if item.get("key") in {"system_health", "health", "runtime"}:
+                item["level"] = overall_health_to_ops_level(
+                    "HEALTHY_WITH_KNOWN_LIMITATIONS"
+                )
+                if item.get("key") == "system_health":
+                    item["value"] = "LIMITATIONS"
+
     warnings = [stability_warning] if stability_warning else []
     if runtime_truth_warning:
         warnings.append(runtime_truth_warning)
 
+    runtime_status = str(health_dimensions.get("runtime", {}).get("status") or "OPERATIONAL").upper()
+    current_stalls = int(pipeline.get("current_stalls_timeouts") or 0)
+    resource_display = str(resources_dim.get("display_status") or "NORMAL").upper()
+    if runtime_status in {"DEGRADED", "CRITICAL", "FAILED"} or current_stalls > 0:
+        runtime_stability = "DEGRADED"
+    elif resource_display == "WARNING" or health.get("display_status") == "OPERATIONAL_WITH_LIMITATIONS":
+        runtime_stability = "STABLE_WITH_WARNINGS"
+    else:
+        runtime_stability = "STABLE"
+    health_dimensions["runtime_stability"] = {
+        "status": runtime_stability,
+        "reason": (
+            "Live runtime nominal with resource or known-limitation warnings"
+            if runtime_stability == "STABLE_WITH_WARNINGS"
+            else "Live runtime nominal"
+            if runtime_stability == "STABLE"
+            else "Active live runtime pressure"
+        ),
+    }
+    health["runtime_stability"] = runtime_stability
+
+    overall_out = health.get("display_status") or overall
+    if overall_out == "HEALTHY_WITH_KNOWN_LIMITATIONS":
+        overall_out = "OPERATIONAL_WITH_LIMITATIONS"
+    elif overall in {"HEALTHY_WITH_KNOWN_LIMITATIONS", "OPERATIONAL_WITH_LIMITATIONS"}:
+        overall_out = "OPERATIONAL_WITH_LIMITATIONS"
+    elif overall == "BROKEN":
+        overall_out = "FAILED"
+    elif overall in {"HEALTHY", "OPERATIONAL"} and health.get("display_status") == "OPERATIONAL":
+        overall_out = "OPERATIONAL"
+
+    status_planes = {
+        "live_operational_health": {
+            "system_health": health.get("display_status"),
+            "runtime_status": runtime_status,
+            "runtime_stability": runtime_stability,
+            "active_failures": health_dimensions.get("runtime", {}).get("current_failures_count", 0),
+            "current_stalls": current_stalls,
+            "open_actionable_alerts": len(alert_groups.get("actionable") or []),
+        },
+        "known_limitations": (runtime_truth or {}).get("known_limitations") or [],
+        "research_validation": health_dimensions.get("research_validation") or {},
+        "historical_audit": health_dimensions.get("historical_audit") or {},
+    }
+
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "schema_version": "ops_snapshot_v2_runtime_truth",
+        "schema_version": "ops_snapshot_v3_live_research_historical",
         "ribbon": ribbon,
         "research_pipeline": research_pipeline,
         "mtf_cognition_health": mtf_cognition_health,
@@ -1524,6 +1667,8 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         "stability": stability,
         "health": health,
         "health_dimensions": health_dimensions,
+        "status_planes": status_planes,
+        "runtime_stability": runtime_stability,
         "alerts": alert_groups["all"],
         "alert_groups": alert_groups,
         "warnings": warnings,
@@ -1535,8 +1680,8 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
             "deferred_engine_count": health.get("deferred_engine_count", 0),
         },
         "snapshot_mode": "lite" if lite else "full",
-        # Canonical truth plane (Patch 4.2)
-        "overall_health": (runtime_truth or {}).get("overall_health"),
+        # Canonical truth plane (Patch 4.2 / final cleanup)
+        "overall_health": overall_out,
         "overall_reason": (runtime_truth or {}).get("overall_reason"),
         "runtime_truth": runtime_truth,
         "processes": (runtime_truth or {}).get("processes") or [],

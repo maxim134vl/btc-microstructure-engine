@@ -206,15 +206,50 @@ def governance_age_days(iso_timestamp: str | None) -> int | None:
 
 
 def _parse_event_epoch(value: Any) -> float | None:
+    """Parse event timestamps to UTC epoch.
+
+    Naive values that land >30s in the future when assumed UTC are reinterpreted
+    as local wall-clock (writers often omit timezone).
+    """
     if value is None:
         return None
     try:
-        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        raw = str(value).replace("Z", "+00:00")
+        ts = datetime.fromisoformat(raw)
+        now_ts = datetime.now(timezone.utc).timestamp()
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            as_utc = ts.replace(tzinfo=timezone.utc).timestamp()
+            if as_utc - now_ts > 30:
+                local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+                return ts.replace(tzinfo=local_tz).astimezone(timezone.utc).timestamp()
+            return as_utc
         return ts.astimezone(timezone.utc).timestamp()
     except (TypeError, ValueError):
         return None
+
+
+def _stall_superseded_by_completion(
+    event: dict[str, Any],
+    chain_events: list[dict[str, Any]],
+) -> bool:
+    """TIMEOUT/STALL is not current if the same engine later COMPLETED."""
+    engine = event.get("engine")
+    if not engine:
+        return False
+    stall_epoch = _parse_event_epoch(event.get("timestamp"))
+    if stall_epoch is None:
+        return False
+    for row in chain_events:
+        if not isinstance(row, dict):
+            continue
+        if row.get("engine") != engine:
+            continue
+        if row.get("event") not in {"COMPLETED", "SUCCESS", "OK"}:
+            continue
+        done_epoch = _parse_event_epoch(row.get("timestamp"))
+        if done_epoch is not None and done_epoch > stall_epoch:
+            return True
+    return False
 
 
 def classify_blocking_stalls(
@@ -226,19 +261,24 @@ def classify_blocking_stalls(
 ) -> dict[str, Any]:
     """Split TIMEOUT/STALL_DETECTED into current vs historical."""
     now_ts = now if now is not None else datetime.now(timezone.utc).timestamp()
+    window = chain_events[-lookback:] if lookback else chain_events
     events = [
         e
-        for e in (chain_events[-lookback:] if lookback else chain_events)
+        for e in window
         if isinstance(e, dict) and e.get("event") in ("TIMEOUT", "STALL_DETECTED")
     ]
     current: list[dict[str, Any]] = []
     historical: list[dict[str, Any]] = []
     for event in events:
+        if _stall_superseded_by_completion(event, window):
+            historical.append(event)
+            continue
         age = None
         epoch = _parse_event_epoch(event.get("timestamp"))
         if epoch is not None:
             age = now_ts - epoch
-        if age is not None and age <= window_s:
+        # Negative age (residual clock skew) is not an active stall.
+        if age is not None and 0 <= age <= window_s:
             current.append(event)
         else:
             historical.append(event)
@@ -272,29 +312,46 @@ def resource_health_status(
     cpu_pct: float,
     memory_pct: float,
     disk_pct: float,
+    sustained_cpu_pct: float | None = None,
 ) -> dict[str, Any]:
-    """Resource card status — separate from runtime infrastructure health."""
-    reasons: list[str] = []
-    status = "OPERATIONAL"
-    if memory_pct > 95 or disk_pct > 95 or cpu_pct > 95:
-        status = "CRITICAL"
-    elif memory_pct >= 75 or disk_pct >= 90 or cpu_pct >= 90:
-        status = "DEGRADED"
+    """Resource card status — separate from runtime infrastructure health.
 
-    if memory_pct >= 75:
+    Thresholds (instantaneous display; sustained CPU used for pressure flags):
+      NORMAL    cpu < 70, memory < 70, disk < 85
+      WARNING   cpu 70–85, memory 70–95, disk 85–95
+      CRITICAL  cpu > 85, memory > 95, disk > 95
+    """
+    cpu_for_status = float(sustained_cpu_pct if sustained_cpu_pct is not None else cpu_pct)
+    reasons: list[str] = []
+    # Keep OPERATIONAL/DEGRADED/CRITICAL for existing consumers; add display_status.
+    status = "OPERATIONAL"
+    display = "NORMAL"
+    if memory_pct > 95 or disk_pct > 95 or cpu_for_status > 85:
+        status = "CRITICAL"
+        display = "CRITICAL"
+    elif memory_pct >= 70 or disk_pct >= 85 or cpu_for_status >= 70:
+        status = "DEGRADED"  # resource WARNING — not a runtime failure
+        display = "WARNING"
+
+    if memory_pct >= 70:
         reasons.append(f"Resource warning: memory {memory_pct:.0f}%")
-    if disk_pct >= 90:
+    if disk_pct >= 85:
         reasons.append(f"Resource warning: disk {disk_pct:.0f}%")
-    if cpu_pct >= 90:
-        reasons.append(f"Resource warning: cpu {cpu_pct:.0f}%")
+    if cpu_for_status >= 70:
+        reasons.append(f"Resource warning: cpu {cpu_for_status:.0f}%")
+    elif float(cpu_pct) >= 70 and (sustained_cpu_pct is not None and sustained_cpu_pct < 70):
+        reasons.append(f"Brief cpu peak {float(cpu_pct):.0f}% (not sustained)")
 
     return {
         "status": status,
+        "display_status": display,
         "cpu_pct": round(float(cpu_pct), 1),
+        "sustained_cpu_pct": round(float(cpu_for_status), 1),
         "memory_pct": round(float(memory_pct), 1),
         "disk_pct": round(float(disk_pct), 1),
         "reason": reasons[0] if reasons else "Resources nominal",
         "reasons": reasons,
+        "sustained_critical": display == "CRITICAL" and cpu_for_status > 85,
     }
 
 
@@ -358,17 +415,21 @@ def derive_system_health_level(
     *,
     runtime_status: str,
     resources_status: str = "OPERATIONAL",
+    known_limitations: bool = False,
+    sustained_resource_critical: bool = False,
 ) -> tuple[str, str | None]:
-    """Top System Health from runtime only.
+    """Top System Health from live runtime (+ sustained critical resource pressure).
 
-    CPU / memory / disk stay on the Resources dimension and never roll up into
-    System Health, Runtime Health, research, or validation status.
-    ``resources_status`` is accepted for call-site compatibility and ignored.
+    Soft resource warnings (memory WARNING, brief CPU peaks) do not roll up.
+    Known limitations yield OPERATIONAL_WITH_LIMITATIONS when live runtime is healthy.
     """
-    _ = resources_status  # intentionally unused — resources are display-only
     rt = runtime_status.upper()
-    if rt == "CRITICAL":
-        return "CRITICAL", None
-    if rt == "DEGRADED":
-        return "DEGRADED", None
-    return "HEALTHY", None
+    if rt in {"CRITICAL", "FAILED"}:
+        return "FAILED", "FAILED"
+    if rt == "DEGRADED" or sustained_resource_critical:
+        return "DEGRADED", "DEGRADED"
+    if known_limitations or rt in {"OPERATIONAL_WITH_LIMITATIONS", "HEALTHY_WITH_KNOWN_LIMITATIONS"}:
+        return "HEALTHY", "OPERATIONAL_WITH_LIMITATIONS"
+    if resources_status.upper() == "CRITICAL" and sustained_resource_critical:
+        return "DEGRADED", "DEGRADED"
+    return "HEALTHY", "OPERATIONAL"

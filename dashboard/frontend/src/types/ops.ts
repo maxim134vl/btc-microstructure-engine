@@ -16,6 +16,8 @@ export interface OpsSnapshot {
   stability?: StabilitySummary;
   health: HealthSummary;
   health_dimensions?: HealthDimensions;
+  runtime_stability?: string;
+  status_planes?: Record<string, unknown>;
   alerts: OpsAlert[];
   alert_groups?: AlertGroups;
   manifest?: ManifestSummary;
@@ -23,7 +25,7 @@ export interface OpsSnapshot {
   research_pipeline?: ResearchPipelineSnapshot;
   runtime_failure_audit?: RuntimeFailureAuditSummary;
   runtime_skipped_engine_audit?: RuntimeSkippedEngineAuditSummary;
-  /** Patch 4.2 canonical runtime truth plane */
+  /** Patch 4.2 / final cleanup canonical runtime truth plane */
   overall_health?: string;
   overall_reason?: string;
   runtime_truth?: RuntimeTruthSnapshot;
@@ -46,6 +48,7 @@ export interface RuntimeTruthProcess {
   health_reason?: string;
   process_state?: string;
   command?: string | null;
+  required?: boolean;
 }
 
 export interface RuntimeTruthEngine {
@@ -69,6 +72,9 @@ export interface RuntimeTruthTimeframe {
   support?: string;
   availability_status?: string;
   availability_reason?: string | null;
+  display_status?: string | null;
+  requirement?: string | null;
+  detail?: string | null;
   state_asof?: string | null;
   source_bar_close?: string | null;
   is_new_event?: boolean | null;
@@ -87,6 +93,9 @@ export interface RuntimeTruthContextChain {
 export interface RuntimeTruthPaper {
   process_health?: string;
   representation?: string;
+  display_status?: string;
+  requirement?: string;
+  detail?: string;
   is_controller_failure?: boolean;
   health?: string;
   health_reason?: string;
@@ -100,6 +109,8 @@ export interface RuntimeTruthLimitation {
   id?: string;
   detail?: string;
   classification?: string;
+  display_status?: string;
+  requirement?: string;
 }
 
 export interface RuntimeTruthTrader {
@@ -112,7 +123,12 @@ export interface RuntimeTruthTrader {
   realized_pnl_usd?: number | null;
   unrealized_pnl_usd?: number | null;
   closed_trades?: number | null;
+  trade_count?: number | null;
   last_command_intent?: string | null;
+  last_command_timestamp?: string | null;
+  last_reason?: string | null;
+  manager_command_id?: string | null;
+  process_health?: string;
   health?: string;
   health_reason?: string;
 }
@@ -146,6 +162,7 @@ export interface RuntimeTruthTimeframeTraders {
 export interface RuntimeTruthLegacy {
   component_id?: string;
   classification?: string;
+  display_status?: string;
   active?: boolean;
   reason?: string;
 }
@@ -363,7 +380,7 @@ export interface PipelineSummary {
 }
 
 export interface HealthSummary {
-  level: "HEALTHY" | "DEGRADED" | "CRITICAL";
+  level: "HEALTHY" | "DEGRADED" | "CRITICAL" | "UNKNOWN" | "FAILED";
   primary_reason: string;
   reasons: string[];
   critical_reasons?: string[];
