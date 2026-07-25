@@ -136,6 +136,171 @@ def test_bar_event_and_location_helpers():
     assert mod.classify_auction_location(location_bias="LOWER_ABSORPTION") == "LOWER_AREA"
 
 
+def test_resolve_expected_follow_through_direction_explicit_wins():
+    assert (
+        mod.resolve_expected_follow_through_direction(
+            auction_episode="ACCEPTANCE_LOWER",
+            bar_event="BUYING_CLIMAX",
+            effort_side="UNKNOWN",
+        )
+        == "HIGHER"
+    )
+    assert (
+        mod.resolve_expected_follow_through_direction(
+            auction_episode="ACCEPTANCE_HIGHER",
+            bar_event="UNKNOWN",
+            effort_side="SELLER",
+        )
+        == "LOWER"
+    )
+
+
+def test_resolve_expected_follow_through_direction_acceptance_fallback():
+    assert (
+        mod.resolve_expected_follow_through_direction(
+            auction_episode="ACCEPTANCE_HIGHER",
+            bar_event="UNKNOWN",
+            effort_side="UNKNOWN",
+        )
+        == "HIGHER"
+    )
+    assert (
+        mod.resolve_expected_follow_through_direction(
+            auction_episode="ACCEPTANCE_LOWER",
+            bar_event="UNKNOWN",
+            effort_side="UNKNOWN",
+        )
+        == "LOWER"
+    )
+    assert (
+        mod.resolve_expected_follow_through_direction(
+            auction_episode="BALANCE",
+            bar_event="UNKNOWN",
+            effort_side="UNKNOWN",
+        )
+        is None
+    )
+
+
+def test_acceptance_higher_unknown_side_with_higher_follow_through_confirms():
+    # base=100, future peaks at +0.3% and ends +0.2% → YES for HIGHER thresholds
+    closes = [100.0, 100.15, 100.25, 100.28, 100.20]
+    ft = mod.classify_follow_through(
+        closes=closes,
+        index=0,
+        effort_side="UNKNOWN",
+        bar_event="UNKNOWN",
+        auction_episode="ACCEPTANCE_HIGHER",
+    )
+    assert ft == "YES"
+    status = mod.classify_episode_status(
+        auction_episode="ACCEPTANCE_HIGHER",
+        follow_through=ft,
+        effort_result="ACCEPTED",
+    )
+    assert status == "CONFIRMED"
+
+
+def test_acceptance_lower_unknown_side_with_lower_follow_through_confirms():
+    closes = [100.0, 99.85, 99.75, 99.70, 99.80]
+    ft = mod.classify_follow_through(
+        closes=closes,
+        index=0,
+        effort_side="UNKNOWN",
+        bar_event="UNKNOWN",
+        auction_episode="ACCEPTANCE_LOWER",
+    )
+    assert ft == "YES"
+    status = mod.classify_episode_status(
+        auction_episode="ACCEPTANCE_LOWER",
+        follow_through=ft,
+        effort_result="ACCEPTED",
+    )
+    assert status == "CONFIRMED"
+
+
+def test_acceptance_higher_unknown_side_without_follow_through_stays_developing():
+    # Flat / insufficient continuation → NO or WEAK, never CONFIRMED
+    closes = [100.0, 100.02, 100.01, 100.0, 100.01]
+    ft = mod.classify_follow_through(
+        closes=closes,
+        index=0,
+        effort_side="UNKNOWN",
+        bar_event="UNKNOWN",
+        auction_episode="ACCEPTANCE_HIGHER",
+    )
+    assert ft in {"NO", "WEAK", "FAILED"}
+    status = mod.classify_episode_status(
+        auction_episode="ACCEPTANCE_HIGHER",
+        follow_through=ft,
+        effort_result="ACCEPTED",
+    )
+    assert status == "DEVELOPING"
+
+
+def test_acceptance_lower_unknown_side_without_follow_through_stays_developing():
+    closes = [100.0, 99.99, 100.0, 100.01, 100.0]
+    ft = mod.classify_follow_through(
+        closes=closes,
+        index=0,
+        effort_side="UNKNOWN",
+        bar_event="UNKNOWN",
+        auction_episode="ACCEPTANCE_LOWER",
+    )
+    assert ft in {"NO", "WEAK", "FAILED", "UNKNOWN"}
+    status = mod.classify_episode_status(
+        auction_episode="ACCEPTANCE_LOWER",
+        follow_through=ft,
+        effort_result="ACCEPTED",
+    )
+    assert status == "DEVELOPING"
+
+
+def test_balance_unknown_fields_not_confirmed_by_follow_through():
+    closes = [100.0, 100.3, 100.5, 100.6, 100.7]  # strong up move
+    assert (
+        mod.resolve_expected_follow_through_direction(
+            auction_episode="BALANCE", bar_event="UNKNOWN", effort_side="UNKNOWN"
+        )
+        is None
+    )
+    ft = mod.classify_follow_through(
+        closes=closes,
+        index=0,
+        effort_side="UNKNOWN",
+        bar_event="UNKNOWN",
+        auction_episode="BALANCE",
+    )
+    # Without directional expectation, BALANCE must not adopt ACCEPTANCE YES path.
+    # Large move with no side still returns UNKNOWN (not forced YES).
+    assert ft == "UNKNOWN"
+    status = mod.classify_episode_status(
+        auction_episode="BALANCE",
+        follow_through=ft,
+        effort_result="ABSORBED",
+    )
+    assert status == "DEVELOPING"
+
+
+def test_explicit_buyer_side_behavior_unchanged_without_episode():
+    closes = [100.0, 100.15, 100.25, 100.28, 100.20]
+    ft_explicit = mod.classify_follow_through(
+        closes=closes,
+        index=0,
+        effort_side="BUYER",
+        bar_event="UNKNOWN",
+    )
+    ft_with_episode = mod.classify_follow_through(
+        closes=closes,
+        index=0,
+        effort_side="BUYER",
+        bar_event="UNKNOWN",
+        auction_episode="ACCEPTANCE_LOWER",  # must not override BUYER → HIGHER
+    )
+    assert ft_explicit == "YES"
+    assert ft_with_episode == "YES"
+
+
 def test_atomic_write_unique_tmp(tmp_path: Path):
     frame = pd.DataFrame(
         {

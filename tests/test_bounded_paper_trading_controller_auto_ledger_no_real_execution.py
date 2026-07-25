@@ -129,6 +129,25 @@ def test_03_bounded_loop_defaults():
 
 
 def test_04_long_short_stop_take_context_and_stop_first():
+    # Canonical default: HOLD_UNTIL_DIRECTIONAL_CONTEXT_END suppresses stop/take.
+    long_hold = mod.evaluate_exit_preview(
+        side="LONG",
+        entry_price=100.0,
+        quantity=1.0,
+        stop_loss_price=99.0,
+        take_profit_price=101.5,
+        entry_fee_usd=0.1,
+        current_price=100.5,
+        latest_high=101.6,
+        latest_low=98.5,
+        latest_context="LONG_CONTEXT",
+        latest_lifecycle_state="ACTIVE",
+    )
+    assert long_hold["same_bar_stop_take_hit"] is True
+    assert long_hold["exit_preview_action"] == "PREVIEW_HOLD_LONG"
+    assert "HOLD_UNTIL_DIRECTIONAL_CONTEXT_END" in long_hold["exit_preview_reason"]
+
+    # Explicit hold_mode=OFF restores stop-first / take / context exit canon.
     long_stop = mod.evaluate_exit_preview(
         side="LONG",
         entry_price=100.0,
@@ -141,6 +160,7 @@ def test_04_long_short_stop_take_context_and_stop_first():
         latest_low=98.5,
         latest_context="LONG_CONTEXT",
         latest_lifecycle_state="ACTIVE",
+        hold_mode="OFF",
     )
     assert long_stop["same_bar_stop_take_hit"] is True
     assert long_stop["exit_preview_action"] == "PREVIEW_CLOSE_LONG_STOP_LOSS"
@@ -158,6 +178,7 @@ def test_04_long_short_stop_take_context_and_stop_first():
         latest_low=100.2,
         latest_context="LONG_CONTEXT",
         latest_lifecycle_state="ACTIVE",
+        hold_mode="OFF",
     )
     assert long_take["exit_preview_action"] == "PREVIEW_CLOSE_LONG_TAKE_PROFIT"
 
@@ -188,6 +209,7 @@ def test_04_long_short_stop_take_context_and_stop_first():
         latest_low=98.0,
         latest_context="SHORT_CONTEXT",
         latest_lifecycle_state="ACTIVE",
+        hold_mode="OFF",
     )
     assert short_stop["same_bar_stop_take_hit"] is True
     assert short_stop["exit_preview_action"] == "PREVIEW_CLOSE_SHORT_STOP_LOSS"
@@ -204,6 +226,7 @@ def test_04_long_short_stop_take_context_and_stop_first():
         latest_low=98.0,
         latest_context="SHORT_CONTEXT",
         latest_lifecycle_state="CHALLENGED",
+        hold_mode="OFF",
     )
     assert short_take["exit_preview_action"] == "PREVIEW_CLOSE_SHORT_TAKE_PROFIT"
 
@@ -322,11 +345,29 @@ def test_07_one_cycle_writes_pid_status_dataset(tmp_path: Path):
 
 
 def test_08_flat_entry_gate_and_synthetic_price_forbidden():
+    # Incomplete fixture must fail-closed (missing episode identity).
+    incomplete = mod.evaluate_flat_entry_gate(
+        {
+            "decision_stale": False,
+            "active_market_context": "LONG_CONTEXT",
+            "lifecycle_state": "CHALLENGED",
+            "expected_edge_bps": 4.5,
+            "confidence": 0.6,
+        }
+    )
+    assert incomplete["allowed"] is False
+    assert any("EPISODE" in r or "CONTEXT_START" in r for r in incomplete["block_reasons"])
+
+    # Canonical allow path: episode key + fresh start from prior non-directional.
     ok = mod.evaluate_flat_entry_gate(
         {
             "decision_stale": False,
             "active_market_context": "LONG_CONTEXT",
             "lifecycle_state": "CHALLENGED",
+            "lifecycle_episode_id": "ep_test_long_1",
+            "context_episode_key": "ep_test_long_1|LONG_CONTEXT",
+            "previous_active_market_context": "OBSERVE",
+            "candle_timestamp": "2026-07-21T09:15:00Z",
             "expected_edge_bps": 4.5,
             "confidence": 0.6,
         }
@@ -338,6 +379,10 @@ def test_08_flat_entry_gate_and_synthetic_price_forbidden():
             "decision_stale": True,
             "active_market_context": "LONG_CONTEXT",
             "lifecycle_state": "CHALLENGED",
+            "lifecycle_episode_id": "ep_test_long_1",
+            "context_episode_key": "ep_test_long_1|LONG_CONTEXT",
+            "previous_active_market_context": "OBSERVE",
+            "candle_timestamp": "2026-07-21T09:15:00Z",
             "expected_edge_bps": 4.5,
             "confidence": 0.6,
         }
@@ -346,3 +391,4 @@ def test_08_flat_entry_gate_and_synthetic_price_forbidden():
     stop, take = mod.compute_stop_take("LONG", 65913.0)
     assert abs(stop - 65253.87) < 0.05
     assert abs(take - 66901.695) < 0.05
+    assert abs(mod.SYNTHETIC_FORBIDDEN_PRICE - 100000.0) < 1e-9

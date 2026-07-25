@@ -71,7 +71,9 @@ def test_panels_and_overlay_load_preserved():
     assert "paperTradeResultPanel" in html
     assert "paperPnlPanel" in html
     assert "Paper trade result" in html
-    assert "Paper PnL" in html
+    assert "Detailed PnL" in html
+    assert "Trading Model Evaluation Metrics" in html
+    assert "modelMetricsPanel" in html
     assert "Controller actions" in html
     assert "paper_trade_overlays.json" in js
     assert "trade_result_summary.json" in js
@@ -79,7 +81,12 @@ def test_panels_and_overlay_load_preserved():
     assert "cacheBust" in js
     assert 'cache: "no-store"' in js
     assert "tradeShapes" in js
-    assert "chart geometry only" in js.lower() or "no trade parameter text" in js.lower()
+    js_l = js.lower()
+    assert (
+        "chart geometry only" in js_l
+        or "chart geometry remains visual-only" in js_l
+        or "no trade parameter text" in js_l
+    )
 
 
 def test_no_forbidden_writes_and_no_synthetic_trade_price(tmp_path=None):
