@@ -55,7 +55,7 @@ After invalidation the system stays in OBSERVE until a confirmed directional con
 
 ### Auction neutralization confluence
 
-For active SHORT or LONG, invalidate only when **all** are true:
+A neutralization confluence bar for an active SHORT or LONG requires **all** of:
 
 - `raw_market_context == OBSERVE`
 - `raw_context_status == OBSERVE`
@@ -63,13 +63,40 @@ For active SHORT or LONG, invalidate only when **all** are true:
 - `raw_state_direction == NEUTRAL`
 - `auction_episode == BALANCE`
 
-No TTL. No N-bar rule. No `active_context_age_bars` rule. No `challenge_ratio` rule. No price rewrite.
+### Termination persistence protection
+
+A single neutralization confluence bar must **not** kill a confirmed active context.
+Two conservative persistence rules protect directional episodes (shadow-only; no execution):
+
+- `NEUTRALIZATION_CONFIRM_BARS = 2` — a confirmed context is invalidated only after
+  this many **consecutive** neutralization confluence bars. The first confluence bar
+  sets `lifecycle_state = CHALLENGED` while keeping the existing LONG/SHORT active.
+- `MIN_ACTIVE_CONTEXT_HOLD_BARS = 3` — a fresh context whose
+  `active_context_age_bars < MIN_ACTIVE_CONTEXT_HOLD_BARS` is never invalidated by
+  auction neutralization **or** by a source `INVALIDATED` row. It is held as
+  `CHALLENGED` with the active context unchanged until the minimum hold is met.
+
+Both constants live next to the lifecycle parameters in
+`scripts/research/build_market_context_lifecycle_memory.py`.
+
+Exempt from persistence protection:
+
+- **Opposite CONFIRMED replacement** — if `raw_market_context` is the opposite
+  LONG/SHORT with `raw_context_status == ACTIVE`, the active context is replaced
+  **immediately** via `OPPOSITE_CONTEXT_REPLACEMENT`, even before the minimum hold.
+
+`invalidation_type` describes the exact event row only. It is **not** carried forward
+onto later `NO_ACTIVE_CONTEXT` / `CANDIDATE` rows.
+
+This is a persistence/debounce rule only. No `challenge_ratio` rule. No price rewrite.
 
 ## Why no manual TTL
 
-No “N bars then expire”.
+No “N bars then expire” (there is no expiry — an undisturbed active context lives on).
 No rolling-window smoothing.
 No rewriting history from later price.
+The only N-bar element is the neutralization/hold **persistence** debounce above,
+which delays termination; it never forces one.
 
 Episode ends when:
 
