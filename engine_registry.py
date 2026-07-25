@@ -14,6 +14,8 @@ import intermediate_cognition_engine_v1
 
 import state_transition_engine_v1
 
+import mtf_availability_runtime_engine_v1
+
 ENGINES = {
 
     "auction_convergence_engine_v1.py":
@@ -39,5 +41,8 @@ ENGINES = {
 
     "state_transition_engine_v1.py":
         state_transition_engine_v1.run,
+
+    "mtf_availability_runtime_engine_v1.py":
+        mtf_availability_runtime_engine_v1.run,
 
 }

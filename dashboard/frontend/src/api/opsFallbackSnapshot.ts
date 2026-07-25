@@ -1,5 +1,6 @@
 import type { OpsSnapshot } from "../types/ops";
 
+/** Patch 4.2 — fallback mirrors canonical runtime inventory (20). Never invent healthy phantoms. */
 const ENGINE_NAMES = [
   "candle_structure_engine_v1.py",
   "volume_classification_engine_v1.py",
@@ -20,6 +21,7 @@ const ENGINE_NAMES = [
   "auction_decay_engine_v1.py",
   "state_transition_engine_v1.py",
   "adaptive_meta_cognition_engine_v1.py",
+  "mtf_availability_runtime_engine_v1.py",
 ] as const;
 
 /** Static Operations snapshot so Platform UI renders without live :8080 API. */
@@ -29,27 +31,28 @@ export function buildOpsFallbackSnapshot(): OpsSnapshot {
   return {
     generated_at: now,
     ribbon: [
-      { key: "system_health", label: "System Health", level: "GREEN", value: "HEALTHY" },
-      { key: "pipeline", label: "Pipeline", level: "GREEN", value: "RUNNING" },
-      { key: "validation", label: "Validation", level: "YELLOW", value: "REVIEW" },
-      { key: "trading_state", label: "Trading State", level: "GREEN", value: "OBSERVE" },
-      { key: "shadow_model", label: "Shadow Model", level: "GREEN", value: "ACTIVE" },
-      { key: "governance", label: "Governance", level: "GREEN", value: "STABLE" },
-      { key: "drift", label: "Drift Monitoring", level: "GREEN", value: "STABLE" },
-      { key: "toxic_box", label: "Toxic Box", level: "GREEN", value: "QUIET" },
-      { key: "live_feed", label: "Live Feed", level: "GREY", value: "OPTIONAL / OFFLINE" },
+      { key: "system_health", label: "System Health", level: "GREY", value: "UNKNOWN" },
+      { key: "pipeline", label: "Pipeline", level: "GREY", value: "OFFLINE" },
+      { key: "validation", label: "Validation", level: "GREY", value: "UNKNOWN" },
+      { key: "trading_state", label: "Trading State", level: "GREY", value: "UNKNOWN" },
+      { key: "shadow_model", label: "Shadow Model", level: "GREY", value: "LEGACY" },
+      { key: "governance", label: "Governance", level: "GREY", value: "UNKNOWN" },
+      { key: "drift", label: "Drift Monitoring", level: "GREY", value: "UNKNOWN" },
+      { key: "toxic_box", label: "Toxic Box", level: "GREY", value: "UNKNOWN" },
+      { key: "live_feed", label: "Live Feed", level: "GREY", value: "API OFFLINE" },
     ],
     engines: ENGINE_NAMES.map((engine) => ({
       engine,
       short_name: engine.replace(/_engine_v1\.py$|_v1\.py$/, ""),
-      status: "HEALTHY",
+      status: "DEFERRED",
       classification: "REQUIRED",
-      affects_health: true,
+      affects_health: false,
       last_run: now,
       last_run_ago: "—",
-      duration_s: 0.2,
+      duration_s: null,
       mode: "inprocess",
-      note: "fallback snapshot",
+      note: "offline fallback — UNKNOWN (not healthy)",
+      ignored_by_health: true,
     })),
     parquet: {
       summary_level: "GREEN",

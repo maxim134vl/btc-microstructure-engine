@@ -197,6 +197,22 @@ def safe_append_candle(candle):
             rows_after=len(df),
             output_path=output_path,
         )
+        # Patch 1: metadata sidecar only (activates after feed process restart).
+        try:
+            from pathlib import Path as _Path
+
+            _root = _Path(__file__).resolve().parent
+            if str(_root) not in sys.path:
+                sys.path.insert(0, str(_root))
+            from runtime_dataset_metadata import emit_metadata_for_path
+
+            emit_metadata_for_path(
+                "data/live/live_market_feed.parquet",
+                root=_root,
+                metadata_origin="LIVE_WRITER",
+            )
+        except Exception:
+            pass
 
         global _message_count
         _message_count += 1

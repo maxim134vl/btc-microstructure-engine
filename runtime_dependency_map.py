@@ -38,6 +38,10 @@ DEPENDENCIES = {
     "auction_decay_engine_v1.py": [
         "auction_convergence_memory.parquet",
         "auction_reinforcement_memory.parquet"
-    ]
+    ],
+
+    "mtf_availability_runtime_engine_v1.py": [
+        "candle_structure_memory.parquet"
+    ],
 
 }

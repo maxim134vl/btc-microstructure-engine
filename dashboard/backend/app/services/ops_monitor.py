@@ -25,6 +25,7 @@ from app.services.monitoring_kpis import (
 from app.services.parquet_service import _read_parquet_tail_sync, df_records, file_snapshot, read_parquet
 from app.services.pipeline_audit import read_pipeline_cycle_count
 from app.services.research_pipeline_service import build_research_pipeline_snapshot
+from app.services.domain_builders import build_mtf_health
 from app.services.required_manifest import (
     is_required_collector,
     is_required_engine,
@@ -1410,6 +1411,7 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
     critical_alerts = [a for a in alert_groups["actionable"] if a["severity"] == "CRITICAL"]
 
     research_pipeline = await _research_pipeline_cached(force=False)
+    mtf_cognition_health = await build_mtf_health()
     health_dimensions = _compose_health_dimensions(
         health=health,
         pipeline=pipeline,
@@ -1448,10 +1450,70 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
     )
     ribbon.extend(research_pipeline.get("ribbon_extensions", []))
 
+    # Patch 4.2 — canonical runtime truth (read-only). Fail-closed to UNKNOWN, never invent HEALTHY.
+    runtime_truth: dict[str, Any] | None = None
+    runtime_truth_warning = None
+    try:
+        from ops_dashboard_runtime_truth import (
+            build_runtime_truth_snapshot,
+            overall_health_to_ops_level,
+        )
+
+        runtime_truth = build_runtime_truth_snapshot()
+        overall = str(runtime_truth.get("overall_health") or "UNKNOWN")
+        health["runtime_truth_overall"] = overall
+        health["runtime_truth_reason"] = runtime_truth.get("overall_reason")
+        # Preserve existing health.level for required-engine CRITICAL paths, but surface
+        # known-limitations overall as non-broken when runtime truth is healthy-with-limits.
+        if overall == "HEALTHY_WITH_KNOWN_LIMITATIONS" and health.get("level") != "CRITICAL":
+            health["display_status"] = "HEALTHY_WITH_KNOWN_LIMITATIONS"
+            health["level"] = "HEALTHY"
+            # Re-color system ribbon from runtime truth (known limitations are not RED).
+            for item in ribbon:
+                if item.get("key") in {"system_health", "health", "runtime"}:
+                    item["level"] = overall_health_to_ops_level(overall)
+                    if item.get("key") == "system_health":
+                        item["value"] = "LIMITATIONS"
+        elif overall == "BROKEN":
+            health["level"] = "CRITICAL"
+            health["display_status"] = "BROKEN"
+        elif overall == "DEGRADED" and health.get("level") != "CRITICAL":
+            health["level"] = "DEGRADED"
+            health["display_status"] = "DEGRADED"
+        elif overall == "UNKNOWN" and health.get("level") == "HEALTHY":
+            # Never promote unknown critical truth to healthy.
+            health["level"] = "DEGRADED"
+            health["display_status"] = "UNKNOWN"
+    except Exception as exc:  # noqa: BLE001
+        runtime_truth_warning = f"runtime_truth_unavailable: {type(exc).__name__}: {exc}"
+        runtime_truth = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "schema_version": "ops_dashboard_runtime_truth_v1",
+            "overall_health": "UNKNOWN",
+            "overall_reason": runtime_truth_warning,
+            "processes": [],
+            "pipeline_engines": [],
+            "datasets": [],
+            "multi_timeframe": [],
+            "context_chain": {},
+            "paper": {},
+            "known_limitations": [],
+            "legacy_components": [],
+            "alerts": [],
+            "read_only": True,
+            "error": runtime_truth_warning,
+        }
+
+    warnings = [stability_warning] if stability_warning else []
+    if runtime_truth_warning:
+        warnings.append(runtime_truth_warning)
+
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "schema_version": "ops_snapshot_v2_runtime_truth",
         "ribbon": ribbon,
         "research_pipeline": research_pipeline,
+        "mtf_cognition_health": mtf_cognition_health,
         "engines": engines,
         "parquet": parquet,
         "collectors": collectors,
@@ -1464,7 +1526,7 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         "health_dimensions": health_dimensions,
         "alerts": alert_groups["all"],
         "alert_groups": alert_groups,
-        "warnings": [stability_warning] if stability_warning else [],
+        "warnings": warnings,
         "manifest": manifest_summary(),
         "classification": {
             "required_only_health": True,
@@ -1473,6 +1535,19 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
             "deferred_engine_count": health.get("deferred_engine_count", 0),
         },
         "snapshot_mode": "lite" if lite else "full",
+        # Canonical truth plane (Patch 4.2)
+        "overall_health": (runtime_truth or {}).get("overall_health"),
+        "overall_reason": (runtime_truth or {}).get("overall_reason"),
+        "runtime_truth": runtime_truth,
+        "processes": (runtime_truth or {}).get("processes") or [],
+        "pipeline_engines": (runtime_truth or {}).get("pipeline_engines") or [],
+        "datasets": (runtime_truth or {}).get("datasets") or [],
+        "multi_timeframe": (runtime_truth or {}).get("multi_timeframe") or [],
+        "context_chain": (runtime_truth or {}).get("context_chain") or {},
+        "paper": (runtime_truth or {}).get("paper") or {},
+        "timeframe_traders": (runtime_truth or {}).get("timeframe_traders") or {},
+        "known_limitations": (runtime_truth or {}).get("known_limitations") or [],
+        "legacy_components": (runtime_truth or {}).get("legacy_components") or [],
     }
     _OPS_SNAPSHOT_CACHE[cache_key] = {"ts": now, "data": payload}
     return payload

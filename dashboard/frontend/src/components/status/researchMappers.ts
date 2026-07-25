@@ -245,7 +245,7 @@ export function resolveLocalTokenStatus(token?: string | null): ResolvedStatus {
   return researchStatus(label, levelToTone(label));
 }
 
-/** Pipeline sync: 24/24 orchestration health. */
+/** Pipeline sync: N/N orchestration health (canonical runtime inventory). */
 export function resolvePipelineSyncStatus(level: string): ResolvedStatus {
   const normalized = level.toUpperCase();
   const label = normalized === "GREEN" ? "Synced" : "Out of Sync";

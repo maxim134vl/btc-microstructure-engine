@@ -10,6 +10,7 @@ confluence with BALANCE / NEUTRAL auction+cognitive thesis rejection appears.
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import tempfile
@@ -19,11 +20,22 @@ from typing import Any
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "market_context_lifecycle_memory_v2"
+BUILDER_VERSION = "market_context_lifecycle_memory_v2_origin_continuation_diag"
 INPUT_PATH = ROOT / "data" / "cognition" / "final_market_context_memory.parquet"
 AUCTION_PATH = ROOT / "data" / "cognition" / "auction_episode_memory.parquet"
+COGNITION_PATH = ROOT / "data" / "cognition" / "runtime_cognition_memory.parquet"
+# Per-bar cognition-chain heartbeat (evaluation cadence). Runtime cognition itself is a sparse event log.
+COGNITION_EVALUATION_PATH = ROOT / "data" / "cognition" / "cognitive_market_state_memory.parquet"
 MEMORY_OUTPUT_PATH = ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
 EPISODES_OUTPUT_PATH = ROOT / "data" / "cognition" / "market_context_lifecycle_episodes.parquet"
+# Canonical threshold shared with auction episode cognition asof max_age (45 minutes).
+UPSTREAM_COGNITION_STALE_MINUTES = 45.0
+COGNITION_EVALUATION_TIMESTAMP_COLUMNS = (
+    "evaluated_at",
+    "processed_market_timestamp",
+    "source_timestamp",
+    "cognition_observed_at",
+)
 
 REQUIRED_MEMORY_COLUMNS = [
     "timestamp",
@@ -52,6 +64,25 @@ REQUIRED_MEMORY_COLUMNS = [
     "invalidated_by_market_context",
     "invalidation_type",
     "transition_reason",
+    "lifecycle_state_reason",
+    "state_entered_at",
+    "state_age_minutes",
+    "transition_block_reason",
+    "cognition_state_age_minutes",
+    "upstream_cognition_freshness_minutes",
+    "market_feed_age_minutes",
+    "market_activity_score",
+    "observe_escape_candidate",
+    "observe_block_reason",
+    "observe_secondary_reason",
+    # Phase-1 context origin price diagnostics (immutable per directional episode).
+    "context_origin_price",
+    "context_entered_at",
+    "context_episode_id",
+    "context_direction",
+    "context_distance_bps",
+    "context_favorable_distance_bps",
+    "context_adverse_distance_bps",
     "action_allowed",
     "action_reason",
     "shadow_only",
@@ -87,6 +118,14 @@ INVALIDATION_AUCTION = "AUCTION_NEUTRALIZATION"
 INVALIDATION_OPPOSITE = "OPPOSITE_CONTEXT_REPLACEMENT"
 INVALIDATION_THESIS = "THESIS_REJECTION"
 
+# Termination persistence protection (shadow-only; no execution, no TTL expiry).
+# A confirmed active context must not be killed by a single neutral BALANCE/OBSERVE bar.
+#   NEUTRALIZATION_CONFIRM_BARS  — consecutive full-confluence bars required to invalidate.
+#   MIN_ACTIVE_CONTEXT_HOLD_BARS — a fresh context cannot be neutralized/rejected before this age.
+# Opposite CONFIRMED replacement is intentionally exempt and still replaces immediately.
+NEUTRALIZATION_CONFIRM_BARS = 2
+MIN_ACTIVE_CONTEXT_HOLD_BARS = 3
+
 
 def _clean_text(value: Any, default: str = "UNKNOWN") -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -117,6 +156,122 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "f", "no"}:
         return False
     return bool(value)
+
+
+def _to_utc_ts(value: Any) -> pd.Timestamp | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None
+    ts = pd.Timestamp(ts)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    try:
+        return ts.as_unit("ns")
+    except (TypeError, AttributeError, ValueError):
+        return ts
+
+
+def normalize_utc_ns_series(values: Any) -> pd.Series:
+    """Normalize timestamps to timezone-aware datetime64[ns, UTC] for merge_asof."""
+    if isinstance(values, pd.Series):
+        series = values
+        index = values.index
+    else:
+        series = pd.Series(values)
+        index = series.index
+    if len(series) == 0:
+        return pd.Series(pd.array([], dtype="datetime64[ns, UTC]"), index=index)
+
+    parsed = pd.to_datetime(series, utc=True, errors="coerce")
+    if not isinstance(parsed, pd.Series):
+        parsed = pd.Series(parsed, index=index)
+    else:
+        parsed = parsed.reindex(index)
+
+    if getattr(parsed.dt, "tz", None) is None:
+        parsed = parsed.dt.tz_localize("UTC")
+    else:
+        parsed = parsed.dt.tz_convert("UTC")
+
+    if hasattr(parsed.dt, "as_unit"):
+        try:
+            parsed = parsed.dt.as_unit("ns")
+        except (TypeError, ValueError, AttributeError):
+            parsed = pd.to_datetime(parsed.astype("int64"), unit="ns", utc=True)
+    else:
+        # Fallback path for older pandas: reconstruct via ns epoch ints.
+        nanos = parsed.view("int64")
+        parsed = pd.to_datetime(nanos, unit="ns", utc=True)
+
+    if str(parsed.dtype) != "datetime64[ns, UTC]":
+        parsed = pd.to_datetime(parsed, utc=True, errors="coerce")
+        if hasattr(parsed.dt, "as_unit"):
+            parsed = parsed.dt.as_unit("ns")
+    return parsed
+
+
+def _age_minutes(newer: Any, older: Any) -> float | None:
+    newer_ts = _to_utc_ts(newer)
+    older_ts = _to_utc_ts(older)
+    if newer_ts is None or older_ts is None:
+        return None
+    return round(float((newer_ts - older_ts).total_seconds() / 60.0), 6)
+
+
+def _market_activity_score(close: float | None, previous_close: float | None) -> float | None:
+    if close is None or previous_close is None or previous_close == 0:
+        return None
+    return round(abs((float(close) - float(previous_close)) / float(previous_close)) * 100.0, 6)
+
+
+def _is_stale_upstream_cognition(age_minutes: float | None) -> bool:
+    return age_minutes is not None and age_minutes > UPSTREAM_COGNITION_STALE_MINUTES
+
+
+def _is_stale_market_feed(age_minutes: float | None) -> bool:
+    return age_minutes is not None and age_minutes > UPSTREAM_COGNITION_STALE_MINUTES
+
+
+def _fmt_age(age_minutes: float | None) -> str:
+    if age_minutes is None:
+        return "unknown"
+    return f"{age_minutes:.3f}".rstrip("0").rstrip(".")
+
+
+def _resolve_cognition_evaluation_timestamps(
+    cognition_frame: pd.DataFrame | None,
+    evaluation_frame: pd.DataFrame | None = None,
+) -> pd.Series:
+    """Return evaluation/processing timestamps for cognition freshness.
+
+    runtime_cognition_memory is a sparse event log (state changes only). Evaluation
+    freshness must not be inferred solely from the last synthesis_state event time.
+    Preference order:
+      1) explicit evaluation columns on cognition rows
+      2) denser evaluation_frame timestamps (canonical: cognitive_market_state_memory)
+      3) fallback to cognition event timestamps (conservative / degraded)
+    """
+    if cognition_frame is not None and len(cognition_frame) > 0:
+        for column in COGNITION_EVALUATION_TIMESTAMP_COLUMNS:
+            if column in cognition_frame.columns:
+                series = normalize_utc_ns_series(cognition_frame[column])
+                if series.notna().any():
+                    return series
+
+    if evaluation_frame is not None and len(evaluation_frame) > 0:
+        for column in ("timestamp",) + COGNITION_EVALUATION_TIMESTAMP_COLUMNS:
+            if column in evaluation_frame.columns:
+                series = normalize_utc_ns_series(evaluation_frame[column])
+                if series.notna().any():
+                    return series
+
+    if cognition_frame is not None and len(cognition_frame) > 0 and "timestamp" in cognition_frame.columns:
+        return normalize_utc_ns_series(cognition_frame["timestamp"])
+    return pd.Series(pd.array([], dtype="datetime64[ns, UTC]"))
 
 
 def _mode_or_unknown(series: pd.Series) -> str:
@@ -194,6 +349,7 @@ def step_lifecycle(
         transition = "initial state"
         prev_lifecycle = "NO_ACTIVE_CONTEXT"
         carried_inv = _empty_invalidation()
+        prev_neutralization_streak = 0
     else:
         active = _clean_text(prev.get("active_market_context"), default="OBSERVE")
         lifecycle = _clean_text(prev.get("lifecycle_state"), default="NO_ACTIVE_CONTEXT")
@@ -209,20 +365,10 @@ def step_lifecycle(
         challenge_reason = prev.get("challenge_reason")
         transition = ""
         prev_lifecycle = lifecycle
-        # Carry last invalidation diagnostics while still in OBSERVE after a close.
-        prev_inv_type = _clean_text(prev.get("invalidation_type"), default=INVALIDATION_NONE)
-        if prev_inv_type != INVALIDATION_NONE and active == "OBSERVE":
-            carried_inv = {
-                "previous_active_market_context": prev.get("previous_active_market_context"),
-                "invalidation_reason": prev.get("invalidation_reason"),
-                "invalidated_at": prev.get("invalidated_at"),
-                "invalidated_by_auction_episode": prev.get("invalidated_by_auction_episode"),
-                "invalidated_by_cognitive_state": prev.get("invalidated_by_cognitive_state"),
-                "invalidated_by_market_context": prev.get("invalidated_by_market_context"),
-                "invalidation_type": prev_inv_type,
-            }
-        else:
-            carried_inv = _empty_invalidation()
+        prev_neutralization_streak = int(prev.get("_neutralization_streak") or 0)
+        # Invalidation diagnostics describe the actual event row only.
+        # Do NOT carry AUCTION_NEUTRALIZATION forward onto later OBSERVE/CANDIDATE rows.
+        carried_inv = _empty_invalidation()
 
     new_candidate = None
     new_candidate_started = None
@@ -232,24 +378,34 @@ def step_lifecycle(
     new_challenge_reason = None
     new_transition = transition
     inv = dict(carried_inv)
+    neutralization_streak = 0
 
-    # Source-row INVALIDATED → thesis rejection to OBSERVE.
+    # Source-row INVALIDATED → thesis rejection, with minimum-hold protection.
     if status == "INVALIDATED":
-        previous = active if active in DIRECTIONAL else None
-        active = "OBSERVE"
-        lifecycle = "INVALIDATED"
-        active_started = None
-        active_age = 0
-        new_transition = "source context invalidated"
-        inv = {
-            "previous_active_market_context": previous,
-            "invalidation_reason": "source context invalidated",
-            "invalidated_at": timestamp,
-            "invalidated_by_auction_episode": auction,
-            "invalidated_by_cognitive_state": cognitive,
-            "invalidated_by_market_context": raw,
-            "invalidation_type": INVALIDATION_THESIS,
-        }
+        if active in DIRECTIONAL and active_age < MIN_ACTIVE_CONTEXT_HOLD_BARS:
+            # Too fresh: hold as CHALLENGED instead of closing on the first rejection bar.
+            lifecycle = "CHALLENGED"
+            new_challenge = active
+            new_challenge_started = timestamp
+            new_challenge_reason = "source invalidated within minimum active hold"
+            active_age = active_age + 1
+            new_transition = "source invalidation held (minimum active hold protection)"
+        else:
+            previous = active if active in DIRECTIONAL else None
+            active = "OBSERVE"
+            lifecycle = "INVALIDATED"
+            active_started = None
+            active_age = 0
+            new_transition = "source context invalidated"
+            inv = {
+                "previous_active_market_context": previous,
+                "invalidation_reason": "source context invalidated",
+                "invalidated_at": timestamp,
+                "invalidated_by_auction_episode": auction,
+                "invalidated_by_cognitive_state": cognitive,
+                "invalidated_by_market_context": raw,
+                "invalidation_type": INVALIDATION_THESIS,
+            }
     # OBSERVE path: neutralization or challenge.
     elif raw == "OBSERVE":
         if active == "OBSERVE":
@@ -264,27 +420,45 @@ def step_lifecycle(
             raw_state_direction=direction,
             auction_episode=auction,
         ):
-            previous = active
-            inv_reason = (
-                f"{previous} invalidated because auction and cognitive state moved to "
-                "BALANCE / NEUTRAL / OBSERVE; no confirmed opposite context required."
-            )
-            active = "OBSERVE"
-            lifecycle = "INVALIDATED"
-            active_started = None
-            active_age = 0
-            new_transition = "auction neutralization invalidated active context"
-            inv = {
-                "previous_active_market_context": previous,
-                "invalidation_reason": inv_reason,
-                "invalidated_at": timestamp,
-                "invalidated_by_auction_episode": auction,
-                "invalidated_by_cognitive_state": cognitive,
-                "invalidated_by_market_context": raw,
-                "invalidation_type": INVALIDATION_AUCTION,
-            }
+            # Persistence protection: a single neutral bar must not kill a confirmed context.
+            streak = prev_neutralization_streak + 1
+            too_young = active_age < MIN_ACTIVE_CONTEXT_HOLD_BARS
+            not_persistent = streak < NEUTRALIZATION_CONFIRM_BARS
+            if too_young or not_persistent:
+                lifecycle = "CHALLENGED"
+                new_challenge = "OBSERVE"
+                new_challenge_started = timestamp
+                new_challenge_reason = reason
+                active_age = active_age + 1
+                neutralization_streak = streak
+                new_transition = (
+                    "neutralization confluence challenged active context "
+                    f"(hold protection: age={active_age - 1}, streak={streak})"
+                )
+            else:
+                previous = active
+                inv_reason = (
+                    f"{previous} invalidated after {streak} consecutive neutralization bars; "
+                    "auction and cognitive state held BALANCE / NEUTRAL / OBSERVE."
+                )
+                active = "OBSERVE"
+                lifecycle = "INVALIDATED"
+                active_started = None
+                active_age = 0
+                neutralization_streak = 0
+                new_transition = "auction neutralization invalidated active context"
+                inv = {
+                    "previous_active_market_context": previous,
+                    "invalidation_reason": inv_reason,
+                    "invalidated_at": timestamp,
+                    "invalidated_by_auction_episode": auction,
+                    "invalidated_by_cognitive_state": cognitive,
+                    "invalidated_by_market_context": raw,
+                    "invalidation_type": INVALIDATION_AUCTION,
+                }
         else:
             # Challenge only — incomplete confluence must not kill active context.
+            # Confluence chain is broken, so reset the neutralization streak.
             lifecycle = "CHALLENGED"
             new_challenge = "OBSERVE"
             new_challenge_started = timestamp
@@ -402,60 +576,406 @@ def step_lifecycle(
         "challenge_started_at": new_challenge_started,
         "challenge_reason": new_challenge_reason,
         "transition_reason": new_transition,
+        # Internal state threaded via prev; dropped from output (not in REQUIRED_MEMORY_COLUMNS).
+        "_neutralization_streak": int(neutralization_streak),
         **inv,
     }
 
 
 def attach_auction_episode(context_frame: pd.DataFrame, auction_frame: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Attach auction_episode onto final-context rows (merge_asof or passthrough)."""
+    """Attach auction_episode (+ FT/status diagnostics) onto final-context rows."""
     work = context_frame.copy()
-    if "auction_episode" in work.columns:
+    need_episode = "auction_episode" not in work.columns
+    need_ft = "follow_through" not in work.columns
+    need_status = "episode_status" not in work.columns
+    if not need_episode and not need_ft and not need_status:
         return work
 
     if auction_frame is None:
         if AUCTION_PATH.exists():
             auction_frame = pd.read_parquet(AUCTION_PATH)
         else:
-            work["auction_episode"] = "UNKNOWN"
+            if need_episode:
+                work["auction_episode"] = "UNKNOWN"
+            if need_ft:
+                work["follow_through"] = "UNKNOWN"
+            if need_status:
+                work["episode_status"] = "UNKNOWN"
             return work
 
     auction = auction_frame.copy()
     if "timestamp" not in auction.columns or "auction_episode" not in auction.columns:
-        work["auction_episode"] = "UNKNOWN"
+        if need_episode:
+            work["auction_episode"] = "UNKNOWN"
+        if need_ft:
+            work["follow_through"] = "UNKNOWN"
+        if need_status:
+            work["episode_status"] = "UNKNOWN"
         return work
 
-    work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce").astype("datetime64[ns, UTC]")
-    auction["timestamp"] = pd.to_datetime(auction["timestamp"], utc=True, errors="coerce").astype("datetime64[ns, UTC]")
-    auction = auction.dropna(subset=["timestamp"]).sort_values("timestamp")
-    work = work.dropna(subset=["timestamp"]).sort_values("timestamp")
+    original_index = work.index
+    left = work.copy()
+    left["_row_id"] = range(len(left))
+    left["timestamp"] = normalize_utc_ns_series(left["timestamp"])
+    auction = auction.copy()
+    auction["timestamp"] = normalize_utc_ns_series(auction["timestamp"])
+    left_valid = left.dropna(subset=["timestamp"]).sort_values(["timestamp", "_row_id"])
+    cols = ["timestamp", "auction_episode"]
+    for col in ("follow_through", "episode_status"):
+        if col in auction.columns:
+            cols.append(col)
+    right = (
+        auction[cols]
+        .dropna(subset=["timestamp"])
+        .sort_values("timestamp")
+        .drop_duplicates(subset=["timestamp"], keep="last")
+    )
+    if len(left_valid) == 0 or len(right) == 0:
+        if need_episode:
+            work["auction_episode"] = "UNKNOWN"
+        if need_ft:
+            work["follow_through"] = "UNKNOWN"
+        if need_status:
+            work["episode_status"] = "UNKNOWN"
+        return work.drop(columns=["_row_id"], errors="ignore")
+
     merged = pd.merge_asof(
-        work,
-        auction[["timestamp", "auction_episode"]],
+        left_valid,
+        right,
         on="timestamp",
         direction="backward",
         tolerance=pd.Timedelta("2h"),
+        suffixes=("", "_auc"),
     )
-    merged["auction_episode"] = merged["auction_episode"].map(
-        lambda v: _clean_text(v, default="UNKNOWN")
+    out = work.drop(columns=["_row_id"], errors="ignore").copy()
+    if need_episode:
+        episode_by_row = {
+            int(row_id): _clean_text(value, default="UNKNOWN")
+            for row_id, value in zip(merged["_row_id"].tolist(), merged["auction_episode"].tolist())
+        }
+        out["auction_episode"] = [episode_by_row.get(i, "UNKNOWN") for i in range(len(out))]
+    if need_ft:
+        ft_col = "follow_through" if "follow_through" in merged.columns else None
+        if ft_col:
+            ft_by_row = {
+                int(row_id): _clean_text(value, default="UNKNOWN")
+                for row_id, value in zip(merged["_row_id"].tolist(), merged[ft_col].tolist())
+            }
+            out["follow_through"] = [ft_by_row.get(i, "UNKNOWN") for i in range(len(out))]
+        else:
+            out["follow_through"] = "UNKNOWN"
+    if need_status:
+        st_col = "episode_status" if "episode_status" in merged.columns else None
+        if st_col:
+            st_by_row = {
+                int(row_id): _clean_text(value, default="UNKNOWN")
+                for row_id, value in zip(merged["_row_id"].tolist(), merged[st_col].tolist())
+            }
+            out["episode_status"] = [st_by_row.get(i, "UNKNOWN") for i in range(len(out))]
+        else:
+            out["episode_status"] = "UNKNOWN"
+    out.index = original_index
+    return out
+
+
+def attach_runtime_cognition_freshness(
+    context_frame: pd.DataFrame,
+    cognition_frame: pd.DataFrame | None = None,
+    evaluation_frame: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Attach cognition state-age and evaluation-freshness diagnostics.
+
+    Preserves original lifecycle/context row order and count. NaT timestamps are
+    kept in the output with null diagnostics rather than dropped.
+    """
+    work = context_frame.copy()
+    original_index = work.index
+    n_rows = len(work)
+    if "cognition_state_age_minutes" not in work.columns:
+        work["cognition_state_age_minutes"] = pd.array([pd.NA] * n_rows, dtype="Float64")
+    if "upstream_cognition_freshness_minutes" not in work.columns:
+        work["upstream_cognition_freshness_minutes"] = pd.array([pd.NA] * n_rows, dtype="Float64")
+
+    if "timestamp" not in work.columns:
+        work.index = original_index
+        return work
+
+    left = pd.DataFrame(
+        {
+            "_row_id": range(n_rows),
+            "timestamp": normalize_utc_ns_series(work["timestamp"]),
+        },
+        index=original_index,
     )
-    return merged
+    left_valid = left.dropna(subset=["timestamp"]).sort_values(["timestamp", "_row_id"])
+    if len(left_valid) == 0:
+        work.index = original_index
+        return work
+
+    state_ages = pd.Series(pd.array([pd.NA] * n_rows, dtype="Float64"))
+    eval_ages = pd.Series(pd.array([pd.NA] * n_rows, dtype="Float64"))
+
+    if (
+        cognition_frame is not None
+        and len(cognition_frame) > 0
+        and "timestamp" in cognition_frame.columns
+    ):
+        right_state = pd.DataFrame(
+            {
+                "runtime_cognition_timestamp": normalize_utc_ns_series(cognition_frame["timestamp"]),
+            }
+        )
+        # Keep NaT out of merge keys only; do not drop valid lifecycle rows.
+        right_state = right_state.dropna(subset=["runtime_cognition_timestamp"])
+        right_state = right_state.sort_values("runtime_cognition_timestamp")
+        right_state = right_state.drop_duplicates(subset=["runtime_cognition_timestamp"], keep="last")
+        if len(right_state) > 0:
+            merged_state = pd.merge_asof(
+                left_valid,
+                right_state,
+                left_on="timestamp",
+                right_on="runtime_cognition_timestamp",
+                direction="backward",
+            )
+            for row_id, bar_ts, event_ts in zip(
+                merged_state["_row_id"].tolist(),
+                merged_state["timestamp"].tolist(),
+                merged_state["runtime_cognition_timestamp"].tolist(),
+            ):
+                state_ages.iloc[int(row_id)] = _age_minutes(bar_ts, event_ts)
+
+    eval_timestamps = _resolve_cognition_evaluation_timestamps(
+        cognition_frame,
+        evaluation_frame=evaluation_frame,
+    )
+    if len(eval_timestamps) > 0 and eval_timestamps.notna().any():
+        right_eval = pd.DataFrame({"cognition_evaluation_timestamp": eval_timestamps})
+        right_eval = right_eval.dropna(subset=["cognition_evaluation_timestamp"])
+        right_eval = right_eval.sort_values("cognition_evaluation_timestamp")
+        right_eval = right_eval.drop_duplicates(
+            subset=["cognition_evaluation_timestamp"], keep="last"
+        )
+        if len(right_eval) > 0:
+            merged_eval = pd.merge_asof(
+                left_valid,
+                right_eval,
+                left_on="timestamp",
+                right_on="cognition_evaluation_timestamp",
+                direction="backward",
+            )
+            for row_id, bar_ts, eval_ts in zip(
+                merged_eval["_row_id"].tolist(),
+                merged_eval["timestamp"].tolist(),
+                merged_eval["cognition_evaluation_timestamp"].tolist(),
+            ):
+                eval_ages.iloc[int(row_id)] = _age_minutes(bar_ts, eval_ts)
+
+    work["cognition_state_age_minutes"] = state_ages.to_numpy()
+    work["upstream_cognition_freshness_minutes"] = eval_ages.to_numpy()
+    work.index = original_index
+    return work
+
+
+def _attach_lifecycle_diagnostics(
+    row: dict[str, Any],
+    *,
+    prev: dict[str, Any] | None,
+    timestamp: pd.Timestamp,
+    upstream_cognition_age_minutes: float | None,
+    cognition_state_age_minutes: float | None,
+    market_feed_age_minutes: float | None,
+    market_activity_score: float | None,
+) -> dict[str, Any]:
+    active = _clean_text(row.get("active_market_context"), default="OBSERVE")
+    lifecycle = _clean_text(row.get("lifecycle_state"), default="NO_ACTIVE_CONTEXT")
+    raw = _clean_text(row.get("raw_market_context"), default="OBSERVE")
+    candidate = _clean_text(row.get("candidate_context"), default="UNKNOWN")
+    stale_cognition = _is_stale_upstream_cognition(upstream_cognition_age_minutes)
+    stale_market = _is_stale_market_feed(market_feed_age_minutes)
+    observe_escape_candidate = bool(raw in DIRECTIONAL or candidate in DIRECTIONAL)
+    observe_block_reason = None
+    observe_secondary_reason = None
+    transition_block_reason = None
+
+    if active == "OBSERVE":
+        if lifecycle == "INVALIDATED":
+            observe_block_reason = _clean_text(row.get("invalidation_type"), default="INVALIDATED")
+            transition_block_reason = observe_block_reason
+        elif stale_cognition and raw == "OBSERVE":
+            # Stale cognition is never a normal OBSERVE / tradeable neutral state.
+            observe_escape_candidate = False
+            if stale_market:
+                observe_block_reason = "STALE_MARKET_AND_COGNITION"
+                transition_block_reason = "STALE_MARKET_AND_COGNITION"
+                reason = (
+                    "stale market feed "
+                    f"(gap_minutes={_fmt_age(market_feed_age_minutes)}) "
+                    "and stale upstream cognition evaluation "
+                    f"(age_minutes={_fmt_age(upstream_cognition_age_minutes)}; "
+                    f"state_age_minutes={_fmt_age(cognition_state_age_minutes)})"
+                )
+            else:
+                observe_block_reason = "STALE_COGNITION"
+                transition_block_reason = "STALE_COGNITION"
+                reason = (
+                    "stale upstream cognition evaluation while market bars continue "
+                    f"(age_minutes={_fmt_age(upstream_cognition_age_minutes)}; "
+                    f"state_age_minutes={_fmt_age(cognition_state_age_minutes)})"
+                )
+            if lifecycle in {"NO_ACTIVE_CONTEXT", "STALE_COGNITION"}:
+                lifecycle = "STALE_COGNITION"
+                row["lifecycle_state"] = lifecycle
+                row["transition_reason"] = reason
+        elif raw == "OBSERVE":
+            observe_block_reason = "NO_DIRECTIONAL_CONTEXT"
+            transition_block_reason = "NO_DIRECTIONAL_CONTEXT"
+        elif candidate in DIRECTIONAL:
+            observe_block_reason = "DIRECTIONAL_CONTEXT_CANDIDATE_ONLY"
+            auction_ep = _clean_text(
+                row.get("raw_auction_episode") or row.get("auction_episode"),
+                default="UNKNOWN",
+            ).upper()
+            ft = _clean_text(row.get("follow_through"), default="UNKNOWN").upper()
+            if auction_ep in {"ACCEPTANCE_HIGHER", "ACCEPTANCE_LOWER"} and ft in {"NO", "WEAK"}:
+                observe_secondary_reason = "ACCEPTANCE_AWAITING_FT_YES"
+
+    previous_entered = None
+    if prev is not None:
+        same_state = (
+            _clean_text(prev.get("active_market_context"), default="OBSERVE") == active
+            and _clean_text(prev.get("lifecycle_state"), default="NO_ACTIVE_CONTEXT") == lifecycle
+        )
+        if same_state:
+            previous_entered = _to_utc_ts(prev.get("state_entered_at"))
+    state_entered_at = previous_entered or timestamp
+    row["lifecycle_state_reason"] = _clean_text(row.get("transition_reason"), default="NONE")
+    row["state_entered_at"] = state_entered_at
+    row["state_age_minutes"] = _age_minutes(timestamp, state_entered_at) or 0.0
+    row["transition_block_reason"] = transition_block_reason
+    row["cognition_state_age_minutes"] = cognition_state_age_minutes
+    row["upstream_cognition_freshness_minutes"] = upstream_cognition_age_minutes
+    row["market_feed_age_minutes"] = market_feed_age_minutes
+    row["market_activity_score"] = market_activity_score
+    row["observe_escape_candidate"] = observe_escape_candidate
+    row["observe_block_reason"] = observe_block_reason
+    row["observe_secondary_reason"] = observe_secondary_reason
+    return row
+
+
+def signed_context_distance_bps(
+    direction: str | None,
+    origin_price: float | None,
+    current_close: float | None,
+) -> float | None:
+    """Signed distance in bps; positive = move with context, negative = against."""
+    direction_clean = _clean_text(direction, default="")
+    origin = _safe_float(origin_price)
+    close = _safe_float(current_close)
+    if origin is None or close is None or origin == 0.0:
+        return None
+    if direction_clean == "LONG_CONTEXT":
+        return round((close - origin) / origin * 10000.0, 6)
+    if direction_clean == "SHORT_CONTEXT":
+        return round((origin - close) / origin * 10000.0, 6)
+    return None
+
+
+def attach_context_origin_fields(memory_frame: pd.DataFrame) -> pd.DataFrame:
+    """Attach immutable per-episode origin price diagnostics to lifecycle bars.
+
+    Semantics (Phase 1):
+      - Origin is created only when active_market_context is LONG/SHORT
+        (confirmed active directional episode), not on CANDIDATE while OBSERVE.
+      - Origin = close of the first bar of that directional episode.
+      - Origin is immutable until the episode ends / is invalidated.
+      - context_episode_id matches build_lifecycle_episodes numbering.
+    """
+    if memory_frame is None or len(memory_frame) == 0:
+        empty = pd.DataFrame(columns=REQUIRED_MEMORY_COLUMNS)
+        return empty
+
+    work = memory_frame.copy()
+    work["timestamp"] = normalize_utc_ns_series(work["timestamp"])
+    work = work.sort_values("timestamp").reset_index(drop=True)
+
+    for col in (
+        "context_origin_price",
+        "context_entered_at",
+        "context_episode_id",
+        "context_direction",
+        "context_distance_bps",
+        "context_favorable_distance_bps",
+        "context_adverse_distance_bps",
+    ):
+        if col not in work.columns:
+            work[col] = None
+
+    changed = work["active_market_context"] != work["active_market_context"].shift(1)
+    if len(changed):
+        changed.iloc[0] = True
+    work["_episode_group"] = changed.cumsum()
+
+    for episode_id, (_, group) in enumerate(
+        work.groupby("_episode_group", sort=True), start=1
+    ):
+        idx = group.index
+        active = _clean_text(group.iloc[0].get("active_market_context"), default="OBSERVE")
+        work.loc[idx, "context_episode_id"] = int(episode_id)
+        if active not in DIRECTIONAL:
+            work.loc[idx, "context_origin_price"] = None
+            work.loc[idx, "context_entered_at"] = None
+            work.loc[idx, "context_direction"] = None
+            work.loc[idx, "context_distance_bps"] = None
+            work.loc[idx, "context_favorable_distance_bps"] = None
+            work.loc[idx, "context_adverse_distance_bps"] = None
+            continue
+
+        start_row = group.iloc[0]
+        origin = _safe_float(start_row.get("close"))
+        entered_at = start_row.get("timestamp")
+        work.loc[idx, "context_origin_price"] = origin
+        work.loc[idx, "context_entered_at"] = entered_at
+        work.loc[idx, "context_direction"] = active
+        for i in idx:
+            close = _safe_float(work.at[i, "close"])
+            dist = signed_context_distance_bps(active, origin, close)
+            work.at[i, "context_distance_bps"] = dist
+            if dist is None:
+                work.at[i, "context_favorable_distance_bps"] = None
+                work.at[i, "context_adverse_distance_bps"] = None
+            else:
+                work.at[i, "context_favorable_distance_bps"] = round(max(float(dist), 0.0), 6)
+                work.at[i, "context_adverse_distance_bps"] = round(max(-float(dist), 0.0), 6)
+
+    work = work.drop(columns=["_episode_group"], errors="ignore")
+    return work
 
 
 def build_lifecycle_memory(
     context_frame: pd.DataFrame,
     auction_frame: pd.DataFrame | None = None,
+    cognition_frame: pd.DataFrame | None = None,
+    evaluation_frame: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     if context_frame is None or len(context_frame) == 0:
         return pd.DataFrame(columns=REQUIRED_MEMORY_COLUMNS)
 
     work = attach_auction_episode(context_frame, auction_frame=auction_frame)
+    work = attach_runtime_cognition_freshness(
+        work,
+        cognition_frame=cognition_frame,
+        evaluation_frame=evaluation_frame,
+    )
     if "timestamp" not in work.columns or "market_context" not in work.columns:
         raise ValueError("final_market_context_memory missing timestamp/market_context")
-    work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
+    work = work.copy()
+    work["timestamp"] = normalize_utc_ns_series(work["timestamp"])
     work = work.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
     rows: list[dict[str, Any]] = []
     prev: dict[str, Any] | None = None
+    previous_close: float | None = None
+    previous_ts: pd.Timestamp | None = None
     for _, src in work.iterrows():
         raw = _clean_text(src.get("market_context"), default="OBSERVE")
         status = _clean_text(src.get("context_status"), default="UNKNOWN")
@@ -464,6 +984,11 @@ def build_lifecycle_memory(
         direction = _clean_text(src.get("state_direction"), default="UNKNOWN")
         auction = _clean_text(src.get("auction_episode"), default="UNKNOWN")
         ts = src["timestamp"]
+        close = _safe_float(src.get("close"))
+        upstream_age = _safe_float(src.get("upstream_cognition_freshness_minutes"), default=None)
+        state_age = _safe_float(src.get("cognition_state_age_minutes"), default=None)
+        market_feed_age = _age_minutes(ts, previous_ts) if previous_ts is not None else 0.0
+        activity_score = _market_activity_score(close, previous_close)
         step = step_lifecycle(
             raw_market_context=raw,
             raw_context_status=status,
@@ -476,13 +1001,15 @@ def build_lifecycle_memory(
         )
         row = {
             "timestamp": ts,
-            "close": _safe_float(src.get("close")),
+            "close": close,
             "raw_market_context": raw,
             "raw_context_status": status,
             "raw_cognitive_market_state": cognitive,
             "raw_state_direction": direction,
             "raw_context_reason": reason,
             "raw_auction_episode": auction,
+            "follow_through": _clean_text(src.get("follow_through"), default="UNKNOWN"),
+            "episode_status": _clean_text(src.get("episode_status"), default="UNKNOWN"),
             **step,
             # Shadow policy: never enable execution from lifecycle.
             "action_allowed": False,
@@ -493,12 +1020,24 @@ def build_lifecycle_memory(
             "shadow_only": True,
             "builder_version": BUILDER_VERSION,
         }
+        row = _attach_lifecycle_diagnostics(
+            row,
+            prev=prev,
+            timestamp=ts,
+            upstream_cognition_age_minutes=upstream_age,
+            cognition_state_age_minutes=state_age,
+            market_feed_age_minutes=market_feed_age,
+            market_activity_score=activity_score,
+        )
         rows.append(row)
         prev = row
+        previous_close = close
+        previous_ts = _to_utc_ts(ts)
 
     out = pd.DataFrame(rows)
     if len(out) and not out["shadow_only"].astype(bool).all():
         raise RuntimeError("shadow_only must remain True")
+    out = attach_context_origin_fields(out)
     return out[REQUIRED_MEMORY_COLUMNS]
 
 
@@ -606,7 +1145,30 @@ def write_atomic_parquet(frame: pd.DataFrame, output_path: Path) -> Path:
     return output_path
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build shadow market context lifecycle memory + episodes"
+    )
+    parser.add_argument(
+        "--output-path",
+        type=Path,
+        default=MEMORY_OUTPUT_PATH,
+        help="Lifecycle memory parquet output path (default: production path)",
+    )
+    parser.add_argument(
+        "--episodes-output-path",
+        type=Path,
+        default=EPISODES_OUTPUT_PATH,
+        help="Lifecycle episodes parquet output path (default: production path)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    memory_output_path = Path(args.output_path)
+    episodes_output_path = Path(args.episodes_output_path)
+
     if not INPUT_PATH.exists():
         print(
             f"ERROR: required input missing: {INPUT_PATH}\n"
@@ -628,10 +1190,32 @@ def main() -> int:
         except Exception as exc:
             print(f"WARNING: failed to read auction episodes ({exc}); neutralization may be limited")
 
-    memory = build_lifecycle_memory(context_frame, auction_frame=auction_frame)
+    cognition_frame = None
+    if COGNITION_PATH.exists():
+        try:
+            cognition_frame = pd.read_parquet(COGNITION_PATH)
+        except Exception as exc:
+            print(f"WARNING: failed to read runtime cognition ({exc}); stale-cognition diagnostics may be limited")
+
+    evaluation_frame = None
+    if COGNITION_EVALUATION_PATH.exists():
+        try:
+            evaluation_frame = pd.read_parquet(COGNITION_EVALUATION_PATH)
+        except Exception as exc:
+            print(
+                f"WARNING: failed to read cognition evaluation heartbeat ({exc}); "
+                "falling back to cognition event timestamps"
+            )
+
+    memory = build_lifecycle_memory(
+        context_frame,
+        auction_frame=auction_frame,
+        cognition_frame=cognition_frame,
+        evaluation_frame=evaluation_frame,
+    )
     episodes = build_lifecycle_episodes(memory)
-    mem_path = write_atomic_parquet(memory, MEMORY_OUTPUT_PATH)
-    ep_path = write_atomic_parquet(episodes, EPISODES_OUTPUT_PATH)
+    mem_path = write_atomic_parquet(memory, memory_output_path)
+    ep_path = write_atomic_parquet(episodes, episodes_output_path)
 
     print(f"rows written memory: {len(memory)}")
     print(f"rows written episodes: {len(episodes)}")

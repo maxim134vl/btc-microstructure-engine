@@ -66,6 +66,13 @@ import type {
   ResearchPipelineSnapshot,
   RuntimeFailureAuditSummary,
   RuntimeSkippedEngineAuditSummary,
+  RuntimeTruthContextChain,
+  RuntimeTruthLegacy,
+  RuntimeTruthLimitation,
+  RuntimeTruthPaper,
+  RuntimeTruthProcess,
+  RuntimeTruthTimeframe,
+  RuntimeTruthTimeframeTraders,
   RibbonItem,
   HealthDimensions,
 } from "../../types/ops";
@@ -74,9 +81,241 @@ import { RingGauge, StatusOrb } from "./OpsVisuals";
 type SymbolComponent = ComponentType<{ className?: string }>;
 
 function healthScore(level: string): number {
-  if (level === "HEALTHY") return 100;
+  if (level === "HEALTHY" || level === "HEALTHY_WITH_KNOWN_LIMITATIONS") return 100;
   if (level === "DEGRADED") return 58;
+  if (level === "UNKNOWN") return 40;
   return 28;
+}
+
+function usdText(value?: number | null): string {
+  return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "—";
+}
+
+function RuntimeTruthSection({
+  processes,
+  multi_timeframe,
+  context_chain,
+  paper,
+  known_limitations,
+  legacy_components,
+  timeframe_traders,
+  overall_health,
+  overall_reason,
+}: {
+  processes?: RuntimeTruthProcess[];
+  multi_timeframe?: RuntimeTruthTimeframe[];
+  context_chain?: RuntimeTruthContextChain;
+  paper?: RuntimeTruthPaper;
+  known_limitations?: RuntimeTruthLimitation[];
+  legacy_components?: RuntimeTruthLegacy[];
+  timeframe_traders?: RuntimeTruthTimeframeTraders;
+  overall_health?: string;
+  overall_reason?: string;
+}) {
+  const processRows = Array.isArray(processes) ? processes : [];
+  const mtfRows = Array.isArray(multi_timeframe) ? multi_timeframe : [];
+  const limits = Array.isArray(known_limitations) ? known_limitations : [];
+  const legacy = Array.isArray(legacy_components) ? legacy_components.filter((c) => c.classification === "PHANTOM") : [];
+  const traderRows = Array.isArray(timeframe_traders?.traders) ? timeframe_traders!.traders! : [];
+  const commandBus = timeframe_traders?.command_bus;
+  const portfolio = timeframe_traders?.portfolio;
+  if (
+    processRows.length === 0 &&
+    mtfRows.length === 0 &&
+    !context_chain &&
+    !paper &&
+    limits.length === 0
+  ) {
+    return null;
+  }
+
+  const processStatus = (health?: string): ResolvedStatus => {
+    if (health === "RUNNING") return translateActiveService();
+    if (health === "STOPPED" || health === "BROKEN") return translateOpsLevel("RED", "engine");
+    return translateOpsLevel("GREY", "engine");
+  };
+
+  return (
+    <section className="space-y-2.5">
+      <SectionLabel>Runtime Truth</SectionLabel>
+      {overall_health ? (
+        <p className="px-0.5 text-[11px] text-ds-text-secondary">
+          {overall_health}
+          {overall_reason ? ` · ${overall_reason}` : ""}
+        </p>
+      ) : null}
+      <div className="grid gap-3.5 xl:grid-cols-2">
+        <PanelCard title="Processes" icon={SymbolPipeline} empty={processRows.length === 0 ? "No process truth" : undefined}>
+          {processRows.map((row) => (
+            <ListRow
+              key={row.process_id}
+              icon={SymbolPipeline}
+              primary={row.display_name || row.process_id}
+              secondary={[row.pid != null ? `pid ${row.pid}` : "pid —", row.health_reason || row.process_state || ""]
+                .filter(Boolean)
+                .join(" · ")}
+              status={processStatus(row.health)}
+            />
+          ))}
+        </PanelCard>
+        <PanelCard title="MTF Availability" icon={SymbolLayers} empty={mtfRows.length === 0 ? "No MTF truth" : undefined}>
+          {mtfRows.map((row) => (
+            <ListRow
+              key={row.timeframe}
+              icon={SymbolLayers}
+              primary={row.timeframe}
+              secondary={[
+                row.availability_status || "UNKNOWN",
+                row.availability_reason || null,
+                row.source_bar_close ? `close ${row.source_bar_close}` : null,
+                row.is_new_event === true ? "new event" : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              status={
+                row.availability_status === "TIMEFRAME_NOT_LIVE"
+                  ? translateOpsLevel("GREY", "engine")
+                  : row.availability_status === "FRESH_EVENT" || row.availability_status === "AVAILABLE_LAST_CONFIRMED"
+                    ? translateOpsLevel("GREEN", "engine")
+                    : translateOpsLevel("YELLOW", "engine")
+              }
+            />
+          ))}
+        </PanelCard>
+        <PanelCard title="Context Chain" icon={SymbolWaveform}>
+          <ListRow
+            icon={SymbolWaveform}
+            primary={context_chain?.last_result || "UNKNOWN"}
+            secondary={[
+              context_chain?.health_reason || null,
+              context_chain?.final_context_tip ? `context ${context_chain.final_context_tip}` : null,
+              context_chain?.decision_tip ? `decision ${context_chain.decision_tip}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            status={
+              context_chain?.last_result === "REFRESH_FAILED"
+                ? translateOpsLevel("RED", "engine")
+                : translateOpsLevel("GREEN", "engine")
+            }
+          />
+        </PanelCard>
+        <PanelCard title="Paper Controller" icon={SymbolHeart}>
+          <ListRow
+            icon={SymbolHeart}
+            primary={paper?.representation || paper?.process_health || "UNKNOWN"}
+            secondary={[
+              paper?.is_controller_failure ? "controller failure" : "not a controller failure",
+              paper?.last_cycle_result || null,
+              paper?.skip_refresh ? "skip-refresh" : null,
+              paper?.real_execution === false ? "no real execution" : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            status={
+              paper?.is_controller_failure || paper?.process_health === "STOPPED"
+                ? translateOpsLevel("RED", "engine")
+                : translateOpsLevel("GREEN", "engine")
+            }
+          />
+        </PanelCard>
+        {traderRows.length > 0 ? (
+          <PanelCard title="Timeframe Traders" icon={SymbolLayers}>
+            {traderRows.map((row) => (
+              <ListRow
+                key={row.timeframe}
+                icon={SymbolLayers}
+                primary={`${row.timeframe} · ${row.direction || "FLAT"}`}
+                secondary={[
+                  row.open_position_id ? `pos ${row.open_position_id}` : "no open position",
+                  row.last_command_intent ? `cmd ${row.last_command_intent}` : null,
+                  `risk ${usdText(row.open_risk_usd)}`,
+                  `realized ${usdText(row.realized_pnl_usd)}`,
+                  `unrealized ${usdText(row.unrealized_pnl_usd)}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                status={
+                  row.health === "BROKEN"
+                    ? translateOpsLevel("RED", "engine")
+                    : row.direction && row.direction !== "FLAT"
+                      ? translateOpsLevel("GREEN", "engine")
+                      : translateOpsLevel("GREY", "engine")
+                }
+              />
+            ))}
+          </PanelCard>
+        ) : null}
+        {timeframe_traders?.activated ? (
+          <PanelCard title="Manager / Portfolio" icon={SymbolPipeline}>
+            <ListRow
+              icon={SymbolPipeline}
+              primary={`Command bus ${commandBus?.health || "UNKNOWN"}`}
+              secondary={[
+                `${commandBus?.rows ?? 0} commands`,
+                `${commandBus?.duplicate_command_ids ?? 0} duplicates`,
+                commandBus?.latest_evaluation_timestamp
+                  ? `tip ${commandBus.latest_evaluation_timestamp}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              status={
+                commandBus?.health === "HEALTHY"
+                  ? translateOpsLevel("GREEN", "engine")
+                  : commandBus?.health === "BROKEN"
+                    ? translateOpsLevel("RED", "engine")
+                    : translateOpsLevel("GREY", "engine")
+              }
+            />
+            <ListRow
+              icon={SymbolLayers}
+              primary={`Gross open risk ${usdText(portfolio?.gross_open_risk_usd)} / ${usdText(
+                portfolio?.portfolio_max_risk_usd,
+              )}`}
+              secondary={[
+                `${portfolio?.open_positions ?? 0} open positions`,
+                `available ${usdText(portfolio?.available_risk_usd)}`,
+                "gross, never netted",
+                timeframe_traders?.d1_trader === false ? "D1 not live" : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              status={translateOpsLevel("GREEN", "engine")}
+            />
+          </PanelCard>
+        ) : null}
+      </div>
+      {limits.length > 0 || legacy.length > 0 ? (
+        <div className="grid gap-3.5 xl:grid-cols-2">
+          <PanelCard title="Known Limitations" icon={SymbolBell} empty={limits.length === 0 ? "None" : undefined}>
+            {limits.map((row) => (
+              <ListRow
+                key={row.id || row.detail || "limit"}
+                icon={SymbolBell}
+                primary={row.id || "limitation"}
+                secondary={row.detail || row.classification || ""}
+                status={translateOpsLevel("YELLOW", "engine")}
+              />
+            ))}
+          </PanelCard>
+          <PanelCard title="Legacy / Phantom" icon={SymbolEngine} empty={legacy.length === 0 ? "None" : undefined}>
+            {legacy.map((row) => (
+              <ListRow
+                key={row.component_id || "legacy"}
+                icon={SymbolEngine}
+                primary={row.component_id || "legacy"}
+                secondary={[row.classification || "PHANTOM", row.reason || "NOT_PRESENT_IN_CANONICAL_RUNTIME"]
+                  .filter(Boolean)
+                  .join(" · ")}
+                status={translateOpsLevel("GREY", "engine")}
+              />
+            ))}
+          </PanelCard>
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 function progressTone(percent: number): string {
@@ -1084,6 +1323,16 @@ export function OpsDashboard({
     runtime_failure_audit,
     runtime_skipped_engine_audit,
     health_dimensions: topHealthDimensions,
+    overall_health,
+    overall_reason,
+    processes,
+    multi_timeframe,
+    context_chain,
+    paper,
+    known_limitations,
+    legacy_components,
+    timeframe_traders,
+    pipeline_engines,
   } = snapshot;
 
   const safeHealth = health || ({
@@ -1114,7 +1363,19 @@ export function OpsDashboard({
     (a) => !acknowledged.has(a.id),
   );
 
-  const healthStatus = translateSystemHealth(safeHealth.level, safeHealth.display_status);
+  // Patch 4.2: prefer canonical overall_health when present (known limitations ≠ broken).
+  const healthStatus = translateSystemHealth(
+    overall_health === "HEALTHY_WITH_KNOWN_LIMITATIONS"
+      ? "HEALTHY"
+      : overall_health === "BROKEN"
+        ? "CRITICAL"
+        : overall_health === "DEGRADED"
+          ? "DEGRADED"
+          : overall_health === "UNKNOWN"
+            ? "UNKNOWN"
+            : safeHealth.level,
+    overall_health || safeHealth.display_status,
+  );
   const memoryStatus = translateResourceUsage(safeHealth.memory_percent);
   const pipelineStatus = translatePipelineState(safePipeline.active_state);
   const alertsStatus = translateOpenAlerts(
@@ -1408,7 +1669,30 @@ export function OpsDashboard({
             <EngineList engines={safeEngines} />
             <CollectorsCard collectors={safeCollectors} />
           </div>
+          {Array.isArray(pipeline_engines) && pipeline_engines.length > 0 ? (
+            <p className="px-0.5 text-[11px] text-ds-text-secondary">
+              Canonical runtime engines: {pipeline_engines.length}
+              {safeEngines.length !== pipeline_engines.length
+                ? ` · snapshot engine rows: ${safeEngines.length}`
+                : ""}
+              {overall_reason ? ` · ${overall_reason}` : ""}
+            </p>
+          ) : null}
         </section>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary title="Runtime Truth">
+          <RuntimeTruthSection
+            processes={processes}
+            multi_timeframe={multi_timeframe}
+            context_chain={context_chain}
+            paper={paper}
+            known_limitations={known_limitations}
+            legacy_components={legacy_components}
+            timeframe_traders={timeframe_traders}
+            overall_health={overall_health}
+            overall_reason={overall_reason}
+          />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary title="Research Pipeline">

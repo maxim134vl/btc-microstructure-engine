@@ -204,7 +204,9 @@ def apply_stale_governance(
         out["promotion_eligible"] = False
         out["promotion_eligible_label"] = "NO"
         status = str(out.get("governance_status") or "")
-        if freshness.get("freshness_status") == STATUS_MISSING:
+        if status in {"GOVERNANCE_MISSING"}:
+            out["governance_status"] = status
+        elif freshness.get("freshness_status") == STATUS_MISSING:
             out["governance_status"] = STATUS_MISSING
         elif status and status not in {STATUS_STALE_GOVERNANCE, STATUS_STALE_VALIDATION}:
             out["governance_status"] = f"{status}+STALE"
@@ -242,8 +244,25 @@ def build_model_summary_with_freshness(
     drift: dict[str, Any],
     shadow: dict[str, Any],
     base_summary: dict[str, Any],
+    sources: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Downgrade Model Summary when validation/governance/drift are stale."""
+    """Compose Model Summary with source-aware attention reasons.
+
+    When ``sources`` is provided (Stage 11+), benchmark diagnostics are primary
+    and missing governance does not imply stale diagnostics.
+    """
+    if sources is not None:
+        from app.services.model_summary_sources import build_model_summary_from_sources
+
+        return build_model_summary_from_sources(
+            sources=sources,
+            governance=governance,
+            drift=drift,
+            shadow=shadow,
+            base_summary=base_summary,
+        )
+
+    # Legacy path (tests / callers without source bundle)
     summary = dict(base_summary)
     gov_fresh = (governance.get("freshness") or {})
     drift_fresh = (drift.get("freshness") or {})
@@ -279,7 +298,6 @@ def build_model_summary_with_freshness(
         as_of = summary.get("last_validation_at") or gov_fresh.get("source_timestamp") or "unknown"
         if hasattr(as_of, "isoformat"):
             as_of = as_of.isoformat().replace("+00:00", "Z")
-        # Prefer date-only in warning when possible
         as_of_str = str(as_of)
         if "T" in as_of_str:
             as_of_str = as_of_str.split("T", 1)[0]

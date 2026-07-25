@@ -454,6 +454,36 @@ bounded-paper-controller-auto-ledger-tail: ## Tail bounded paper controller log
 bounded-paper-controller-auto-ledger-stop: ## Stop bounded paper trading controller
 	bash scripts/bounded_paper_trading_controller_ctl.sh stop
 
+intrabar-feed-start: ## Start paper-only Binance intrabar/minute feed (does not touch M15 canonical feed)
+	bash scripts/intrabar_feed_ctl.sh start
+
+intrabar-feed-stop: ## Stop paper-only intrabar feed
+	bash scripts/intrabar_feed_ctl.sh stop
+
+intrabar-feed-status: ## Status of paper-only intrabar feed
+	bash scripts/intrabar_feed_ctl.sh status
+
+intrabar-feed-tail: ## Tail paper-only intrabar feed log
+	bash scripts/intrabar_feed_ctl.sh tail
+
+intrabar-feed-healthcheck: ## Pass/fail freshness+process health for paper-only intrabar feed
+	bash scripts/intrabar_feed_ctl.sh healthcheck
+
+intrabar-feed-restart: ## Stop then start intrabar feed; print status (exactly one process)
+	bash scripts/intrabar_feed_ctl.sh restart
+
+intrabar-feed-supervisor-start: ## Start paper-only intrabar feed supervisor (does not touch controller)
+	bash scripts/intrabar_feed_supervisor_ctl.sh start
+
+intrabar-feed-supervisor-stop: ## Stop paper-only intrabar feed supervisor
+	bash scripts/intrabar_feed_supervisor_ctl.sh stop
+
+intrabar-feed-supervisor-status: ## Status of paper-only intrabar feed supervisor
+	bash scripts/intrabar_feed_supervisor_ctl.sh status
+
+intrabar-feed-supervisor-restart: ## Restart paper-only intrabar feed supervisor
+	bash scripts/intrabar_feed_supervisor_ctl.sh restart
+
 bounded-paper-controller-auto-ledger-repair-duplicates: ## Terminate orphan/duplicate controller PIDs; keep canonical
 	bash scripts/bounded_paper_trading_controller_ctl.sh repair-duplicates
 

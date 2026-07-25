@@ -21,6 +21,7 @@ from app.services.parquet_service import (
     parse_regime_vector,
     read_parquet,
 )
+from app.services.mtf_observability import classify_mtf_health
 from runtime_dependency_map import DEPENDENCIES
 from src.btc_ml.runtime import pipeline as runtime_pipeline
 
@@ -310,6 +311,67 @@ async def _timeframe_cognition_snapshot(timeframe: str) -> dict[str, Any]:
     }
 
 
+def _latest_engine_status(engine_state: pd.DataFrame, engine: str) -> dict[str, Any]:
+    for row in reversed(df_records(engine_state)):
+        if row.get("engine") == engine:
+            return row
+    return {}
+
+
+async def build_mtf_health() -> dict[str, Any]:
+    synthesis = latest_row(
+        await read_parquet(
+            "multi_timeframe_synthesis.parquet",
+            tail=1,
+            columns=["timestamp", "synthesis_state", "lineage_propagation_timestamp"],
+        )
+    ) or {}
+    runtime_cog = latest_row(
+        await read_parquet(
+            "runtime_cognition_memory.parquet",
+            tail=1,
+            columns=["timestamp", "synthesis_state", "lineage_propagation_timestamp"],
+        )
+    ) or {}
+    input_candle = latest_row(
+        await read_parquet("candle_structure_memory.parquet", tail=1, columns=["timestamp"])
+    ) or {}
+    live_candle = latest_row(
+        await read_parquet("live_market_feed.parquet", tail=1, columns=["timestamp"])
+    ) or {}
+    engine_state = await read_parquet(
+        "runtime_engine_state.parquet",
+        tail=2000,
+        columns=["timestamp", "engine", "status", "duration"],
+    )
+    producer = _latest_engine_status(engine_state, "stage2_cognition_runtime_v1.py")
+    synthesis_snapshot = file_snapshot("multi_timeframe_synthesis.parquet")
+    runtime_snapshot = file_snapshot("runtime_cognition_memory.parquet")
+
+    health = classify_mtf_health(
+        latest_event_timestamp=synthesis.get("timestamp") or runtime_cog.get("timestamp"),
+        latest_input_candle_timestamp=input_candle.get("timestamp"),
+        producer_heartbeat_timestamp=producer.get("timestamp"),
+        producer_last_status=producer.get("status"),
+        output_mtime=synthesis_snapshot.get("mtime"),
+        source_reference_timestamp=live_candle.get("timestamp") or input_candle.get("timestamp"),
+        lineage_propagation_timestamp=(
+            synthesis.get("lineage_propagation_timestamp")
+            or runtime_cog.get("lineage_propagation_timestamp")
+        ),
+    )
+    health.update(
+        {
+            "producer_engine": "stage2_cognition_runtime_v1.py",
+            "output_file": "multi_timeframe_synthesis.parquet",
+            "output_row_count": synthesis_snapshot.get("row_count"),
+            "runtime_cognition_output_mtime": runtime_snapshot.get("mtime"),
+            "runtime_cognition_latest_event_timestamp": runtime_cog.get("timestamp"),
+        }
+    )
+    return health
+
+
 def _serialize_cell(value: Any) -> Any:
     if isinstance(value, (pd.Timestamp, datetime)):
         return value.isoformat()
@@ -319,10 +381,23 @@ def _serialize_cell(value: Any) -> Any:
 
 
 async def build_mtf_cognition() -> dict[str, Any]:
-    synthesis = latest_row(await read_parquet("multi_timeframe_synthesis.parquet", tail=1))
-    runtime_cog = latest_row(await read_parquet("runtime_cognition_memory.parquet", tail=1))
+    synthesis = latest_row(
+        await read_parquet(
+            "multi_timeframe_synthesis.parquet",
+            tail=1,
+            columns=["timestamp", "synthesis_state", "lineage_propagation_timestamp"],
+        )
+    )
+    runtime_cog = latest_row(
+        await read_parquet(
+            "runtime_cognition_memory.parquet",
+            tail=1,
+            columns=["timestamp", "synthesis_state", "lineage_propagation_timestamp"],
+        )
+    )
     htf = latest_row(await read_parquet("htf_structure_memory.parquet", tail=1))
     context = latest_row(await read_parquet("htf_ltf_context_memory.parquet", tail=1))
+    health = await build_mtf_health()
 
     tf_states = []
     for tf in TIMEFRAMES:
@@ -332,6 +407,7 @@ async def build_mtf_cognition() -> dict[str, Any]:
         "timeframe_states": tf_states,
         "stage2_synthesis": synthesis,
         "runtime_cognition": runtime_cog,
+        "health": health,
         "htf_structure": htf,
         "htf_ltf_context": context,
         "hierarchy": [item.get("timeframe") for item in tf_states],

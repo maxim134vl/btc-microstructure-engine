@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from runtime_config import ENGINE_TIMEOUT_SECONDS, RUNTIME_LOOP_DELAY
 from runtime_dependency_guard import should_run_engine
@@ -46,10 +47,12 @@ CANONICAL_PIPELINE = [
     "auction_decay_engine_v1.py",
     "state_transition_engine_v1.py",
     "adaptive_meta_cognition_engine_v1.py",
+    # Patch 3.2 — operational MTF availability read-model (after Stage-2 sources ready)
+    "mtf_availability_runtime_engine_v1.py",
 ]
 
 # Frozen step count for operational hardening — update only with intentional pipeline changes.
-EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 19
+EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 20
 
 
 def _repo_root() -> str:
@@ -136,6 +139,36 @@ def run_once() -> None:
             export_runtime_blocking_chain()
 
         print()
+
+    _emit_pipeline_dataset_metadata()
+
+
+def _emit_pipeline_dataset_metadata() -> None:
+    """Patch 1: best-effort metadata sidecars for pipeline-owned datasets.
+
+    Never mutates parquet payloads. Failures must not stop the pipeline.
+    Takes effect after process restart (not auto-restarted in Patch 1).
+    """
+    try:
+        root = _repo_root()
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from runtime_dataset_metadata import emit_metadata_for_path
+
+        for rel in (
+            "data/cognition/candle_structure_memory.parquet",
+            "data/cognition/volume_response_state.parquet",
+            "data/reinforcement/auction_synthesis_memory.parquet",
+            "data/cognition/multi_timeframe_synthesis.parquet",
+            "data/cognition/runtime_cognition_memory.parquet",
+            "data/reinforcement/auction_reinforcement_memory.parquet",
+            "data/probabilistic/probabilistic_auction_memory.parquet",
+            "data/cognition/multi_timeframe_availability_memory.parquet",
+            "data/runtime/multi_timeframe_availability_latest.json",
+        ):
+            emit_metadata_for_path(rel, root=Path(root), metadata_origin="LIVE_WRITER")
+    except Exception as error:  # noqa: BLE001
+        print(f"METADATA_WARN pipeline sidecars: {error}")
 
 
 def _maybe_run_stage1_benchmark() -> None:

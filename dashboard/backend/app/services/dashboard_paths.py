@@ -23,6 +23,12 @@ DASHBOARD_PARQUET_CANDIDATES: dict[str, tuple[str, ...]] = {
         "data/cognition/trading_state_memory.parquet",
         "data/probabilistic/trading_state_memory.parquet",
     ),
+    "context_decision_log.parquet": (
+        "data/live/context_decision_log.parquet",
+    ),
+    "market_context_lifecycle_memory.parquet": (
+        "data/cognition/market_context_lifecycle_memory.parquet",
+    ),
     "trading_state_feature_snapshots.parquet": (
         "data/replay/trading_state_feature_snapshots.parquet",
         "data/cognition/trading_state_feature_snapshots.parquet",

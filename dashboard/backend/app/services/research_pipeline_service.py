@@ -140,6 +140,228 @@ def _decision_status_label(
     return label
 
 
+DECISION_SOURCE_FRESH_LAG_SECONDS = 30 * 60
+DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
+DIRECTIONAL_PAPER_ACTIONS = frozenset({"INTENT_OPEN_LONG", "INTENT_OPEN_SHORT"})
+
+
+def _clean_token(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none", "null", "—", "-"}:
+        return None
+    return text
+
+
+def _parse_utc_timestamp(value: Any) -> pd.Timestamp | None:
+    if value is None:
+        return None
+    try:
+        ts = pd.to_datetime(value, utc=True, errors="coerce")
+    except Exception:
+        return None
+    if pd.isna(ts):
+        return None
+    return pd.Timestamp(ts)
+
+
+def _format_utc_timestamp(value: pd.Timestamp | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _row_timestamp(row: dict[str, Any], keys: tuple[str, ...]) -> pd.Timestamp | None:
+    for key in keys:
+        ts = _parse_utc_timestamp(row.get(key))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _source_lag_seconds(source_ts: pd.Timestamp | None, live_ts: pd.Timestamp | None) -> float | None:
+    if source_ts is None or live_ts is None:
+        return None
+    return round(max((live_ts - source_ts).total_seconds(), 0.0), 3)
+
+
+def _source_freshness(
+    *,
+    source_name: str,
+    source_ts: pd.Timestamp | None,
+    live_ts: pd.Timestamp | None,
+) -> dict[str, Any]:
+    lag = _source_lag_seconds(source_ts, live_ts)
+    stale = source_ts is None or (lag is not None and lag > DECISION_SOURCE_FRESH_LAG_SECONDS)
+    warning = None
+    if stale:
+        if lag is None:
+            warning = f"Decision source {source_name} has no usable timestamp."
+        else:
+            warning = (
+                f"Decision source {source_name} is stale: "
+                f"{int(lag)}s behind latest live_market_feed.parquet."
+            )
+    return {
+        "source_name": source_name,
+        "source_timestamp": _format_utc_timestamp(source_ts),
+        "source_reference_timestamp": _format_utc_timestamp(live_ts),
+        "source_lag_seconds": lag,
+        "source_stale": stale,
+        "freshness_warning": warning,
+        "freshness": {
+            "source_name": source_name,
+            "source_timestamp": _format_utc_timestamp(source_ts),
+            "reference_timestamp": _format_utc_timestamp(live_ts),
+            "lag_seconds": lag,
+            "max_lag_seconds": DECISION_SOURCE_FRESH_LAG_SECONDS,
+            "is_stale": stale,
+            "warning": warning,
+        },
+    }
+
+
+def _context_status_label(row: dict[str, Any]) -> str | None:
+    active_context = _clean_token(row.get("active_market_context"))
+    candidate_context = _clean_token(row.get("candidate_context"))
+    paper_action = _clean_token(row.get("paper_action_candidate"))
+    lifecycle_state = _clean_token(row.get("lifecycle_state"))
+
+    if active_context and active_context != "OBSERVE":
+        return active_context
+    if candidate_context in DIRECTIONAL_CONTEXTS:
+        return candidate_context
+    if paper_action in DIRECTIONAL_PAPER_ACTIONS:
+        return paper_action
+    return active_context or lifecycle_state
+
+
+def _build_context_decision_payload(
+    *,
+    source_name: str,
+    row: dict[str, Any],
+    source_ts: pd.Timestamp | None,
+    live_ts: pd.Timestamp | None,
+    rows: dict[str, int],
+    probabilistic_latest: dict[str, Any],
+) -> dict[str, Any]:
+    label = _context_status_label(row)
+    missing = label is None
+    entry_eligible = _to_bool(
+        row.get("paper_loop_allowed")
+        if "paper_loop_allowed" in row
+        else row.get("paper_signal_write_allowed")
+        if "paper_signal_write_allowed" in row
+        else row.get("action_allowed")
+    )
+    source = _source_freshness(source_name=source_name, source_ts=source_ts, live_ts=live_ts)
+    level = "GREY" if missing else ("GREEN" if entry_eligible is True else "YELLOW")
+
+    payload = {
+        "level": level,
+        "status_label": label or "UNAVAILABLE",
+        "market_state": _clean_token(row.get("raw_market_context")) or _clean_token(row.get("active_market_context")),
+        "market_bias": _clean_token(row.get("intended_side")),
+        "rule_id": _clean_token(row.get("edge_signal_rule")),
+        "market_state_confidence": _to_float(row.get("confidence")),
+        "trend_confidence": _to_float(probabilistic_latest.get("trend_confidence")),
+        "trading_state": label,
+        "confidence_band": _clean_token(row.get("lifecycle_state")),
+        "entry_eligible": entry_eligible,
+        "execution_posture": _clean_token(row.get("paper_action_candidate")) or _clean_token(row.get("action_reason")),
+        "snapshot_id": _clean_token(row.get("decision_id")),
+        "timestamp": _format_utc_timestamp(source_ts),
+        "active_market_context": _clean_token(row.get("active_market_context")),
+        "lifecycle_state": _clean_token(row.get("lifecycle_state")),
+        "candidate_context": _clean_token(row.get("candidate_context")),
+        "paper_action_candidate": _clean_token(row.get("paper_action_candidate")),
+        "intended_side": _clean_token(row.get("intended_side")),
+        "rows": rows,
+    }
+    payload.update(source)
+    return payload
+
+
+def _build_legacy_decision_payload(
+    *,
+    market_latest: dict[str, Any],
+    trading_latest: dict[str, Any],
+    snapshot_latest: dict[str, Any],
+    probabilistic_latest: dict[str, Any],
+    live_ts: pd.Timestamp | None,
+    rows: dict[str, int],
+    missing: bool,
+) -> dict[str, Any]:
+    trading_state = trading_latest.get("trading_state") or snapshot_latest.get("trading_state")
+    market_state = market_latest.get("market_state") or trading_latest.get("market_state") or snapshot_latest.get("market_state")
+    rule_id = market_latest.get("rule_id") or snapshot_latest.get("rule_id")
+    market_state_confidence = _to_float(
+        market_latest.get("market_state_confidence")
+        or trading_latest.get("market_state_confidence")
+        or snapshot_latest.get("market_state_confidence")
+    )
+    trend_confidence = _to_float(probabilistic_latest.get("trend_confidence"))
+    entry_eligible = _to_bool(trading_latest.get("entry_eligible") if "entry_eligible" in trading_latest else snapshot_latest.get("entry_eligible"))
+    execution_posture = trading_latest.get("execution_posture") or snapshot_latest.get("execution_posture")
+
+    if trading_latest:
+        source_name = "trading_state_memory.parquet"
+        source_ts = _row_timestamp(trading_latest, ("timestamp",))
+    elif snapshot_latest:
+        source_name = "trading_state_feature_snapshots.parquet"
+        source_ts = _row_timestamp(snapshot_latest, ("timestamp",))
+    elif market_latest:
+        source_name = "market_state_memory.parquet"
+        source_ts = _row_timestamp(market_latest, ("timestamp",))
+    else:
+        source_name = "decision_layer"
+        source_ts = None
+
+    source = _source_freshness(source_name=source_name, source_ts=source_ts, live_ts=live_ts)
+    source_stale = bool(source.get("source_stale"))
+    level = _decision_level(
+        entry_eligible=entry_eligible,
+        trading_state=trading_state,
+        execution_posture=str(execution_posture) if execution_posture is not None else None,
+        missing=missing,
+    )
+    status_label = _decision_status_label(
+        entry_eligible=entry_eligible,
+        trading_state=trading_state,
+        execution_posture=str(execution_posture) if execution_posture is not None else None,
+        missing=missing,
+    )
+    if source_stale and not missing:
+        level = "YELLOW"
+        status_label = "STALE_DECISION"
+
+    payload = {
+        "level": level,
+        "status_label": status_label,
+        "market_state": market_state,
+        "market_bias": market_latest.get("market_bias") or snapshot_latest.get("market_bias"),
+        "rule_id": rule_id,
+        "market_state_confidence": market_state_confidence,
+        "trend_confidence": trend_confidence,
+        "trading_state": None if source_stale and not missing else trading_state,
+        "stale_trading_state": trading_state if source_stale and not missing else None,
+        "confidence_band": trading_latest.get("confidence_band") or snapshot_latest.get("confidence_band"),
+        "entry_eligible": entry_eligible,
+        "execution_posture": trading_latest.get("execution_posture") or snapshot_latest.get("execution_posture"),
+        "snapshot_id": snapshot_latest.get("snapshot_id"),
+        "timestamp": _format_utc_timestamp(source_ts),
+        "rows": rows,
+    }
+    payload.update(source)
+    return payload
+
+
 def _derive_governance_status(
     *,
     active_model: str | None,
@@ -214,61 +436,74 @@ async def build_pipeline_sync_status() -> dict[str, Any]:
 
 
 async def build_decision_layer_snapshot() -> dict[str, Any]:
+    live_feed = await read_parquet("live_market_feed.parquet", tail=1)
+    decision_log = await read_parquet("context_decision_log.parquet", tail=1)
+    lifecycle = await read_parquet("market_context_lifecycle_memory.parquet", tail=1)
     market = await read_parquet("market_state_memory.parquet", tail=1)
     trading = await read_parquet("trading_state_memory.parquet", tail=1)
     snapshots = await read_parquet("trading_state_feature_snapshots.parquet", tail=1)
     probabilistic = await read_parquet("probabilistic_auction_memory.parquet", tail=1)
 
+    live_latest = latest_row(live_feed) or {}
+    decision_latest = latest_row(decision_log) or {}
+    lifecycle_latest = latest_row(lifecycle) or {}
     market_latest = latest_row(market) or {}
     trading_latest = latest_row(trading) or {}
     snapshot_latest = latest_row(snapshots) or {}
     probabilistic_latest = latest_row(probabilistic) or {}
 
-    trading_state = trading_latest.get("trading_state") or snapshot_latest.get("trading_state")
-    market_state = market_latest.get("market_state") or trading_latest.get("market_state") or snapshot_latest.get("market_state")
-    rule_id = market_latest.get("rule_id") or snapshot_latest.get("rule_id")
-    market_state_confidence = _to_float(
-        market_latest.get("market_state_confidence")
-        or trading_latest.get("market_state_confidence")
-        or snapshot_latest.get("market_state_confidence")
-    )
-    trend_confidence = _to_float(probabilistic_latest.get("trend_confidence"))
-    entry_eligible = _to_bool(trading_latest.get("entry_eligible") if "entry_eligible" in trading_latest else snapshot_latest.get("entry_eligible"))
-    execution_posture = trading_latest.get("execution_posture") or snapshot_latest.get("execution_posture")
+    live_ts = _row_timestamp(live_latest, ("timestamp",))
+    rows = {
+        "live_market_feed": len(live_feed),
+        "context_decision_log": len(decision_log),
+        "market_context_lifecycle_memory": len(lifecycle),
+        "market_state_memory": len(market),
+        "trading_state_memory": len(trading),
+        "feature_snapshots": len(snapshots),
+    }
 
-    missing = len(market) == 0 and len(trading) == 0
-    level = _decision_level(
-        entry_eligible=entry_eligible,
-        trading_state=trading_state,
-        execution_posture=str(execution_posture) if execution_posture is not None else None,
+    decision_ts = _row_timestamp(decision_latest, ("candle_timestamp", "decision_written_at_utc"))
+    decision_source = _source_freshness(
+        source_name="context_decision_log.parquet",
+        source_ts=decision_ts,
+        live_ts=live_ts,
+    )
+    if decision_latest and not decision_source["source_stale"]:
+        return _build_context_decision_payload(
+            source_name="context_decision_log.parquet",
+            row=decision_latest,
+            source_ts=decision_ts,
+            live_ts=live_ts,
+            rows=rows,
+            probabilistic_latest=probabilistic_latest,
+        )
+
+    lifecycle_ts = _row_timestamp(lifecycle_latest, ("timestamp",))
+    lifecycle_source = _source_freshness(
+        source_name="market_context_lifecycle_memory.parquet",
+        source_ts=lifecycle_ts,
+        live_ts=live_ts,
+    )
+    if lifecycle_latest and not lifecycle_source["source_stale"]:
+        return _build_context_decision_payload(
+            source_name="market_context_lifecycle_memory.parquet",
+            row=lifecycle_latest,
+            source_ts=lifecycle_ts,
+            live_ts=live_ts,
+            rows=rows,
+            probabilistic_latest=probabilistic_latest,
+        )
+
+    missing = len(market) == 0 and len(trading) == 0 and len(snapshots) == 0
+    return _build_legacy_decision_payload(
+        market_latest=market_latest,
+        trading_latest=trading_latest,
+        snapshot_latest=snapshot_latest,
+        probabilistic_latest=probabilistic_latest,
+        live_ts=live_ts,
+        rows=rows,
         missing=missing,
     )
-
-    return {
-        "level": level,
-        "status_label": _decision_status_label(
-            entry_eligible=entry_eligible,
-            trading_state=trading_state,
-            execution_posture=str(execution_posture) if execution_posture is not None else None,
-            missing=missing,
-        ),
-        "market_state": market_state,
-        "market_bias": market_latest.get("market_bias") or snapshot_latest.get("market_bias"),
-        "rule_id": rule_id,
-        "market_state_confidence": market_state_confidence,
-        "trend_confidence": trend_confidence,
-        "trading_state": trading_state,
-        "confidence_band": trading_latest.get("confidence_band") or snapshot_latest.get("confidence_band"),
-        "entry_eligible": entry_eligible,
-        "execution_posture": trading_latest.get("execution_posture") or snapshot_latest.get("execution_posture"),
-        "snapshot_id": snapshot_latest.get("snapshot_id"),
-        "timestamp": trading_latest.get("timestamp") or market_latest.get("timestamp") or snapshot_latest.get("timestamp"),
-        "rows": {
-            "market_state_memory": len(market),
-            "trading_state_memory": len(trading),
-            "feature_snapshots": len(snapshots),
-        },
-    }
 
 
 async def build_drift_monitoring_snapshot(
@@ -1090,7 +1325,7 @@ async def build_research_pipeline_snapshot() -> dict[str, Any]:
         },
         {
             "key": "pipeline_sync",
-            "label": "PIPELINE24",
+            "label": "PIPELINE",
             "level": "GREEN" if pipeline["in_sync"] else "RED",
             "value": f"{pipeline['step_count']}/{pipeline['expected_step_count']}",
         },

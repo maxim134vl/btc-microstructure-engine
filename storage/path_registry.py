@@ -55,6 +55,7 @@ PARQUET_REGISTRY: dict[str, str] = {
     "runtime_cognition_memory.parquet": "cognition",
     "intermediate_cognition_memory.parquet": "cognition",
     "multi_timeframe_synthesis.parquet": "cognition",
+    "multi_timeframe_availability_memory.parquet": "cognition",
     "runtime_cognition_alignment_audit.parquet": "cognition",
     "adaptive_meta_cognition_state.parquet": "cognition",
     "volume_reactions.parquet": "cognition",

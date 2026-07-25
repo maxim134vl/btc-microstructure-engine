@@ -497,10 +497,32 @@ def print_summary(result: ChainResult) -> None:
     print(f"status json: {STATUS_PATH}")
 
 
+def _emit_context_truth_metadata() -> None:
+    """Patch 1: metadata sidecars for CONTEXT_TRUTH datasets (no parquet mutation)."""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from runtime_dataset_metadata import emit_metadata_for_path
+
+        for rel in (
+            "data/cognition/auction_episode_memory.parquet",
+            "data/cognition/cognitive_market_state_memory.parquet",
+            "data/cognition/final_market_context_memory.parquet",
+            "data/cognition/market_context_lifecycle_memory.parquet",
+            "data/cognition/market_context_lifecycle_episodes.parquet",
+            "apps/context_visualizer/public/data/lifecycle_latest.json",
+        ):
+            emit_metadata_for_path(rel, root=ROOT, metadata_origin="LIVE_WRITER")
+    except Exception as exc:  # noqa: BLE001
+        print(f"METADATA_WARN context_truth sidecars: {exc}")
+
+
 def main() -> int:
     result = run_shadow_chain()
     write_status(result)
     print_summary(result)
+    if result.status == "PASS":
+        _emit_context_truth_metadata()
     return 0 if result.status == "PASS" else 1
 
 

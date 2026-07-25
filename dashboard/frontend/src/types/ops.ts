@@ -6,6 +6,7 @@ export type EngineStatus = "HEALTHY" | "DEFERRED" | "FAILED" | "TIMEOUT" | "STAL
 
 export interface OpsSnapshot {
   generated_at?: string;
+  schema_version?: string;
   ribbon: RibbonItem[];
   engines: EngineRow[];
   parquet: ParquetSummary;
@@ -22,6 +23,146 @@ export interface OpsSnapshot {
   research_pipeline?: ResearchPipelineSnapshot;
   runtime_failure_audit?: RuntimeFailureAuditSummary;
   runtime_skipped_engine_audit?: RuntimeSkippedEngineAuditSummary;
+  /** Patch 4.2 canonical runtime truth plane */
+  overall_health?: string;
+  overall_reason?: string;
+  runtime_truth?: RuntimeTruthSnapshot;
+  processes?: RuntimeTruthProcess[];
+  pipeline_engines?: RuntimeTruthEngine[];
+  datasets?: RuntimeTruthDataset[];
+  multi_timeframe?: RuntimeTruthTimeframe[];
+  context_chain?: RuntimeTruthContextChain;
+  paper?: RuntimeTruthPaper;
+  known_limitations?: RuntimeTruthLimitation[];
+  legacy_components?: RuntimeTruthLegacy[];
+  timeframe_traders?: RuntimeTruthTimeframeTraders;
+}
+
+export interface RuntimeTruthProcess {
+  process_id: string;
+  display_name?: string;
+  pid?: number | null;
+  health?: string;
+  health_reason?: string;
+  process_state?: string;
+  command?: string | null;
+}
+
+export interface RuntimeTruthEngine {
+  engine_id: string;
+  display_name?: string;
+  pipeline_order?: number;
+  last_result?: string;
+  health?: string;
+  required?: boolean;
+}
+
+export interface RuntimeTruthDataset {
+  dataset_id?: string;
+  health?: string;
+  health_reason?: string;
+  path?: string;
+}
+
+export interface RuntimeTruthTimeframe {
+  timeframe: string;
+  support?: string;
+  availability_status?: string;
+  availability_reason?: string | null;
+  state_asof?: string | null;
+  source_bar_close?: string | null;
+  is_new_event?: boolean | null;
+  age_bars?: number | null;
+}
+
+export interface RuntimeTruthContextChain {
+  process_health?: string;
+  last_result?: string;
+  health?: string;
+  health_reason?: string;
+  final_context_tip?: string | null;
+  decision_tip?: string | null;
+}
+
+export interface RuntimeTruthPaper {
+  process_health?: string;
+  representation?: string;
+  is_controller_failure?: boolean;
+  health?: string;
+  health_reason?: string;
+  last_cycle_result?: string | null;
+  skip_refresh?: boolean;
+  real_execution?: boolean;
+  exchange_enabled?: boolean;
+}
+
+export interface RuntimeTruthLimitation {
+  id?: string;
+  detail?: string;
+  classification?: string;
+}
+
+export interface RuntimeTruthTrader {
+  timeframe: string;
+  book_exists?: boolean;
+  direction?: string;
+  open_position_id?: string | null;
+  entry_price?: number | null;
+  open_risk_usd?: number | null;
+  realized_pnl_usd?: number | null;
+  unrealized_pnl_usd?: number | null;
+  closed_trades?: number | null;
+  last_command_intent?: string | null;
+  health?: string;
+  health_reason?: string;
+}
+
+export interface RuntimeTruthCommandBus {
+  exists?: boolean;
+  rows?: number | null;
+  duplicate_command_ids?: number | null;
+  latest_evaluation_timestamp?: string | null;
+  health?: string;
+}
+
+export interface RuntimeTruthPortfolio {
+  open_positions?: number | null;
+  gross_open_risk_usd?: number | null;
+  available_risk_usd?: number | null;
+  portfolio_max_risk_usd?: number | null;
+  net_notional?: number | null;
+  realized_pnl?: number | null;
+  unrealized_pnl?: number | null;
+}
+
+export interface RuntimeTruthTimeframeTraders {
+  activated?: boolean;
+  d1_trader?: boolean;
+  command_bus?: RuntimeTruthCommandBus;
+  portfolio?: RuntimeTruthPortfolio;
+  traders?: RuntimeTruthTrader[];
+}
+
+export interface RuntimeTruthLegacy {
+  component_id?: string;
+  classification?: string;
+  active?: boolean;
+  reason?: string;
+}
+
+export interface RuntimeTruthSnapshot {
+  generated_at?: string;
+  schema_version?: string;
+  overall_health?: string;
+  overall_reason?: string;
+  processes?: RuntimeTruthProcess[];
+  pipeline_engines?: RuntimeTruthEngine[];
+  multi_timeframe?: RuntimeTruthTimeframe[];
+  context_chain?: RuntimeTruthContextChain;
+  paper?: RuntimeTruthPaper;
+  known_limitations?: RuntimeTruthLimitation[];
+  legacy_components?: RuntimeTruthLegacy[];
+  timeframe_traders?: RuntimeTruthTimeframeTraders;
 }
 
 

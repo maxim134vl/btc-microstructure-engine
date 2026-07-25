@@ -17,7 +17,14 @@ from typing import Any
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "auction_episode_memory_v1"
+# Production writes keep legacy classification unless explicitly enabled.
+# Candidate/audit/tests set BTC_ML_CONTINUATION_PROGRESSION=1.
+CONTINUATION_PROGRESSION_ENABLED = os.environ.get("BTC_ML_CONTINUATION_PROGRESSION", "0") == "1"
+BUILDER_VERSION = (
+    "auction_episode_memory_v1_continuation_progression"
+    if CONTINUATION_PROGRESSION_ENABLED
+    else "auction_episode_memory_v1"
+)
 OUTPUT_PATH = ROOT / "data" / "cognition" / "auction_episode_memory.parquet"
 STALE_HOURS = 6.0
 
@@ -328,6 +335,38 @@ def classify_price_result(
     return "ACCEPTED_LOWER"
 
 
+def resolve_expected_follow_through_direction(
+    auction_episode: str | None = None,
+    bar_event: str | None = None,
+    effort_side: str | None = None,
+) -> str | None:
+    """Return ``HIGHER`` / ``LOWER`` / ``None`` for follow-through evaluation.
+
+    Explicit ``effort_side`` / ``bar_event`` win when known.
+    ``auction_episode`` is a fallback only when those are UNKNOWN/missing.
+    BALANCE and unsupported episodes return ``None`` (no directional FT).
+    """
+    side = _clean_text(effort_side, default="UNKNOWN").upper()
+    event = _clean_text(bar_event, default="UNKNOWN").upper()
+    episode = _clean_text(auction_episode, default="UNKNOWN").upper()
+
+    # Explicit signal first — preserve legacy behavior.
+    if side == "BUYER" or event in {"BUYING_CLIMAX"}:
+        return "HIGHER"
+    if side == "SELLER" or event in {"SELLING_CLIMAX", "STOPPING_VOLUME"}:
+        return "LOWER"
+
+    # Fallback: derive direction from the auction episode itself.
+    if episode == "ACCEPTANCE_HIGHER":
+        return "HIGHER"
+    if episode == "ACCEPTANCE_LOWER":
+        return "LOWER"
+    # Absorption / distribution already have directional confirmation semantics via
+    # explicit bar_event in the normal path; do not invent fallbacks here.
+    # BALANCE / UNKNOWN / CONTINUATION without side → no directional expectation.
+    return None
+
+
 def classify_follow_through(
     *,
     closes: list[float],
@@ -335,8 +374,14 @@ def classify_follow_through(
     effort_side: str,
     bar_event: str,
     horizon: int = 4,
+    auction_episode: str | None = None,
 ) -> str:
-    """Diagnostic look-ahead over available history only."""
+    """Diagnostic look-ahead over available history only.
+
+    When ``effort_side`` / ``bar_event`` cannot resolve a direction, optionally
+    fall back to ``auction_episode`` (ACCEPTANCE_HIGHER → higher, ACCEPTANCE_LOWER → lower).
+    Thresholds are unchanged.
+    """
     if index < 0 or index >= len(closes) - 1:
         return "UNKNOWN"
     base = closes[index]
@@ -350,11 +395,14 @@ def classify_follow_through(
     move = (end - base) / abs(base)
     max_up = (max(future) - base) / abs(base)
     max_down = (min(future) - base) / abs(base)
-    side = _clean_text(effort_side).upper()
-    event = _clean_text(bar_event).upper()
 
-    want_higher = side == "BUYER" or event in {"BUYING_CLIMAX"}
-    want_lower = side == "SELLER" or event in {"SELLING_CLIMAX", "STOPPING_VOLUME"}
+    direction = resolve_expected_follow_through_direction(
+        auction_episode=auction_episode,
+        bar_event=bar_event,
+        effort_side=effort_side,
+    )
+    want_higher = direction == "HIGHER"
+    want_lower = direction == "LOWER"
 
     if want_higher:
         if max_up >= 0.002 and move >= 0.001:
@@ -420,13 +468,23 @@ def classify_auction_episode(
     price_result: str,
     volume_effort: str,
     effort_result: str,
+    prior_auction_episode: str | None = None,
 ) -> str:
+    """Classify auction episode for the current bar.
+
+    CONTINUATION semantics (progression model):
+    - First accepted-price bar remains ACCEPTANCE_*.
+    - A later bar that continues the same accepted direction with FT=YES
+      becomes CONTINUATION (uses only prior bar episode + current bar fields).
+    - FT thresholds are unchanged.
+    """
     event = _clean_text(bar_event).upper()
     location = _clean_text(auction_location).upper()
     ft = _clean_text(follow_through).upper()
     price = _clean_text(price_result).upper()
     effort = _clean_text(volume_effort).upper()
     eresult = _clean_text(effort_result).upper()
+    prior = _clean_text(prior_auction_episode, default="UNKNOWN").upper()
 
     failed_higher = ft in {"FAILED", "NO"} or price in {"REJECTED_HIGHER", "NO_PROGRESS"}
     failed_lower = ft in {"FAILED", "NO"} or price in {"REJECTED_LOWER", "NO_PROGRESS"}
@@ -440,15 +498,46 @@ def classify_auction_episode(
     if effort in {"HIGH", "EXTREME"} and (price == "REJECTED_LOWER" or (eresult == "REJECTED" and location in {"LOWER_AREA", "BREAKDOWN_AREA"})):
         return "FAILED_BREAKDOWN"
     if price == "ACCEPTED_HIGHER" and eresult in {"ACCEPTED", "CONTINUED"}:
+        # Progression: do not look ahead; only prior bar episode is allowed.
+        if prior in {"ACCEPTANCE_HIGHER", "CONTINUATION"} and ft == "YES":
+            return "CONTINUATION"
         return "ACCEPTANCE_HIGHER"
     if price == "ACCEPTED_LOWER" and eresult in {"ACCEPTED", "CONTINUED"}:
+        if prior in {"ACCEPTANCE_LOWER", "CONTINUATION"} and ft == "YES":
+            return "CONTINUATION"
         return "ACCEPTANCE_LOWER"
+    # Non-accepted efficient continuation (e.g. EFFICIENT_CONTINUATION upstream).
     if eresult == "CONTINUED" and ft == "YES":
         return "CONTINUATION"
     if price == "RANGE" or eresult in {"ABSORBED", "NO_RESULT"}:
         return "BALANCE"
     if event == "UNKNOWN" and location == "UNKNOWN":
         return "UNKNOWN"
+    return "UNKNOWN"
+
+
+def derive_continuation_effort_side(
+    *,
+    auction_episode: str,
+    effort_side: str,
+    price_result: str,
+) -> str:
+    """Align CONTINUATION effort_side with accepted-price direction (PIT only).
+
+    Progression CONTINUATION is defined by ACCEPTED_HIGHER/LOWER continuity.
+    Conflicting upstream effort_side (e.g. SELLER + ACCEPTED_HIGHER) must not
+    flip BUYER_CONTROL↔SELLER_CONTROL relative to the acceptance direction.
+    """
+    side = _clean_text(effort_side).upper()
+    if _clean_text(auction_episode).upper() != "CONTINUATION":
+        return side if side else "UNKNOWN"
+    price = _clean_text(price_result).upper()
+    if price == "ACCEPTED_HIGHER":
+        return "BUYER"
+    if price == "ACCEPTED_LOWER":
+        return "SELLER"
+    if side in {"BUYER", "SELLER", "MIXED"}:
+        return side
     return "UNKNOWN"
 
 
@@ -506,6 +595,8 @@ def build_episode_reason(
         return f"high effort rejected lower ({event}, {price}, follow_through={ft})"
     if episode in {"ACCEPTANCE_HIGHER", "ACCEPTANCE_LOWER"}:
         return f"{price} with follow_through={ft}"
+    if episode == "CONTINUATION":
+        return f"continued accepted direction after prior acceptance (price_result={price}, follow_through={ft})"
     if episode == "BALANCE":
         return f"balance / no decisive auction progress (price_result={price}, follow_through={ft})"
     if event == "UNKNOWN" or location == "UNKNOWN":
@@ -663,6 +754,11 @@ def build_auction_episode_rows(
             follow_through=follow_through,
             effort_result_state=effort_result_state,
         )
+        prior_episode = (
+            rows[-1]["auction_episode"]
+            if (CONTINUATION_PROGRESSION_ENABLED and rows)
+            else None
+        )
         auction_episode = classify_auction_episode(
             bar_event=bar_event,
             auction_location=auction_location,
@@ -670,7 +766,54 @@ def build_auction_episode_rows(
             price_result=price_result,
             volume_effort=volume_effort,
             effort_result=effort_result,
+            prior_auction_episode=prior_episode,
         )
+        # Targeted fix: when bar_event/effort_side are UNKNOWN, ACCEPTANCE_* had no
+        # directional FT resolution and stayed DEVELOPING despite valid price follow-through.
+        # Re-evaluate FT using auction_episode as fallback direction only.
+        if (
+            resolve_expected_follow_through_direction(
+                auction_episode=auction_episode,
+                bar_event=bar_event,
+                effort_side=effort_side,
+            )
+            is not None
+            and _clean_text(effort_side).upper() not in {"BUYER", "SELLER"}
+            and _clean_text(bar_event).upper()
+            not in {"BUYING_CLIMAX", "SELLING_CLIMAX", "STOPPING_VOLUME"}
+        ):
+            refined_ft = classify_follow_through(
+                closes=closes,
+                index=int(index),
+                effort_side=effort_side,
+                bar_event=bar_event,
+                auction_episode=auction_episode,
+            )
+            if refined_ft != follow_through:
+                follow_through = refined_ft
+                # Refresh effort_result using refined follow-through, then re-classify
+                # episode with the same prior (no look-ahead beyond existing FT window).
+                effort_result = classify_effort_result(
+                    volume_effort=volume_effort,
+                    price_result=price_result,
+                    follow_through=follow_through,
+                    effort_result_state=effort_result_state,
+                )
+                auction_episode = classify_auction_episode(
+                    bar_event=bar_event,
+                    auction_location=auction_location,
+                    follow_through=follow_through,
+                    price_result=price_result,
+                    volume_effort=volume_effort,
+                    effort_result=effort_result,
+                    prior_auction_episode=prior_episode,
+                )
+        if CONTINUATION_PROGRESSION_ENABLED:
+            effort_side = derive_continuation_effort_side(
+                auction_episode=auction_episode,
+                effort_side=effort_side,
+                price_result=price_result,
+            )
         episode_status = classify_episode_status(
             auction_episode=auction_episode,
             follow_through=follow_through,
