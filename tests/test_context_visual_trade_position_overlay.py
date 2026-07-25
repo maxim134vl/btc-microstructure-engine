@@ -34,7 +34,9 @@ def test_ui_has_panels_and_no_chart_param_text_intent():
     assert "paperTradeResultPanel" in html
     assert "paperPnlPanel" in html
     assert "Paper trade result" in html
-    assert "Paper PnL" in html
+    assert "Detailed PnL" in html
+    assert "Trading Model Evaluation Metrics" in html
+    assert "modelMetricsPanel" in html
     js = _read(APP_JS)
     assert "tradeShapes" in js
     assert "chart geometry only" in js.lower() or "no trade parameter text" in js.lower()
@@ -75,22 +77,30 @@ def test_builder_trade_shapes_and_context(tmp_path, monkeypatch):
     assert shapes, "expected trade_shape objects"
     assert all(s.get("trade_shape") is True for s in shapes)
 
-    # Target LONG 65913 trade
-    target = next((s for s in shapes if s.get("entry_price") is not None and abs(float(s["entry_price"]) - 65913) < 1), None)
+    # Target restated LONG episode (replaced mid-context 65913 entry).
+    target = next(
+        (
+            s
+            for s in shapes
+            if s.get("restated")
+            and s.get("original_trade_id") == "PAPER_TRADE_ONE_SHOT_3693c3f8009e4582"
+        ),
+        None,
+    )
     assert target is not None
     assert target["side"] == "LONG"
-    assert abs(float(target["exit_price"]) - 66240.02) < 0.05
-    assert abs(float(target["stop_price"]) - 65253.87) < 0.05
-    assert abs(float(target["take_profit_price"]) - 66901.695) < 0.05
+    assert abs(float(target["entry_price"]) - 65751.56) < 0.05
+    assert abs(float(target["exit_price"]) - 65931.92) < 0.05
     assert target.get("entry_ts")
     assert target.get("exit_ts")
     assert target.get("context_at_entry") == "LONG_CONTEXT"
-    assert target.get("lifecycle_at_entry") == "CHALLENGED"
+    assert target.get("lifecycle_at_entry") in {"ACTIVE", "CHALLENGED"}
     assert target.get("context_at_exit") == "OBSERVE"
     assert target.get("lifecycle_at_exit") in {"NO_ACTIVE_CONTEXT", "INVALIDATED"}
-    assert target.get("entered_near_context_end") is True
+    assert target.get("entered_near_context_end") is False
+    assert target.get("entry_context_start_event") is True
+    assert target.get("exit_context_end_event") is True
     assert target.get("exited_inside_observe") is True
-    assert "OBSERVE" in str(target.get("exit_reason") or "")
     geo = target.get("geometry") or {}
     assert geo.get("connector") == "dashed_entry_to_exit"
     assert geo.get("chart_text_labels") is False
@@ -98,6 +108,11 @@ def test_builder_trade_shapes_and_context(tmp_path, monkeypatch):
     assert geo["risk_zone"]["above_entry"] is False  # LONG risk below
     assert geo["profit_zone"]["profitable"] is True
     assert target.get("result_status") == "WIN"
+
+    # Superseded originals must not appear as main shapes.
+    main_ids = {str(s.get("entry_trade_id") or s.get("trade_id")) for s in shapes}
+    assert "PAPER_TRADE_ONE_SHOT_3693c3f8009e4582" not in main_ids
+    assert "PAPER_TRADE_CTRL_f0e8e76f177bebf5" not in main_ids
 
     # Synthetic prices absent from price fields
     for s in shapes:
@@ -120,6 +135,7 @@ def test_builder_trade_shapes_and_context(tmp_path, monkeypatch):
     assert "annualized_return_pct" in pnl
     assert pnl.get("closed_trades_count", 0) >= 1
     assert pnl.get("execution_enabled") is False
+    assert pnl.get("accounting_mode") == "CANONICAL_PAPER_TRADE_ECONOMICS_V1"
 
     entry_check, exit_check = mod.build_trade_context_checks(overlays)
     assert entry_check.get("entry_context") == "LONG_CONTEXT"

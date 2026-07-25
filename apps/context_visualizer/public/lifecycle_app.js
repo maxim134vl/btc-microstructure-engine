@@ -10,6 +10,7 @@ const state = {
   latest: null,
   visualStatus: null,
   overlays: null,
+  normalizedVisualLayer: null,
   openPositions: [],
   closedTrades: [],
   tradeShapes: [],
@@ -41,6 +42,7 @@ const statusLine = document.getElementById("statusLine");
 const sourceLine = document.getElementById("sourceLine");
 const statusChips = document.getElementById("statusChips");
 const hoverReadout = document.getElementById("hoverReadout");
+const latestTradeBadge = document.getElementById("latestTradeBadge");
 const rangeSelect = document.getElementById("rangeSelect");
 const themeSelect = document.getElementById("themeSelect");
 const sidebarToggle = document.getElementById("sidebarToggle");
@@ -48,6 +50,7 @@ const inspectorPanel = document.getElementById("inspectorPanel");
 const controllerTimeline = document.getElementById("controllerTimeline");
 const paperTradeResultPanel = document.getElementById("paperTradeResultPanel");
 const paperPnlPanel = document.getElementById("paperPnlPanel");
+const modelMetricsPanel = document.getElementById("modelMetricsPanel");
 const ctx = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
 
 function cssVar(name, fallback) {
@@ -74,6 +77,14 @@ function chartColors() {
     lossZone: cssVar("--loss-zone", "rgba(255, 69, 58, 0.12)"),
     connector: cssVar("--connector", "rgba(255, 214, 10, 0.55)"),
     markerStroke: cssVar("--marker-stroke", "rgba(255,255,255,0.65)"),
+    tradeEntry: cssVar("--trade-entry-color", "#0a84ff"),
+    tradeExit: cssVar("--trade-exit-color", "#ff9f0a"),
+    tradeStop: cssVar("--trade-stop-color", "#ff453a"),
+    tradeTake: cssVar("--trade-take-color", "#30d158"),
+    tradeSpanBorder: cssVar("--trade-span-border-color", "rgba(255,255,255,0.75)"),
+    latestTradeBorder: cssVar("--latest-trade-border-color", "#ffffff"),
+    tradeLabelBg: cssVar("--trade-label-bg", "rgba(17,19,21,0.92)"),
+    tradeLabelText: cssVar("--trade-label-text", "#f5f5f7"),
     muted: cssVar("--text-muted", "#6e7380"),
     mono: cssVar("--font-mono", "ui-monospace, SF Mono, Menlo, monospace"),
   };
@@ -168,6 +179,83 @@ function copyableId(value) {
   return `<span class="lifecycle-id-row"><span class="lifecycle-mono" title="${escapeHtml(full)}">${escapeHtml(short)}</span><button type="button" data-copy="${escapeHtml(full)}" title="Copy full id">Copy</button></span>`;
 }
 
+function unixFromTs(value) {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+function normalizedTradeToShape(row) {
+  const tradeId = row.trade_id;
+  const status = String(row.status || (row.close_ts ? "CLOSED" : "OPEN")).toUpperCase();
+  const shape = {
+    trade_id: tradeId,
+    entry_trade_id: tradeId,
+    exit_trade_id: tradeId,
+    trade_source: row.trade_source,
+    visual_source: "normalized_trade_render_layer",
+    source: row.trade_source,
+    context_id: row.context_id,
+    context_label: row.context_label,
+    context_episode_id: row.context_episode_id,
+    entry_ts: row.open_ts,
+    exit_ts: row.close_ts,
+    entry_action_ts: row.open_ts,
+    exit_action_ts: row.close_ts,
+    entry_time_unix: row.open_time_unix ?? unixFromTs(row.open_ts),
+    exit_time_unix: row.close_time_unix ?? unixFromTs(row.close_ts),
+    side: row.direction,
+    direction: row.direction,
+    position_size_btc: row.position_size_btc ?? row.position_size_asset,
+    position_notional_usd: row.position_notional_usd ?? row.position_size_usd,
+    entry_price: row.entry_price,
+    exit_price: row.exit_price,
+    current_price: row.current_price,
+    gross_price_pnl_usd: row.gross_price_pnl_usd ?? row.gross_pnl_before_fees_slippage,
+    gross_pnl_usd: row.gross_pnl_before_fees_slippage ?? row.gross_price_pnl_usd,
+    gross_pnl_before_fees_slippage: row.gross_pnl_before_fees_slippage ?? row.gross_price_pnl_usd,
+    net_realized_pnl_usd: row.net_realized_pnl_usd ?? row.net_pnl_after_fees_slippage,
+    net_pnl_usd: row.net_pnl_after_fees_slippage ?? row.net_realized_pnl_usd,
+    net_pnl_after_fees_slippage: row.net_pnl_after_fees_slippage ?? row.net_realized_pnl_usd,
+    unrealized_pnl_usd: row.unrealized_pnl_usd,
+    pnl: status === "OPEN" ? row.unrealized_pnl_usd : (row.net_pnl_after_fees_slippage ?? row.net_realized_pnl_usd),
+    entry_fee_usd: row.entry_fee_usd,
+    exit_fee_usd: row.exit_fee_usd,
+    fees_usd: row.fees_usd ?? row.total_fees_usd,
+    entry_slippage_usd: row.entry_slippage_usd,
+    exit_slippage_usd: row.exit_slippage_usd,
+    slippage_usd: row.slippage_usd ?? row.total_slippage_usd,
+    slippage_bps: row.slippage_bps,
+    slippage_R: row.slippage_R,
+    stop_price: row.stop_loss_price ?? row.stop_price,
+    take_price: row.take_profit_price ?? row.take_price,
+    stop_loss_price: row.stop_loss_price ?? row.stop_price,
+    take_profit_price: row.take_profit_price ?? row.take_price,
+    r_multiple: row.r_multiple ?? row.R,
+    R: row.R ?? row.r_multiple,
+    risk_amount_usd: row.risk_amount_usd ?? row.max_risk_usd,
+    stop_distance_usd: row.stop_distance_usd ?? row.risk_distance_price,
+    entry_execution_source: row.entry_execution_source,
+    exit_execution_source: row.exit_execution_source,
+    execution_quality_status: row.execution_quality_status,
+    context_quality: row.context_quality,
+    paper_entry_basis: row.paper_entry_basis,
+    sizing_status: row.sizing_status,
+    sizing_method: row.sizing_method,
+    status,
+    visual_style: "normal_trade_style",
+    uniform_style: true,
+    dedupe_key: row.dedupe_key || (tradeId ? `trade_id:${tradeId}` : null),
+    inspector: { ...row },
+  };
+  const stopPrice = row.stop_loss_price ?? row.stop_price;
+  const takePrice = row.take_profit_price ?? row.take_price;
+  shape.stop_take_lines = [];
+  if (stopPrice != null) shape.stop_take_lines.push({ kind: "STOP_LOSS", price: stopPrice, visible: true, trade_id: tradeId });
+  if (takePrice != null) shape.stop_take_lines.push({ kind: "TAKE_PROFIT", price: takePrice, visible: true, trade_id: tradeId });
+  return shape;
+}
+
 function bindCopyButtons(root) {
   if (!root) return;
   root.querySelectorAll("button[data-copy]").forEach((btn) => {
@@ -241,11 +329,25 @@ function clamp(value, min, max) {
 }
 
 function formatNumber(value, digits = 2) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
-  return Number(value).toLocaleString("en-US", {
+  const n = Number(value);
+  if (value === null || value === undefined || !Number.isFinite(n)) return "—";
+  const factor = 10 ** digits;
+  const rounded = Math.round(n * factor) / factor;
+  const display = Object.is(rounded, -0) ? 0 : rounded;
+  return display.toLocaleString("en-US", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function signedNumberLabel(value, digits = 2) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  const factor = 10 ** digits;
+  const rounded = Math.round(n * factor) / factor;
+  const display = Object.is(rounded, -0) ? 0 : rounded;
+  const sign = display > 0 ? "+" : "";
+  return `${sign}${formatNumber(display, digits)}`;
 }
 
 function formatTime(unixSeconds) {
@@ -259,6 +361,54 @@ function formatTime(unixSeconds) {
     timeZone: "UTC",
   }).format(new Date(unixSeconds * 1000));
 }
+
+function formatTimestamp(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString().replace(":00.000Z", "Z");
+}
+
+function contextNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const match = String(value).match(/(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function latestTradeInfo() {
+  const direct = state.overlays?.latest_trade_explainability;
+  if (direct && typeof direct === "object") return direct;
+  const shapes = Array.isArray(state.tradeShapes) ? state.tradeShapes : [];
+  const latest = shapes.find((shape) => shape.latest_context_trade) || shapes[shapes.length - 1];
+  if (!latest) return null;
+  const ctxId = contextNumber(latest.context_episode_id ?? latest.lifecycle_episode_id ?? latest.context_id);
+  return {
+    latest_context_id: ctxId,
+    latest_trade_id: latest.trade_id,
+    label: latest.latest_trade_label || (ctxId ? `CTX ${ctxId}` : "LATEST CTX"),
+    status: latest.status || "CLOSED",
+    trade_state: latest.trade_state || "OPENED + CLOSED",
+    side: latest.side,
+    entry_ts: latest.entry_ts,
+    entry_price: latest.entry_price,
+    exit_ts: latest.exit_ts,
+    exit_price: latest.exit_price,
+    stop_price: latest.stop_price ?? latest.stop_loss_price,
+    take_price: latest.take_profit_price,
+    realized_pnl: latest.realized_pnl_usd ?? latest.net_pnl_usd ?? latest.pnl,
+    r_multiple: latest.r_multiple ?? latest.R,
+    opened_by: latest.opened_by || latest.paper_policy_action_at_start || latest.trade_policy_mode,
+    closed_by: latest.closed_by || latest.paper_policy_action_at_end || latest.hold_policy_mode,
+    source: latest.source || "canonical bar-policy trade",
+  };
+}
+
+function renderLatestTradeBadge() {
+  if (!latestTradeBadge) return;
+  latestTradeBadge.hidden = true;
+  latestTradeBadge.innerHTML = "";
+}
+
 
 function actionLabel(allowed) {
   return allowed ? "action enabled" : "action disabled";
@@ -372,6 +522,7 @@ function updateStatusLine() {
   renderControllerTimeline();
   renderTradeResultPanel();
   renderPnlPanel();
+  renderModelMetricsPanel();
 }
 
 function renderTradeResultPanel() {
@@ -406,20 +557,95 @@ function renderTradeResultPanel() {
   bindCopyButtons(paperTradeResultPanel);
 }
 
+function tradeSummaryRef(trade) {
+  if (!trade || !trade.trade_id) return "—";
+  const pnl = formatNumber(trade.net_pnl ?? trade.net_pnl_usd, 2);
+  return `${escapeHtml(shortId(trade.trade_id, 10))} ${pnl}`;
+}
+
+function compactMetric(label, value, opts = {}) {
+  const classes = ["metric-value"];
+  if (opts.pos) classes.push("pos");
+  if (opts.neg) classes.push("neg");
+  return `<div class="metric-item" title="${escapeHtml(opts.title || value)}"><span class="metric-label">${escapeHtml(label)}</span><span class="${classes.join(" ")}">${value}</span></div>`;
+}
+
 function renderPnlPanel() {
   if (!paperPnlPanel) return;
   const p = state.pnlSummary || {};
-  const total = Number(p.total_pnl_usd);
+  const d = p.detailed_pnl || {};
+  const total = Number(d.total_pnl_usd ?? d.total_pnl ?? p.total_pnl_usd);
+  const realized = Number(d.realized_pnl_usd ?? d.realized_pnl ?? p.realized_pnl);
+  const unrealized = Number(d.unrealized_pnl_usd ?? d.unrealized_pnl ?? 0);
+  const annualStatus = d.annualization_status || (d.annualization_warning ? "UNSTABLE_SHORT_SAMPLE" : "OK");
   paperPnlPanel.innerHTML = `
-    <div class="lifecycle-kv">
-      ${kvRow("initial capital", formatNumber(p.initial_capital, 2), { title: p.initial_capital_source || "" })}
-      ${kvRow("current equity", formatNumber(p.current_paper_equity, 2))}
-      ${kvRow("total pnl", formatNumber(p.total_pnl_usd, 2), { pos: total >= 0, neg: total < 0 })}
-      ${kvRow("total pnl %", `${formatNumber(p.total_pnl_pct, 4)}%`)}
-      ${kvRow("annualized %", `${formatNumber(p.annualized_return_pct, 4)}%`)}
-      ${kvRow("closed trades", String(p.closed_trades_count ?? 0))}
-      ${kvRow("win / loss", `${p.win_count ?? 0} / ${p.loss_count ?? 0}`)}
-      ${kvRow("open positions", String(p.open_positions_count ?? 0))}
+    <div class="lifecycle-pnl-grid">
+      ${compactMetric("Initial Capital", formatNumber(d.initial_capital_usd ?? d.initial_capital ?? p.initial_capital, 2))}
+      ${compactMetric("Current Equity", formatNumber(d.current_equity_usd ?? d.current_equity ?? p.current_equity, 2))}
+      ${compactMetric("Total PnL", formatNumber(total, 2), { pos: total >= 0, neg: total < 0 })}
+      ${compactMetric("Total Return %", formatNumber(d.total_return_pct ?? p.total_pnl_pct, 2))}
+      ${compactMetric("Daily Return %", formatNumber(d.daily_return_pct ?? p.daily_return_pct, 2))}
+      ${compactMetric("Annualized %", formatNumber(d.annualized_return_pct ?? p.annualized_return_pct, 2), { title: d.annualization_warning || "Indicative annualized return" })}
+      ${compactMetric("Ann. Status", escapeHtml(annualStatus))}
+      ${compactMetric("Closed Trades", String(d.closed_trades ?? p.closed_trades_count ?? 0))}
+      ${compactMetric("Open Positions", String(d.open_positions ?? p.open_positions_count ?? 0))}
+      ${compactMetric("Win / Loss", `${d.win_count ?? p.win_count ?? 0} / ${d.loss_count ?? p.loss_count ?? 0}`)}
+      ${compactMetric("Win Rate %", formatNumber(d.win_rate_pct, 2))}
+      ${compactMetric("Gross PnL", formatNumber(d.gross_pnl_before_costs_usd, 2))}
+      ${compactMetric("Fees Paid", formatNumber(d.fees_paid_usd ?? d.fees_paid, 2))}
+      ${compactMetric("Slippage", formatNumber(d.slippage_paid_usd ?? d.slippage_paid, 2))}
+      ${compactMetric("Net PnL", formatNumber(d.net_pnl_after_costs_usd ?? d.total_pnl_usd, 2), { pos: total >= 0, neg: total < 0 })}
+      ${compactMetric("Best Trade", tradeSummaryRef(d.best_trade), { title: d.best_trade?.trade_id || "" })}
+      ${compactMetric("Worst Trade", tradeSummaryRef(d.worst_trade), { title: d.worst_trade?.trade_id || "" })}
+      ${compactMetric("Risk %", formatNumber(d.risk_per_trade_pct ?? p.risk_per_trade_pct, 2))}
+      ${compactMetric("Risk USD", formatNumber(d.risk_amount_usd ?? d.risk_amount ?? p.risk_amount_usd ?? p.risk_amount, 2))}
+      ${compactMetric("Avg Notional", formatNumber(d.avg_position_notional_usd, 2))}
+      ${compactMetric("Min Notional", formatNumber(d.min_position_notional_usd, 2))}
+      ${compactMetric("Max Notional", formatNumber(d.max_position_notional_usd, 2))}
+      ${compactMetric("Avg BTC", formatNumber(d.avg_position_size_btc, 6))}
+    </div>`;
+}
+
+function renderModelMetricsPanel() {
+  if (!modelMetricsPanel) return;
+  const p = state.pnlSummary || {};
+  const m = p.model_evaluation_metrics || {};
+  const warning = m.sample_size_warning || m.risk_metrics_sample_warning;
+  modelMetricsPanel.innerHTML = `
+    <div class="metric-section-title">Core quality</div>
+    <div class="lifecycle-metric-grid">
+      ${compactMetric("Profit Factor", formatNumber(m.profit_factor, 2))}
+      ${compactMetric("Payoff", formatNumber(m.payoff_ratio, 2))}
+      ${compactMetric("Exp / Trade", formatNumber(m.expectancy_per_trade_usd ?? m.expectancy_per_trade, 2))}
+      ${compactMetric("Expectancy R", formatNumber(m.expectancy_r, 2))}
+      ${compactMetric("Win Rate", formatNumber(m.win_rate_pct, 2))}
+      ${compactMetric("Loss Rate", formatNumber(m.loss_rate_pct, 2))}
+    </div>
+    <div class="metric-section-title">Risk</div>
+    <div class="lifecycle-metric-grid">
+      ${compactMetric("Max DD %", formatNumber(m.max_drawdown_pct_display ?? Math.abs(Number(m.max_drawdown_pct || 0)), 2))}
+      ${compactMetric("Recovery", formatNumber(m.recovery_factor, 2))}
+      ${compactMetric("Calmar-like", formatNumber(m.calmar_like_ratio ?? m.calmar_ratio, 2), { title: m.calmar_status || "" })}
+      ${compactMetric("Sharpe-like", formatNumber(m.sharpe_like_ratio ?? m.sharpe_ratio, 2), { title: m.sharpe_status || "" })}
+      ${compactMetric("Sortino-like", formatNumber(m.sortino_like_ratio ?? m.sortino_ratio, 2), { title: m.sortino_status || "" })}
+    </div>
+    <div class="metric-section-title">R / execution</div>
+    <div class="lifecycle-metric-grid">
+      ${compactMetric("Average R", formatNumber(m.avg_r_multiple ?? m.average_r, 2))}
+      ${compactMetric("Median R", formatNumber(m.median_r_multiple ?? m.median_r, 2))}
+      ${compactMetric("Best R", formatNumber(m.best_r_multiple ?? m.best_r, 2))}
+      ${compactMetric("Worst R", formatNumber(m.worst_r_multiple ?? m.worst_r, 2), { neg: Number(m.worst_r_multiple ?? m.worst_r) < 0 })}
+      ${compactMetric("Avg Holding", escapeHtml(m.average_holding_time || `${formatNumber(m.average_holding_minutes, 2)}m`))}
+      ${compactMetric("Exposure %", formatNumber(m.exposure_time_pct, 2))}
+    </div>
+    <div class="metric-section-title">Consistency</div>
+    <div class="lifecycle-metric-grid">
+      ${compactMetric("Trades / Day", formatNumber(m.trades_per_day, 2))}
+      ${compactMetric("Wins Streak", String(m.consecutive_wins_max ?? m.consecutive_wins ?? "—"))}
+      ${compactMetric("Loss Streak", String(m.consecutive_losses_max ?? m.consecutive_losses ?? "—"))}
+      ${compactMetric("Turnover", formatNumber(m.turnover_on_capital, 2))}
+      ${compactMetric("Kelly", formatNumber(m.kelly_fraction_capped ?? m.kelly_fraction, 2))}
+      ${compactMetric("BE Win %", formatNumber(m.breakeven_win_rate_pct, 2))}
     </div>`;
 }
 
@@ -557,15 +783,19 @@ function fillHatch(x, y, w, h, color) {
 
 function episodeFill(episode) {
   const colors = chartColors();
-  const challenged = Number(episode.challenge_ratio || 0) > 0.5
-    || String(episode.dominant_lifecycle_state || "").toUpperCase() === "CHALLENGED";
-  if (episode.context === "LONG_CONTEXT") {
-    return challenged
+  const quality = String(episode.context_quality_label || "").toUpperCase();
+  // Base directional episodes stay solid; CANDIDATE / CHALLENGED doubt is
+  // rendered as a separate hatch overlay so raw OBSERVE cannot erase active context.
+  const questionable = quality === "QUESTIONABLE_CONTEXT"
+    || episode.is_candidate_only === true
+    || (quality === "" && Number(episode.challenge_ratio || 0) > 0.85 && String(episode.start_lifecycle_state || "").toUpperCase() === "CANDIDATE");
+  if (episode.context === "LONG_CONTEXT" || episode.context_side === "LONG_CONTEXT") {
+    return questionable
       ? { mode: "hatch", color: colors.longZoneFaded }
       : { mode: "solid", color: colors.longZone };
   }
-  if (episode.context === "SHORT_CONTEXT") {
-    return challenged
+  if (episode.context === "SHORT_CONTEXT" || episode.context_side === "SHORT_CONTEXT") {
+    return questionable
       ? { mode: "hatch", color: colors.shortZoneFaded }
       : { mode: "solid", color: colors.shortZone };
   }
@@ -736,39 +966,71 @@ function drawTriangle(x, y, up, color) {
   ctx.stroke();
 }
 
-function drawCircleMarker(x, y, color) {
+function drawCircleMarker(x, y, color, size = 6.5) {
   const colors = chartColors();
   ctx.beginPath();
-  ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+  ctx.arc(x, y, size, 0, Math.PI * 2);
   ctx.fillStyle = color;
   ctx.fill();
   ctx.strokeStyle = colors.markerStroke;
-  ctx.lineWidth = 1.1;
+  ctx.lineWidth = 1.6;
   ctx.stroke();
 }
 
+function drawTradeLabel(text, x, y, color) {
+  const colors = chartColors();
+  ctx.save();
+  ctx.font = `10px ${colors.mono}`;
+  const padX = 5;
+  const padY = 3;
+  const w = ctx.measureText(text).width + padX * 2;
+  const h = 17;
+  const x0 = clamp(x, 8, canvas.width - w - 8);
+  const y0 = clamp(y - h / 2, 8, canvas.height - h - 8);
+  ctx.fillStyle = colors.tradeLabelBg;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x0, y0, w, h, 4);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = colors.tradeLabelText;
+  ctx.fillText(text, x0 + padX, y0 + 12);
+  ctx.restore();
+}
+
+function isLatestTradeShape(_shape, _latestInfo) {
+  return false;
+}
+
+
 function drawPaperOverlays(bounds, visibleStartTime, visibleEndTime, xForTime, yForPrice) {
-  // Chart geometry only — no trade parameter text labels on canvas.
+  // Chart geometry remains visual-only; all trades use the normal overlay style by default.
   const colors = chartColors();
   state.hitTargets = [];
   const shapes = Array.isArray(state.tradeShapes) && state.tradeShapes.length
     ? state.tradeShapes
     : [...(state.closedTrades || []), ...(state.openPositions || [])];
+  const latestInfo = latestTradeInfo();
 
   shapes.forEach((shape) => {
-    const entryTs = shape.entry_time_unix ?? (shape.entry_ts ? Math.floor(Date.parse(shape.entry_ts) / 1000) : null);
-    let exitTs = shape.exit_time_unix ?? (shape.exit_ts ? Math.floor(Date.parse(shape.exit_ts) / 1000) : null);
-    const entryPx = shape.entry_price;
-    const exitPx = shape.exit_price;
-    const stop = shape.stop_price ?? shape.stop_loss_price;
-    const take = shape.take_profit_price;
+    const entryTs = shape.entry_time_unix ?? (shape.entry_action_ts || shape.entry_ts ? Math.floor(Date.parse(shape.entry_action_ts || shape.entry_ts) / 1000) : null);
+    let exitTs = shape.exit_time_unix ?? (shape.exit_action_ts || shape.exit_ts ? Math.floor(Date.parse(shape.exit_action_ts || shape.exit_ts) / 1000) : null);
+    const entryPx = Number(shape.entry_price);
+    const exitPx = Number(shape.exit_price);
+    const currentPx = Number(shape.current_price);
+    const stop = Number(shape.stop_price ?? shape.stop_loss_price);
+    const take = Number(shape.take_price ?? shape.take_profit_price);
     const side = String(shape.side || "LONG").toUpperCase();
+    const contextIdForLabel = contextNumber(shape.context_episode_id ?? shape.context_id);
+    const contextLabel = shape.context_label || (contextIdForLabel ? `CTX ${contextIdForLabel}` : "");
     const isOpen = String(shape.status || "").toUpperCase() === "OPEN";
-    if (entryTs == null || entryPx == null) return;
+    const isLatest = isLatestTradeShape(shape, latestInfo);
+    const latestLabel = shape.latest_trade_label || latestInfo?.label || (latestInfo?.latest_context_id ? `CTX ${latestInfo.latest_context_id}` : "LATEST CTX");
+    if (entryTs == null || !Number.isFinite(entryPx)) return;
+    const drawExitPx = isOpen && Number.isFinite(currentPx) ? currentPx : exitPx;
     if (isOpen) exitTs = visibleEndTime;
     if (exitTs == null) return;
-
-    // Partial visibility: draw if any overlap with visible window.
     if (exitTs < visibleStartTime || entryTs > visibleEndTime) return;
 
     const xEntryRaw = xForTime(entryTs);
@@ -777,76 +1039,101 @@ function drawPaperOverlays(bounds, visibleStartTime, visibleEndTime, xForTime, y
     const x1 = clamp(Math.max(xEntryRaw, xExitRaw), bounds.left, bounds.right);
     const xEntry = clamp(xEntryRaw, bounds.left, bounds.right);
     const xExit = clamp(xExitRaw, bounds.left, bounds.right);
+    const width = Math.max(1, x1 - x0);
     const yEntry = yForPrice(entryPx);
+    const pnlSource = isOpen ? shape.unrealized_pnl_usd : shape.net_realized_pnl_usd;
+    const pnl = Number(pnlSource);
 
-    // Risk zone: LONG below entry→stop; SHORT above entry→stop.
-    if (stop != null) {
+    ctx.save();
+    ctx.globalAlpha = 1;
+    if (Number.isFinite(take)) {
+      const yTake = yForPrice(take);
+      ctx.fillStyle = colors.profitZone;
+      ctx.fillRect(x0, Math.min(yEntry, yTake), width, Math.max(2, Math.abs(yTake - yEntry)));
+    }
+    if (Number.isFinite(stop)) {
       const yStop = yForPrice(stop);
-      const top = Math.min(yEntry, yStop);
-      const h = Math.max(1, Math.abs(yStop - yEntry));
       ctx.fillStyle = colors.riskZone;
-      ctx.fillRect(x0, top, Math.max(1, x1 - x0), h);
+      ctx.fillRect(x0, Math.min(yEntry, yStop), width, Math.max(2, Math.abs(yStop - yEntry)));
     }
-
-    // Realized PnL zone between entry and exit prices (closed only).
-    if (!isOpen && exitPx != null) {
-      const yExit = yForPrice(exitPx);
-      const profitable = side === "SHORT" ? exitPx <= entryPx : exitPx >= entryPx;
-      ctx.fillStyle = profitable ? colors.profitZone : colors.lossZone;
-      const top = Math.min(yEntry, yExit);
-      const h = Math.max(1, Math.abs(yExit - yEntry));
-      ctx.fillRect(x0, top, Math.max(1, x1 - x0), h);
+    ctx.strokeStyle = isLatest ? colors.latestTradeBorder : colors.tradeSpanBorder;
+    ctx.lineWidth = isLatest ? 3.4 : 2;
+    ctx.setLineDash([]);
+    if (isLatest) {
+      ctx.shadowColor = colors.latestTradeBorder;
+      ctx.shadowBlur = 8;
     }
+    const topPrices = [entryPx, Number.isFinite(stop) ? stop : entryPx, Number.isFinite(take) ? take : entryPx, Number.isFinite(drawExitPx) ? drawExitPx : entryPx];
+    const ys = topPrices.map((p) => yForPrice(p));
+    const yTop = Math.min(...ys);
+    const yBot = Math.max(...ys);
+    ctx.strokeRect(x0, yTop, width, Math.max(2, yBot - yTop));
+    if (isLatest) ctx.shadowBlur = 0;
 
-    // SL / TP reference lines (no price text on chart).
-    if (stop != null) {
+    ctx.lineWidth = isLatest ? 3 : 2.2;
+    ctx.strokeStyle = colors.tradeEntry;
+    ctx.beginPath();
+    ctx.moveTo(x0, yEntry);
+    ctx.lineTo(x1, yEntry);
+    ctx.stroke();
+    drawTradeLabel(isLatest ? `${latestLabel} ENTRY ${formatNumber(entryPx, 0)}` : `ENTRY ${formatNumber(entryPx, 0)}`, x1 - (isLatest ? 142 : 92), yEntry - (isLatest ? 18 : 0), colors.tradeEntry);
+
+    if (Number.isFinite(stop)) {
       const y = yForPrice(stop);
-      ctx.strokeStyle = colors.negative;
-      ctx.globalAlpha = 0.75;
-      ctx.setLineDash([4, 5]);
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = colors.tradeStop;
+      ctx.setLineDash([6, 4]);
       ctx.beginPath();
       ctx.moveTo(x0, y);
       ctx.lineTo(x1, y);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+      drawTradeLabel(isLatest ? `${latestLabel} STOP ${formatNumber(stop, 0)}` : `STOP ${formatNumber(stop, 0)}`, x1 - (isLatest ? 136 : 88), y - (isLatest ? 14 : 0), colors.tradeStop);
     }
-    if (take != null) {
+    if (Number.isFinite(take)) {
       const y = yForPrice(take);
-      ctx.strokeStyle = colors.positive;
-      ctx.globalAlpha = 0.75;
-      ctx.setLineDash([4, 5]);
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = colors.tradeTake;
+      ctx.setLineDash([6, 4]);
       ctx.beginPath();
       ctx.moveTo(x0, y);
       ctx.lineTo(x1, y);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+      drawTradeLabel(isLatest ? `${latestLabel} TAKE ${formatNumber(take, 0)}` : `TAKE ${formatNumber(take, 0)}`, x1 - (isLatest ? 136 : 88), y + (isLatest ? 14 : 0), colors.tradeTake);
     }
-
-    // Dashed connector entry → exit (partial from visible edge if needed).
-    if (exitPx != null || isOpen) {
-      const yExit = yForPrice(isOpen ? entryPx : exitPx);
-      ctx.strokeStyle = colors.connector;
-      ctx.setLineDash([5, 5]);
-      ctx.lineWidth = 1;
+    if (Number.isFinite(drawExitPx)) {
+      const yExit = yForPrice(drawExitPx);
+      ctx.strokeStyle = Number.isFinite(pnl) && pnl < 0 ? colors.tradeStop : colors.tradeTake;
+      ctx.setLineDash(isOpen ? [2, 3] : [4, 4]);
       ctx.beginPath();
       ctx.moveTo(xEntry, yEntry);
-      ctx.lineTo(xExit, isOpen ? yEntry : yExit);
+      ctx.lineTo(xExit, yExit);
       ctx.stroke();
       ctx.setLineDash([]);
+      const pnlText = signedNumberLabel(pnl, 2);
+      const sizingOk = String(shape.sizing_status || "").toUpperCase() === "OK";
+      const rValue = Number(shape.r_multiple);
+      const rText = !isOpen && sizingOk && Number.isFinite(rValue) ? `R ${formatNumber(rValue, 2)}` : "";
+      const exitLabel = isOpen ? ["OPEN", pnlText].filter(Boolean).join(" ") : [pnlText, rText].filter(Boolean).join(" / ");
+      if (exitLabel) {
+        drawTradeLabel(isLatest ? `${latestLabel} EXIT ${exitLabel}` : exitLabel, xExit + 6, yExit - (isLatest ? 18 : 0), Number.isFinite(pnl) && pnl < 0 ? colors.tradeStop : colors.tradeTake);
+      }
     }
+    if (contextLabel) {
+      drawTradeLabel(contextLabel, x0 + 6, Math.min(yTop - 16, yBot - 20), colors.tradeSpanBorder);
+    }
+    if (isLatest) {
+      drawTradeLabel(`${latestLabel} · ${side} · ${shortId(shape.trade_id, 18)}`, x0 + 8, Math.min(yTop - 22, yBot - 26), colors.latestTradeBorder);
+    }
+    ctx.restore();
 
     if (entryTs >= visibleStartTime && entryTs <= visibleEndTime) {
-      drawCircleMarker(xEntry, yEntry, colors.positive);
-      state.hitTargets.push({ x: xEntry, y: yEntry, r: 14, payload: shape.inspector || shape });
+      drawCircleMarker(xEntry, yEntry, colors.tradeEntry, isLatest ? 9 : 7);
+      state.hitTargets.push({ x: xEntry, y: yEntry, r: 16, payload: shape.inspector || shape });
     }
-    if (!isOpen && exitPx != null && exitTs >= visibleStartTime && exitTs <= visibleEndTime) {
+    if (!isOpen && Number.isFinite(exitPx) && exitTs >= visibleStartTime && exitTs <= visibleEndTime) {
       const yExit = yForPrice(exitPx);
-      drawCircleMarker(xExit, yExit, colors.warning);
-      state.hitTargets.push({ x: xExit, y: yExit, r: 14, payload: shape.inspector || shape });
+      drawCircleMarker(xExit, yExit, colors.tradeExit, isLatest ? 9 : 7);
+      state.hitTargets.push({ x: xExit, y: yExit, r: 16, payload: shape.inspector || shape });
     }
   });
 }
@@ -904,12 +1191,20 @@ function updateHover(rows, bounds, xForTime) {
     return;
   }
   hoverReadout.classList.remove("hidden");
+  const activeContext = row.active_market_context || "OBSERVE";
+  const lifecycle = row.lifecycle_state || "—";
+  const rawContext = row.raw_market_context || "OBSERVE";
+  const challengeContext = row.challenge_context || "";
+  const candidateContext = row.candidate_context || "";
   const parts = [
     formatTime(row.time),
     `close ${formatNumber(row.close)}`,
-    row.active_market_context || "OBSERVE",
-    row.lifecycle_state || "—",
+    `active ${activeContext}`,
+    lifecycle,
   ];
+  if (rawContext && rawContext !== activeContext) parts.push(`raw ${rawContext}`);
+  if (challengeContext) parts.push(`challenge ${challengeContext}`);
+  if (candidateContext) parts.push(`candidate ${candidateContext}`);
   const event = volumeEventOf(row);
   if (VOLUME_HIGHLIGHT_EVENTS.has(event)) parts.push(event);
   hoverReadout.textContent = parts.join(" · ");
@@ -937,6 +1232,7 @@ function renderChart() {
     ctx.textAlign = "center";
     ctx.font = "14px sans-serif";
     ctx.fillText("No lifecycle candle data. Run visual refresher.", width / 2, height / 2);
+    renderLatestTradeBadge();
     return;
   }
 
@@ -946,7 +1242,7 @@ function renderChart() {
   const overlayPrices = [];
   const shapes = Array.isArray(state.tradeShapes) ? state.tradeShapes : [];
   shapes.forEach((s) => {
-    [s.entry_price, s.exit_price, s.stop_price, s.stop_loss_price, s.take_profit_price].forEach((p) => {
+    [s.entry_price, s.exit_price, s.current_price, s.stop_price, s.stop_loss_price, s.take_price, s.take_profit_price].forEach((p) => {
       if (p != null && Number.isFinite(Number(p))) overlayPrices.push(Number(p));
     });
   });
@@ -986,6 +1282,7 @@ function renderChart() {
   drawVolume(bounds, rows, xForTime, volumeMax);
   drawPaperOverlays(bounds, visibleStartTime, visibleEndTime, xForTime, yForPrice);
   drawTimeAxis(bounds, rows, xForTime);
+  renderLatestTradeBadge();
   updateHover(rows, bounds, xForTime);
 }
 
@@ -1080,12 +1377,15 @@ async function loadAllVisualData() {
   }
   state.latest = latest && typeof latest === "object" ? latest : {};
   state.visualStatus = await loadOptional("./data/visual_status.json", {});
+  state.normalizedVisualLayer = await loadOptional("./data/normalized_trade_render_layer.json", { trades: [] });
+  const normalizedRows = Array.isArray(state.normalizedVisualLayer?.trades) ? state.normalizedVisualLayer.trades : [];
+  state.tradeShapes = normalizedRows.map(normalizedTradeToShape).filter((shape) => shape.trade_id);
+  state.closedTrades = state.tradeShapes.filter((shape) => String(shape.status || "").toUpperCase() === "CLOSED");
+  state.openPositions = state.tradeShapes.filter((shape) => String(shape.status || "").toUpperCase() === "OPEN");
   state.overlays = await loadOptional("./data/paper_trade_overlays.json", { entries: [], exits: [], counts: {}, trade_shapes: [] });
-  const openPayload = await loadOptional("./data/open_positions.json", { open_positions: [] });
-  state.openPositions = openPayload.open_positions || state.overlays.open_positions || [];
-  const closedPayload = await loadOptional("./data/closed_trades.json", { closed_trades: [] });
-  state.closedTrades = closedPayload.closed_trades || state.overlays.closed_trades || [];
-  state.tradeShapes = state.overlays.trade_shapes || [...state.closedTrades, ...state.openPositions];
+  state.overlays.trade_shapes = state.tradeShapes;
+  state.overlays.closed_trades = state.closedTrades;
+  state.overlays.open_positions = state.openPositions;
   state.tradeResult = await loadOptional("./data/trade_result_summary.json", null);
   state.pnlSummary = await loadOptional("./data/pnl_summary.json", null);
   state.controller = await loadOptional("./data/controller_cycles.json", { cycles: [], actions: [] });

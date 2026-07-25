@@ -65,28 +65,37 @@
       <main class="lifecycle-main lifecycle-main-split">
         <div class="lifecycle-chart-wrap">
           <canvas id="lifecycleCanvas"></canvas>
+          <div id="latestTradeBadge" class="latest-trade-badge" aria-live="polite" hidden></div>
           <div id="hoverReadout" class="lifecycle-hover-readout hidden" aria-live="polite"></div>
         </div>
-        <aside class="lifecycle-side" id="lifecycleSide" aria-label="Paper trade inspector">
-          <div class="lifecycle-side-block">
-            <h2>Inspector</h2>
-            <div id="inspectorPanel" class="lifecycle-card-body">
-              <p class="lifecycle-empty">Click an entry/exit marker or trade shape.</p>
+        <aside class="lifecycle-side" id="lifecycleSide" aria-label="Paper trade metrics">
+          <div class="lifecycle-dev-panels" hidden aria-hidden="true">
+            <div class="lifecycle-side-block" id="inspectorBlock" hidden>
+              <h2>Inspector</h2>
+              <div id="inspectorPanel" class="lifecycle-card-body">
+                <p class="lifecycle-empty">Click an entry/exit marker or trade shape.</p>
+              </div>
+            </div>
+            <div class="lifecycle-side-block" id="controllerActionsBlock" hidden>
+              <h2>Controller actions</h2>
+              <div id="controllerTimeline" class="lifecycle-timeline lifecycle-card-body"></div>
+            </div>
+            <div class="lifecycle-side-block" id="paperTradeResultBlock" hidden>
+              <h2>Paper trade result</h2>
+              <div id="paperTradeResultPanel" class="lifecycle-card-body">
+                <p class="lifecycle-empty">No closed paper trade yet.</p>
+              </div>
             </div>
           </div>
-          <div class="lifecycle-side-block">
-            <h2>Controller actions</h2>
-            <div id="controllerTimeline" class="lifecycle-timeline lifecycle-card-body"></div>
-          </div>
-          <div class="lifecycle-side-block" id="paperTradeResultBlock">
-            <h2>Paper trade result</h2>
-            <div id="paperTradeResultPanel" class="lifecycle-card-body">
-              <p class="lifecycle-empty">No closed paper trade yet.</p>
-            </div>
-          </div>
-          <div class="lifecycle-side-block" id="paperPnlBlock">
-            <h2>Paper PnL</h2>
+          <div class="lifecycle-side-block" id="paperPnlBlock" data-main-container="true">
+            <h2>Detailed PnL</h2>
             <div id="paperPnlPanel" class="lifecycle-card-body">
+              <p class="lifecycle-empty">Loading…</p>
+            </div>
+          </div>
+          <div class="lifecycle-side-block" id="modelMetricsBlock" data-main-container="true">
+            <h2>Trading Model Evaluation Metrics</h2>
+            <div id="modelMetricsPanel" class="lifecycle-card-body">
               <p class="lifecycle-empty">Loading…</p>
             </div>
           </div>

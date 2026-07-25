@@ -503,6 +503,21 @@ def write_json(path: Path, payload: Any) -> None:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
     tmp.replace(path)
+    # Patch 1: read-model metadata sidecar only.
+    try:
+        if path.name == "lifecycle_latest.json":
+            repo = Path(__file__).resolve().parents[2]
+            if str(repo) not in sys.path:
+                sys.path.insert(0, str(repo))
+            from runtime_dataset_metadata import emit_metadata_for_path
+
+            emit_metadata_for_path(
+                "apps/context_visualizer/public/data/lifecycle_latest.json",
+                root=repo,
+                metadata_origin="LIVE_WRITER",
+            )
+    except Exception:
+        pass
 
 
 def main() -> int:
