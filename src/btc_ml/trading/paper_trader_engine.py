@@ -74,6 +74,34 @@ def _iso(value: Any) -> str | None:
         return None
 
 
+def command_decision_id(command: dict[str, Any]) -> str | None:
+    """Passthrough canonical ``decision_id`` from manager command.
+
+    Never aliases ``command_id``. Legacy commands without the field → None
+    (runtime classification ``LEGACY_NO_DECISION_ID``; no synthetic ID).
+    """
+    value = command.get("decision_id")
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "nan", "<na>"}:
+        return None
+    return text
+
+
+def command_lineage_status(command: dict[str, Any]) -> str:
+    return "HAS_DECISION_ID" if command_decision_id(command) is not None else "LEGACY_NO_DECISION_ID"
+
+
+# Additive identity column on new ledger rows (readers tolerate absence on legacy).
+LEDGER_IDENTITY_COLUMNS = ["decision_id"]
+
+
 def _append(path, columns: list[str], record: dict[str, Any], existing: pd.DataFrame) -> None:
     row = pd.DataFrame([{c: record.get(c) for c in columns}], columns=columns)
     if len(existing):
@@ -310,9 +338,12 @@ class PaperTraderEngine:
         order_side = "BUY" if side == "LONG" else "SELL"
         now = _utc_now()
 
+        decision_id = command_decision_id(command)
         lineage = {
             "timeframe": self.timeframe,
             "command_id": command.get("command_id"),
+            "decision_id": decision_id,
+            "lineage_status": command_lineage_status(command),
             "manager_cycle_id": command.get("manager_cycle_id"),
             "lifecycle_episode_id": command.get("lifecycle_episode_id"),
             "lifecycle_phase": command.get("lifecycle_phase"),
@@ -383,11 +414,12 @@ class PaperTraderEngine:
             "approval_phrase": APPROVAL_PHRASE,
             "timeframe": self.timeframe,
             "command_id": command.get("command_id"),
+            "decision_id": decision_id,
         }
         order = {
             "paper_order_id": ids["order_id"],
             "created_at": now,
-            "decision_id": command.get("command_id"),
+            "decision_id": decision_id,
             "candle_timestamp": fill.timestamp,
             "symbol": self.symbol,
             "side": order_side,
@@ -428,6 +460,7 @@ class PaperTraderEngine:
             "metadata_json": metadata_json(lineage),
             "timeframe": self.timeframe,
             "command_id": command.get("command_id"),
+            "decision_id": decision_id,
         }
         position = {
             "position_id": ids["position_id"],
@@ -451,18 +484,21 @@ class PaperTraderEngine:
             "metadata_json": metadata_json(lineage),
             "timeframe": self.timeframe,
             "command_id": command.get("command_id"),
+            "decision_id": decision_id,
         }
 
         self.book.ensure_dirs()
-        _append(self.book.signals, SIGNAL_COLUMNS + ["timeframe", "command_id"], signal, self.book.signals_frame())
-        _append(self.book.orders, ORDER_COLUMNS + ["timeframe", "command_id"], order, self.book.orders_frame())
-        _append(self.book.fills, TRADE_COLUMNS + ["timeframe", "command_id"], fill_row, self.book.fills_frame())
-        _append(
-            self.book.positions,
-            POSITION_COLUMNS + ["timeframe", "command_id"],
-            position,
-            self.book.positions_frame(),
-        )
+        signal_cols = SIGNAL_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS
+        order_cols = ORDER_COLUMNS + ["timeframe", "command_id"]
+        # ORDER_COLUMNS already includes decision_id; ensure present once
+        if "decision_id" not in order_cols:
+            order_cols = order_cols + LEDGER_IDENTITY_COLUMNS
+        fill_cols = TRADE_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS
+        position_cols = POSITION_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS
+        _append(self.book.signals, signal_cols, signal, self.book.signals_frame())
+        _append(self.book.orders, order_cols, order, self.book.orders_frame())
+        _append(self.book.fills, fill_cols, fill_row, self.book.fills_frame())
+        _append(self.book.positions, position_cols, position, self.book.positions_frame())
         return self._result(
             command,
             RESULT_OPENED,
@@ -544,10 +580,13 @@ class PaperTraderEngine:
         ids = self._ids_for(command, "CLOSE")
         order_side = "SELL" if side == "LONG" else "BUY"
         now = _utc_now()
+        decision_id = command_decision_id(command)
         lineage = {
             **meta,
             "timeframe": self.timeframe,
             "closing_command_id": command.get("command_id"),
+            "decision_id": decision_id,
+            "lineage_status": command_lineage_status(command),
             "closed_at": fill.timestamp,
             "exit_price": exit_price,
             "exit_reason": exit_reason,
@@ -591,11 +630,12 @@ class PaperTraderEngine:
             "approval_phrase": APPROVAL_PHRASE,
             "timeframe": self.timeframe,
             "command_id": command.get("command_id"),
+            "decision_id": decision_id,
         }
         order = {
             "paper_order_id": ids["order_id"],
             "created_at": now,
-            "decision_id": command.get("command_id"),
+            "decision_id": decision_id,
             "candle_timestamp": fill.timestamp,
             "symbol": self.symbol,
             "side": order_side,
@@ -636,12 +676,14 @@ class PaperTraderEngine:
             "metadata_json": metadata_json(lineage),
             "timeframe": self.timeframe,
             "command_id": command.get("command_id"),
+            "decision_id": decision_id,
         }
         closed_trade = {
             "trade_id": ids["trade_id"],
             "timeframe": self.timeframe,
             "position_id": position_id,
             "command_id": command.get("command_id"),
+            "decision_id": decision_id,
             "lifecycle_episode_id": meta.get("lifecycle_episode_id"),
             "side": side,
             "quantity": qty,
@@ -679,9 +721,14 @@ class PaperTraderEngine:
         positions.loc[mask, "metadata_json"] = metadata_json(lineage)
 
         self.book.ensure_dirs()
-        _append(self.book.signals, SIGNAL_COLUMNS + ["timeframe", "command_id"], signal, self.book.signals_frame())
-        _append(self.book.orders, ORDER_COLUMNS + ["timeframe", "command_id"], order, self.book.orders_frame())
-        _append(self.book.fills, TRADE_COLUMNS + ["timeframe", "command_id"], fill_row, self.book.fills_frame())
+        signal_cols = SIGNAL_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS
+        order_cols = ORDER_COLUMNS + ["timeframe", "command_id"]
+        if "decision_id" not in order_cols:
+            order_cols = order_cols + LEDGER_IDENTITY_COLUMNS
+        fill_cols = TRADE_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS
+        _append(self.book.signals, signal_cols, signal, self.book.signals_frame())
+        _append(self.book.orders, order_cols, order, self.book.orders_frame())
+        _append(self.book.fills, fill_cols, fill_row, self.book.fills_frame())
         atomic_write_parquet(self.book.positions, positions)
         _append(self.book.trades, CLOSED_TRADE_COLUMNS, closed_trade, self.book.trades_frame())
 

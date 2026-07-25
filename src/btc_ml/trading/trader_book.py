@@ -26,11 +26,15 @@ ROOT = Path(__file__).resolve().parents[3]
 PRODUCTION_BOOKS_ROOT = ROOT / "data" / "trading" / "timeframe_traders"
 CANDIDATE_BOOKS_ROOT = ROOT / "data" / "research" / "s4_1_candidate_timeframe_traders"
 
+# Additive nullable identity column for new rows; legacy parquet without it still reads.
+LEDGER_IDENTITY_COLUMNS = ["decision_id"]
+
 CLOSED_TRADE_COLUMNS = [
     "trade_id",
     "timeframe",
     "position_id",
     "command_id",
+    "decision_id",
     "lifecycle_episode_id",
     "side",
     "quantity",
@@ -157,16 +161,21 @@ class TraderBook:
 
     # --- frames --------------------------------------------------------------
     def signals_frame(self) -> pd.DataFrame:
-        return read_parquet(self.signals, SIGNAL_COLUMNS + ["timeframe", "command_id"])
+        return read_parquet(self.signals, SIGNAL_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS)
 
     def orders_frame(self) -> pd.DataFrame:
-        return read_parquet(self.orders, ORDER_COLUMNS + ["timeframe", "command_id"])
+        cols = ORDER_COLUMNS + ["timeframe", "command_id"]
+        # ORDER_COLUMNS already includes decision_id; avoid duplicate column names.
+        for col in LEDGER_IDENTITY_COLUMNS:
+            if col not in cols:
+                cols.append(col)
+        return read_parquet(self.orders, cols)
 
     def fills_frame(self) -> pd.DataFrame:
-        return read_parquet(self.fills, TRADE_COLUMNS + ["timeframe", "command_id"])
+        return read_parquet(self.fills, TRADE_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS)
 
     def positions_frame(self) -> pd.DataFrame:
-        return read_parquet(self.positions, POSITION_COLUMNS + ["timeframe", "command_id"])
+        return read_parquet(self.positions, POSITION_COLUMNS + ["timeframe", "command_id"] + LEDGER_IDENTITY_COLUMNS)
 
     def trades_frame(self) -> pd.DataFrame:
         return read_parquet(self.trades, CLOSED_TRADE_COLUMNS)

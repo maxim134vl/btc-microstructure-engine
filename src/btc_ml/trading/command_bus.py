@@ -66,6 +66,13 @@ COMMAND_COLUMNS = [
     "source_lineage",
     "paper_only",
     "execution_enabled",
+    # Additive identity fields (nullable; legacy rows remain readable without them)
+    "decision_id",
+    "context_id",
+    "canonical_episode_id",
+    "timeframe_episode_id",
+    "source_decision_timestamp",
+    "lineage_lookup_status",
 ]
 
 VALID_INTENTS = ("OPEN_LONG", "OPEN_SHORT", "HOLD", "CLOSE", "NO_ACTION")
@@ -73,6 +80,22 @@ VALID_INTENTS = ("OPEN_LONG", "OPEN_SHORT", "HOLD", "CLOSE", "NO_ACTION")
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def classify_command_lineage(command: dict[str, Any]) -> str:
+    """Runtime classification only — does not rewrite historical rows."""
+    value = command.get("decision_id")
+    if value is None:
+        return "LEGACY_NO_DECISION_ID"
+    try:
+        if pd.isna(value):
+            return "LEGACY_NO_DECISION_ID"
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "nan", "<na>"}:
+        return "LEGACY_NO_DECISION_ID"
+    return "HAS_DECISION_ID"
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,18 @@
 """Deterministic timeframe manager (S4.1).
 
 The manager is a pure command dispatcher. It never executes orders, never
-writes paper fills/trades, never touches cognition/context/decision datasets,
-and never merges directions across timeframes: each timeframe receives its own
-explainable command every cycle.
+writes paper fills/trades, and never merges directions across timeframes:
+each timeframe receives its own explainable command every cycle.
+
+Identity-only read: exact lookup against ``context_decision_log`` attaches
+immutable ``decision_id`` (and related additive identity fields) onto new
+command rows. Trading policy / intent / risk logic is unchanged. No separate
+manager-evaluation live artifact is written.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -29,9 +34,175 @@ from .trader_book import TraderBook, repo_relative
 
 ROOT = Path(__file__).resolve().parents[3]
 LIVE_FEED = ROOT / "data" / "live" / "live_market_feed.parquet"
+CONTEXT_DECISION_LOG = ROOT / "data" / "live" / "context_decision_log.parquet"
 
 ASSET = "BTCUSDT"
 TIMEFRAME_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
+_SOURCE_TF_TO_MANAGER = {"15m": "M15", "30m": "M30", "1h": "H1", "4h": "H4"}
+
+
+def _canonical_episode_id(*, namespace: str, original: str, timeframe: str | None) -> str:
+    """Deterministic bridge id — does not replace original episode keys."""
+    payload = "|".join(["episode", namespace, original, timeframe if timeframe else "NONE"])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def _ts_key(value: Any) -> pd.Timestamp | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    stamp = pd.Timestamp(value)
+    if pd.isna(stamp):
+        return None
+    return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+
+
+LINEAGE_EXACT_UNIQUE_MATCH = "EXACT_UNIQUE_MATCH"
+LINEAGE_NO_EXACT_DECISION_MATCH = "NO_EXACT_DECISION_MATCH"
+LINEAGE_AMBIGUOUS_EXACT_DECISION_MATCH = "AMBIGUOUS_EXACT_DECISION_MATCH"
+
+
+def _empty_identity(*, status: str) -> dict[str, Any]:
+    return {
+        "decision_id": None,
+        "context_id": None,
+        "source_decision_timestamp": None,
+        "lineage_lookup_status": status,
+    }
+
+
+def _index_put(
+    index: dict[tuple[pd.Timestamp, str], dict[str, Any]],
+    key: tuple[pd.Timestamp, str],
+    identity: dict[str, Any],
+) -> None:
+    """Insert identity; mark key ambiguous if distinct decision_ids collide."""
+    existing = index.get(key)
+    if existing is None:
+        index[key] = identity
+        return
+    if existing.get("lineage_lookup_status") == LINEAGE_AMBIGUOUS_EXACT_DECISION_MATCH:
+        return
+    if existing.get("decision_id") == identity.get("decision_id"):
+        return
+    # Fail-closed marker — never keep first/last winner
+    index[key] = {
+        "decision_id": None,
+        "context_id": None,
+        "source_decision_timestamp": None,
+        "lineage_lookup_status": LINEAGE_AMBIGUOUS_EXACT_DECISION_MATCH,
+        "ambiguous_decision_ids": sorted(
+            {
+                str(existing.get("decision_id")),
+                str(identity.get("decision_id")),
+            }
+        ),
+    }
+
+
+def load_decision_identity_index(
+    path: Path | None = None,
+) -> dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]]:
+    """Exact-key indexes separated by bar-open vs bar-close.
+
+    Open keys use ``candle_timestamp``; close keys use ``candle_close_time_utc``.
+    Mixing both into one map creates false collisions (prev close == next open).
+    Never invents ``decision_id``. Missing / unreadable log → empty indexes.
+    """
+    empty: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]] = {"open": {}, "close": {}}
+    target = path or CONTEXT_DECISION_LOG
+    if not target.exists():
+        return empty
+    try:
+        frame = pd.read_parquet(target)
+    except Exception:
+        return empty
+    if frame is None or not len(frame) or "decision_id" not in frame.columns:
+        return empty
+    for _, row in frame.iterrows():
+        manager_tf = _SOURCE_TF_TO_MANAGER.get(str(row.get("source_timeframe") or "").strip())
+        if not manager_tf:
+            continue
+        decision_id = row.get("decision_id")
+        if decision_id is None or (isinstance(decision_id, float) and pd.isna(decision_id)):
+            continue
+        decision_text = str(decision_id).strip()
+        if not decision_text:
+            continue
+        context_raw = row.get("context_episode_id")
+        lifecycle_raw = row.get("lifecycle_episode_id")
+        context_id = None if context_raw is None or pd.isna(context_raw) else str(context_raw).strip() or None
+        lifecycle_id = None if lifecycle_raw is None or pd.isna(lifecycle_raw) else str(lifecycle_raw).strip() or None
+        identity = {
+            "decision_id": decision_text,
+            "context_id": context_id,
+            "lifecycle_episode_id_from_decision": lifecycle_id,
+            "source_decision_timestamp": row.get("candle_timestamp") or row.get("candle_close_time_utc"),
+            "lineage_lookup_status": LINEAGE_EXACT_UNIQUE_MATCH,
+        }
+        open_ts = _ts_key(row.get("candle_timestamp"))
+        if open_ts is not None:
+            _index_put(empty["open"], (open_ts, manager_tf), identity)
+        close_ts = _ts_key(row.get("candle_close_time_utc"))
+        if close_ts is not None:
+            _index_put(empty["close"], (close_ts, manager_tf), identity)
+    return empty
+
+
+def resolve_decision_identity(
+    *,
+    timeframe: str,
+    source_bar_open: Any,
+    source_bar_close: Any,
+    evaluation_timestamp: Any,
+    index: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]] | dict[tuple[pd.Timestamp, str], dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Exact join only — no first/last pick, no fuzzy window, no synthetic decision_id.
+
+    Status contract:
+      EXACT_UNIQUE_MATCH | NO_EXACT_DECISION_MATCH | AMBIGUOUS_EXACT_DECISION_MATCH
+    """
+    if not index:
+        return _empty_identity(status=LINEAGE_NO_EXACT_DECISION_MATCH)
+
+    # Backward-compatible: flat dict treated as open-index only (tests / callers).
+    if "open" in index and "close" in index and isinstance(index.get("open"), dict):
+        open_index = index["open"]
+        close_index = index["close"]
+    else:
+        open_index = index  # type: ignore[assignment]
+        close_index = {}
+
+    tf = str(timeframe).upper()
+    # Ordered probes: first exact unique hit wins. Ambiguity on a probed key
+    # fails closed immediately — never pick first/last among colliding IDs.
+    probes: list[tuple[Any, dict[tuple[pd.Timestamp, str], dict[str, Any]]]] = [
+        (source_bar_open, open_index),
+        (source_bar_close, close_index),
+        (evaluation_timestamp, open_index),
+        (evaluation_timestamp, close_index),
+    ]
+    for value, table in probes:
+        key_ts = _ts_key(value)
+        if key_ts is None:
+            continue
+        hit = table.get((key_ts, tf))
+        if hit is None:
+            continue
+        if hit.get("lineage_lookup_status") == LINEAGE_AMBIGUOUS_EXACT_DECISION_MATCH:
+            return _empty_identity(status=LINEAGE_AMBIGUOUS_EXACT_DECISION_MATCH)
+        if hit.get("decision_id"):
+            return {
+                "decision_id": hit.get("decision_id"),
+                "context_id": hit.get("context_id"),
+                "source_decision_timestamp": hit.get("source_decision_timestamp") or value,
+                "lineage_lookup_status": LINEAGE_EXACT_UNIQUE_MATCH,
+            }
+    return _empty_identity(status=LINEAGE_NO_EXACT_DECISION_MATCH)
 
 
 def _command_key(*, asset: str, timeframe: str, evaluation_timestamp: Any, episode: Any, intent: str) -> str:
@@ -138,6 +309,10 @@ class TimeframeManager:
         feed: pd.DataFrame | None = None,
         activation_boundary: Any = None,
         persist: bool = True,
+        decision_log_path: Path | None = None,
+        decision_index: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]]
+        | dict[tuple[pd.Timestamp, str], dict[str, Any]]
+        | None = None,
     ) -> dict[str, Any]:
         src = sources or load_sources()
         market_feed = feed if feed is not None else load_feed()
@@ -162,6 +337,11 @@ class TimeframeManager:
         }
 
         reserved_risk = dict(open_risk)
+        # Identity lookup is read-only. Callers may pass an empty index to isolate
+        # fixtures from the live decision log without changing trading policy.
+        resolved_decision_index = (
+            decision_index if decision_index is not None else load_decision_identity_index(decision_log_path)
+        )
         commands: list[dict[str, Any]] = []
         for tf in self.timeframes:
             command = self._build_command(
@@ -176,6 +356,7 @@ class TimeframeManager:
                 per_tf_state=tf_state.setdefault(tf, {}),
                 cross_metadata=cross_metadata,
                 activation_boundary=activation_boundary,
+                decision_index=resolved_decision_index,
             )
             approved = float(safe_float(command.get("approved_risk_usd")) or 0.0)
             if command.get("intent") in {"OPEN_LONG", "OPEN_SHORT"} and approved > 0:
@@ -213,6 +394,7 @@ class TimeframeManager:
                     "timeframe_direction": cmd["timeframe_direction"],
                     "availability_status": cmd["availability_status"],
                     "lifecycle_episode_id": cmd["lifecycle_episode_id"],
+                    "decision_id": cmd.get("decision_id"),
                     "approved_risk_usd": cmd["approved_risk_usd"],
                 }
                 for cmd in commands
@@ -268,6 +450,9 @@ class TimeframeManager:
         per_tf_state: dict[str, Any],
         cross_metadata: dict[str, Any],
         activation_boundary: Any = None,
+        decision_index: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]]
+        | dict[tuple[pd.Timestamp, str], dict[str, Any]]
+        | None = None,
     ) -> dict[str, Any]:
         reasons: list[str] = []
         intent = "NO_ACTION"
@@ -391,6 +576,24 @@ class TimeframeManager:
             episode=episode,
             intent=intent,
         )
+        # Additive identity passthrough — never invent decision_id; never alias command_id.
+        identity = resolve_decision_identity(
+            timeframe=timeframe,
+            source_bar_open=state.get("source_bar_open"),
+            source_bar_close=bar_close,
+            evaluation_timestamp=state.get("evaluation_timestamp") or evaluation_timestamp,
+            index=decision_index,
+        )
+        decision_id = identity.get("decision_id")
+        lineage_lookup_status = identity.get("lineage_lookup_status") or LINEAGE_NO_EXACT_DECISION_MATCH
+        timeframe_episode_id = str(episode).strip() if episode is not None and str(episode).strip() else None
+        canonical_episode_id = None
+        if timeframe_episode_id:
+            canonical_episode_id = _canonical_episode_id(
+                namespace="timeframe",
+                original=timeframe_episode_id,
+                timeframe=timeframe,
+            )
         return {
             "command_id": command_id,
             "manager_cycle_id": manager_cycle_id,
@@ -427,6 +630,15 @@ class TimeframeManager:
             "source_lineage": json.dumps(state.get("source_lineage") or {}),
             "paper_only": True,
             "execution_enabled": False,
+            "decision_id": decision_id,
+            "context_id": identity.get("context_id"),
+            "canonical_episode_id": canonical_episode_id,
+            "timeframe_episode_id": timeframe_episode_id,
+            "source_decision_timestamp": identity.get("source_decision_timestamp")
+            or state.get("source_bar_open")
+            or state.get("evaluation_timestamp")
+            or evaluation_timestamp,
+            "lineage_lookup_status": lineage_lookup_status,
         }
 
     def _position_meta(self, timeframe: str) -> dict[str, Any]:
