@@ -94,23 +94,37 @@ function usdText(value?: number | null): string {
   return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "—";
 }
 
-function LiveOperationalTruth({
+function RuntimeTruthSection({
   processes,
   multi_timeframe,
   context_chain,
   paper,
+  known_limitations,
+  legacy_components,
   timeframe_traders,
+  overall_health,
+  overall_reason,
 }: {
   processes?: RuntimeTruthProcess[];
   multi_timeframe?: RuntimeTruthTimeframe[];
   context_chain?: RuntimeTruthContextChain;
   paper?: RuntimeTruthPaper;
+  known_limitations?: RuntimeTruthLimitation[];
+  legacy_components?: RuntimeTruthLegacy[];
   timeframe_traders?: RuntimeTruthTimeframeTraders;
+  overall_health?: string;
+  overall_reason?: string;
 }) {
   const processRows = Array.isArray(processes)
     ? processes.filter((row) => row.process_id !== "paper_controller")
     : [];
   const mtfRows = Array.isArray(multi_timeframe) ? multi_timeframe : [];
+  const limits = Array.isArray(known_limitations) ? known_limitations : [];
+  const legacy = Array.isArray(legacy_components)
+    ? legacy_components.filter(
+        (c) => c.classification === "PHANTOM" || c.display_status === "NOT_IN_CANONICAL_RUNTIME",
+      )
+    : [];
   const traderRows = Array.isArray(timeframe_traders?.traders) ? timeframe_traders!.traders! : [];
   const commandBus = timeframe_traders?.command_bus;
   const portfolio = timeframe_traders?.portfolio;
@@ -118,6 +132,15 @@ function LiveOperationalTruth({
     paper?.representation === "MIGRATED_TO_TIMEFRAME_TRADERS" ||
     paper?.display_status === "MIGRATED" ||
     (Boolean(timeframe_traders?.activated) && !paper?.is_controller_failure);
+  if (
+    processRows.length === 0 &&
+    mtfRows.length === 0 &&
+    !context_chain &&
+    !paper &&
+    limits.length === 0
+  ) {
+    return null;
+  }
 
   const processStatus = (row: RuntimeTruthProcess): ResolvedStatus => {
     if (row.health === "RUNNING") return translateActiveService();
@@ -129,126 +152,28 @@ function LiveOperationalTruth({
   };
 
   return (
-    <>
-      <section className="space-y-2.5">
-        <SectionLabel>Live Operational Health</SectionLabel>
-        <div className="grid gap-3.5 xl:grid-cols-2">
-          <PanelCard title="Required Processes" icon={SymbolPipeline} empty={processRows.length === 0 ? "No process truth" : undefined}>
-            {processRows.map((row) => (
-              <ListRow
-                key={row.process_id}
-                icon={SymbolPipeline}
-                primary={row.display_name || row.process_id}
-                secondary={[row.pid != null ? `pid ${row.pid}` : "pid —", row.health_reason || row.process_state || ""]
-                  .filter(Boolean)
-                  .join(" · ")}
-                status={processStatus(row)}
-              />
-            ))}
-          </PanelCard>
-          <PanelCard title="Legacy Paper Controller" icon={SymbolHeart}>
+    <section className="space-y-2.5">
+      <SectionLabel>Runtime Truth</SectionLabel>
+      {overall_health ? (
+        <p className="px-0.5 text-[11px] text-ds-text-secondary">
+          {overall_health}
+          {overall_reason ? ` · ${overall_reason}` : ""}
+        </p>
+      ) : null}
+      <div className="grid gap-3.5 xl:grid-cols-2">
+        <PanelCard title="Processes" icon={SymbolPipeline} empty={processRows.length === 0 ? "No process truth" : undefined}>
+          {processRows.map((row) => (
             <ListRow
-              icon={SymbolHeart}
-              primary={migrated ? "MIGRATED" : paper?.representation || paper?.process_health || "UNKNOWN"}
-              secondary={[
-                migrated ? "NOT REQUIRED" : null,
-                paper?.detail ||
-                  (migrated ? "Replaced by independent M15, M30, H1 and H4 traders" : null),
-                paper?.health_reason || null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-              status={
-                paper?.is_controller_failure
-                  ? translateOpsLevel("RED", "engine")
-                  : migrated
-                    ? translateOpsLevel("MIGRATED", "engine")
-                    : translateOpsLevel("GREEN", "engine")
-              }
-            />
-          </PanelCard>
-        </div>
-      </section>
-
-      {timeframe_traders?.activated ? (
-        <section className="space-y-2.5">
-          <SectionLabel>Manager / Portfolio</SectionLabel>
-          <PanelCard title="Manager / Portfolio" icon={SymbolPipeline}>
-            <ListRow
+              key={row.process_id}
               icon={SymbolPipeline}
-              primary={`Command bus ${commandBus?.health || "UNKNOWN"}`}
-              secondary={[
-                `${commandBus?.rows ?? 0} commands`,
-                `${commandBus?.duplicate_command_ids ?? 0} duplicates`,
-                commandBus?.latest_evaluation_timestamp
-                  ? `tip ${commandBus.latest_evaluation_timestamp}`
-                  : null,
-              ]
+              primary={row.display_name || row.process_id}
+              secondary={[row.pid != null ? `pid ${row.pid}` : "pid —", row.health_reason || row.process_state || ""]
                 .filter(Boolean)
                 .join(" · ")}
-              status={
-                commandBus?.health === "HEALTHY"
-                  ? translateOpsLevel("GREEN", "engine")
-                  : commandBus?.health === "BROKEN"
-                    ? translateOpsLevel("RED", "engine")
-                    : translateOpsLevel("UNKNOWN", "engine")
-              }
+              status={processStatus(row)}
             />
-            <ListRow
-              icon={SymbolLayers}
-              primary={`Gross open risk ${usdText(portfolio?.gross_open_risk_usd)} / ${usdText(
-                portfolio?.portfolio_max_risk_usd,
-              )}`}
-              secondary={[
-                `${portfolio?.open_positions ?? 0} open positions`,
-                `available ${usdText(portfolio?.available_risk_usd)}`,
-                "gross, never netted",
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-              status={translateOpsLevel("GREEN", "engine")}
-            />
-          </PanelCard>
-        </section>
-      ) : null}
-
-      {traderRows.length > 0 ? (
-        <section className="space-y-2.5">
-          <SectionLabel>Timeframe Traders</SectionLabel>
-          <PanelCard title="Timeframe Traders" icon={SymbolLayers}>
-            {traderRows.map((row) => (
-              <ListRow
-                key={row.timeframe}
-                icon={SymbolLayers}
-                primary={`${row.timeframe} · ${row.process_health || row.health || "UNKNOWN"} · ${row.direction || "FLAT"}`}
-                secondary={[
-                  row.open_position_id ? `pos ${row.open_position_id}` : "no open position",
-                  row.last_command_intent ? `cmd ${row.last_command_intent}` : null,
-                  row.last_command_timestamp ? `at ${row.last_command_timestamp}` : null,
-                  row.last_reason ? `reason ${row.last_reason}` : null,
-                  `risk ${usdText(row.open_risk_usd)}`,
-                  `realized ${usdText(row.realized_pnl_usd)}`,
-                  `unrealized ${usdText(row.unrealized_pnl_usd)}`,
-                  row.trade_count != null ? `trades ${row.trade_count}` : null,
-                  row.manager_command_id ? `mgr ${row.manager_command_id}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                status={
-                  row.health === "BROKEN" || row.process_health === "STOPPED"
-                    ? translateOpsLevel("RED", "engine")
-                    : row.process_health === "RUNNING" || row.health === "HEALTHY"
-                      ? translateOpsLevel("GREEN", "engine")
-                      : translateOpsLevel("UNKNOWN", "engine")
-                }
-              />
-            ))}
-          </PanelCard>
-        </section>
-      ) : null}
-
-      <section className="space-y-2.5">
-        <SectionLabel>MTF Availability</SectionLabel>
+          ))}
+        </PanelCard>
         <PanelCard title="MTF Availability" icon={SymbolLayers} empty={mtfRows.length === 0 ? "No MTF truth" : undefined}>
           {mtfRows.map((row) => {
             const notLive =
@@ -262,7 +187,11 @@ function LiveOperationalTruth({
                 primary={row.timeframe}
                 secondary={
                   notLive
-                    ? [row.display_status || "NOT LIVE", row.requirement || "EXPECTED", row.detail || "No live Stage-2 writer · No D1 timeframe trader"]
+                    ? [
+                        row.display_status || "NOT LIVE",
+                        row.requirement || "EXPECTED",
+                        row.detail || "No live Stage-2 writer · No D1 timeframe trader",
+                      ]
                         .filter(Boolean)
                         .join(" · ")
                     : [
@@ -286,10 +215,6 @@ function LiveOperationalTruth({
             );
           })}
         </PanelCard>
-      </section>
-
-      <section className="space-y-2.5">
-        <SectionLabel>Context Chain</SectionLabel>
         <PanelCard title="Context Chain" icon={SymbolWaveform}>
           <ListRow
             icon={SymbolWaveform}
@@ -308,66 +233,137 @@ function LiveOperationalTruth({
             }
           />
         </PanelCard>
-      </section>
-    </>
-  );
-}
-
-function KnownLimitationsSection({ known_limitations }: { known_limitations?: RuntimeTruthLimitation[] }) {
-  const limits = Array.isArray(known_limitations) ? known_limitations : [];
-  if (limits.length === 0) return null;
-  return (
-    <section className="space-y-2.5">
-      <SectionLabel>Known Limitations</SectionLabel>
-      <PanelCard title="Known Limitations" icon={SymbolBell}>
-        {limits.map((row) => (
+        <PanelCard title="Legacy Paper Controller" icon={SymbolHeart}>
           <ListRow
-            key={row.id || row.detail || "limit"}
-            icon={SymbolBell}
-            primary={row.id || "limitation"}
-            secondary={[row.display_status || row.classification || null, row.requirement || null, row.detail || null]
-              .filter(Boolean)
-              .join(" · ")}
-            status={translateOpsLevel(row.display_status || "KNOWN_LIMITATION", "engine")}
-          />
-        ))}
-      </PanelCard>
-    </section>
-  );
-}
-
-function LegacyExcludedModulesSection({ legacy_components }: { legacy_components?: RuntimeTruthLegacy[] }) {
-  const legacy = Array.isArray(legacy_components)
-    ? legacy_components.filter((c) => c.classification === "PHANTOM" || c.display_status === "NOT_IN_CANONICAL_RUNTIME")
-    : [];
-  if (legacy.length === 0) return null;
-  return (
-    <section className="space-y-2.5">
-      <SectionLabel>Legacy / Excluded Modules</SectionLabel>
-      <PanelCard title="Legacy / Excluded Modules" icon={SymbolEngine}>
-        {legacy.map((row) => (
-          <ListRow
-            key={row.component_id || "legacy"}
-            icon={SymbolEngine}
-            primary={row.component_id || "legacy"}
+            icon={SymbolHeart}
+            primary={migrated ? "MIGRATED" : paper?.representation || paper?.process_health || "UNKNOWN"}
             secondary={[
-              row.display_status || "NOT_IN_CANONICAL_RUNTIME",
-              row.classification || "PHANTOM",
-              row.reason || "NOT_PRESENT_IN_CANONICAL_RUNTIME",
+              migrated ? "NOT REQUIRED" : null,
+              paper?.detail ||
+                (migrated ? "Replaced by independent M15, M30, H1 and H4 traders" : null),
+              paper?.health_reason || null,
+              !migrated && paper?.is_controller_failure ? "controller failure" : null,
+              !migrated && paper?.real_execution === false ? "no real execution" : null,
             ]
               .filter(Boolean)
               .join(" · ")}
-            status={translateOpsLevel(row.display_status || "NOT_IN_CANONICAL_RUNTIME", "engine")}
+            status={
+              paper?.is_controller_failure
+                ? translateOpsLevel("RED", "engine")
+                : migrated
+                  ? translateOpsLevel("MIGRATED", "engine")
+                  : translateOpsLevel("GREEN", "engine")
+            }
           />
-        ))}
-      </PanelCard>
+        </PanelCard>
+        {traderRows.length > 0 ? (
+          <PanelCard title="Timeframe Traders" icon={SymbolLayers}>
+            {traderRows.map((row) => (
+              <ListRow
+                key={row.timeframe}
+                icon={SymbolLayers}
+                primary={`${row.timeframe} · ${row.direction || "FLAT"}`}
+                secondary={[
+                  row.open_position_id ? `pos ${row.open_position_id}` : "no open position",
+                  row.last_command_intent ? `cmd ${row.last_command_intent}` : null,
+                  `risk ${usdText(row.open_risk_usd)}`,
+                  `realized ${usdText(row.realized_pnl_usd)}`,
+                  `unrealized ${usdText(row.unrealized_pnl_usd)}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                status={
+                  row.health === "BROKEN"
+                    ? translateOpsLevel("RED", "engine")
+                    : row.direction && row.direction !== "FLAT"
+                      ? translateOpsLevel("GREEN", "engine")
+                      : translateOpsLevel("GREY", "engine")
+                }
+              />
+            ))}
+          </PanelCard>
+        ) : null}
+        {timeframe_traders?.activated ? (
+          <PanelCard title="Manager / Portfolio" icon={SymbolPipeline}>
+            <ListRow
+              icon={SymbolPipeline}
+              primary={`Command bus ${commandBus?.health || "UNKNOWN"}`}
+              secondary={[
+                `${commandBus?.rows ?? 0} commands`,
+                `${commandBus?.duplicate_command_ids ?? 0} duplicates`,
+                commandBus?.latest_evaluation_timestamp
+                  ? `tip ${commandBus.latest_evaluation_timestamp}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              status={
+                commandBus?.health === "HEALTHY"
+                  ? translateOpsLevel("GREEN", "engine")
+                  : commandBus?.health === "BROKEN"
+                    ? translateOpsLevel("RED", "engine")
+                    : translateOpsLevel("GREY", "engine")
+              }
+            />
+            <ListRow
+              icon={SymbolLayers}
+              primary={`Gross open risk ${usdText(portfolio?.gross_open_risk_usd)} / ${usdText(
+                portfolio?.portfolio_max_risk_usd,
+              )}`}
+              secondary={[
+                `${portfolio?.open_positions ?? 0} open positions`,
+                `available ${usdText(portfolio?.available_risk_usd)}`,
+                "gross, never netted",
+                timeframe_traders?.d1_trader === false ? "D1 not live" : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              status={translateOpsLevel("GREEN", "engine")}
+            />
+          </PanelCard>
+        ) : null}
+      </div>
+      {limits.length > 0 || legacy.length > 0 ? (
+        <div className="grid gap-3.5 xl:grid-cols-2">
+          <PanelCard title="Known Limitations" icon={SymbolBell} empty={limits.length === 0 ? "None" : undefined}>
+            {limits.map((row) => (
+              <ListRow
+                key={row.id || row.detail || "limit"}
+                icon={SymbolBell}
+                primary={row.id || "limitation"}
+                secondary={[row.display_status || row.classification || null, row.requirement || null, row.detail || null]
+                  .filter(Boolean)
+                  .join(" · ")}
+                status={translateOpsLevel(row.display_status || "KNOWN_LIMITATION", "engine")}
+              />
+            ))}
+          </PanelCard>
+          <PanelCard title="Legacy / Phantom" icon={SymbolEngine} empty={legacy.length === 0 ? "None" : undefined}>
+            {legacy.map((row) => (
+              <ListRow
+                key={row.component_id || "legacy"}
+                icon={SymbolEngine}
+                primary={row.component_id || "legacy"}
+                secondary={[
+                  row.display_status || "NOT_IN_CANONICAL_RUNTIME",
+                  row.classification || "PHANTOM",
+                  row.reason || "NOT_PRESENT_IN_CANONICAL_RUNTIME",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                status={translateOpsLevel(row.display_status || "NOT_IN_CANONICAL_RUNTIME", "engine")}
+              />
+            ))}
+          </PanelCard>
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function progressTone(percent: number): string {
-  if (percent > 85) return "bg-ds-status-error";
-  if (percent >= 70) return "bg-ds-status-warning";
+  if (percent >= 90) return "bg-ds-status-error";
+  if (percent >= 75) return "bg-ds-status-warning";
   return "bg-ds-status-healthy";
 }
 
@@ -789,7 +785,7 @@ function ResearchPipelineSection({ research }: { research: ResearchPipelineSnaps
 
   return (
     <section className="space-y-4">
-      <SectionLabel>Research / Validation Readiness</SectionLabel>
+      <SectionLabel>{t("ops.researchPipeline")}</SectionLabel>
 
       {model_summary ? (
         <PanelCard title={t("ops.modelSummary")} icon={SymbolLayers} status={summaryStatus}>
@@ -1447,23 +1443,20 @@ export function OpsDashboard({
           />
 
           <KpiCard
-            title={t("ops.openAlerts")}
-            icon={SymbolBell}
-            status={alertsStatus}
-            hint={
-              actionableAlerts.length === 0
-                ? "Nothing requires immediate operational action"
-                : t("ops.waiting", { count: actionableAlerts.length })
-            }
-            renderVisual={(tone) =>
-              actionableAlerts.length === 0 ? (
-                <StatusOrb tone={tone} size="lg" />
-              ) : (
-                <p className="font-ds-display text-[48px] font-semibold leading-none tabular-nums tracking-tight text-ds-text-primary">
-                  {actionableAlerts.length}
-                </p>
-              )
-            }
+            title={t("ops.memoryUsage")}
+            icon={SymbolMemory}
+            status={memoryStatus}
+            hint={t("ops.resourceHint", {
+              cpu: Number(safeHealth.cpu_percent || 0).toFixed(0),
+              disk: Number(safeHealth.disk_percent || 0).toFixed(0),
+            })}
+            renderVisual={(tone) => (
+              <RingGauge value={Number(safeHealth.memory_percent || 0)} tone={tone} size={100}>
+                <span className="font-ds-display text-[26px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
+                  {Number(safeHealth.memory_percent || 0).toFixed(0)}%
+                </span>
+              </RingGauge>
+            )}
           />
 
           <KpiCard
@@ -1486,86 +1479,21 @@ export function OpsDashboard({
           />
 
           <KpiCard
-            title="Runtime Stability"
-            icon={SymbolClock}
-            status={runtimeStabilityStatus}
-            hint={t("ops.resourceHint", {
-              cpu: Number(safeHealth.cpu_percent || 0).toFixed(0),
-              disk: Number(safeHealth.disk_percent || 0).toFixed(0),
-            })}
-            renderVisual={(tone) => (
-              <RingGauge value={Number(safeHealth.memory_percent || 0)} tone={tone} size={100}>
-                <span className="font-ds-display text-[18px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {runtimeStabilityStatus.label}
-                </span>
-              </RingGauge>
-            )}
+            title={t("ops.openAlerts")}
+            icon={SymbolBell}
+            status={alertsStatus}
+            hint={actionableAlerts.length === 0 ? t("ops.nothingRequiresAction") : t("ops.waiting", { count: actionableAlerts.length })}
+            renderVisual={(tone) =>
+              actionableAlerts.length === 0 ? (
+                <StatusOrb tone={tone} size="lg" />
+              ) : (
+                <p className="font-ds-display text-[48px] font-semibold leading-none tabular-nums tracking-tight text-ds-text-primary">
+                  {actionableAlerts.length}
+                </p>
+              )
+            }
           />
         </div>
-
-        <SectionErrorBoundary title="Live Operational Health">
-          <section className="space-y-2.5">
-            <SectionLabel>Data Freshness</SectionLabel>
-            <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-              {runtimeRibbon.map((item) => (
-                <RibbonTile
-                  key={item.key}
-                  icon={ribbonIcon(item)}
-                  label={item.label}
-                  status={translateRibbonItem(item)}
-                />
-              ))}
-              {pipelineSyncRibbon.map((item) => (
-                <RibbonTile
-                  key={item.key}
-                  icon={ribbonIcon(item)}
-                  label={item.label}
-                  status={translateResearchRibbonItem(item)}
-                />
-              ))}
-              <RibbonTile
-                key="current-failures"
-                icon={SymbolEngine}
-                label="CURRENT FAILURES"
-                status={translateFailedEngineCount(dimensions?.runtime?.current_failures_count ?? 0)}
-              />
-            </div>
-            {feed_confidence ? (
-              <div className="grid gap-3.5 md:grid-cols-3">
-                {[feed_confidence.ws, feed_confidence.write, feed_confidence.consume].filter(Boolean).map((signal) => (
-                  <RibbonTile
-                    key={signal.label}
-                    icon={SymbolWifi}
-                    label={signal.label}
-                    status={translateOpsLevel(signal.level, "feed")}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </section>
-        </SectionErrorBoundary>
-
-        <SectionErrorBoundary title="Manager Traders Context">
-          <LiveOperationalTruth
-            processes={processes}
-            multi_timeframe={multi_timeframe}
-            context_chain={context_chain}
-            paper={paper}
-            timeframe_traders={timeframe_traders}
-          />
-        </SectionErrorBoundary>
-
-        <SectionErrorBoundary title="Active Alerts">
-          <section className="space-y-2.5">
-            <SectionLabel>Active Alerts</SectionLabel>
-            <AlertsCard alerts={safeAlerts} alertGroups={alert_groups} acknowledged={acknowledged} onAck={onAckAlert} />
-            {actionableAlerts.length === 0 ? (
-              <p className="px-0.5 text-[11px] text-ds-text-secondary">
-                Open Alerts: 0 · Nothing requires immediate operational action
-              </p>
-            ) : null}
-          </section>
-        </SectionErrorBoundary>
 
         <SectionErrorBoundary title="Resources">
         <section className="space-y-2.5">
@@ -1593,18 +1521,65 @@ export function OpsDashboard({
                 ) : null}
               </div>
             </Card>
-            <StatusTile label="Runtime Stability" icon={SymbolClock} status={runtimeStabilityStatus} />
+
+            <StatusTile
+              label="Research / Validation"
+              icon={SymbolLayers}
+              status={researchStatus}
+            />
           </div>
+
+          {feed_confidence ? (
+            <div className="grid gap-3.5 md:grid-cols-3">
+              {[feed_confidence.ws, feed_confidence.write, feed_confidence.consume].filter(Boolean).map((signal) => (
+                <RibbonTile
+                  key={signal.label}
+                  icon={SymbolWifi}
+                  label={signal.label}
+                  status={translateOpsLevel(signal.level, "feed")}
+                />
+              ))}
+            </div>
+          ) : null}
         </section>
         </SectionErrorBoundary>
 
-        <SectionErrorBoundary title="Known Limitations">
-          <KnownLimitationsSection known_limitations={known_limitations} />
+        <SectionErrorBoundary title="Runtime Health">
+        <section className="space-y-2.5">
+          <SectionLabel>Runtime Health</SectionLabel>
+          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+            {runtimeRibbon.map((item) => (
+              <RibbonTile
+                key={item.key}
+                icon={ribbonIcon(item)}
+                label={item.label}
+                status={translateRibbonItem(item)}
+              />
+            ))}
+            {pipelineSyncRibbon.map((item) => (
+              <RibbonTile
+                key={item.key}
+                icon={ribbonIcon(item)}
+                label={item.label}
+                status={translateResearchRibbonItem(item)}
+              />
+            ))}
+            <RibbonTile
+              key="current-failures"
+              icon={SymbolEngine}
+              label="CURRENT FAILURES"
+              status={translateFailedEngineCount(dimensions?.runtime?.current_failures_count ?? 0)}
+            />
+          </div>
+          {dimensions?.runtime?.reason ? (
+            <p className="px-0.5 text-[11px] text-ds-text-secondary">{dimensions.runtime.reason}</p>
+          ) : null}
+        </section>
         </SectionErrorBoundary>
 
-        <SectionErrorBoundary title="Research / Validation Readiness">
+        <SectionErrorBoundary title="Research / Validation">
         <section className="space-y-2.5">
-          <SectionLabel>Research / Validation Readiness</SectionLabel>
+          <SectionLabel>Research / Validation</SectionLabel>
           <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
             <StatusTile label="Research readiness" icon={SymbolLayers} status={researchStatus} />
             {researchRibbon.map((item) => (
@@ -1618,10 +1593,13 @@ export function OpsDashboard({
           </div>
           {dimensions?.research_validation?.reason ? (
             <p className="px-0.5 text-[11px] text-ds-text-secondary">
-              INCOMPLETE — NON-BLOCKING · {dimensions.research_validation.reason}
+              RESEARCH_INCOMPLETE — NON-BLOCKING · {dimensions.research_validation.reason}
             </p>
-          ) : null}
-          {research_pipeline ? <ResearchPipelineSection research={research_pipeline} /> : null}
+          ) : (
+            <p className="px-0.5 text-[11px] text-ds-text-secondary">
+              RESEARCH_INCOMPLETE — NON-BLOCKING · does not affect live System Health
+            </p>
+          )}
         </section>
         </SectionErrorBoundary>
 
@@ -1640,16 +1618,6 @@ export function OpsDashboard({
               status={translateFailedEngineCount(dimensions?.runtime?.current_failures_count ?? 0)}
             />
             <MetricTile
-              label="Current stalls"
-              icon={SymbolWaveform}
-              value={
-                <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
-                  {currentStallCount}
-                </p>
-              }
-              status={translateStallCount(currentStallCount)}
-            />
-            <MetricTile
               label="Historical failures"
               icon={SymbolEngine}
               value={
@@ -1663,7 +1631,7 @@ export function OpsDashboard({
               status={historicalStatus}
             />
             <MetricTile
-              label="Historical stalls"
+              label="Historical stalls/timeouts"
               icon={SymbolWaveform}
               value={
                 <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
@@ -1672,9 +1640,11 @@ export function OpsDashboard({
               }
               status={historicalStatus}
             />
+            <StatusTile label="Historical Audit" icon={SymbolClock} status={historicalStatus} />
           </div>
           <p className="px-0.5 text-[11px] text-ds-text-secondary">
             No active runtime failures. Historical records retained for audit only.
+            {dimensions?.historical_audit?.reason ? ` · ${dimensions.historical_audit.reason}` : ""}
             {dimensions?.historical_audit?.latest_historical_failure_at
               ? ` · Latest historical failure: ${formatSourceTimestamp(String(dimensions.historical_audit.latest_historical_failure_at))}`
               : ""}
@@ -1683,10 +1653,6 @@ export function OpsDashboard({
               : ""}
           </p>
         </section>
-        </SectionErrorBoundary>
-
-        <SectionErrorBoundary title="Legacy / Excluded Modules">
-          <LegacyExcludedModulesSection legacy_components={legacy_components} />
         </SectionErrorBoundary>
 
         <SectionErrorBoundary title="Pipeline Status">
@@ -1703,18 +1669,33 @@ export function OpsDashboard({
               }
               status={translateFailedEngineCount(safePipeline.failed_engine_count ?? 0)}
             />
+            <MetricTile
+              label="Current stalls/timeouts"
+              icon={SymbolWaveform}
+              value={
+                <p className="font-ds-display text-[32px] font-semibold tabular-nums tracking-tight text-ds-text-primary">
+                  {currentStallCount}
+                </p>
+              }
+              status={translateStallCount(currentStallCount)}
+            />
             <StatusTile
               label={t("ops.heartbeat")}
               icon={SymbolWaveform}
               status={translateOpsLevel(safePipeline.heartbeat_level, "engine")}
             />
             <StatusTile
+              label="Runtime Stability"
+              icon={SymbolClock}
+              status={runtimeStabilityStatus}
+            />
+            <StatusTile
               label={t("ops.collectors")}
               icon={SymbolAntenna}
               status={translateOpsLevel(safeCollectors.level, "feed")}
             />
-            <StatusTile label="Memory" icon={SymbolMemory} status={memoryStatus} />
           </div>
+
           <div className="grid gap-3.5 xl:grid-cols-2">
             <EngineList engines={safeEngines} />
             <CollectorsCard collectors={safeCollectors} />
@@ -1728,6 +1709,30 @@ export function OpsDashboard({
               {overall_reason ? ` · ${overall_reason}` : ""}
             </p>
           ) : null}
+        </section>
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary title="Runtime Truth">
+          <RuntimeTruthSection
+            processes={processes}
+            multi_timeframe={multi_timeframe}
+            context_chain={context_chain}
+            paper={paper}
+            known_limitations={known_limitations}
+            legacy_components={legacy_components}
+            timeframe_traders={timeframe_traders}
+            overall_health={overall_health}
+            overall_reason={overall_reason}
+          />
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary title="Research Pipeline">
+          {research_pipeline ? <ResearchPipelineSection research={research_pipeline} /> : null}
+        </SectionErrorBoundary>
+
+        <SectionErrorBoundary title="Runtime Activity">
+        <section className="space-y-2.5">
+          <SectionLabel>{t("ops.systemActivity")}</SectionLabel>
           <div className="grid gap-3.5 xl:grid-cols-3">
             {parquet ? (
               <ParquetCard parquet={parquet} expanded={expandedStaleParquet} onToggle={onToggleStaleParquet} />
@@ -1754,10 +1759,18 @@ export function OpsDashboard({
                   secondary={formatUptime(stability.websocket_uptime_s)}
                   status={translateActiveService()}
                 />
+                <div className="space-y-1 px-2.5 py-2 text-[11px] text-ds-text-secondary">
+                  <p>Current stalls/timeouts: {currentStallCount}</p>
+                  <p>Historical stalls/timeouts: {historicalStallCount}</p>
+                  {safePipeline.latest_historical_stall_at ? (
+                    <p>Latest historical stall: {formatSourceTimestamp(String(safePipeline.latest_historical_stall_at))}</p>
+                  ) : null}
+                </div>
               </PanelCard>
             ) : null}
             <RuntimeFailureAuditCard audit={runtime_failure_audit} />
             <RuntimeSkippedEngineAuditCard audit={runtime_skipped_engine_audit} />
+            <AlertsCard alerts={safeAlerts} alertGroups={alert_groups} acknowledged={acknowledged} onAck={onAckAlert} />
           </div>
         </section>
         </SectionErrorBoundary>
