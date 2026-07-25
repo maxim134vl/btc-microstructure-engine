@@ -142,13 +142,44 @@ def _txt(value: Any) -> str | None:
     return text
 
 
-def _iso(value: Any) -> str | None:
+def utc_stamp(value: Any) -> pd.Timestamp | pd.NaTType:
+    """Parse a single value as a UTC instant.
+
+    Strings go through explicit ISO-8601 parsing. Letting pandas infer the format
+    is unsafe here because the archived legacy ledger writes microseconds while
+    the timeframe traders do not, and inference locks onto the first value seen.
+    """
     if value is None:
-        return None
+        return pd.NaT
+    if isinstance(value, str):
+        if not value.strip():
+            return pd.NaT
+        try:
+            return pd.to_datetime(value, utc=True, errors="coerce", format="ISO8601")
+        except (ValueError, TypeError):
+            return pd.NaT
     try:
-        stamp = pd.to_datetime(value, utc=True, errors="coerce")
-    except Exception:
-        return None
+        return pd.to_datetime(value, utc=True, errors="coerce")
+    except (ValueError, TypeError):
+        return pd.NaT
+
+
+def utc_series(values: Any) -> pd.Series:
+    """Parse a column as UTC instants, element-wise for mixed ISO precision."""
+    series = values if isinstance(values, pd.Series) else pd.Series(list(values))
+    if len(series) == 0:
+        return pd.Series([], dtype="datetime64[ns, UTC]")
+    if pd.api.types.is_datetime64_any_dtype(series):
+        if getattr(series.dtype, "tz", None) is None:
+            return series.dt.tz_localize("UTC")
+        return series.dt.tz_convert("UTC")
+    return pd.Series(
+        [utc_stamp(v) for v in series], index=series.index, dtype="datetime64[ns, UTC]"
+    )
+
+
+def _iso(value: Any) -> str | None:
+    stamp = utc_stamp(value)
     if stamp is None or pd.isna(stamp):
         return None
     return stamp.isoformat().replace("+00:00", "Z")
@@ -187,7 +218,7 @@ class _ContextResolver:
             return
         if not len(frame):
             return
-        stamps = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        stamps = utc_series(frame["timestamp"])
         mask = stamps.notna() & frame["context_episode_id"].notna()
         if not mask.any():
             return
@@ -204,7 +235,7 @@ class _ContextResolver:
     def resolve(self, timestamp: Any) -> str | None:
         if self._stamps is None or self._episodes is None:
             return None
-        stamp = pd.to_datetime(timestamp, utc=True, errors="coerce")
+        stamp = utc_stamp(timestamp)
         if stamp is None or pd.isna(stamp):
             return None
         position = int(self._stamps.searchsorted(stamp, side="right")) - 1
@@ -428,7 +459,7 @@ def build_canonical_visual_trades() -> pd.DataFrame:
     if not len(frame):
         return frame
     frame = frame.drop_duplicates(subset=["visual_trade_id"], keep="first")
-    order = pd.to_datetime(frame["exit_timestamp"], utc=True, errors="coerce")
+    order = utc_series(frame["exit_timestamp"])
     frame = frame.assign(_order=order).sort_values(
         ["_order", "visual_trade_id"], kind="stable"
     )
@@ -439,19 +470,19 @@ def reconcile(frame: pd.DataFrame | None = None) -> dict[str, Any]:
     """Invariant report used by the activation gates and the parity tests."""
     frame = build_canonical_visual_trades() if frame is None else frame
     boundary = activation_boundary()
-    boundary_ts = pd.to_datetime(boundary, utc=True, errors="coerce") if boundary else None
+    boundary_ts = utc_stamp(boundary) if boundary else None
 
     legacy = frame[frame["timeframe"] == LEGACY_TIMEFRAME]
     s4 = frame[frame["timeframe"] != LEGACY_TIMEFRAME]
 
-    entry = pd.to_datetime(frame["entry_timestamp"], utc=True, errors="coerce")
-    exit_ = pd.to_datetime(frame["exit_timestamp"], utc=True, errors="coerce")
+    entry = utc_series(frame["entry_timestamp"])
+    exit_ = utc_series(frame["exit_timestamp"])
 
     legacy_after_boundary = 0
     s4_before_boundary = 0
     if boundary_ts is not None and len(frame):
-        legacy_exit = pd.to_datetime(legacy["exit_timestamp"], utc=True, errors="coerce")
-        s4_entry = pd.to_datetime(s4["entry_timestamp"], utc=True, errors="coerce")
+        legacy_exit = utc_series(legacy["exit_timestamp"])
+        s4_entry = utc_series(s4["entry_timestamp"])
         legacy_after_boundary = int((legacy_exit > boundary_ts).sum())
         s4_before_boundary = int((s4_entry < boundary_ts).sum())
 

@@ -1697,7 +1697,10 @@ def build_decision_row(
         "observe_block_reason": _clean(life_row.get("observe_block_reason"), default="NONE"),
         # Phase-1 origin diagnostics from point-in-time lifecycle row (never a fill price).
         "context_origin_price": _nullable_float(life_row.get("context_origin_price")),
-        "context_entered_at": _iso(_to_utc_ts(life_row.get("context_entered_at"))),
+        # Canonical nullable UTC timestamp, not an ISO string: the persisted
+        # parquet column is timestamp[us, tz=UTC] and a string here makes the
+        # concat fall back to object dtype, which Arrow cannot write.
+        "context_entered_at": _to_utc_ts(life_row.get("context_entered_at")),
         "context_episode_id": _safe_int(
             life_row.get("context_episode_id")
             if life_row.get("context_episode_id") is not None
@@ -1771,6 +1774,60 @@ def write_atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
                 tmp.unlink()
             except OSError:
                 pass
+
+
+"""Columns persisted as Arrow ``timestamp[us, tz=UTC]`` rather than as strings.
+
+Every other temporal field in this log is stored as an ISO string; these are the
+exceptions, so a value reaching the writer as a string silently degrades the
+column to object dtype and breaks the Arrow conversion.
+"""
+CANONICAL_TIMESTAMP_COLUMNS: tuple[str, ...] = ("context_entered_at",)
+
+CANONICAL_TIMESTAMP_DTYPE = "datetime64[us, UTC]"
+
+
+def coerce_utc_timestamp_series(values: Any, column: str) -> pd.Series:
+    """Coerce a column to nullable UTC timestamps, failing closed on garbage.
+
+    Each value is parsed on its own so that mixed precision (with and without
+    microseconds) cannot make pandas infer one format from the first element and
+    coerce every other value to NaT.
+    """
+    parsed: list[Any] = []
+    for value in values:
+        if value is None:
+            parsed.append(pd.NaT)
+            continue
+        if isinstance(value, str):
+            if not value.strip():
+                parsed.append(pd.NaT)
+                continue
+            timestamp = pd.to_datetime(value, utc=True, errors="coerce", format="ISO8601")
+        else:
+            try:
+                if pd.isna(value):
+                    parsed.append(pd.NaT)
+                    continue
+            except (TypeError, ValueError):
+                pass
+            timestamp = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(timestamp):
+            raise DecisionLoggerError(
+                f"INVALID_TIMESTAMP: column={column} value={value!r} "
+                "is not a parseable ISO-8601 UTC timestamp"
+            )
+        parsed.append(timestamp)
+    index = values.index if isinstance(values, pd.Series) else None
+    return pd.Series(parsed, dtype=CANONICAL_TIMESTAMP_DTYPE, index=index)
+
+
+def normalize_canonical_timestamp_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Apply the canonical timestamp dtype to a frame about to be persisted."""
+    for column in CANONICAL_TIMESTAMP_COLUMNS:
+        if column in frame.columns:
+            frame[column] = coerce_utc_timestamp_series(frame[column], column)
+    return frame
 
 
 def normalize_utc_ns_series(values: Any) -> pd.Series:
@@ -2105,6 +2162,7 @@ def append_decision(
     else:
         combined = new_frame
 
+    combined = normalize_canonical_timestamp_columns(combined)
     write_atomic_parquet(combined, log_path)
     try:
         if str(ROOT) not in sys.path:

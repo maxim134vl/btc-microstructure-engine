@@ -27,6 +27,8 @@ from btc_ml.visual.canonical_trade_view import (  # noqa: E402
     build_canonical_visual_trades,
     legacy_archive_dir,
     reconcile,
+    utc_series,
+    utc_stamp,
 )
 
 PUBLIC_DATA = ROOT / "apps/context_visualizer/public/data"
@@ -214,7 +216,7 @@ def test_16_context_lineage_exists(view: pd.DataFrame) -> None:
 
 def test_17_no_future_context_join(view: pd.DataFrame) -> None:
     lifecycle = pd.read_parquet(LIFECYCLE_MEMORY, columns=["timestamp", "context_episode_id"])
-    lifecycle["timestamp"] = pd.to_datetime(lifecycle["timestamp"], utc=True, errors="coerce")
+    lifecycle["timestamp"] = utc_series(lifecycle["timestamp"])
     for _, row in view.iterrows():
         episode = row["context_episode_id"]
         if episode is None:
@@ -224,13 +226,13 @@ def test_17_no_future_context_join(view: pd.DataFrame) -> None:
             == pd.to_numeric(episode, errors="coerce"),
             "timestamp",
         ].min()
-        entry = pd.to_datetime(row["entry_timestamp"], utc=True, errors="coerce")
+        entry = utc_stamp(row["entry_timestamp"])
         assert first_seen <= entry, f"{row['visual_trade_id']} joined a future context"
 
 
 def test_18_no_future_trade_join(view: pd.DataFrame) -> None:
-    entry = pd.to_datetime(view["entry_timestamp"], utc=True, errors="coerce")
-    exit_ = pd.to_datetime(view["exit_timestamp"], utc=True, errors="coerce")
+    entry = utc_series(view["entry_timestamp"])
+    exit_ = utc_series(view["exit_timestamp"])
     assert (entry < exit_).all()
 
 
