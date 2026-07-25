@@ -40,9 +40,25 @@ list_controller_pids() {
   ps -ax -o pid=,command= 2>/dev/null | awk '
     /scripts\/live\/bounded_paper_trading_controller_auto_ledger_no_real_execution\.py/ &&
     $0 !~ /audit_/ &&
-    $0 !~ /bounded_paper_trading_controller_ctl/ {
+    $0 !~ /bounded_paper_trading_controller_ctl/ &&
+    $0 !~ /grep/ {
       print $1
     }'
+}
+
+cleanup_stale_pid_files() {
+  local pid
+  pid="$(read_pid)"
+  if [[ -f "$PID_FILE" ]] && { [[ -z "${pid:-}" ]] || ! pid_alive "$pid"; }; then
+    echo "stale_pid_cleanup pid=${pid:-empty}"
+    rm -f "$PID_FILE"
+  fi
+  local lock_pid
+  lock_pid="$(read_lock_pid)"
+  if [[ -f "$LOCK_FILE" ]] && { [[ -z "${lock_pid:-}" ]] || ! pid_alive "$lock_pid"; }; then
+    echo "stale_lock_cleanup pid=${lock_pid:-empty}"
+    rm -f "$LOCK_FILE"
+  fi
 }
 
 cleanup_stale_lock() {
@@ -56,10 +72,119 @@ cleanup_stale_lock() {
   return 1
 }
 
+stop_all_controller_processes() {
+  local killed=0
+  local pids
+  pids="$(list_controller_pids | tr '\n' ' ')"
+  for lp in $pids; do
+    if pid_alive "$lp"; then
+      echo "stopping_controller_pid=$lp signal=TERM"
+      kill -TERM "$lp" 2>/dev/null || true
+      killed=1
+    fi
+  done
+  if [[ "$killed" -eq 1 ]]; then
+    sleep 1
+  fi
+  for lp in $(list_controller_pids); do
+    if pid_alive "$lp"; then
+      echo "stopping_controller_pid=$lp signal=KILL"
+      kill -KILL "$lp" 2>/dev/null || true
+    fi
+  done
+  sleep 0.3
+  rm -f "$PID_FILE" "$LOCK_FILE"
+}
+
+emit_process_status() {
+  local pid_file_exists=false
+  local pid_file_pid=""
+  local pid_file_alive=false
+  local live_pids=()
+  local orphan_pids=()
+  local live_count=0
+  local duplicate_count=0
+  local status="STOPPED"
+
+  if [[ -f "$PID_FILE" ]]; then
+    pid_file_exists=true
+    pid_file_pid="$(read_pid)"
+    if pid_alive "$pid_file_pid"; then
+      pid_file_alive=true
+    fi
+  fi
+
+  while IFS= read -r lp; do
+    [[ -z "$lp" ]] && continue
+    if pid_alive "$lp"; then
+      live_pids+=("$lp")
+    fi
+  done < <(list_controller_pids)
+
+  live_count="${#live_pids[@]}"
+  if [[ "$live_count" -gt 1 ]]; then
+    duplicate_count=$((live_count - 1))
+  fi
+
+  for lp in "${live_pids[@]:-}"; do
+    if [[ "$pid_file_alive" == "true" ]]; then
+      if [[ "$lp" != "$pid_file_pid" ]]; then
+        orphan_pids+=("$lp")
+      fi
+    else
+      orphan_pids+=("$lp")
+    fi
+  done
+
+  if [[ "$live_count" -eq 0 ]]; then
+    if [[ "$pid_file_exists" == "true" ]] && [[ "$pid_file_alive" != "true" ]]; then
+      status="STALE_PID"
+    else
+      status="STOPPED"
+    fi
+  elif [[ "$live_count" -gt 1 ]]; then
+    status="DUPLICATE_RUNNING"
+  elif [[ "$pid_file_alive" == "true" ]] && [[ "${live_pids[0]:-}" == "$pid_file_pid" ]]; then
+    status="RUNNING"
+  else
+    status="ORPHAN_RUNNING"
+  fi
+
+  local live_csv orphan_csv
+  live_csv="$(IFS=,; echo "${live_pids[*]:-}")"
+  orphan_csv="$(IFS=,; echo "${orphan_pids[*]:-}")"
+
+  echo "pid_file_exists=$pid_file_exists"
+  echo "pid_file_pid=${pid_file_pid:-}"
+  echo "pid_file_alive=$pid_file_alive"
+  echo "live_controller_process_count=$live_count"
+  echo "live_controller_count=$live_count"
+  echo "live_controller_pids=[${live_csv}]"
+  echo "orphan_controller_pids=[${orphan_csv}]"
+  echo "duplicate_controller_count=$duplicate_count"
+  echo "status=$status"
+  # Backward-compatible one-liner
+  case "$status" in
+    RUNNING) echo "running pid=${live_pids[0]}" ;;
+    ORPHAN_RUNNING) echo "orphan running pid=${live_pids[0]} (pid_file_alive=$pid_file_alive)" ;;
+    DUPLICATE_RUNNING) echo "duplicate running count=$live_count pids=[${live_csv}]" ;;
+    STALE_PID) echo "stale pid=${pid_file_pid}" ;;
+    *) echo "not running" ;;
+  esac
+}
+
 cmd="${1:-status}"
 
 case "$cmd" in
   start)
+    # After the S4.1 cutover the manager and the four timeframe traders own paper
+    # execution; the global controller must never append to the frozen ledger.
+    if [[ -f "$ROOT/data/trading/manager/activation.json" ]] && [[ "${ALLOW_LEGACY_PAPER_CONTROLLER_AFTER_S4_1:-0}" != "1" ]]; then
+      echo "start_blocked reason=LEGACY_CONTROLLER_RETIRED_AFTER_S4_1_CUTOVER"
+      echo "activation_record=data/trading/manager/activation.json"
+      echo "use=scripts/timeframe_trading_ctl.sh start all"
+      exit 3
+    fi
     cleanup_stale_lock || true
     old="$(read_pid)"
     lock_pid="$(read_lock_pid)"
@@ -97,6 +222,7 @@ cmd = [
     "--approved-bounded-paper-controller-auto-ledger",
     "--paper-only",
     "--no-real-execution",
+    "--skip-refresh",
     "--max-cycles",
     "96",
     "--interval-seconds",
@@ -121,25 +247,27 @@ print(f"lock_file={lock_file}")
 PY
     ;;
   stop)
-    pid="$(read_pid)"
-    if pid_alive "$pid"; then
-      kill "$pid" || true
-      echo "stopped pid=$pid"
+    echo "stop_begin"
+    stop_all_controller_processes
+    remaining=0
+    for lp in $(list_controller_pids); do
+      if pid_alive "$lp"; then
+        remaining=$((remaining + 1))
+        echo "still_alive_after_stop pid=$lp"
+      fi
+    done
+    if [[ "$remaining" -eq 0 ]]; then
+      echo "stopped"
+      echo "live_controller_count=0"
+      echo "pid_file_removed=true"
     else
-      echo "not running"
+      echo "ERROR: controller_process_still_alive count=$remaining"
+      exit 1
     fi
-    rm -f "$PID_FILE" "$LOCK_FILE"
     ;;
   status)
-    pid="$(read_pid)"
+    emit_process_status
     lock_pid="$(read_lock_pid)"
-    if pid_alive "$pid"; then
-      echo "running pid=$pid"
-    elif [[ -n "${pid:-}" ]]; then
-      echo "stale pid=$pid"
-    else
-      echo "not running (no pid file)"
-    fi
     if [[ -f "$LOCK_FILE" ]]; then
       if pid_alive "$lock_pid"; then
         echo "lock_status=HELD pid=$lock_pid"
@@ -149,17 +277,13 @@ PY
     else
       echo "lock_status=ABSENT"
     fi
-    live_count=0
-    for lp in $(list_controller_pids); do
-      if pid_alive "$lp"; then
-        live_count=$((live_count + 1))
-        echo "live_controller_pid=$lp"
-      fi
-    done
-    echo "live_controller_count=$live_count"
     if [[ -f "$STATUS_JSON" ]]; then
       "$PYTHON" -c "import json; print(json.dumps(json.load(open(r'''$STATUS_JSON''')), indent=2)[:2500])"
     fi
+    ;;
+  cleanup-stale)
+    cleanup_stale_pid_files
+    emit_process_status
     ;;
   repair-duplicates)
     echo "approval_phrase=APPROVE_FIX_BOUNDED_PAPER_CONTROLLER_DUPLICATE_PROCESS_NO_LEDGER_NO_EXECUTION"
@@ -347,7 +471,7 @@ PY
     tail -n 80 "$LOG_FILE"
     ;;
   *)
-    echo "Usage: $0 {start|stop|status|tail|repair-duplicates}"
+    echo "Usage: $0 {start|stop|status|tail|repair-duplicates|cleanup-stale}"
     exit 2
     ;;
 esac
