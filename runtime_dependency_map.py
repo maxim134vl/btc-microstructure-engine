@@ -32,13 +32,11 @@ DEPENDENCIES = {
     ],
 
     "stage2_cognition_runtime_v1.py": [
-        "candle_structure_memory.parquet",
-        "auction_synthesis_memory.parquet",
+        "candle_structure_memory.parquet"
     ],
 
     "runtime_cognition_engine_v1.py": [
-        "runtime_cognition_memory.parquet",
-        "multi_timeframe_synthesis.parquet",
+        "runtime_cognition_memory.parquet"
     ],
 
     "intermediate_cognition_engine_v1.py": [
