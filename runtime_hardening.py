@@ -57,6 +57,132 @@ def check_startup_dependencies(report: HardeningReport) -> None:
         report.passed.append("startup dependencies")
 
 
+# Frozen relative order of the base cognition chain (localization may be inserted).
+# Absolute indices are intentionally NOT used — insertion shifts later steps.
+BASE_CANONICAL_PIPELINE_ORDER: tuple[str, ...] = (
+    "candle_structure_engine_v1.py",
+    "volume_classification_engine_v1.py",
+    "schema_validation_engine_v1.py",
+    "behavioral_sequence_memory_v1.py",
+    "behavioral_volume_observer_v1.py",
+    "microstructure_candle_engine_v1.py",
+    "volume_response_engine_v1.py",
+    "climactic_behavior_engine_v1.py",
+    "auction_convergence_engine_v1.py",
+    "auction_synthesis_engine_v1.py",
+    "stage2_cognition_runtime_v1.py",
+    "runtime_cognition_engine_v1.py",
+    "intermediate_cognition_engine_v1.py",
+    "auction_reinforcement_engine_v1.py",
+    "probabilistic_auction_engine_v1.py",
+    "auction_context_arbitration_engine_v1.py",
+    "auction_decay_engine_v1.py",
+    "state_transition_engine_v1.py",
+    "adaptive_meta_cognition_engine_v1.py",
+    "mtf_availability_runtime_engine_v1.py",
+)
+
+VOLUME_LOCALIZATION_ENGINE = "volume_localization_engine_v1.py"
+CANDLE_STRUCTURE_ENGINE = "candle_structure_engine_v1.py"
+VOLUME_RESPONSE_ENGINE = "volume_response_engine_v1.py"
+BASE_PIPELINE_STEP_COUNT = len(BASE_CANONICAL_PIPELINE_ORDER)
+ACTIVATED_PIPELINE_STEP_COUNT = BASE_PIPELINE_STEP_COUNT + 1
+
+
+def validate_canonical_pipeline_order(
+    pipeline: list[str] | tuple[str, ...],
+    expected_step_count: int,
+) -> list[str]:
+    """Validate relative architectural order (no absolute index coupling).
+
+    Returns a list of failure strings; empty means pass.
+    """
+    failures: list[str] = []
+    steps = list(pipeline)
+    actual = len(steps)
+
+    if expected_step_count not in (
+        BASE_PIPELINE_STEP_COUNT,
+        ACTIVATED_PIPELINE_STEP_COUNT,
+    ):
+        failures.append(
+            f"unexpected pipeline mode step count {expected_step_count} "
+            f"(allowed {BASE_PIPELINE_STEP_COUNT} or {ACTIVATED_PIPELINE_STEP_COUNT})"
+        )
+        # Still report length mismatch when caller passes an unsupported mode.
+        if actual != expected_step_count:
+            failures.append(
+                f"pipeline step count != {expected_step_count} ({actual})"
+            )
+        return failures
+
+    if actual != expected_step_count:
+        failures.append(
+            f"pipeline step count != {expected_step_count} ({actual})"
+        )
+
+    activated = expected_step_count == ACTIVATED_PIPELINE_STEP_COUNT
+    loc_count = steps.count(VOLUME_LOCALIZATION_ENGINE)
+
+    if activated:
+        if loc_count == 0:
+            failures.append(
+                "volume_localization_engine_v1.py missing in activated pipeline"
+            )
+        elif loc_count > 1:
+            failures.append(
+                "volume_localization_engine_v1.py registered more than once"
+            )
+    else:
+        if loc_count != 0:
+            failures.append(
+                "volume_localization_engine_v1.py must be absent in 20-step pipeline"
+            )
+
+    # Required base engines present exactly once.
+    for engine in BASE_CANONICAL_PIPELINE_ORDER:
+        count = steps.count(engine)
+        if count == 0:
+            failures.append(f"required engine missing: {engine}")
+        elif count > 1:
+            failures.append(f"required engine duplicated: {engine}")
+
+    # Base relative order preserved (localization ignored when extracting).
+    base_observed = [e for e in steps if e != VOLUME_LOCALIZATION_ENGINE]
+    if base_observed != list(BASE_CANONICAL_PIPELINE_ORDER):
+        failures.append(
+            "base cognition relative order violated "
+            "(localization insertion must not reorder other engines)"
+        )
+
+    # Localization sandwich when present.
+    if loc_count == 1 and CANDLE_STRUCTURE_ENGINE in steps and VOLUME_RESPONSE_ENGINE in steps:
+        candle = steps.index(CANDLE_STRUCTURE_ENGINE)
+        loc = steps.index(VOLUME_LOCALIZATION_ENGINE)
+        response = steps.index(VOLUME_RESPONSE_ENGINE)
+        if not (candle < loc < response):
+            failures.append(
+                "volume localization order invalid "
+                f"(candle={candle}, localization={loc}, response={response})"
+            )
+
+    # Core cognition relative chain (names, not absolute indices).
+    cognition_chain = (
+        "stage2_cognition_runtime_v1.py",
+        "runtime_cognition_engine_v1.py",
+        "intermediate_cognition_engine_v1.py",
+    )
+    if all(engine in steps for engine in cognition_chain):
+        idxs = [steps.index(engine) for engine in cognition_chain]
+        if idxs != sorted(idxs):
+            failures.append(
+                "cognition relative order violated "
+                "(stage2 → runtime_cognition → intermediate_cognition)"
+            )
+
+    return failures
+
+
 def check_package_imports(report: HardeningReport) -> None:
     root = _repo_root()
     if str(root) not in sys.path:
@@ -71,16 +197,13 @@ def check_package_imports(report: HardeningReport) -> None:
         )  # noqa: F401
         from storage.path_registry import PARQUET_REGISTRY  # noqa: F401
         from config import get_calibration_settings  # noqa: F401
-        actual = len(CANONICAL_PIPELINE)
-        if actual != EXPECTED_CANONICAL_PIPELINE_STEP_COUNT:
-            report.failures.append(
-                f"pipeline step count != {EXPECTED_CANONICAL_PIPELINE_STEP_COUNT} ({actual})"
-            )
-        elif CANONICAL_PIPELINE[12] != "intermediate_cognition_engine_v1.py":
-            report.failures.append(
-                "pipeline step 13 must be intermediate_cognition_engine_v1.py "
-                f"(got {CANONICAL_PIPELINE[12]!r})"
-            )
+
+        failures = validate_canonical_pipeline_order(
+            CANONICAL_PIPELINE,
+            EXPECTED_CANONICAL_PIPELINE_STEP_COUNT,
+        )
+        if failures:
+            report.failures.extend(failures)
         else:
             report.passed.append("canonical package imports")
     except ImportError as error:
