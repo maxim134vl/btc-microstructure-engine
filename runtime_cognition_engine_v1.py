@@ -112,6 +112,12 @@ def run():
         "location_bias":
             latest_state["location_bias"],
 
+        "auction_state":
+            latest_state.get("auction_state"),
+
+        "auction_event_timestamp":
+            latest_state.get("auction_event_timestamp"),
+
         "lineage_engine":
             latest_state.get("lineage_engine"),
 
