@@ -85,11 +85,7 @@ def canonical_pipeline_with_volume_localization_candidate(
     return candidate
 
 
-# Stage 1B controlled live activation — use proven helper order (21 steps).
-CANONICAL_PIPELINE = canonical_pipeline_with_volume_localization_candidate()
-EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 21
-
-# Stage 2B1.1B — integrated synthesis-input producers (candidate only; not live default).
+# Stage 2B1.1B — integrated synthesis-input producers (candidate builder; live via env flag).
 STAGE2_SYNTHESIS_INPUT_ENGINES: tuple[str, ...] = (
     "live_volume_flow_engine_v1.py",
     "liquidity_cluster_engine_v1.py",
@@ -99,6 +95,14 @@ STAGE2_SYNTHESIS_INPUT_ENGINES: tuple[str, ...] = (
 )
 STAGE2_SYNTHESIS_INPUT_INSERT_BEFORE = "auction_synthesis_engine_v1.py"
 EXPECTED_STAGE2_SYNTHESIS_INPUTS_PIPELINE_STEP_COUNT = 26
+# Stage 2B2 — explicit env-gated live activation (default off → 21-step Stage 1).
+STAGE2_SYNTHESIS_INPUTS_LIVE_ENV = "BTC_ML_STAGE2_SYNTHESIS_INPUTS_LIVE"
+
+
+def _stage2_synthesis_inputs_live_enabled() -> bool:
+    """Return True only when Stage-2 integrated inputs are explicitly enabled."""
+    raw = os.environ.get(STAGE2_SYNTHESIS_INPUTS_LIVE_ENV, "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def canonical_pipeline_with_stage2_synthesis_inputs_candidate(
@@ -167,6 +171,17 @@ def canonical_pipeline_with_stage2_synthesis_inputs_candidate(
     )
     assert len(candidate) == EXPECTED_STAGE2_SYNTHESIS_INPUTS_PIPELINE_STEP_COUNT
     return candidate
+
+
+# Stage 1B default (21) unless Stage 2B2 env flag enables integrated 26-step chain.
+if _stage2_synthesis_inputs_live_enabled():
+    CANONICAL_PIPELINE = canonical_pipeline_with_stage2_synthesis_inputs_candidate()
+    EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = (
+        EXPECTED_STAGE2_SYNTHESIS_INPUTS_PIPELINE_STEP_COUNT
+    )
+else:
+    CANONICAL_PIPELINE = canonical_pipeline_with_volume_localization_candidate()
+    EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 21
 
 
 def _repo_root() -> str:
