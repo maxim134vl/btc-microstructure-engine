@@ -1,16 +1,23 @@
 import math
+import os
 
 import numpy as np
 import pandas as pd
 
-from datetime import datetime
 from runtime_integrity import (
     ALIGNMENT_STATUS_VALID,
     log_runtime_warning,
 )
 from runtime_lineage import apply_lineage_metadata
 from state_manager_v1 import STATE
-from storage.path_registry import resolve_read, resolve_write
+from storage.path_registry import resolve_canonical, resolve_read, resolve_write
+
+_REQUIRED_COGNITION_FIELDS = (
+    "persistence_score",
+    "structural_rank",
+    "synthesis_state",
+    "location_bias",
+)
 
 
 def _belief_entropy(window: pd.DataFrame) -> float:
@@ -42,6 +49,96 @@ def _resolve_alignment(runtime_cognition: dict) -> tuple:
     return 0.0, alignment_status, 0.0
 
 
+def _load_latest_runtime_cognition() -> dict | None:
+    """Load latest valid evaluation row from canonical cognition parquet.
+
+    Parent STATE["runtime_cognition"] is intentionally ignored.
+    """
+
+    # Canonical path only — never fall back to legacy/repo-root copies.
+    path = resolve_canonical("runtime_cognition_memory.parquet")
+    if not os.path.exists(path):
+        return None
+    try:
+        frame = pd.read_parquet(path)
+    except Exception:
+        return None
+
+    if frame is None or len(frame) == 0 or "timestamp" not in frame.columns:
+        return None
+
+    work = frame.copy()
+    work["_eval_ts"] = pd.to_datetime(work["timestamp"], utc=True)
+    work = work.dropna(subset=["_eval_ts"])
+    if len(work) == 0:
+        return None
+
+    for field in _REQUIRED_COGNITION_FIELDS:
+        if field not in work.columns:
+            return None
+
+    tip = work["_eval_ts"].max()
+    latest_rows = work.loc[work["_eval_ts"] == tip].copy()
+    if len(latest_rows) == 0:
+        return None
+
+    identity_cols = list(_REQUIRED_COGNITION_FIELDS)
+    if latest_rows[identity_cols].drop_duplicates().shape[0] > 1:
+        # No source priority among duplicate evaluation identities.
+        return None
+
+    latest_rows = latest_rows.sort_values("_eval_ts")
+    row = latest_rows.iloc[-1]
+    for field in _REQUIRED_COGNITION_FIELDS:
+        if pd.isna(row[field]):
+            return None
+
+    alignment_status = "MISSING"
+    if "alignment_status" in latest_rows.columns and pd.notna(row.get("alignment_status")):
+        alignment_status = str(row["alignment_status"])
+
+    alignment_score = None
+    if "alignment_score" in latest_rows.columns and pd.notna(row.get("alignment_score")):
+        alignment_score = float(row["alignment_score"])
+
+    lineage_event_timestamp = None
+    if (
+        "lineage_event_timestamp" in latest_rows.columns
+        and pd.notna(row.get("lineage_event_timestamp"))
+    ):
+        lineage_event_timestamp = pd.to_datetime(
+            row["lineage_event_timestamp"],
+            utc=True,
+        )
+
+    auction_event_timestamp = None
+    if (
+        "auction_event_timestamp" in latest_rows.columns
+        and pd.notna(row.get("auction_event_timestamp"))
+    ):
+        auction_event_timestamp = pd.to_datetime(
+            row["auction_event_timestamp"],
+            utc=True,
+        )
+
+    auction_state_lineage = None
+    if "auction_state" in latest_rows.columns and pd.notna(row.get("auction_state")):
+        auction_state_lineage = row["auction_state"]
+
+    return {
+        "timestamp": tip,
+        "persistence_score": float(row["persistence_score"]),
+        "structural_rank": row["structural_rank"],
+        "synthesis_state": row["synthesis_state"],
+        "location_bias": row["location_bias"],
+        "alignment_status": alignment_status,
+        "alignment_score": alignment_score,
+        "lineage_event_timestamp": lineage_event_timestamp,
+        "auction_event_timestamp": auction_event_timestamp,
+        "auction_state_lineage": auction_state_lineage,
+    }
+
+
 def run():
 
     print()
@@ -60,10 +157,12 @@ def run():
         synthesis.iloc[-1]
     )
 
-    runtime_cognition = STATE.get(
-        "runtime_cognition",
-        {}
-    )
+    runtime_cognition = _load_latest_runtime_cognition()
+    if runtime_cognition is None:
+        print("RUNTIME COGNITION UNAVAILABLE")
+        print("SKIP — missing required runtime cognition evaluation")
+        print()
+        return
 
     persistence_score = float(
 
@@ -94,6 +193,8 @@ def run():
 
     )
 
+    evaluation_timestamp = runtime_cognition["timestamp"]
+
     try:
 
         memory = pd.read_parquet(
@@ -103,6 +204,15 @@ def run():
     except:
 
         memory = pd.DataFrame()
+
+    if len(memory) > 0 and "timestamp" in memory.columns:
+        existing_ts = pd.to_datetime(memory["timestamp"], utc=True)
+        if (existing_ts == evaluation_timestamp).any():
+            print("SKIP — reinforcement evaluation already exists for cognition tip")
+            print(evaluation_timestamp)
+            print()
+            STATE["auction_reinforcement"] = memory
+            return
 
     auction_state = latest_synthesis[
         "auction_state"
@@ -319,7 +429,7 @@ def run():
 
     print()
 
-    row = pd.DataFrame([{
+    row_payload = {
 
         "auction_state":
             auction_state,
@@ -337,7 +447,7 @@ def run():
             effort_result_state,
 
         "timestamp":
-            datetime.utcnow(),
+            evaluation_timestamp,
 
         "alignment_status":
             alignment_status,
@@ -365,7 +475,14 @@ def run():
 
         **rein_discipline_exports,
 
-    }])
+    }
+
+    if runtime_cognition.get("auction_event_timestamp") is not None:
+        row_payload["auction_event_timestamp"] = runtime_cognition[
+            "auction_event_timestamp"
+        ]
+
+    row = pd.DataFrame([row_payload])
 
     row = apply_lineage_metadata(
         row,
@@ -380,6 +497,12 @@ def run():
         ],
         event_timestamp_col="timestamp",
     )
+
+    # Preserve cognition MTF/event lineage; do not replace with evaluation tip.
+    if runtime_cognition.get("lineage_event_timestamp") is not None:
+        row["lineage_event_timestamp"] = runtime_cognition[
+            "lineage_event_timestamp"
+        ]
 
     memory = pd.concat([
 

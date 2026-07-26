@@ -46,9 +46,15 @@ DEPENDENCIES = {
         "runtime_cognition_memory.parquet",
     ],
 
-    "probabilistic_auction_engine_v1.py": [
+    "auction_reinforcement_engine_v1.py": [
+        "runtime_cognition_memory.parquet",
         "auction_synthesis_memory.parquet",
-        "auction_reinforcement_memory.parquet"
+        "volume_response_state.parquet",
+    ],
+
+    "probabilistic_auction_engine_v1.py": [
+        "runtime_cognition_memory.parquet",
+        "auction_reinforcement_memory.parquet",
     ],
 
     "auction_context_arbitration_engine_v1.py": [

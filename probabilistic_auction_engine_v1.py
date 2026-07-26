@@ -1,4 +1,5 @@
 import math
+import os
 
 import pandas as pd
 
@@ -35,13 +36,20 @@ from state_guard import (
     should_persist_state
 )
 
-from datetime import datetime
 from runtime_integrity import (
     ALIGNMENT_STATUS_VALID,
     log_runtime_warning,
 )
 from runtime_lineage import apply_lineage_metadata
 from state_manager_v1 import STATE
+from storage.path_registry import resolve_canonical
+
+_REQUIRED_COGNITION_FIELDS = (
+    "persistence_score",
+    "structural_rank",
+    "synthesis_state",
+    "location_bias",
+)
 
 
 def _belief_entropy(window: pd.DataFrame) -> float:
@@ -74,6 +82,95 @@ def _resolve_alignment(runtime_cognition: dict) -> tuple:
     return None, alignment_status, 1.0
 
 
+def _load_latest_runtime_cognition() -> dict | None:
+    """Load latest valid evaluation row from canonical cognition parquet.
+
+    Parent STATE["runtime_cognition"] is intentionally ignored.
+    """
+
+    # Canonical path only — never fall back to legacy/repo-root copies.
+    path = resolve_canonical("runtime_cognition_memory.parquet")
+    if not os.path.exists(path):
+        return None
+    try:
+        frame = pd.read_parquet(path)
+    except Exception:
+        return None
+
+    if frame is None or len(frame) == 0 or "timestamp" not in frame.columns:
+        return None
+
+    work = frame.copy()
+    work["_eval_ts"] = pd.to_datetime(work["timestamp"], utc=True)
+    work = work.dropna(subset=["_eval_ts"])
+    if len(work) == 0:
+        return None
+
+    for field in _REQUIRED_COGNITION_FIELDS:
+        if field not in work.columns:
+            return None
+
+    tip = work["_eval_ts"].max()
+    latest_rows = work.loc[work["_eval_ts"] == tip].copy()
+    if len(latest_rows) == 0:
+        return None
+
+    identity_cols = list(_REQUIRED_COGNITION_FIELDS)
+    if latest_rows[identity_cols].drop_duplicates().shape[0] > 1:
+        return None
+
+    latest_rows = latest_rows.sort_values("_eval_ts")
+    row = latest_rows.iloc[-1]
+    for field in _REQUIRED_COGNITION_FIELDS:
+        if pd.isna(row[field]):
+            return None
+
+    alignment_status = "MISSING"
+    if "alignment_status" in latest_rows.columns and pd.notna(row.get("alignment_status")):
+        alignment_status = str(row["alignment_status"])
+
+    alignment_score = None
+    if "alignment_score" in latest_rows.columns and pd.notna(row.get("alignment_score")):
+        alignment_score = float(row["alignment_score"])
+
+    lineage_event_timestamp = None
+    if (
+        "lineage_event_timestamp" in latest_rows.columns
+        and pd.notna(row.get("lineage_event_timestamp"))
+    ):
+        lineage_event_timestamp = pd.to_datetime(
+            row["lineage_event_timestamp"],
+            utc=True,
+        )
+
+    auction_event_timestamp = None
+    if (
+        "auction_event_timestamp" in latest_rows.columns
+        and pd.notna(row.get("auction_event_timestamp"))
+    ):
+        auction_event_timestamp = pd.to_datetime(
+            row["auction_event_timestamp"],
+            utc=True,
+        )
+
+    return {
+        "timestamp": tip,
+        "persistence_score": float(row["persistence_score"]),
+        "structural_rank": row["structural_rank"],
+        "synthesis_state": row["synthesis_state"],
+        "location_bias": row["location_bias"],
+        "alignment_status": alignment_status,
+        "alignment_score": alignment_score,
+        "lineage_event_timestamp": lineage_event_timestamp,
+        "auction_event_timestamp": auction_event_timestamp,
+        "auction_state": (
+            row["auction_state"]
+            if "auction_state" in latest_rows.columns and pd.notna(row.get("auction_state"))
+            else None
+        ),
+    }
+
+
 def run():
 
     print()
@@ -84,16 +181,36 @@ def run():
     
     print()
 
-    reinforcement = STATE[
-        "auction_reinforcement"
-    ]
+    runtime_cognition = _load_latest_runtime_cognition()
+    if runtime_cognition is None:
+        print("RUNTIME COGNITION UNAVAILABLE")
+        print("SKIP — missing required runtime cognition evaluation")
+        print()
+        return
+
+    reinforcement = safe_read_parquet(
+        "auction_reinforcement_memory.parquet"
+    )
+    if reinforcement is None or len(reinforcement) == 0:
+        print("AUCTION REINFORCEMENT UNAVAILABLE")
+        print("SKIP — missing required auction reinforcement memory")
+        print()
+        return
+
+    STATE["auction_reinforcement"] = reinforcement
 
     latest = reinforcement.iloc[-1]
 
-    runtime_cognition = STATE.get(
-        "runtime_cognition",
-        {}
-    )
+    evaluation_timestamp = runtime_cognition["timestamp"]
+    if "timestamp" in reinforcement.columns:
+        reinf_ts = pd.to_datetime(reinforcement["timestamp"], utc=True)
+        if (reinf_ts == evaluation_timestamp).any():
+            evaluation_timestamp = pd.to_datetime(
+                reinforcement.loc[
+                    reinf_ts == evaluation_timestamp, "timestamp"
+                ].iloc[-1],
+                utc=True,
+            )
 
     synthesis_state = runtime_cognition.get(
         "synthesis_state",
@@ -562,10 +679,19 @@ def run():
 
     conviction_probability = min(runtime_conviction, 1.0)
 
-    row = pd.DataFrame([{
+    if len(probabilistic_history) > 0 and "timestamp" in probabilistic_history.columns:
+        existing_ts = pd.to_datetime(probabilistic_history["timestamp"], utc=True)
+        if (existing_ts == evaluation_timestamp).any():
+            print()
+            print("SKIP — probabilistic evaluation already exists for cognition tip")
+            print(evaluation_timestamp)
+            print()
+            return
+
+    row_payload = {
 
     "timestamp":
-        datetime.utcnow(),
+        evaluation_timestamp,
 
     "auction_regime":
         auction_regime,
@@ -613,7 +739,14 @@ def run():
 
     **stabilization_exports,
 
-    }])
+    }
+
+    if runtime_cognition.get("auction_event_timestamp") is not None:
+        row_payload["auction_event_timestamp"] = runtime_cognition[
+            "auction_event_timestamp"
+        ]
+
+    row = pd.DataFrame([row_payload])
 
     row = apply_lineage_metadata(
         row,
@@ -628,7 +761,15 @@ def run():
         event_timestamp_col="timestamp",
     )
 
+    if runtime_cognition.get("lineage_event_timestamp") is not None:
+        row["lineage_event_timestamp"] = runtime_cognition[
+            "lineage_event_timestamp"
+        ]
+
     state_payload = {
+
+        "timestamp":
+            evaluation_timestamp,
 
         "auction_regime":
             auction_regime,
