@@ -1,4 +1,7 @@
+import importlib.util
 import os
+from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -11,9 +14,7 @@ from state_guard import (
     should_persist_state
 )
 
-from datetime import datetime
-
-# Phase 4A: default OFF so live subprocesses keep legacy v2 path until activation.
+# Phase 4A/4B: default OFF so live subprocesses keep legacy v2 path until activation.
 # Activation: BTC_ML_VOLUME_LOCALIZATION_LIVE=1 after localization is registered + restarted.
 _VOLUME_LOCALIZATION_LIVE = os.environ.get("BTC_ML_VOLUME_LOCALIZATION_LIVE", "0").strip() == "1"
 _LOCALIZATION_V1 = "volume_localization_memory.parquet"
@@ -22,6 +23,29 @@ _LOCALIZATION_V2 = "volume_localization_v2_memory.parquet"
 from volume_localization_engine_v1 import (  # noqa: E402
     resolve_localization_for_structure,
 )
+
+
+def _load_timestamp_identity():
+    path = (
+        Path(__file__).resolve().parent
+        / "src"
+        / "btc_ml"
+        / "cognition"
+        / "volume_response_timestamp_identity.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "btc_ml_cognition_volume_response_timestamp_identity",
+        path,
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_TS_IDENTITY = _load_timestamp_identity()
+build_response_identity_fields = _TS_IDENTITY.build_response_identity_fields
+
 
 print()
 print(
@@ -70,10 +94,18 @@ latest_geometry = (
     geometry.iloc[-1]
 )
 
+# Phase 4B: canonical M15 bar-open identity from candle_structure (passthrough).
+# Wall-clock evaluation time is separate (evaluated_at / legacy timestamp).
+_response_identity = build_response_identity_fields(latest_structure)
+source_candle_timestamp = _response_identity["source_candle_timestamp"]
+source_candle_close = _response_identity["source_candle_close"]
+evaluated_at = _response_identity["evaluated_at"]
+
 if _VOLUME_LOCALIZATION_LIVE:
+    # Exact join key: localization.timestamp == source_candle_timestamp
     _localization_join = resolve_localization_for_structure(
         localization,
-        latest_structure["timestamp"],
+        source_candle_timestamp,
         live_v1=True,
     )
     latest_localization = _localization_join["row"]
@@ -912,10 +944,18 @@ print()
 # SAVE
 # =====================================
 
+# Legacy `timestamp` remains wall-clock evaluation time for backward compatibility.
+# Canonical bar-open identity is additive: source_candle_timestamp / evaluated_at.
+# Flag OFF: keep historical utcnow() write semantics byte-for-byte equivalent.
+_row_timestamp = (
+    evaluated_at.to_pydatetime().replace(tzinfo=None)
+    if _VOLUME_LOCALIZATION_LIVE and hasattr(evaluated_at, "to_pydatetime")
+    else datetime.utcnow()
+)
 row = pd.DataFrame([{
 
     "timestamp":
-        datetime.utcnow(),
+        _row_timestamp,
 
     "volume_event":
         volume_event,
@@ -961,13 +1001,18 @@ row = pd.DataFrame([{
 
 }])
 
-# Additive localization join metadata only when live-v1 activation flag is on.
+# Additive identity + localization join metadata only when live-v1 flag is on
+# (avoids live schema writes while candidate remains inactive).
 if _VOLUME_LOCALIZATION_LIVE:
     row["estimated_local_volume"] = estimated_local_volume
     row["volume_concentration"] = volume_concentration
     row["localization_join_status"] = localization_join_status
     row["localization_source_timestamp"] = localization_source_timestamp
     row["localization_fresh"] = localization_fresh
+    row["source_candle_timestamp"] = source_candle_timestamp
+    row["source_candle_close"] = source_candle_close
+    row["source_timeframe"] = _response_identity["source_timeframe"]
+    row["evaluated_at"] = evaluated_at
 
 state_payload = {
 
