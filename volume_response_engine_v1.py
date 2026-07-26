@@ -1027,6 +1027,12 @@ state_payload = {
 
 }
 
+# When live-v1 is on, tip-identity changes must persist even if behavior label is unchanged
+# (otherwise source_candle_timestamp / EXACT_FRESH_MATCH never land in state).
+if _VOLUME_LOCALIZATION_LIVE:
+    state_payload["source_candle_timestamp"] = str(source_candle_timestamp)
+    state_payload["localization_join_status"] = localization_join_status
+
 if not should_persist_state(
 
     "volume_response_state.parquet",
