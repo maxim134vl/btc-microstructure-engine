@@ -89,6 +89,85 @@ def canonical_pipeline_with_volume_localization_candidate(
 CANONICAL_PIPELINE = canonical_pipeline_with_volume_localization_candidate()
 EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 21
 
+# Stage 2B1.1B — integrated synthesis-input producers (candidate only; not live default).
+STAGE2_SYNTHESIS_INPUT_ENGINES: tuple[str, ...] = (
+    "live_volume_flow_engine_v1.py",
+    "liquidity_cluster_engine_v1.py",
+    "flow_liquidity_interaction_engine_v3.py",
+    "htf_structure_engine_v1.py",
+    "htf_ltf_context_engine_v1.py",
+)
+STAGE2_SYNTHESIS_INPUT_INSERT_BEFORE = "auction_synthesis_engine_v1.py"
+EXPECTED_STAGE2_SYNTHESIS_INPUTS_PIPELINE_STEP_COUNT = 26
+
+
+def canonical_pipeline_with_stage2_synthesis_inputs_candidate(
+    pipeline: list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return 26-step pipeline with Stage-2 synthesis input producers inserted.
+
+    Disabled by default: live CANONICAL_PIPELINE remains the 21-step Stage 1 chain.
+    Inserts immediately before auction_synthesis in source-proven relative order:
+    flow → clusters → interaction → htf_structure → htf_ltf_context → synthesis.
+    """
+    base = list(
+        pipeline
+        if pipeline is not None
+        else canonical_pipeline_with_volume_localization_candidate()
+    )
+    for engine in STAGE2_SYNTHESIS_INPUT_ENGINES:
+        if engine in base:
+            raise ValueError(f"stage2 synthesis input already present: {engine}")
+    if STAGE2_SYNTHESIS_INPUT_INSERT_BEFORE not in base:
+        raise ValueError(
+            f"missing insert anchor {STAGE2_SYNTHESIS_INPUT_INSERT_BEFORE}"
+        )
+    # Required upstream anchors for relative-order proof.
+    for required in (
+        "candle_structure_engine_v1.py",
+        VOLUME_LOCALIZATION_LIVE_WIRING_ENGINE,
+        "volume_response_engine_v1.py",
+    ):
+        if required not in base:
+            raise ValueError(f"missing required upstream engine: {required}")
+
+    idx = base.index(STAGE2_SYNTHESIS_INPUT_INSERT_BEFORE)
+    candidate = base[:idx] + list(STAGE2_SYNTHESIS_INPUT_ENGINES) + base[idx:]
+
+    # Source-proven relative-order invariants.
+    assert candidate.index("candle_structure_engine_v1.py") < candidate.index(
+        VOLUME_LOCALIZATION_LIVE_WIRING_ENGINE
+    )
+    assert candidate.index(VOLUME_LOCALIZATION_LIVE_WIRING_ENGINE) < candidate.index(
+        "liquidity_cluster_engine_v1.py"
+    )
+    assert candidate.index("live_volume_flow_engine_v1.py") < candidate.index(
+        "flow_liquidity_interaction_engine_v3.py"
+    )
+    assert candidate.index("liquidity_cluster_engine_v1.py") < candidate.index(
+        "flow_liquidity_interaction_engine_v3.py"
+    )
+    assert candidate.index("htf_structure_engine_v1.py") < candidate.index(
+        "htf_ltf_context_engine_v1.py"
+    )
+    assert candidate.index("live_volume_flow_engine_v1.py") < candidate.index(
+        "htf_ltf_context_engine_v1.py"
+    )
+    assert candidate.index("flow_liquidity_interaction_engine_v3.py") < candidate.index(
+        "htf_ltf_context_engine_v1.py"
+    )
+    assert candidate.index("volume_response_engine_v1.py") < candidate.index(
+        "auction_synthesis_engine_v1.py"
+    )
+    assert candidate.index("htf_structure_engine_v1.py") < candidate.index(
+        "auction_synthesis_engine_v1.py"
+    )
+    assert candidate.index("htf_ltf_context_engine_v1.py") < candidate.index(
+        "auction_synthesis_engine_v1.py"
+    )
+    assert len(candidate) == EXPECTED_STAGE2_SYNTHESIS_INPUTS_PIPELINE_STEP_COUNT
+    return candidate
+
 
 def _repo_root() -> str:
     return os.path.dirname(

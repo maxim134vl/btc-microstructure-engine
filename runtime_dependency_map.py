@@ -1,5 +1,30 @@
 DEPENDENCIES = {
 
+    # Stage 2B1.1B candidate producers (source-true reads).
+    "live_volume_flow_engine_v1.py": [
+        "live_market_feed.parquet",
+    ],
+
+    "liquidity_cluster_engine_v1.py": [
+        "volume_localization_memory.parquet",
+    ],
+
+    "flow_liquidity_interaction_engine_v3.py": [
+        "live_volume_flow_memory.parquet",
+        "live_market_feed.parquet",
+        "liquidity_clusters_memory.parquet",
+    ],
+
+    "htf_structure_engine_v1.py": [
+        "live_market_feed.parquet",
+    ],
+
+    "htf_ltf_context_engine_v1.py": [
+        "live_volume_flow_memory.parquet",
+        "flow_liquidity_interaction_memory.parquet",
+        "htf_structure_memory.parquet",
+    ],
+
     "auction_synthesis_engine_v1.py": [
         "volume_response_state.parquet",
         "htf_structure_memory.parquet",

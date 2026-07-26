@@ -85,8 +85,23 @@ BASE_CANONICAL_PIPELINE_ORDER: tuple[str, ...] = (
 VOLUME_LOCALIZATION_ENGINE = "volume_localization_engine_v1.py"
 CANDLE_STRUCTURE_ENGINE = "candle_structure_engine_v1.py"
 VOLUME_RESPONSE_ENGINE = "volume_response_engine_v1.py"
+STAGE2_SYNTHESIS_INPUT_ENGINES: tuple[str, ...] = (
+    "live_volume_flow_engine_v1.py",
+    "liquidity_cluster_engine_v1.py",
+    "flow_liquidity_interaction_engine_v3.py",
+    "htf_structure_engine_v1.py",
+    "htf_ltf_context_engine_v1.py",
+)
 BASE_PIPELINE_STEP_COUNT = len(BASE_CANONICAL_PIPELINE_ORDER)
 ACTIVATED_PIPELINE_STEP_COUNT = BASE_PIPELINE_STEP_COUNT + 1
+STAGE2_INTEGRATED_PIPELINE_STEP_COUNT = (
+    ACTIVATED_PIPELINE_STEP_COUNT + len(STAGE2_SYNTHESIS_INPUT_ENGINES)
+)
+_ALLOWED_PIPELINE_STEP_COUNTS = (
+    BASE_PIPELINE_STEP_COUNT,
+    ACTIVATED_PIPELINE_STEP_COUNT,
+    STAGE2_INTEGRATED_PIPELINE_STEP_COUNT,
+)
 
 
 def validate_canonical_pipeline_order(
@@ -101,13 +116,11 @@ def validate_canonical_pipeline_order(
     steps = list(pipeline)
     actual = len(steps)
 
-    if expected_step_count not in (
-        BASE_PIPELINE_STEP_COUNT,
-        ACTIVATED_PIPELINE_STEP_COUNT,
-    ):
+    if expected_step_count not in _ALLOWED_PIPELINE_STEP_COUNTS:
         failures.append(
             f"unexpected pipeline mode step count {expected_step_count} "
-            f"(allowed {BASE_PIPELINE_STEP_COUNT} or {ACTIVATED_PIPELINE_STEP_COUNT})"
+            f"(allowed {BASE_PIPELINE_STEP_COUNT}, {ACTIVATED_PIPELINE_STEP_COUNT}, "
+            f"or {STAGE2_INTEGRATED_PIPELINE_STEP_COUNT})"
         )
         # Still report length mismatch when caller passes an unsupported mode.
         if actual != expected_step_count:
@@ -121,7 +134,11 @@ def validate_canonical_pipeline_order(
             f"pipeline step count != {expected_step_count} ({actual})"
         )
 
-    activated = expected_step_count == ACTIVATED_PIPELINE_STEP_COUNT
+    activated = expected_step_count in (
+        ACTIVATED_PIPELINE_STEP_COUNT,
+        STAGE2_INTEGRATED_PIPELINE_STEP_COUNT,
+    )
+    stage2 = expected_step_count == STAGE2_INTEGRATED_PIPELINE_STEP_COUNT
     loc_count = steps.count(VOLUME_LOCALIZATION_ENGINE)
 
     if activated:
@@ -139,6 +156,20 @@ def validate_canonical_pipeline_order(
                 "volume_localization_engine_v1.py must be absent in 20-step pipeline"
             )
 
+    # Stage-2 synthesis-input producers: present exactly once only in 26-step mode.
+    for engine in STAGE2_SYNTHESIS_INPUT_ENGINES:
+        count = steps.count(engine)
+        if stage2:
+            if count == 0:
+                failures.append(f"required stage2 engine missing: {engine}")
+            elif count > 1:
+                failures.append(f"stage2 engine duplicated: {engine}")
+        else:
+            if count != 0:
+                failures.append(
+                    f"stage2 engine {engine} must be absent outside 26-step candidate"
+                )
+
     # Required base engines present exactly once.
     for engine in BASE_CANONICAL_PIPELINE_ORDER:
         count = steps.count(engine)
@@ -147,12 +178,13 @@ def validate_canonical_pipeline_order(
         elif count > 1:
             failures.append(f"required engine duplicated: {engine}")
 
-    # Base relative order preserved (localization ignored when extracting).
-    base_observed = [e for e in steps if e != VOLUME_LOCALIZATION_ENGINE]
+    # Base relative order preserved (localization + stage2 inserts ignored).
+    skip = {VOLUME_LOCALIZATION_ENGINE, *STAGE2_SYNTHESIS_INPUT_ENGINES}
+    base_observed = [e for e in steps if e not in skip]
     if base_observed != list(BASE_CANONICAL_PIPELINE_ORDER):
         failures.append(
             "base cognition relative order violated "
-            "(localization insertion must not reorder other engines)"
+            "(optional insertions must not reorder other engines)"
         )
 
     # Localization sandwich when present.
@@ -165,6 +197,29 @@ def validate_canonical_pipeline_order(
                 "volume localization order invalid "
                 f"(candle={candle}, localization={loc}, response={response})"
             )
+
+    # Stage-2 source-proven relative order when present.
+    if stage2 and all(e in steps for e in STAGE2_SYNTHESIS_INPUT_ENGINES):
+        order_pairs = (
+            (CANDLE_STRUCTURE_ENGINE, VOLUME_LOCALIZATION_ENGINE),
+            (VOLUME_LOCALIZATION_ENGINE, "liquidity_cluster_engine_v1.py"),
+            ("live_volume_flow_engine_v1.py", "flow_liquidity_interaction_engine_v3.py"),
+            ("liquidity_cluster_engine_v1.py", "flow_liquidity_interaction_engine_v3.py"),
+            ("htf_structure_engine_v1.py", "htf_ltf_context_engine_v1.py"),
+            ("live_volume_flow_engine_v1.py", "htf_ltf_context_engine_v1.py"),
+            (
+                "flow_liquidity_interaction_engine_v3.py",
+                "htf_ltf_context_engine_v1.py",
+            ),
+            (VOLUME_RESPONSE_ENGINE, "auction_synthesis_engine_v1.py"),
+            ("htf_structure_engine_v1.py", "auction_synthesis_engine_v1.py"),
+            ("htf_ltf_context_engine_v1.py", "auction_synthesis_engine_v1.py"),
+        )
+        for left, right in order_pairs:
+            if steps.index(left) >= steps.index(right):
+                failures.append(
+                    f"stage2 relative order violated: {left} must precede {right}"
+                )
 
     # Core cognition relative chain (names, not absolute indices).
     cognition_chain = (
