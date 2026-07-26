@@ -60,6 +60,39 @@ def classify_alignment_score(
     return ALIGNMENT_STATUS_VALID
 
 
+def normalize_utc_merge_timestamp(
+    values,
+    *,
+    field_name: str = "timestamp",
+) -> pd.Series:
+    """Normalize merge-key timestamps to timezone-aware UTC without clock shift.
+
+    Market-bar / cognition timestamps in this runtime are UTC wall-clock values.
+    Naive values therefore receive UTC tz (no localize-as-local, no shift).
+    Already-aware values are converted to UTC without changing the instant.
+    Non-null inputs that fail to parse must fail closed (no silent NaT).
+    """
+    series = pd.Series(values, copy=True)
+    if series.empty:
+        return pd.to_datetime(series, utc=True)
+
+    original_non_null = series.notna()
+    try:
+        normalized = pd.to_datetime(series, utc=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"UTC timestamp normalization failed for {field_name}: {exc}"
+        ) from exc
+
+    created_nat = original_non_null & normalized.isna()
+    if bool(created_nat.any()):
+        raise ValueError(
+            f"UTC timestamp normalization produced NaT from non-null {field_name} "
+            f"({int(created_nat.sum())} values)"
+        )
+    return normalized
+
+
 def enrich_alignment_status(
     cognition: pd.DataFrame,
     synthesis: Optional[pd.DataFrame] = None,
@@ -71,21 +104,33 @@ def enrich_alignment_status(
         output["alignment_score"] = pd.NA
 
     if synthesis is not None and len(synthesis) > 0:
-        if "alignment_score" not in synthesis.columns:
-            synthesis = synthesis.copy()
-            synthesis["alignment_score"] = pd.NA
+        synthesis_local = synthesis.copy()
+        if "alignment_score" not in synthesis_local.columns:
+            synthesis_local["alignment_score"] = pd.NA
+
+        if "timestamp" not in output.columns:
+            raise ValueError("timestamp column missing on cognition for alignment merge")
+        if "timestamp" not in synthesis_local.columns:
+            raise ValueError("timestamp column missing on synthesis for alignment merge")
+
+        # Normalize only the merge key. Work on local copies — do not mutate inputs.
+        output["timestamp"] = normalize_utc_merge_timestamp(
+            output["timestamp"],
+            field_name="cognition.timestamp",
+        )
+        right = synthesis_local[["timestamp", "alignment_score"]].copy()
+        right["timestamp"] = normalize_utc_merge_timestamp(
+            right["timestamp"],
+            field_name="synthesis.timestamp",
+        )
+        right = right.rename(
+            columns={
+                "alignment_score": "alignment_score_reference",
+            }
+        )
 
         merged = output.merge(
-            synthesis[
-                [
-                    "timestamp",
-                    "alignment_score",
-                ]
-            ].rename(
-                columns={
-                    "alignment_score": "alignment_score_reference",
-                }
-            ),
+            right,
             on="timestamp",
             how="left",
         )
@@ -110,16 +155,27 @@ def enrich_alignment_status(
     statuses = []
     synthesis_by_ts = {}
     if synthesis is not None and len(synthesis) > 0:
+        synthesis_local = synthesis.copy()
+        synth_ts = normalize_utc_merge_timestamp(
+            synthesis_local["timestamp"],
+            field_name="synthesis.timestamp",
+        )
         synthesis_by_ts = {
-            pd.to_datetime(row["timestamp"]): row.get("alignment_score")
-            for _, row in synthesis.iterrows()
+            ts: score
+            for ts, score in zip(
+                synth_ts.tolist(),
+                synthesis_local.get("alignment_score", pd.Series([pd.NA] * len(synthesis_local))).tolist(),
+            )
         }
-        synthesis_latest = max(synthesis_by_ts.keys())
+        synthesis_latest = max(synthesis_by_ts.keys()) if synthesis_by_ts else None
     else:
         synthesis_latest = None
 
     for _, row in merged.iterrows():
-        event_ts = pd.to_datetime(row.get("timestamp"))
+        event_ts = normalize_utc_merge_timestamp(
+            [row.get("timestamp")],
+            field_name="cognition.timestamp",
+        ).iloc[0]
         status = classify_alignment_score(row.get("alignment_score"))
 
         if status == ALIGNMENT_STATUS_VALID and synthesis_by_ts:
@@ -139,7 +195,7 @@ def enrich_alignment_status(
         if (
             status == ALIGNMENT_STATUS_VALID
             and synthesis_latest is not None
-            and event_ts == pd.to_datetime(merged["timestamp"]).max()
+            and event_ts == merged["timestamp"].max()
         ):
             drift_seconds = (synthesis_latest - event_ts).total_seconds()
             if drift_seconds > stale_seconds:
@@ -197,7 +253,10 @@ def compute_drift_metrics(
     metrics["reinforcement_rows"] = len(reinforcement)
 
     if len(cognition) > 0:
-        cognition_ts = pd.to_datetime(cognition["timestamp"])
+        cognition_ts = normalize_utc_merge_timestamp(
+            cognition["timestamp"],
+            field_name="cognition.timestamp",
+        )
         metrics["cognition_latest_event_timestamp"] = cognition_ts.max()
         if not cognition_ts.is_monotonic_increasing:
             warnings.append("Cognition timestamps are out of order")
@@ -206,13 +265,20 @@ def compute_drift_metrics(
             metrics["cognition_out_of_order"] = False
 
     if len(synthesis) > 0:
-        metrics["synthesis_latest_event_timestamp"] = pd.to_datetime(
-            synthesis["timestamp"]
+        metrics["synthesis_latest_event_timestamp"] = normalize_utc_merge_timestamp(
+            synthesis["timestamp"],
+            field_name="synthesis.timestamp",
         ).max()
 
     if len(cognition) > 0 and len(synthesis) > 0:
-        cognition_latest = pd.to_datetime(cognition["timestamp"]).max()
-        synthesis_latest = pd.to_datetime(synthesis["timestamp"]).max()
+        cognition_latest = normalize_utc_merge_timestamp(
+            cognition["timestamp"],
+            field_name="cognition.timestamp",
+        ).max()
+        synthesis_latest = normalize_utc_merge_timestamp(
+            synthesis["timestamp"],
+            field_name="synthesis.timestamp",
+        ).max()
         event_lag = (synthesis_latest - cognition_latest).total_seconds()
         metrics["cognition_vs_synthesis_event_lag_seconds"] = event_lag
         if abs(event_lag) > stale_seconds:
@@ -237,8 +303,14 @@ def compute_drift_metrics(
             )
 
     if len(reinforcement) > 0 and len(cognition) > 0:
-        reinforcement_latest = pd.to_datetime(reinforcement["timestamp"]).max()
-        cognition_latest = pd.to_datetime(cognition["timestamp"]).max()
+        reinforcement_latest = normalize_utc_merge_timestamp(
+            reinforcement["timestamp"],
+            field_name="reinforcement.timestamp",
+        ).max()
+        cognition_latest = normalize_utc_merge_timestamp(
+            cognition["timestamp"],
+            field_name="cognition.timestamp",
+        ).max()
         metrics["reinforcement_latest_timestamp"] = reinforcement_latest
         reinforcement_lag = (
             cognition_latest - reinforcement_latest
@@ -248,8 +320,14 @@ def compute_drift_metrics(
             warnings.append("Reinforcement memory is stale relative to cognition")
 
     if len(candle_structure) > 0 and len(cognition) > 0:
-        candle_latest = pd.to_datetime(candle_structure["timestamp"]).max()
-        cognition_latest = pd.to_datetime(cognition["timestamp"]).max()
+        candle_latest = normalize_utc_merge_timestamp(
+            candle_structure["timestamp"],
+            field_name="candle_structure.timestamp",
+        ).max()
+        cognition_latest = normalize_utc_merge_timestamp(
+            cognition["timestamp"],
+            field_name="cognition.timestamp",
+        ).max()
         candle_lag = (candle_latest - cognition_latest).total_seconds()
         metrics["candle_structure_vs_cognition_lag_seconds"] = candle_lag
         if candle_lag > stale_seconds:
