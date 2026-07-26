@@ -129,9 +129,10 @@ def test_05_06_07_runtime_order_candidate():
     assert cand.index("volume_localization_engine_v1.py") < cand.index(
         "volume_response_engine_v1.py"
     )
-    # Live pipeline unchanged / not activated
-    assert "volume_localization_engine_v1.py" not in pipeline_mod.CANONICAL_PIPELINE
-    assert pipeline_mod.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 20
+    # Phase 4C: live pipeline activated via the same helper order.
+    assert "volume_localization_engine_v1.py" in pipeline_mod.CANONICAL_PIPELINE
+    assert pipeline_mod.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 21
+    assert pipeline_mod.CANONICAL_PIPELINE == cand
 
 
 def test_08_09_10_exact_join_no_fuzzy_no_stale():
@@ -267,7 +268,8 @@ def test_27_no_live_outputs_written_by_builder(tmp_path):
 
 def test_28_no_daemon_created():
     assert not (REPO / "scripts/live/volume_localization_daemon.py").exists()
-    assert "volume_localization_engine_v1.py" not in pipeline_mod.CANONICAL_PIPELINE
+    # Localization runs inside canonical pipeline — no separate daemon.
+    assert "volume_localization_engine_v1.py" in pipeline_mod.CANONICAL_PIPELINE
 
 
 def test_29_candidate_replay_idempotent():

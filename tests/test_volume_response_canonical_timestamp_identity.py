@@ -232,12 +232,15 @@ def test_20_no_live_writes_from_helpers(tmp_path):
     assert live.read_bytes() == before
 
 
-def test_21_flag_default_off_and_no_pipeline_registration():
-    assert os.environ.get("BTC_ML_VOLUME_LOCALIZATION_LIVE", "0") == "0"
+def test_21_flag_default_off_in_source_contract():
+    # Process env may be activated in live runtime; source default remains "0".
+    resp = (REPO / "volume_response_engine_v1.py").read_text()
+    assert 'os.environ.get("BTC_ML_VOLUME_LOCALIZATION_LIVE", "0")' in resp
     sys.path.insert(0, str(REPO / "src"))
     from btc_ml.runtime import pipeline as pipeline_mod  # noqa: WPS433
 
-    assert "volume_localization_engine_v1.py" not in pipeline_mod.CANONICAL_PIPELINE
+    assert "volume_localization_engine_v1.py" in pipeline_mod.CANONICAL_PIPELINE
+    assert pipeline_mod.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 21
 
 
 def test_22_candidate_replay_idempotent():
