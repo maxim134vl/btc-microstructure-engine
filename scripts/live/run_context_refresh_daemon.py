@@ -47,6 +47,14 @@ from run_live_context_refresh_once import (  # noqa: E402
     latest_parquet_timestamp,
     run_refresh_once,
 )
+from parquet_utils import (  # noqa: E402
+    ParquetTransientReadError,
+    read_parquet_with_transient_retry,
+)
+
+
+class UpstreamParquetTemporarilyUnreadable(RuntimeError):
+    """Fail-closed cycle signal: upstream parquet temporarily unreadable after retries."""
 
 
 def _run_script_streaming(script: Path, *, cwd: Path = ROOT, timeout_s: int = 1200) -> dict[str, Any]:
@@ -284,6 +292,40 @@ class TipSnapshot:
         }
 
 
+def _latest_parquet_timestamp_retry_safe(
+    path: Path,
+    col: str = "timestamp",
+) -> Any:
+    """Tip read with bounded retry on transient parquet footer/metadata races.
+
+    Permanent schema/business errors still raise. Exhausted transient failures raise
+    UpstreamParquetTemporarilyUnreadable so the daemon can skip the cycle without death.
+    """
+    import pandas as pd
+
+    if not path.exists():
+        # Preserve prior contract used by callers that check exists() first.
+        return latest_parquet_timestamp(path, col=col)
+
+    try:
+        frame = read_parquet_with_transient_retry(str(path), columns=[col])
+    except ParquetTransientReadError as exc:
+        emit(
+            "UPSTREAM_PARQUET_TEMPORARILY_UNREADABLE",
+            level="ERROR",
+            message=str(exc),
+            path=str(path),
+        )
+        raise UpstreamParquetTemporarilyUnreadable(str(exc)) from exc
+
+    if col not in frame.columns or len(frame) == 0:
+        return None
+    series = pd.to_datetime(frame[col], utc=True, errors="coerce").dropna()
+    if len(series) == 0:
+        return None
+    return pd.Timestamp(series.max())
+
+
 def read_tips(
     *,
     feed_path: Path = LIVE_FEED,
@@ -293,11 +335,13 @@ def read_tips(
     decision_path: Path = DECISION_PATH,
 ) -> TipSnapshot:
     return TipSnapshot(
-        feed=latest_parquet_timestamp(feed_path) if feed_path.exists() else None,
-        candle=latest_parquet_timestamp(candle_path) if candle_path.exists() else None,
-        final=latest_parquet_timestamp(final_path) if final_path.exists() else None,
-        lifecycle=latest_parquet_timestamp(lifecycle_path) if lifecycle_path.exists() else None,
-        decision=latest_parquet_timestamp(decision_path, col="candle_timestamp")
+        feed=_latest_parquet_timestamp_retry_safe(feed_path) if feed_path.exists() else None,
+        candle=_latest_parquet_timestamp_retry_safe(candle_path) if candle_path.exists() else None,
+        final=_latest_parquet_timestamp_retry_safe(final_path) if final_path.exists() else None,
+        lifecycle=_latest_parquet_timestamp_retry_safe(lifecycle_path)
+        if lifecycle_path.exists()
+        else None,
+        decision=_latest_parquet_timestamp_retry_safe(decision_path, col="candle_timestamp")
         if decision_path.exists()
         else None,
     )
@@ -437,9 +481,6 @@ def run_cycle(
     status_path: Path = DEFAULT_STATUS,
 ) -> dict[str, Any]:
     started = _utc_now()
-    tips_before = read_tips()
-    tip_dict = tips_before.as_dict()
-    event = classify_cycle(tips_before)
     hashes_before = {
         "final": file_sha256(FINAL_PATH),
         "lifecycle": file_sha256(LIFECYCLE_PATH),
@@ -457,6 +498,41 @@ def run_cycle(
             rows_before[name] = int(len(pd.read_parquet(path))) if path.exists() else 0
     except Exception:
         rows_before = {}
+
+    try:
+        tips_before = read_tips()
+    except UpstreamParquetTemporarilyUnreadable as exc:
+        duration_s = (_utc_now() - started).total_seconds()
+        payload = {
+            "cycle_id": cycle_id,
+            "event": "UPSTREAM_PARQUET_TEMPORARILY_UNREADABLE",
+            "result": "UPSTREAM_PARQUET_TEMPORARILY_UNREADABLE",
+            "error": str(exc),
+            "tips_before": {},
+            "tips_after": {},
+            "hashes_before": hashes_before,
+            "hashes_after": hashes_before,
+            "hashes_unchanged": True,
+            "added_rows": {"final": 0, "lifecycle": 0, "decision": 0},
+            "duration_s": round(duration_s, 3),
+            "dry_run": dry_run,
+            "refresh_status": None,
+            "execution_enabled": False,
+        }
+        write_status(status_path, payload)
+        emit(
+            "UPSTREAM_PARQUET_TEMPORARILY_UNREADABLE",
+            level="ERROR",
+            cycle_id=cycle_id,
+            message="cycle_skipped_no_context_mutation",
+            error=str(exc),
+            duration_s=round(duration_s, 3),
+            hashes_unchanged=True,
+        )
+        return payload
+
+    tip_dict = tips_before.as_dict()
+    event = classify_cycle(tips_before)
 
     emit(
         event,
@@ -503,8 +579,15 @@ def run_cycle(
                 traceback=traceback.format_exc()[-2000:],
             )
 
-    tips_after = read_tips()
-    tip_after = tips_after.as_dict()
+    try:
+        tips_after = read_tips()
+        tip_after = tips_after.as_dict()
+    except UpstreamParquetTemporarilyUnreadable as exc:
+        # Refresh (if any) already finished; tip re-read race must not kill daemon.
+        tip_after = tip_dict
+        if result not in {"REFRESH_FAILED", "UPSTREAM_PARQUET_TEMPORARILY_UNREADABLE"}:
+            error = str(exc)
+
     hashes_after = {
         "final": file_sha256(FINAL_PATH),
         "lifecycle": file_sha256(LIFECYCLE_PATH),
@@ -544,7 +627,9 @@ def run_cycle(
 
     emit(
         result,
-        level="ERROR" if result == "REFRESH_FAILED" else "INFO",
+        level="ERROR"
+        if result in {"REFRESH_FAILED", "UPSTREAM_PARQUET_TEMPORARILY_UNREADABLE"}
+        else "INFO",
         cycle_id=cycle_id,
         market_timestamp=tip_after.get("safe_upstream"),
         message="cycle_end",
@@ -644,8 +729,26 @@ def daemon_loop(
         else:
             try:
                 payload = run_cycle(cycle_id=cycle_id, dry_run=dry_run, status_path=status_path)
+                # Transient upstream unreadability is a skipped cycle, not daemon death.
                 if payload.get("result") == "REFRESH_FAILED":
                     exit_code = 1
+            except UpstreamParquetTemporarilyUnreadable as exc:
+                emit(
+                    "UPSTREAM_PARQUET_TEMPORARILY_UNREADABLE",
+                    level="ERROR",
+                    cycle_id=cycle_id,
+                    message="cycle_exception_survived",
+                    error=str(exc),
+                )
+            except Exception as exc:  # noqa: BLE001 — keep daemon alive across cycle faults
+                emit(
+                    "CYCLE_EXCEPTION_SURVIVED",
+                    level="ERROR",
+                    cycle_id=cycle_id,
+                    message=str(exc),
+                    traceback=traceback.format_exc()[-2000:],
+                )
+                exit_code = 1
             finally:
                 release_lock(lock_path)
 

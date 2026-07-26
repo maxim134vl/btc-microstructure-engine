@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 
 from live_feed_paths import read_live_feed_history
+from parquet_utils import atomic_parquet_write
 from storage.path_registry import resolve_write
 
 print("\nCANDLE STRUCTURE ENGINE STARTED\n")
@@ -258,8 +259,13 @@ ohlc["volume_zscore"] = (
 
 ohlc = ohlc.reset_index(drop=True)
 
-ohlc.to_parquet(
-    resolve_write("candle_structure_memory.parquet")
+# Atomic same-directory temp → validate → os.replace (never partial live destination).
+atomic_parquet_write(
+    ohlc,
+    resolve_write("candle_structure_memory.parquet"),
+    validate=True,
+    timestamp_col="timestamp",
+    enforce_timestamp_integrity=True,
 )
 
 # =====================================
