@@ -76,6 +76,22 @@ def check_package_imports(report: HardeningReport) -> None:
             report.failures.append(
                 f"pipeline step count != {EXPECTED_CANONICAL_PIPELINE_STEP_COUNT} ({actual})"
             )
+        elif "intermediate_cognition_engine_v1.py" not in CANONICAL_PIPELINE:
+            report.failures.append(
+                "pipeline missing intermediate_cognition_engine_v1.py"
+            )
+        elif "volume_localization_engine_v1.py" in CANONICAL_PIPELINE:
+            # Phase 4C activated order: candle → localization → … → volume_response
+            loc = CANONICAL_PIPELINE.index("volume_localization_engine_v1.py")
+            candle = CANONICAL_PIPELINE.index("candle_structure_engine_v1.py")
+            response = CANONICAL_PIPELINE.index("volume_response_engine_v1.py")
+            if not (candle < loc < response):
+                report.failures.append(
+                    "volume localization order invalid "
+                    f"(candle={candle}, localization={loc}, response={response})"
+                )
+            else:
+                report.passed.append("canonical package imports")
         elif CANONICAL_PIPELINE[12] != "intermediate_cognition_engine_v1.py":
             report.failures.append(
                 "pipeline step 13 must be intermediate_cognition_engine_v1.py "
