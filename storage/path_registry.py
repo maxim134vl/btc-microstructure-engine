@@ -63,6 +63,7 @@ PARQUET_REGISTRY: dict[str, str] = {
     # Canonical v1 localization memory (Stage 1A candidate; required for safe_read under cognition/)
     "volume_localization_memory.parquet": "cognition",
     "volume_localization_v2_memory.parquet": "cognition",
+    "liquidity_clusters_memory.parquet": "cognition",
     "behavioral_scoring_memory.parquet": "cognition",
     "live_volume_flow_memory.parquet": "cognition",
     "flow_liquidity_interaction_memory.parquet": "cognition",

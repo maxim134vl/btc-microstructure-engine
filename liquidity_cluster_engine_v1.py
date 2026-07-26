@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from storage.path_registry import resolve_read, resolve_write
+
 print("\nLIQUIDITY CLUSTER ENGINE STARTED\n")
 
 # =====================================
@@ -8,7 +10,7 @@ print("\nLIQUIDITY CLUSTER ENGINE STARTED\n")
 # =====================================
 
 zones = pd.read_parquet(
-    "volume_localization_v2_memory.parquet"
+    resolve_read("volume_localization_memory.parquet")
 )
 
 zones = zones.sort_values(
@@ -199,7 +201,7 @@ cluster_df["dominant_behavior"] = (
 # =====================================
 
 cluster_df.to_parquet(
-    "liquidity_clusters_memory.parquet"
+    resolve_write("liquidity_clusters_memory.parquet")
 )
 
 # =====================================
