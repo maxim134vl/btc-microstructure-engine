@@ -1,3 +1,5 @@
+import os
+
 import pandas as pd
 
 from parquet_utils import (
@@ -10,6 +12,16 @@ from state_guard import (
 )
 
 from datetime import datetime
+
+# Phase 4A: default OFF so live subprocesses keep legacy v2 path until activation.
+# Activation: BTC_ML_VOLUME_LOCALIZATION_LIVE=1 after localization is registered + restarted.
+_VOLUME_LOCALIZATION_LIVE = os.environ.get("BTC_ML_VOLUME_LOCALIZATION_LIVE", "0").strip() == "1"
+_LOCALIZATION_V1 = "volume_localization_memory.parquet"
+_LOCALIZATION_V2 = "volume_localization_v2_memory.parquet"
+
+from volume_localization_engine_v1 import (  # noqa: E402
+    resolve_localization_for_structure,
+)
 
 print()
 print(
@@ -37,17 +49,18 @@ geometry = safe_read_parquet(
     "candle_geometry_v2_memory.parquet"
 )
 
+_localization_source = (
+    _LOCALIZATION_V1 if _VOLUME_LOCALIZATION_LIVE else _LOCALIZATION_V2
+)
 localization = safe_read_parquet(
-    "volume_localization_v2_memory.parquet"
+    _localization_source
 )
 
 reactions = safe_read_parquet(
     "volume_reactions.parquet"
 )
 
-micro = safe_read_parquet(
-    "volume_localization_v2_memory.parquet"
-)
+micro = localization
 
 # =====================================
 # LATEST
@@ -57,9 +70,24 @@ latest_geometry = (
     geometry.iloc[-1]
 )
 
-latest_localization = (
-    localization.iloc[-1]
-)
+if _VOLUME_LOCALIZATION_LIVE:
+    _localization_join = resolve_localization_for_structure(
+        localization,
+        latest_structure["timestamp"],
+        live_v1=True,
+    )
+    latest_localization = _localization_join["row"]
+    localization_join_status = _localization_join["localization_join_status"]
+    localization_source_timestamp = _localization_join["localization_source_timestamp"]
+    localization_fresh = _localization_join["localization_fresh"]
+else:
+    # Legacy default (flag OFF): preserve prior v2 tip-carry live behavior unchanged.
+    latest_localization = localization.iloc[-1] if len(localization) else None
+    localization_join_status = "LEGACY_V2_TIP_CARRY"
+    localization_source_timestamp = (
+        latest_localization["timestamp"] if latest_localization is not None else None
+    )
+    localization_fresh = False
 
 latest_reaction = (
     reactions.iloc[-1]
@@ -107,17 +135,23 @@ recent_delta_efficiency = (
 # RELATIVE CONTEXT
 # =====================================
 
-relative_volume = (
+if latest_localization is None or (
+    _VOLUME_LOCALIZATION_LIVE
+    and localization_join_status != "EXACT_FRESH_MATCH"
+):
+    relative_volume = float("nan")
+else:
+    relative_volume = (
 
-    latest_localization[
-        "estimated_local_volume"
-    ]
+        latest_localization[
+            "estimated_local_volume"
+        ]
 
-    /
+        /
 
-    recent_local_volume.mean()
+        recent_local_volume.mean()
 
-)
+    )
 
 relative_spread = (
 
@@ -211,25 +245,23 @@ climax_state = (
 
 # =====================================
 # LOCALIZED VOLUME
+# Proven mapping: localization.behavior → localized_behavior (identity).
+# Live-v1 missing/stale/ambiguous → null (never 0 / never "neutral").
 # =====================================
 
-localized_behavior = (
-    latest_localization[
-        "behavior"
-    ]
-)
-
-estimated_local_volume = (
-    latest_localization[
-        "estimated_local_volume"
-    ]
-)
-
-volume_concentration = (
-    latest_localization[
-        "volume_concentration"
-    ]
-)
+if _VOLUME_LOCALIZATION_LIVE:
+    if latest_localization is not None and localization_join_status == "EXACT_FRESH_MATCH":
+        localized_behavior = latest_localization["behavior"]
+        estimated_local_volume = latest_localization["estimated_local_volume"]
+        volume_concentration = latest_localization["volume_concentration"]
+    else:
+        localized_behavior = None
+        estimated_local_volume = None
+        volume_concentration = None
+else:
+    localized_behavior = latest_localization["behavior"]
+    estimated_local_volume = latest_localization["estimated_local_volume"]
+    volume_concentration = latest_localization["volume_concentration"]
 
 # =====================================
 # REACTION
@@ -241,11 +273,14 @@ delta = (
     ]
 )
 
-delta_efficiency = (
-    delta / latest_localization[
-        "estimated_local_volume"
-    ]
-)
+if estimated_local_volume is None or (
+    isinstance(estimated_local_volume, float) and pd.isna(estimated_local_volume)
+):
+    delta_efficiency = float("nan")
+else:
+    delta_efficiency = (
+        delta / estimated_local_volume
+    )
 
 price_change = (
     latest_structure[
@@ -925,6 +960,14 @@ row = pd.DataFrame([{
         localized_behavior
 
 }])
+
+# Additive localization join metadata only when live-v1 activation flag is on.
+if _VOLUME_LOCALIZATION_LIVE:
+    row["estimated_local_volume"] = estimated_local_volume
+    row["volume_concentration"] = volume_concentration
+    row["localization_join_status"] = localization_join_status
+    row["localization_source_timestamp"] = localization_source_timestamp
+    row["localization_fresh"] = localization_fresh
 
 state_payload = {
 
