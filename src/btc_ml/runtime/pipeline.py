@@ -27,8 +27,7 @@ except ImportError:
 
 _CYCLE_COUNT = 0
 
-# Base order before volume-localization insertion (Phase 4A/4B candidate base).
-_BASE_CANONICAL_PIPELINE_WITHOUT_VOLUME_LOCALIZATION = [
+CANONICAL_PIPELINE = [
     "candle_structure_engine_v1.py",
     "volume_classification_engine_v1.py",
     "schema_validation_engine_v1.py",
@@ -52,6 +51,10 @@ _BASE_CANONICAL_PIPELINE_WITHOUT_VOLUME_LOCALIZATION = [
     "mtf_availability_runtime_engine_v1.py",
 ]
 
+# Frozen step count for operational hardening — update only with intentional pipeline changes.
+EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 20
+
+# Phase 4A live-wiring candidate (NOT active in CANONICAL_PIPELINE until controlled activation).
 # Order contract: candle_structure → volume_localization → … → volume_response.
 VOLUME_LOCALIZATION_LIVE_WIRING_ENGINE = "volume_localization_engine_v1.py"
 VOLUME_LOCALIZATION_LIVE_WIRING_INSERT_AFTER = "candle_structure_engine_v1.py"
@@ -60,12 +63,12 @@ VOLUME_LOCALIZATION_LIVE_WIRING_INSERT_AFTER = "candle_structure_engine_v1.py"
 def canonical_pipeline_with_volume_localization_candidate(
     pipeline: list[str] | tuple[str, ...] | None = None,
 ) -> list[str]:
-    """Return pipeline list with volume localization inserted in proven order."""
-    base = list(
-        pipeline
-        if pipeline is not None
-        else _BASE_CANONICAL_PIPELINE_WITHOUT_VOLUME_LOCALIZATION
-    )
+    """Return pipeline list with volume localization inserted in proven order.
+
+    Does not mutate the live CANONICAL_PIPELINE. Activation requires an explicit
+    follow-up change + process restart (out of scope for Phase 4A).
+    """
+    base = list(pipeline if pipeline is not None else CANONICAL_PIPELINE)
     engine = VOLUME_LOCALIZATION_LIVE_WIRING_ENGINE
     if engine in base:
         return base
@@ -83,11 +86,6 @@ def canonical_pipeline_with_volume_localization_candidate(
     )
     assert candidate.index(engine) < candidate.index("volume_response_engine_v1.py")
     return candidate
-
-
-# Phase 4C controlled live activation — use proven helper order (21 steps).
-CANONICAL_PIPELINE = canonical_pipeline_with_volume_localization_candidate()
-EXPECTED_CANONICAL_PIPELINE_STEP_COUNT = 21
 
 
 def _repo_root() -> str:
