@@ -50,14 +50,15 @@ def _frame(n: int = 4) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_live_pipeline_not_activated():
-    assert "volume_localization_engine_v1.py" not in pipeline_mod.CANONICAL_PIPELINE
-    assert pipeline_mod.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 20
+def test_live_pipeline_activated_stage1b():
+    assert "volume_localization_engine_v1.py" in pipeline_mod.CANONICAL_PIPELINE
+    assert pipeline_mod.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 21
 
 
 def test_candidate_pipeline_order():
     cand = pipeline_mod.canonical_pipeline_with_volume_localization_candidate()
     assert len(cand) == 21
+    assert cand == list(pipeline_mod.CANONICAL_PIPELINE)
     assert cand.index("candle_structure_engine_v1.py") < cand.index(
         "volume_localization_engine_v1.py"
     )

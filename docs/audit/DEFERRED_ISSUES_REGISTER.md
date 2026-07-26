@@ -11,3 +11,5 @@ Created for Stage 1A. Issues here are observed but **not** fixed in Stage 1A unl
 | DEFERRED-UI-AST-CALL | 2026-07-26T12:31Z | OPS UI | UI may show ast.Call / runtime_truth_unavailable | audit: API OK, UI symptom | Misleading ops view | no | OPS/UI stage |
 | DEFERRED-LAUNCHER-LIFECYCLE | 2026-07-26 | runtime_stack | Agent-shell vs detached lifecycle deaths during prior activation | stability gate | Pipeline SIGTERM risk | no | Runtime ops hardening (not Stage 1A) |
 | DEFERRED-LOG-ROTATION | 2026-07-26 | runtime.log | ~1GB log; no rotation | baseline / prior gate | Ops pain; not proven sole death cause | no | Logging ops |
+| STAGE1B-HARDENING-INDEX | 2026-07-26T14:25Z | `runtime_hardening.py` | Absolute `[12]` index blocked 21-step activation | Resolved by relative-order validator in `6972e30` | was yes for Stage 1B | **resolved** | Stage 1B amendment complete |
+| DEFERRED-PATCH-EXPECTED-20 | 2026-07-26T14:40Z | patch3.2 / patch4.2 / write_plane tests | Still assert expected step count 20 in source text | Outside Stage 1 relevant suite | no | Later dashboard/ops test alignment |

@@ -233,14 +233,14 @@ def test_20_no_live_writes_from_helpers(tmp_path):
 
 
 def test_21_flag_default_off_in_source_contract():
-    # Source default remains "0"; Stage 1A keeps live CANONICAL_PIPELINE unactivated.
+    # Source default remains "0"; Stage 1B activates pipeline registration (flag still env).
     resp = (REPO / "volume_response_engine_v1.py").read_text()
     assert 'os.environ.get("BTC_ML_VOLUME_LOCALIZATION_LIVE", "0")' in resp
     sys.path.insert(0, str(REPO / "src"))
     from btc_ml.runtime import pipeline as pipeline_mod  # noqa: WPS433
 
-    assert "volume_localization_engine_v1.py" not in pipeline_mod.CANONICAL_PIPELINE
-    assert pipeline_mod.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 20
+    assert "volume_localization_engine_v1.py" in pipeline_mod.CANONICAL_PIPELINE
+    assert pipeline_mod.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 21
     cand = pipeline_mod.canonical_pipeline_with_volume_localization_candidate()
     assert "volume_localization_engine_v1.py" in cand
     assert len(cand) == 21
