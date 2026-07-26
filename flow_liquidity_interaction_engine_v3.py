@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from storage.path_registry import resolve_read, resolve_write
+
 print("\nFLOW LIQUIDITY INTERACTION ENGINE V3 STARTED\n")
 
 # =====================================
@@ -8,7 +10,7 @@ print("\nFLOW LIQUIDITY INTERACTION ENGINE V3 STARTED\n")
 # =====================================
 
 flow = pd.read_parquet(
-    "live_volume_flow_memory.parquet"
+    resolve_read("live_volume_flow_memory.parquet")
 )
 
 # =====================================
@@ -16,7 +18,7 @@ flow = pd.read_parquet(
 # =====================================
 
 clusters = pd.read_parquet(
-    "liquidity_clusters_memory.parquet"
+    resolve_read("liquidity_clusters_memory.parquet")
 )
 
 # =====================================
@@ -24,7 +26,7 @@ clusters = pd.read_parquet(
 # =====================================
 
 feed = pd.read_parquet(
-    "live_market_feed.parquet"
+    resolve_read("live_market_feed.parquet")
 )
 
 feed = feed.sort_values(
@@ -250,7 +252,7 @@ interaction_df = pd.DataFrame(
 
 interaction_df.to_parquet(
 
-    "flow_liquidity_interaction_memory.parquet",
+    resolve_write("flow_liquidity_interaction_memory.parquet"),
 
     index=False
 

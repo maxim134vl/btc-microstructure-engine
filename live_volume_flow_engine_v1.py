@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from storage.path_registry import resolve_read, resolve_write
+
 print("\nLIVE VOLUME FLOW ENGINE STARTED\n")
 
 # =====================================
@@ -8,7 +10,7 @@ print("\nLIVE VOLUME FLOW ENGINE STARTED\n")
 # =====================================
 
 df = pd.read_parquet(
-    "live_market_feed.parquet"
+    resolve_read("live_market_feed.parquet")
 )
 
 df = df.sort_values(
@@ -228,7 +230,7 @@ memory = df[
 ]
 
 memory.to_parquet(
-    "live_volume_flow_memory.parquet",
+    resolve_write("live_volume_flow_memory.parquet"),
     index=False
 )
 
