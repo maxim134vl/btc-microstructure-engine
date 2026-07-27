@@ -11,6 +11,7 @@ import ast
 import json
 import os
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,13 +38,42 @@ CANONICAL_SOURCE_HIERARCHY = [
     "specialized_runtime_statuses",
 ]
 
-PHANTOM_ENGINES = (
+# Legacy / excluded modules. volume_localization is live in Stage-1B+ chains and
+# must not be treated as phantom when present in the resolved active pipeline.
+LEGACY_PHANTOM_CANDIDATES = (
     "volume_localization_engine_v1.py",
     "market_state_engine_v1.py",
     "trading_state_engine_v1.py",
     "shadow_inference_engine_v1.py",
     "trading_state_validation_engine_v1.py",
     "economic_validation_engine_v1.py",
+)
+
+# Default phantom set for inactive legacy engines (volume_localization excluded —
+# it is an active producer under BTC_ML_VOLUME_LOCALIZATION_LIVE / Stage 1B+).
+PHANTOM_ENGINES = (
+    "market_state_engine_v1.py",
+    "trading_state_engine_v1.py",
+    "shadow_inference_engine_v1.py",
+    "trading_state_validation_engine_v1.py",
+    "economic_validation_engine_v1.py",
+)
+
+STAGE2_SYNTHESIS_INPUTS_LIVE_ENV = "BTC_ML_STAGE2_SYNTHESIS_INPUTS_LIVE"
+VOLUME_LOCALIZATION_LIVE_ENV = "BTC_ML_VOLUME_LOCALIZATION_LIVE"
+
+# Health-affecting required engines (required_manifest contract; not full pipeline size).
+REQUIRED_HEALTH_ENGINES = (
+    "candle_structure_engine_v1.py",
+    "runtime_cognition_engine_v1.py",
+    "probabilistic_auction_engine_v1.py",
+)
+
+SAFE_PIPELINE_BUILDERS = frozenset(
+    {
+        "canonical_pipeline_with_volume_localization_candidate",
+        "canonical_pipeline_with_stage2_synthesis_inputs_candidate",
+    }
 )
 
 S4_ACTIVATION_PATH = ROOT / "data/trading/manager/activation.json"
@@ -85,18 +115,223 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def parse_canonical_pipeline(path: Path | None = None) -> list[str]:
-    path = path or (ROOT / "src/btc_ml/runtime/pipeline.py")
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    for node in tree.body:
+def _env_flag_enabled(name: str, default: str = "0") -> bool:
+    raw = os.environ.get(name, default).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def active_runtime_flags(environ: dict[str, str] | None = None) -> dict[str, bool]:
+    env = environ if environ is not None else os.environ
+    def _on(name: str) -> bool:
+        raw = str(env.get(name, "0")).strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    return {
+        STAGE2_SYNTHESIS_INPUTS_LIVE_ENV: _on(STAGE2_SYNTHESIS_INPUTS_LIVE_ENV),
+        VOLUME_LOCALIZATION_LIVE_ENV: _on(VOLUME_LOCALIZATION_LIVE_ENV),
+    }
+
+
+def _literal_list_assign(tree: ast.AST, name: str) -> list[str]:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return list(ast.literal_eval(node.value))
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return list(ast.literal_eval(node.value))
+    raise RuntimeError(f"{name} literal assignment not found")
+
+
+def _literal_str_assign(tree: ast.AST, name: str) -> str:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return str(ast.literal_eval(node.value))
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return str(ast.literal_eval(node.value))
+    raise RuntimeError(f"{name} string assignment not found")
+
+
+def _compose_volume_localization_pipeline(tree: ast.AST) -> list[str]:
+    base = _literal_list_assign(tree, "_BASE_CANONICAL_PIPELINE_WITHOUT_VOLUME_LOCALIZATION")
+    engine = _literal_str_assign(tree, "VOLUME_LOCALIZATION_LIVE_WIRING_ENGINE")
+    after = _literal_str_assign(tree, "VOLUME_LOCALIZATION_LIVE_WIRING_INSERT_AFTER")
+    if engine in base:
+        return list(base)
+    if after not in base:
+        raise RuntimeError(f"missing insert anchor {after}")
+    if "volume_response_engine_v1.py" not in base:
+        raise RuntimeError("missing volume_response_engine_v1.py in base pipeline")
+    idx = base.index(after) + 1
+    return base[:idx] + [engine] + base[idx:]
+
+
+def _compose_stage2_synthesis_pipeline(tree: ast.AST) -> list[str]:
+    base = _compose_volume_localization_pipeline(tree)
+    extras = _literal_list_assign(tree, "STAGE2_SYNTHESIS_INPUT_ENGINES")
+    before = _literal_str_assign(tree, "STAGE2_SYNTHESIS_INPUT_INSERT_BEFORE")
+    for engine in extras:
+        if engine in base:
+            raise RuntimeError(f"stage2 synthesis input already present: {engine}")
+    if before not in base:
+        raise RuntimeError(f"missing insert anchor {before}")
+    idx = base.index(before)
+    return base[:idx] + list(extras) + base[idx:]
+
+
+def _resolve_pipeline_value(node: ast.AST, tree: ast.AST) -> list[str]:
+    """Resolve CANONICAL_PIPELINE RHS without eval/exec or importing pipeline.py."""
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return list(ast.literal_eval(node))
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise RuntimeError("unsupported pipeline builder call form")
+        name = node.func.id
+        if name not in SAFE_PIPELINE_BUILDERS:
+            raise RuntimeError(f"unsafe/unknown pipeline builder: {name}")
+        if node.args or node.keywords:
+            # Only no-arg builder calls are permitted (source contract).
+            raise RuntimeError(f"pipeline builder {name} must be called with no args")
+        if name == "canonical_pipeline_with_volume_localization_candidate":
+            return _compose_volume_localization_pipeline(tree)
+        if name == "canonical_pipeline_with_stage2_synthesis_inputs_candidate":
+            return _compose_stage2_synthesis_pipeline(tree)
+    if isinstance(node, ast.Name):
+        # Reference to another constant list name.
+        return _literal_list_assign(tree, node.id)
+    raise RuntimeError(f"unsupported CANONICAL_PIPELINE value: {type(node).__name__}")
+
+
+def _eval_stage2_guard(test: ast.AST, flags: dict[str, bool]) -> bool | None:
+    """Return True/False if test is the known stage2 enable helper; else None."""
+    # _stage2_synthesis_inputs_live_enabled()
+    if isinstance(test, ast.Call) and isinstance(test.func, ast.Name):
+        if test.func.id == "_stage2_synthesis_inputs_live_enabled" and not test.args and not test.keywords:
+            return bool(flags.get(STAGE2_SYNTHESIS_INPUTS_LIVE_ENV, False))
+    return None
+
+
+def _collect_pipeline_assignments(
+    nodes: list[ast.stmt],
+    guards: tuple[tuple[str, bool], ...],
+    out: list[dict[str, Any]],
+    flags: dict[str, bool],
+) -> None:
+    for node in nodes:
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "CANONICAL_PIPELINE":
-                    return list(ast.literal_eval(node.value))
-        if isinstance(node, ast.AnnAssign):
+                    out.append({"guards": guards, "value": node.value})
+        elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and node.target.id == "CANONICAL_PIPELINE":
-                return list(ast.literal_eval(node.value))
-    raise RuntimeError(f"CANONICAL_PIPELINE not found in {path}")
+                out.append({"guards": guards, "value": node.value})
+        elif isinstance(node, ast.If):
+            decision = _eval_stage2_guard(node.test, flags)
+            if decision is None:
+                _collect_pipeline_assignments(
+                    list(node.body), guards + (("unknown", True),), out, flags
+                )
+                _collect_pipeline_assignments(
+                    list(node.orelse), guards + (("unknown", False),), out, flags
+                )
+            else:
+                _collect_pipeline_assignments(
+                    list(node.body),
+                    guards + ((STAGE2_SYNTHESIS_INPUTS_LIVE_ENV, decision),),
+                    out,
+                    flags,
+                )
+                _collect_pipeline_assignments(
+                    list(node.orelse),
+                    guards + ((STAGE2_SYNTHESIS_INPUTS_LIVE_ENV, not decision),),
+                    out,
+                    flags,
+                )
+        elif isinstance(
+            node,
+            (
+                ast.For,
+                ast.While,
+                ast.With,
+                ast.Try,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.ClassDef,
+            ),
+        ):
+            continue
+
+
+def resolve_active_canonical_pipeline(
+    path: Path | None = None,
+    *,
+    environ: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Resolve active CANONICAL_PIPELINE from source AST + runtime flags (no import)."""
+    path = path or (ROOT / "src/btc_ml/runtime/pipeline.py")
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    flags = active_runtime_flags(environ)
+    assignments: list[dict[str, Any]] = []
+    _collect_pipeline_assignments(list(tree.body), (), assignments, flags)
+    if not assignments:
+        raise RuntimeError(f"CANONICAL_PIPELINE not found in {path}")
+
+    selected = None
+    for item in assignments:
+        guards = item["guards"]
+        if not guards:
+            selected = item
+            continue
+        if any(name == "unknown" for name, _ in guards):
+            continue
+        if all(active for _name, active in guards):
+            selected = item
+            break
+    if selected is None:
+        for item in assignments:
+            if not item["guards"]:
+                selected = item
+                break
+    if selected is None:
+        raise RuntimeError(f"no active CANONICAL_PIPELINE branch for flags={flags}")
+
+    engines = _resolve_pipeline_value(selected["value"], tree)
+    builder = None
+    value = selected["value"]
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        builder = value.func.id
+    elif isinstance(value, (ast.List, ast.Tuple)):
+        builder = "literal_list"
+
+    phantoms = tuple(e for e in LEGACY_PHANTOM_CANDIDATES if e not in engines)
+    required = [e for e in engines if e in REQUIRED_HEALTH_ENGINES]
+    informational = [e for e in engines if e not in REQUIRED_HEALTH_ENGINES]
+    return {
+        "active_builder": builder,
+        "active_flags": flags,
+        "ordered_engine_names": list(engines),
+        "total_engine_count": len(engines),
+        "required_engine_names": required,
+        "required_engine_count": len(required),
+        "informational_engine_names": informational,
+        "ignored_by_health": informational,
+        "phantom_engines": list(phantoms),
+        "source_path": str(path),
+    }
+
+
+def parse_canonical_pipeline(path: Path | None = None) -> list[str]:
+    """Return ordered active pipeline engine list (env-aware AST resolve)."""
+    return list(resolve_active_canonical_pipeline(path)["ordered_engine_names"])
+
+
+def build_pipeline_metadata(path: Path | None = None) -> dict[str, Any]:
+    return resolve_active_canonical_pipeline(path)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -129,6 +364,42 @@ def _ps_lines() -> list[str]:
         return []
 
 
+def _process_create_time(pid: int) -> tuple[float | None, float | None, str | None]:
+    """Return (create_time_epoch, uptime_seconds, reason)."""
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process(pid)
+        created = float(proc.create_time())
+        uptime = max(0.0, time.time() - created)
+        return created, uptime, None
+    except Exception:
+        pass
+    try:
+        # macOS/Linux fallback via ps etime is lossy; prefer lstart when available.
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            text=True,
+        ).strip()
+        if not out:
+            return None, None, "PIPELINE_PID_UNAVAILABLE"
+        import time as _time
+        from email.utils import parsedate_to_datetime
+
+        # ps lstart format e.g. "Mon Jul 27 09:06:40 2026"
+        try:
+            from datetime import datetime as _dt
+
+            created_dt = _dt.strptime(out, "%a %b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc)
+            # lstart is local wall clock; convert via timestamp() using local interpretation:
+            created = _dt.strptime(out, "%a %b %d %H:%M:%S %Y").timestamp()
+        except Exception:
+            return None, None, "PIPELINE_PID_CREATE_TIME_UNPARSEABLE"
+        return created, max(0.0, _time.time() - created), None
+    except Exception:
+        return None, None, "PIPELINE_PID_UNAVAILABLE"
+
+
 def inspect_processes() -> list[dict[str, Any]]:
     lines = _ps_lines()
     out: list[dict[str, Any]] = []
@@ -152,13 +423,18 @@ def inspect_processes() -> list[dict[str, Any]]:
                 {
                     "process_id": process_id,
                     "display_name": process_id,
+                    "role": process_id,
                     "pid": None,
                     "ppid": None,
+                    "alive": False,
                     "process_state": "STOPPED",
                     "interpreter": None,
                     "cwd": None,
                     "command": None,
                     "started_at": None,
+                    "create_time": None,
+                    "uptime_seconds": None,
+                    "uptime_reason": "PROCESS_NOT_FOUND",
                     "last_heartbeat": utc_now(),
                     "restart_count": None,
                     "owner": process_id,
@@ -208,17 +484,26 @@ def inspect_processes() -> list[dict[str, Any]]:
             reason = "running_skip_refresh_no_real_execution"
         if process_id == "ops_backend" and health == "RUNNING":
             reason = "ops_backend_alive_not_trading_pipeline"
+        created, uptime, uptime_reason = _process_create_time(pid)
+        started_at = None
+        if created is not None:
+            started_at = datetime.fromtimestamp(created, timezone.utc).isoformat().replace("+00:00", "Z")
         out.append(
             {
                 "process_id": process_id,
                 "display_name": process_id,
+                "role": process_id,
                 "pid": pid,
                 "ppid": ppid,
+                "alive": health == "RUNNING",
                 "process_state": proc_state,
                 "interpreter": interpreter,
                 "cwd": str(ROOT),
                 "command": command[:300],
-                "started_at": None,
+                "started_at": started_at,
+                "create_time": created,
+                "uptime_seconds": uptime,
+                "uptime_reason": uptime_reason,
                 "last_heartbeat": utc_now(),
                 "restart_count": None,
                 "owner": process_id,
@@ -231,8 +516,43 @@ def inspect_processes() -> list[dict[str, Any]]:
     return out
 
 
-def build_pipeline_engines() -> list[dict[str, Any]]:
-    engines = parse_canonical_pipeline()
+def pipeline_runtime_uptime(processes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Runtime age from canonical pipeline PID create_time — never host boot time."""
+    rows = processes if processes is not None else inspect_processes()
+    pipe = next((p for p in rows if p.get("process_id") == "canonical_pipeline"), None)
+    if not pipe or not pipe.get("pid") or pipe.get("health") != "RUNNING":
+        return {
+            "runtime_uptime_seconds": None,
+            "pipeline_pid": None if not pipe else pipe.get("pid"),
+            "source": "pipeline_pid_create_time",
+            "reason": "PIPELINE_PID_UNAVAILABLE",
+            "host_boot_time_substituted": False,
+        }
+    created, uptime, reason = _process_create_time(int(pipe["pid"]))
+    if uptime is None:
+        return {
+            "runtime_uptime_seconds": None,
+            "pipeline_pid": pipe["pid"],
+            "source": "pipeline_pid_create_time",
+            "reason": reason or "PIPELINE_PID_UNAVAILABLE",
+            "host_boot_time_substituted": False,
+        }
+    return {
+        "runtime_uptime_seconds": uptime,
+        "pipeline_pid": pipe["pid"],
+        "create_time": created,
+        "source": "pipeline_pid_create_time",
+        "reason": None,
+        "host_boot_time_substituted": False,
+    }
+
+def build_pipeline_engines(
+    engines: list[str] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    meta = metadata if metadata is not None else resolve_active_canonical_pipeline()
+    engine_names = list(engines) if engines is not None else list(meta["ordered_engine_names"])
     state_path = ROOT / "data/diagnostics/runtime_engine_state.parquet"
     latest: dict[str, dict[str, Any]] = {}
     try:
@@ -263,8 +583,9 @@ def build_pipeline_engines() -> list[dict[str, Any]]:
         except Exception:
             latest = {}
 
+    required_set = set(REQUIRED_HEALTH_ENGINES)
     rows = []
-    for idx, eng in enumerate(engines, start=1):
+    for idx, eng in enumerate(engine_names, start=1):
         st = latest.get(eng, {})
         raw = str(st.get("status") or st.get("result") or "UNKNOWN")
         mapped = raw.upper()
@@ -284,7 +605,9 @@ def build_pipeline_engines() -> list[dict[str, Any]]:
             result = mapped
         else:
             result = "UNKNOWN" if mapped in {"", "UNKNOWN", "NONE", "NULL"} else mapped
-        required = eng != "auction_synthesis_engine_v1.py"
+        is_required_health = eng in required_set
+        # auction_synthesis remains non-blocking for overall health (known limitation).
+        required = is_required_health
         non_failure = {
             "SUCCESS",
             "SUCCESS_NO_NEW_OUTPUT",
@@ -305,12 +628,14 @@ def build_pipeline_engines() -> list[dict[str, Any]]:
         rows.append(
             {
                 "engine_id": eng,
-                "display_name": eng.replace("_engine_v1.py", "").replace("_v1.py", ""),
+                "display_name": eng.replace("_engine_v1.py", "").replace("_engine_v3.py", "").replace("_v1.py", ""),
                 "module": eng.replace(".py", ""),
                 "file": eng,
                 "pipeline_order": idx,
                 "enabled": True,
                 "required": required,
+                "ignored_by_health": not is_required_health,
+                "phantom": False,
                 "last_cycle_id": st.get("cycle") or st.get("cycle_id"),
                 "last_result": result,
                 "last_success": st.get("timestamp") or st.get("finished_at"),
@@ -523,13 +848,25 @@ def build_timeframe_traders() -> dict[str, Any]:
     realized_total = 0.0
     unrealized_total = 0.0
     open_positions = 0
+    process_by_tf: dict[str, dict[str, Any]] = {}
+    try:
+        for proc in inspect_processes():
+            pid_name = str(proc.get("process_id") or "")
+            if pid_name.startswith("trader_"):
+                process_by_tf[pid_name.replace("trader_", "", 1)] = proc
+    except Exception:
+        process_by_tf = {}
     for tf in S4_TIMEFRAMES:
         book = ROOT / "data/trading/timeframe_traders" / tf
+        proc = process_by_tf.get(tf) or {}
         entry: dict[str, Any] = {
             "timeframe": tf,
             "entity_type": "TIMEFRAME_TRADER",
             "book_path": f"data/trading/timeframe_traders/{tf}",
             "book_exists": book.exists(),
+            "pid": proc.get("pid"),
+            "alive": bool(proc.get("alive")),
+            "process_health": proc.get("health"),
             "open_position_id": None,
             "direction": "FLAT",
             "entry_price": None,
@@ -537,10 +874,12 @@ def build_timeframe_traders() -> dict[str, Any]:
             "open_risk_usd": 0.0,
             "realized_pnl_usd": 0.0,
             "unrealized_pnl_usd": 0.0,
+            "open_position_count": 0,
             "closed_trades": 0,
             "last_command_id": None,
             "last_command_intent": None,
             "command_cursor": None,
+            "book_tip": None,
             "paper_only": True,
             "execution_enabled": False,
         }
@@ -554,8 +893,14 @@ def build_timeframe_traders() -> dict[str, Any]:
             positions_path = book / "positions.parquet"
             if positions_path.exists():
                 frame = pd.read_parquet(positions_path)
+                entry["book_tip"] = None
+                if "opened_at" in frame.columns and len(frame):
+                    tip = pd.to_datetime(frame["opened_at"], utc=True, errors="coerce").max()
+                    if pd.notna(tip):
+                        entry["book_tip"] = tip.isoformat().replace("+00:00", "Z")
                 if len(frame) and "status" in frame.columns:
                     open_rows = frame[frame["status"].astype(str).str.upper() == "OPEN"]
+                    entry["open_position_count"] = int(len(open_rows))
                     if len(open_rows):
                         row = open_rows.iloc[-1].to_dict()
                         entry["open_position_id"] = row.get("position_id")
@@ -811,36 +1156,96 @@ def compute_overall_health(
 
 
 def build_runtime_truth_snapshot() -> dict[str, Any]:
-    """Deterministic read-only OPS truth snapshot."""
-    processes = inspect_processes()
-    engines = build_pipeline_engines()
-    ids = [e["engine_id"] for e in engines]
-    if len(ids) != len(set(ids)):
-        raise RuntimeError("duplicate engine ids in runtime inventory")
-    if len(engines) != 20:
-        raise RuntimeError(f"expected 20 runtime engines, got {len(engines)}")
-    for required in (
-        "auction_context_arbitration_engine_v1.py",
-        "mtf_availability_runtime_engine_v1.py",
-    ):
-        if required not in ids:
-            raise RuntimeError(f"runtime-only engine missing: {required}")
-    for phantom in PHANTOM_ENGINES:
-        if phantom in ids:
-            raise RuntimeError(f"phantom present in active runtime inventory: {phantom}")
+    """Deterministic read-only OPS truth snapshot with section failure isolation."""
+    section_errors: dict[str, str] = {}
 
-    datasets = build_datasets()
-    multi_timeframe = build_multi_timeframe()
-    paper = build_paper()
-    # sync paper process health from inspection
-    timeframe_traders = build_timeframe_traders()
+    # --- process truth (independent) ---
+    try:
+        processes = inspect_processes()
+    except Exception as exc:  # noqa: BLE001
+        processes = []
+        section_errors["process_truth"] = f"{type(exc).__name__}: {exc}"
+
+    # --- pipeline metadata (independent; must not erase other sections) ---
+    metadata: dict[str, Any] | None = None
+    engines: list[dict[str, Any]] = []
+    try:
+        metadata = resolve_active_canonical_pipeline()
+        engines = build_pipeline_engines(metadata=metadata)
+        ids = [e["engine_id"] for e in engines]
+        if len(ids) != len(set(ids)):
+            raise RuntimeError("duplicate engine ids in runtime inventory")
+        if len(engines) != int(metadata["total_engine_count"]):
+            raise RuntimeError(
+                f"engine list length mismatch: {len(engines)} != {metadata['total_engine_count']}"
+            )
+        for required in (
+            "auction_context_arbitration_engine_v1.py",
+            "mtf_availability_runtime_engine_v1.py",
+        ):
+            if required not in ids:
+                raise RuntimeError(f"runtime-only engine missing: {required}")
+        active_phantoms = [
+            e for e in LEGACY_PHANTOM_CANDIDATES if e not in ids and e in PHANTOM_ENGINES
+        ]
+        # Active pipeline engines are never phantoms.
+        for eng in ids:
+            if eng in LEGACY_PHANTOM_CANDIDATES and eng not in PHANTOM_ENGINES:
+                continue
+            if eng in PHANTOM_ENGINES:
+                raise RuntimeError(f"phantom present in active runtime inventory: {eng}")
+        _ = active_phantoms
+    except Exception as exc:  # noqa: BLE001
+        section_errors["pipeline_metadata"] = f"{type(exc).__name__}: {exc}"
+        metadata = {
+            "status": "UNKNOWN",
+            "error": section_errors["pipeline_metadata"],
+            "ordered_engine_names": [],
+            "total_engine_count": 0,
+            "required_engine_count": 0,
+            "required_engine_names": [],
+            "informational_engine_names": [],
+            "active_builder": None,
+            "active_flags": active_runtime_flags(),
+        }
+        engines = []
+
+    # --- remaining independent sections ---
+    try:
+        datasets = build_datasets()
+    except Exception as exc:  # noqa: BLE001
+        datasets = []
+        section_errors["datasets"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        multi_timeframe = build_multi_timeframe()
+    except Exception as exc:  # noqa: BLE001
+        multi_timeframe = []
+        section_errors["multi_timeframe"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        paper = build_paper()
+    except Exception as exc:  # noqa: BLE001
+        paper = {}
+        section_errors["paper"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        timeframe_traders = build_timeframe_traders()
+    except Exception as exc:  # noqa: BLE001
+        timeframe_traders = {
+            "activated": s4_activated(),
+            "traders": [],
+            "status": "UNKNOWN",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        section_errors["trader_truth"] = f"{type(exc).__name__}: {exc}"
+
     paper_proc = next((p for p in processes if p["process_id"] == "paper_controller"), None)
-    if paper_proc:
+    if paper_proc and isinstance(paper, dict):
         paper["process_health"] = paper_proc["health"]
         paper["pid"] = paper_proc["pid"]
         if paper_proc["health"] != "RUNNING":
-            if timeframe_traders["activated"]:
-                # Expected after the S4.1 cutover: execution moved to timeframe traders.
+            if timeframe_traders.get("activated"):
                 paper["representation"] = "MIGRATED_TO_TIMEFRAME_TRADERS"
                 paper["display_status"] = "MIGRATED"
                 paper["requirement"] = "NOT_REQUIRED"
@@ -855,14 +1260,33 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
                 paper["requirement"] = "REQUIRED"
                 paper["health"] = "BROKEN"
                 paper["is_controller_failure"] = True
-    context_chain = build_context_chain()
+
+    try:
+        context_chain = build_context_chain()
+    except Exception as exc:  # noqa: BLE001
+        context_chain = {
+            "status": "UNKNOWN",
+            "error": f"{type(exc).__name__}: {exc}",
+            "health": "UNKNOWN",
+        }
+        section_errors["context_chain"] = f"{type(exc).__name__}: {exc}"
+
     ctx_proc = next((p for p in processes if p["process_id"] == "context_refresher"), None)
-    if ctx_proc:
+    if ctx_proc and isinstance(context_chain, dict):
         context_chain["process_health"] = ctx_proc["health"]
         if ctx_proc["health"] != "RUNNING":
             context_chain["health"] = "DEGRADED"
 
-    overall, reason, alerts = compute_overall_health(processes, paper)
+    overall, reason, alerts = compute_overall_health(processes, paper if isinstance(paper, dict) else {})
+    if "pipeline_metadata" in section_errors and overall in {
+        "OPERATIONAL_WITH_LIMITATIONS",
+        "HEALTHY_WITH_KNOWN_LIMITATIONS",
+        "HEALTHY",
+        "OPERATIONAL",
+    }:
+        # Metadata gap is a limitation, not a process-down failure.
+        reason = f"{reason}; pipeline_metadata={section_errors['pipeline_metadata']}"
+
     mtf_status = _read_json(ROOT / "data/runtime/multi_timeframe_availability_status.json") or {}
     mtf_latest = _read_json(ROOT / "data/runtime/multi_timeframe_availability_latest.json") or {}
 
@@ -906,6 +1330,18 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "detail": "Legacy toxic baseline retained; not connected to current S4 trades",
         },
     ]
+    if "pipeline_metadata" in section_errors:
+        known_limitations.append(
+            {
+                "id": "PIPELINE_METADATA_UNKNOWN",
+                "entity_type": "PIPELINE_ENGINE",
+                "display_status": "UNKNOWN",
+                "requirement": "NON_BLOCKING_WHEN_PROCESSES_HEALTHY",
+                "detail": section_errors["pipeline_metadata"],
+            }
+        )
+
+    active_ids = {e["engine_id"] for e in engines}
     legacy_components = [
         {
             "component_id": eng,
@@ -917,6 +1353,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "process_badge": None,
         }
         for eng in PHANTOM_ENGINES
+        if eng not in active_ids
     ]
     for name in ("htf_structure_memory", "htf_ltf_context_memory", "oi_history", "btc_oi"):
         legacy_components.append(
@@ -931,6 +1368,8 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             }
         )
 
+    runtime_uptime = pipeline_runtime_uptime(processes)
+
     return {
         "generated_at": utc_now(),
         "schema_version": SCHEMA_VERSION,
@@ -940,6 +1379,8 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         "entity_taxonomy": ENTITY_TAXONOMY,
         "overall_health": overall,
         "overall_reason": reason,
+        "section_errors": section_errors,
+        "pipeline_metadata": metadata,
         "processes": processes,
         "pipeline_engines": engines,
         "datasets": datasets,
@@ -947,6 +1388,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         "context_chain": context_chain,
         "paper": paper,
         "timeframe_traders": timeframe_traders,
+        "runtime_uptime": runtime_uptime,
         "known_limitations": known_limitations,
         "legacy_components": legacy_components,
         "alerts": alerts,
@@ -959,6 +1401,10 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         },
         "flags_frozen": {
             "BTC_ML_CONTINUATION_PROGRESSION": os.environ.get("BTC_ML_CONTINUATION_PROGRESSION", "0"),
+            "BTC_ML_STAGE2_SYNTHESIS_INPUTS_LIVE": os.environ.get(
+                STAGE2_SYNTHESIS_INPUTS_LIVE_ENV, "0"
+            ),
+            "BTC_ML_VOLUME_LOCALIZATION_LIVE": os.environ.get(VOLUME_LOCALIZATION_LIVE_ENV, "0"),
             "PRICE_GATE": os.environ.get("PRICE_GATE", "OFF"),
             "execution": "disabled",
         },

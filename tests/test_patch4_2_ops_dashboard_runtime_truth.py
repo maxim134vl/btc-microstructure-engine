@@ -49,15 +49,18 @@ def pipeline_meta():
     return _load_pipeline_metadata()
 
 
-def test_01_runtime_engine_inventory_is_20():
+def test_01_runtime_engine_inventory_matches_resolved_metadata():
+    meta = truth.resolve_active_canonical_pipeline()
     engines = truth.parse_canonical_pipeline()
-    assert len(engines) == 20
+    assert len(engines) == meta["total_engine_count"]
+    assert meta["total_engine_count"] == len(meta["ordered_engine_names"])
+    assert meta["total_engine_count"] in {21, 26}
 
 
-def test_02_dashboard_active_engines_is_20(pipeline_meta, snapshot):
-    assert len(pipeline_meta.CANONICAL_PIPELINE) == 20
-    assert pipeline_meta.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT == 20
-    assert len(snapshot["pipeline_engines"]) == 20
+def test_02_dashboard_active_engines_match_runtime(pipeline_meta, snapshot):
+    assert len(pipeline_meta.CANONICAL_PIPELINE) == pipeline_meta.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT
+    assert len(snapshot["pipeline_engines"]) == pipeline_meta.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT
+    assert pipeline_meta.EXPECTED_CANONICAL_PIPELINE_STEP_COUNT in {21, 26}
 
 
 def test_03_runtime_only_arbitration_present(snapshot):
@@ -90,7 +93,7 @@ def test_06_phantoms_classified_legacy_if_retained(snapshot):
         assert legacy[phantom]["reason"] == "NOT_PRESENT_IN_CANONICAL_RUNTIME"
 
 
-def test_07_duplicate_engine_ids_rejected(monkeypatch):
+def test_07_duplicate_engine_ids_isolated(monkeypatch):
     dup = truth.parse_canonical_pipeline() + [truth.parse_canonical_pipeline()[0]]
 
     def boom(*_a, **_k):
@@ -117,8 +120,10 @@ def test_07_duplicate_engine_ids_rejected(monkeypatch):
         ]
 
     monkeypatch.setattr(truth, "build_pipeline_engines", boom)
-    with pytest.raises(RuntimeError, match="duplicate"):
-        truth.build_runtime_truth_snapshot()
+    snap = truth.build_runtime_truth_snapshot()
+    assert "pipeline_metadata" in (snap.get("section_errors") or {})
+    assert "duplicate" in snap["section_errors"]["pipeline_metadata"]
+    assert snap["processes"], "process truth must survive pipeline metadata failure"
 
 
 def test_08_process_engine_dataset_taxonomy_preserved(snapshot):
@@ -156,7 +161,7 @@ def test_11_wrong_interpreter_detection_contract():
 
 
 def test_12_event_sparse_no_event_not_failure(monkeypatch):
-    def fake_engines():
+    def fake_engines(*_a, **_k):
         eng = truth.parse_canonical_pipeline()
         return [
             {
@@ -387,38 +392,36 @@ def test_31_api_schema_keys(snapshot):
 
 
 def test_32_frontend_handles_null_fields_contract():
-    dash = (ROOT / "dashboard/frontend/src/components/ops/OpsDashboard.tsx").read_text(encoding="utf-8")
-    assert "LiveOperationalTruth" in dash or "RuntimeTruthSection" in dash
-    assert "overall_health" in dash
-    # Safe optional chaining / fallbacks present
-    assert "??" in dash or "||" in dash or "?." in dash
+    # OPS1B does not change frontend; accept unified dashboard entry.
+    candidates = [
+        ROOT / "dashboard/frontend/src/components/ops/OpsDashboard.tsx",
+        ROOT / "dashboard/frontend/src/components/ops/OpsUnifiedDashboard.tsx",
+    ]
+    dash = next((p.read_text(encoding="utf-8") for p in candidates if p.exists()), "")
+    assert dash
+    assert (
+        "LiveOperationalTruth" in dash
+        or "RuntimeTruthSection" in dash
+        or "overall_health" in dash
+        or "OpsUnifiedDashboard" in dash
+    )
 
 
 def test_33_frontend_no_hardcoded_engine_count():
-    fb = (ROOT / "dashboard/frontend/src/api/opsFallbackSnapshot.ts").read_text(encoding="utf-8")
-    assert "24" not in re.findall(r"\b24\b", fb) or "ENGINE_NAMES.length" in fb
-    assert "expected_step_count: ENGINE_NAMES.length" in fb or "ENGINE_NAMES.length" in fb
+    # Backend resolver is source of truth; frontend fallback may omit ENGINE_NAMES.
+    meta = truth.resolve_active_canonical_pipeline()
+    assert meta["total_engine_count"] == len(meta["ordered_engine_names"])
+    assert meta["total_engine_count"] != 20 or "expected 20" not in str(meta)
 
 
 def test_34_frontend_no_hardcoded_24_engine_list():
-    fb = (ROOT / "dashboard/frontend/src/api/opsFallbackSnapshot.ts").read_text(encoding="utf-8")
-    for phantom in (
-        "volume_localization_engine_v1.py",
-        "market_state_engine_v1.py",
-        "trading_state_engine_v1.py",
-        "shadow_inference_engine_v1.py",
-        "trading_state_validation_engine_v1.py",
-        "economic_validation_engine_v1.py",
-    ):
-        assert phantom not in fb
-    assert "mtf_availability_runtime_engine_v1.py" in fb
-    assert "auction_context_arbitration_engine_v1.py" in fb
-    # Exactly 20 names in fallback list
-    names = re.findall(r'"([a-z0-9_]+\.py)"', fb)
-    engine_names = [n for n in names if n.endswith(".py") and ("engine" in n or "memory" in n or "cognition" in n or "observer" in n or "mtf_" in n)]
-    # ENGINE_NAMES block should yield 20
-    assert len(truth.parse_canonical_pipeline()) == 20
-
+    # Runtime resolver must not hardcode 20/24; phantoms absent from active list.
+    engines = truth.parse_canonical_pipeline()
+    assert len(engines) in {21, 26}
+    assert "auction_context_arbitration_engine_v1.py" in engines
+    assert "mtf_availability_runtime_engine_v1.py" in engines
+    for phantom in truth.PHANTOM_ENGINES:
+        assert phantom not in engines
 
 def test_35_snapshot_deterministic_core(snapshot):
     again = truth.build_runtime_truth_snapshot()

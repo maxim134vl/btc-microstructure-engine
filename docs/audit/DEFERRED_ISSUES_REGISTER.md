@@ -4,6 +4,9 @@ Created for Stage 1A. Issues here are observed but **not** fixed in Stage 1A unl
 
 | ID | Timestamp (UTC) | Component | Symptom | Evidence | Potential impact | Blocks Stage 1A | Recommended stage |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| OPS-HEALTH-ALERT-CONTRACT-MISMATCH | 2026-07-27T09:00Z | ops_monitor health vs alerts | truth unavailable → health degraded while active alerts = 0 | OPS1A diagnosis; OPS1B leaves alert policy untouched (3rd prod file) | Misleading ops severity | no | OPS1C+ alert contract alignment |
+| OPS1B-FRONTEND-TOTAL-VS-REQUIRED | 2026-07-27T09:00Z | OPS UI Live Operations Summary | UI may still show required-gate `3/3` as if full pipeline size | candidate metadata: total=26 required=3 | Misleading engine count in UI | no | OPS frontend follow-up (not OPS1B) |
+| OPS1B-LIVE-OPS-TRUTH-CANDIDATE | 2026-07-27T09:00Z | ops_dashboard_runtime_truth / pipeline_metadata | Conditional pipeline AST + isolation candidate ready; live OPS API still on pre-patch code | `docs/audit/OPS1B_LIVE_OPERATIONS_TRUTH_CANDIDATE.md` | UI remains empty until OPS1C API-only restart | pending activation | OPS1C |
 | DEFERRED-DUAL-FEED | 2026-07-26T13:38Z | live_feed_v2 + intrabar | Two feed processes concurrent | baseline_manifest processes PIDs 93106 + 93404 | Ambiguous market data authority | no | Data-plane cleanup after Stage 1 |
 | DEFERRED-OI-ABSENT | 2026-07-26T13:38Z | oi_collector | Process absent; OI tip May 2026 | baseline `btc_oi` HISTORICAL_ONLY | Incomplete inventory/participation model | no | Later data-layer stage |
 | DEFERRED-SYNTHESIS-STALE | 2026-07-26T13:38Z | auction_synthesis | Was May-HTF stale | **superseded** — Stage 2B2 live synthesis on fresh HTF; remaining gap is MTF cognition disconnect (STAGE3A) | was yes | **superseded** | Stage 3B |
