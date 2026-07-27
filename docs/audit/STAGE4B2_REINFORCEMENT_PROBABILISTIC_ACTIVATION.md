@@ -193,7 +193,21 @@ Register updated: Stage 4A blockers marked **resolved live**; residual `alignmen
 
 ## AA. Git / Private Gitea
 
-Docs commit + push of `6758b11` and docs evidence to `gitea` remote. GitHub push not performed.
+Local commits (ahead of Gitea `5ca7dd1`):
+
+```text
+6758b11 fix: consume current cognition in reinforcement pipeline
+5e23e0f docs: record live reinforcement cognition activation
+7e4d82b docs: mark Stage 4 reinforcement activation resolved in deferred register
+```
+
+Push to `gitea` **failed twice** with remote:
+
+```text
+fatal: unable to write loose object file: No space left on device
+```
+
+GitHub push not performed. Retry push after Gitea disk space is restored.
 
 ## AB. Compliance
 
