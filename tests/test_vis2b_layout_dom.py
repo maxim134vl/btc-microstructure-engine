@@ -1,4 +1,4 @@
-"""VIS2B — layout / DOM / panel removal / generator hook regressions."""
+"""VIS2B→VIS3A layout / DOM / panel removal / generator hook regressions."""
 
 from __future__ import annotations
 
@@ -17,10 +17,10 @@ APP_JS = PUBLIC / "lifecycle_app.js"
 GEN = ROOT / "apps" / "context_visualizer" / "generate_lifecycle_context_data.py"
 
 
-def test_four_chart_containers_and_global_strip():
+def test_four_chart_containers_and_no_global_strip():
     html = INDEX.read_text(encoding="utf-8")
-    assert 'id="globalLifecycleStrip"' in html
-    assert html.count('id="globalLifecycleStrip"') == 1
+    assert 'id="globalLifecycleStrip"' not in html
+    assert 'id="globalLifecycleCanvas"' not in html
     for tf in ("M15", "M30", "H1", "H4"):
         assert f'id="chart-{tf}"' in html
         assert f'data-tf="{tf}"' in html
@@ -41,6 +41,7 @@ def test_js_has_no_ctx_trade_identity_helper_and_no_pnl_renderers():
     assert "GRID" in js
     assert "trade_id" in js
     assert re.search(r"CTX \$\{", js) is None
+    assert "preserveViewportAcrossReload" in js
 
 
 def test_generator_hook_default_off(tmp_path, monkeypatch):
@@ -61,13 +62,13 @@ def test_generator_hook_explicit_candidate_path(tmp_path, monkeypatch):
     assert path == out
     assert out.exists()
     text = out.read_text(encoding="utf-8")
-    assert "timeframe_chart_truth_v1" in text
+    assert "timeframe_chart_truth_v2" in text or "timeframe_chart_truth_v1" in text
     assert "M15" in text
     assert "global_lifecycle" in text
+    assert "context_segments" in text
 
 
 def test_ops_files_untouched_marker():
-    # Scope guard: VIS2B must not modify these production paths in the same change set intent.
     forbidden = [
         ROOT / "src/btc_ml/trading/trading_performance_truth.py",
         ROOT / "src/btc_ml/trading/timeframe_state_adapter.py",

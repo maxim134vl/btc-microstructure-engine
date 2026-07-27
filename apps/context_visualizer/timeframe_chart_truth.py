@@ -1,10 +1,11 @@
-"""VIS2B — Isolated native timeframe chart truth (read-only).
+"""VIS3A — Isolated native timeframe chart workspace truth (read-only).
 
 Builds a single visualizer payload with:
   - M15 native candles from live_market_feed
   - M30/H1/H4 completed bars via multi_timeframe_availability.build_completed_bars
-  - per-TF state / positions / trades
-  - singular global lifecycle strip
+  - per-TF state / positions / trades (strict TF book isolation)
+  - per-TF historical context segments from timeframe_command_memory
+  - global lifecycle kept for lineage/tooltips only (not a visual strip)
   - per-TF performance projection from trading_performance_truth
 
 Side-effect free when only build_* is called. Atomic writers are explicit.
@@ -35,9 +36,10 @@ from multi_timeframe_availability import (  # noqa: E402
     build_completed_bars,
 )
 
-SCHEMA_VERSION = "timeframe_chart_truth_v1"
+SCHEMA_VERSION = "timeframe_chart_truth_v2"
 TIMEFRAMES = ("M15", "M30", "H1", "H4")
 DEFAULT_WINDOW_DAYS = 7
+COMMAND_MEMORY = ROOT / "data" / "trading" / "manager" / "timeframe_command_memory.parquet"
 
 LIVE_FEED = ROOT / "data" / "live" / "live_market_feed.parquet"
 LIFECYCLE_MEMORY = ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
@@ -52,8 +54,7 @@ CANDIDATE_DIR = (
     / "data"
     / "candidate"
     / "architecture_recovery"
-    / "vis2b_four_native_timeframe_charts"
-    / "candidate"
+    / "vis3a_functional_chart_workspace"
 )
 
 
@@ -308,6 +309,148 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
         "lifecycle_phase": _txt(cmd.get("lifecycle_phase")),
         "evaluation_timestamp": _txt(cmd.get("evaluation_timestamp") or manager.get("evaluation_timestamp")),
     }
+
+
+def build_tf_context_segments(
+    timeframe: str,
+    *,
+    window_start: pd.Timestamp | None = None,
+    window_end: pd.Timestamp | None = None,
+) -> list[dict[str, Any]]:
+    """Collapse timeframe_command_memory into historical TF context segments.
+
+    Proven source: data/trading/manager/timeframe_command_memory.parquet
+    filtered by exact timeframe identity. Not a current-snapshot repeat.
+    """
+    try:
+        from btc_ml.trading.command_bus import CommandBus, CommandBusPaths
+    except Exception:
+        if not COMMAND_MEMORY.exists():
+            return []
+        frame = pd.read_parquet(COMMAND_MEMORY)
+    else:
+        frame = CommandBus(CommandBusPaths.production()).timeframe_commands(timeframe)
+
+    if frame is None or not len(frame):
+        return []
+
+    work = frame.copy()
+    if "timeframe" in work.columns:
+        work = work[work["timeframe"].astype(str).str.upper() == timeframe.upper()].copy()
+    if not len(work):
+        return []
+
+    work["_eval"] = pd.to_datetime(work.get("evaluation_timestamp"), utc=True, errors="coerce")
+    work["_bar_open"] = pd.to_datetime(work.get("source_bar_open"), utc=True, errors="coerce")
+    work["_bar_close"] = pd.to_datetime(work.get("source_bar_close"), utc=True, errors="coerce")
+    work = work.dropna(subset=["_eval"]).sort_values("_eval").reset_index(drop=True)
+    if window_start is not None:
+        work = work[work["_eval"] >= window_start - pd.Timedelta(days=1)]
+    if window_end is not None:
+        work = work[work["_eval"] <= window_end + pd.Timedelta(hours=6)]
+    if not len(work):
+        return []
+
+    segments: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+
+    def _flush() -> None:
+        nonlocal current
+        if current is None:
+            return
+        if window_start is not None and current["end_ts"] is not None and current["end_ts"] < window_start:
+            current = None
+            return
+        if window_end is not None and current["start_ts"] is not None and current["start_ts"] > window_end:
+            current = None
+            return
+        segments.append(
+            {
+                "timeframe": timeframe,
+                "start_timestamp": _iso(current["start_ts"]),
+                "end_timestamp": _iso(current["end_ts"]),
+                "directional_state": current["directional_state"],
+                "availability_status": _map_availability_status(current["availability_raw"]),
+                "availability_raw": current["availability_raw"],
+                "manager_instruction": current["manager_instruction"],
+                "entry_eligibility": current["entry_eligibility"],
+                "source": "timeframe_command_memory",
+                "command_count": current["command_count"],
+                "lifecycle_episode_id": current.get("lifecycle_episode_id"),
+            }
+        )
+        current = None
+
+    for _, raw in work.iterrows():
+        state_name = _txt(raw.get("timeframe_state")) or "OBSERVE"
+        avail_raw = _txt(raw.get("availability_status"))
+        intent = _txt(raw.get("intent")) or "NO_ACTION"
+        allowed = raw.get("action_allowed")
+        if isinstance(allowed, str):
+            entry_elig = allowed.strip().lower() in {"1", "true", "yes"}
+        else:
+            entry_elig = bool(allowed)
+        start_ts = raw["_bar_open"] if pd.notna(raw["_bar_open"]) else raw["_eval"]
+        end_ts = raw["_bar_close"] if pd.notna(raw["_bar_close"]) else raw["_eval"]
+        key = state_name
+        if current is None:
+            current = {
+                "key": key,
+                "directional_state": state_name,
+                "availability_raw": avail_raw,
+                "manager_instruction": intent,
+                "entry_eligibility": entry_elig,
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "command_count": 1,
+                "lifecycle_episode_id": _txt(raw.get("lifecycle_episode_id")),
+            }
+            continue
+        if current["key"] != key:
+            _flush()
+            current = {
+                "key": key,
+                "directional_state": state_name,
+                "availability_raw": avail_raw,
+                "manager_instruction": intent,
+                "entry_eligibility": entry_elig,
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "command_count": 1,
+                "lifecycle_episode_id": _txt(raw.get("lifecycle_episode_id")),
+            }
+        else:
+            current["end_ts"] = end_ts if end_ts is not None else current["end_ts"]
+            current["availability_raw"] = avail_raw or current["availability_raw"]
+            current["manager_instruction"] = intent
+            current["entry_eligibility"] = entry_elig
+            current["command_count"] += 1
+            current["lifecycle_episode_id"] = _txt(raw.get("lifecycle_episode_id")) or current.get(
+                "lifecycle_episode_id"
+            )
+    _flush()
+    return segments
+
+
+def assert_entities_tf_isolated(
+    entities: list[dict[str, Any]],
+    *,
+    timeframe: str,
+) -> list[dict[str, Any]]:
+    """Return contaminants whose timeframe != chart TF."""
+    bad: list[dict[str, Any]] = []
+    for entity in entities:
+        tf = _txt(entity.get("timeframe"))
+        if tf is None or tf.upper() != timeframe.upper():
+            bad.append(
+                {
+                    "timeframe_expected": timeframe,
+                    "timeframe_actual": tf,
+                    "trade_id": entity.get("trade_id"),
+                    "position_id": entity.get("position_id"),
+                }
+            )
+    return bad
 
 
 def _short_id(value: str | None, *, keep: int = 8) -> str | None:
@@ -721,6 +864,16 @@ def build_timeframe_chart_truth(
         state = load_tf_state(tf)
         closed = load_closed_trades_for_tf(tf, episode_by_id=episode_by_id)
         opens = load_open_positions_for_tf(tf, episode_by_id=episode_by_id)
+        contaminants = assert_entities_tf_isolated(closed + opens, timeframe=tf)
+        panel_status = "OK"
+        if contaminants:
+            panel_status = "TF_SOURCE_CONTAMINATION"
+            data_quality["orphan_entities"].extend(contaminants)
+        context_segments = build_tf_context_segments(
+            tf,
+            window_start=window_start,
+            window_end=window_end,
+        )
         for entity in closed + opens:
             if entity.get("episode_status") == "UNPROVEN":
                 data_quality["unproven_episode_links"].append(
@@ -760,8 +913,12 @@ def build_timeframe_chart_truth(
             },
             "candles": candle_block.get("candles") or [],
             "state": state,
-            "open_positions": opens,
-            "closed_trades": closed,
+            "context_segments": context_segments,
+            "context_source": "timeframe_command_memory",
+            "open_positions": opens if panel_status == "OK" else [],
+            "closed_trades": closed if panel_status == "OK" else [],
+            "panel_status": panel_status,
+            "contamination": contaminants,
             "performance": perf.get(tf) or {},
             "freshness": {
                 "latest_confirmed_close": candle_block.get("latest_confirmed_close"),
@@ -777,6 +934,12 @@ def build_timeframe_chart_truth(
         "window_end": _iso(window_end),
         "window_days": int(window_days),
         "global_lifecycle": global_lifecycle,
+        "visual_contract": {
+            "global_lifecycle_strip": False,
+            "per_tf_context_bands": True,
+            "equal_grid": True,
+            "timezone": "UTC",
+        },
         "timeframes": timeframes,
         "data_quality": data_quality,
         "runtime": {"paper_only": True, "execution_enabled": False},
