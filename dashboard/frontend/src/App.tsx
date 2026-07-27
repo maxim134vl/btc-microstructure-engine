@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { connectOps, softFetchOpsSnapshot } from "./api/client";
+import { startOpsLiveSession } from "./api/client";
 import { buildOpsFallbackSnapshot } from "./api/opsFallbackSnapshot";
 import {
   compareStage1Stage2,
@@ -34,20 +34,12 @@ function OpsMonitor() {
   const connected = useMonitorStore((s) => s.connected);
   const acknowledged = useMonitorStore((s) => s.acknowledgedAlerts);
   const acknowledgeAlert = useMonitorStore((s) => s.acknowledgeAlert);
-  const expandedGroups = useMonitorStore((s) => s.expandedGroups);
-  const toggleGroup = useMonitorStore((s) => s.toggleGroup);
 
   return (
     <div className="relative min-h-full">
-      {!connected ? (
-        <div className="pointer-events-none absolute right-5 top-3 z-10 rounded-ds-pill border border-ds-border/70 bg-ds-surface/90 px-2.5 py-1 text-[10px] font-medium text-ds-text-secondary shadow-ds-sm backdrop-blur">
-          Live feed optional / offline
-        </div>
-      ) : null}
       <OpsDashboard
         snapshot={snapshot}
-        expandedStaleParquet={expandedGroups.has("stale_parquet")}
-        onToggleStaleParquet={() => toggleGroup("stale_parquet")}
+        liveConnected={connected}
         acknowledged={acknowledged}
         onAckAlert={acknowledgeAlert}
       />
@@ -152,44 +144,12 @@ export default function App() {
   useEffect(() => {
     // Keep fallback UI immediately; upgrade to live when dashboard API is up.
     // Direct :8080 (CORS) — no Vite proxy, so offline does not spam ECONNREFUSED.
-    let cancelled = false;
-    let socket: ReturnType<typeof connectOps> | null = null;
-
-    const attachLiveSocket = () => {
-      if (cancelled || socket) return;
-      socket = connectOps(
-        (live) => {
-          if (cancelled) return;
-          setSnapshot(live);
-        },
-        (ok) => {
-          if (cancelled) return;
-          setConnected(ok);
-        },
-      );
-    };
-
-    const tryLive = () =>
-      softFetchOpsSnapshot().then((live) => {
-        if (cancelled || !live) return false;
-        setSnapshot(live);
-        setConnected(true);
-        attachLiveSocket();
-        return true;
-      });
-
-    void tryLive();
-
-    const poll = window.setInterval(() => {
-      if (cancelled || useMonitorStore.getState().connected) return;
-      void tryLive();
-    }, 8_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(poll);
-      socket?.close();
-    };
+    // OPS2A: bounded reconnect loop clears offline on first success (no sticky latch).
+    const session = startOpsLiveSession({
+      onSnapshot: setSnapshot,
+      onConnected: setConnected,
+    });
+    return () => session.stop();
   }, [setSnapshot, setConnected]);
 
   useEffect(() => {
