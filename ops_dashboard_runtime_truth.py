@@ -11,14 +11,23 @@ import ast
 import json
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+_SRC = ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from btc_ml.trading.trading_performance_truth import (  # noqa: E402
+    build_trading_performance_truth as _build_canonical_trading_performance_truth,
+)
 
 SCHEMA_VERSION = "ops_dashboard_runtime_truth_v1"
+PERFORMANCE_ADAPTER_PATH = "src/btc_ml/trading/trading_performance_truth.py"
 
 ENTITY_TAXONOMY = [
     "PROCESS",
@@ -78,6 +87,189 @@ SAFE_PIPELINE_BUILDERS = frozenset(
 
 S4_ACTIVATION_PATH = ROOT / "data/trading/manager/activation.json"
 S4_TIMEFRAMES = ("M15", "M30", "H1", "H4")
+MANAGER_PORTFOLIO_SUMMARY_PATH = ROOT / "data/trading/manager/portfolio_summary.json"
+
+
+def _json_safe(value: Any) -> Any:
+    """Reject NaN/Inf for API JSON; preserve None."""
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):  # noqa: PLR0124
+            return None
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def project_trading_performance_for_ops(payload: dict[str, Any]) -> dict[str, Any]:
+    """Schema projection only — never recalculates economics.
+
+    Maps canonical ``trading_performance_truth`` into OPS
+    ``trading_operations.performance``.
+    """
+    portfolio = dict(payload.get("portfolio") or {})
+    source_policy = dict(payload.get("source_policy") or {})
+    sample = dict(payload.get("sample_status") or {})
+    descriptive = dict(payload.get("descriptive_metrics") or {})
+    risk_adj = dict(payload.get("risk_adjusted_metrics") or {})
+    data_quality = dict(payload.get("data_quality") or {})
+    closed = list(payload.get("closed_trades") or [])
+    starts = [str(r.get("entry_ts")) for r in closed if r.get("entry_ts")]
+    ends = [str(r.get("exit_ts")) for r in closed if r.get("exit_ts")]
+    recon = str(data_quality.get("reconciliation_status") or "OK")
+    status = "AVAILABLE" if recon == "OK" else "DEGRADED"
+    reasons: list[str] = []
+    if descriptive.get("reason"):
+        reasons.append(str(descriptive["reason"]))
+    for item in risk_adj.get("reasons") or []:
+        if item:
+            reasons.append(str(item))
+    sample_quality = {
+        "closed_trade_count": portfolio.get("closed_trade_count"),
+        "observation_start": min(starts) if starts else None,
+        "observation_end": max(ends) if ends else None,
+        "sample_status": sample.get("descriptive") or descriptive.get("status"),
+        "descriptive_metrics_status": descriptive.get("status") or sample.get("descriptive"),
+        "risk_adjusted_metrics_status": risk_adj.get("status") or sample.get("risk_adjusted"),
+        "reasons": reasons,
+    }
+    return _json_safe(
+        {
+            "status": status,
+            "source": {
+                "adapter": PERFORMANCE_ADAPTER_PATH,
+                "schema_version": payload.get("schema_version"),
+                "generated_at": payload.get("generated_at"),
+                "mark_source": source_policy.get("mark_source"),
+                "mark_timestamp": portfolio.get("mark_timestamp"),
+                "mtm_basis": portfolio.get("mtm_basis"),
+                "included_sources": list(source_policy.get("included_sources") or []),
+                "excluded_sources": list(source_policy.get("excluded_sources") or []),
+            },
+            "portfolio": portfolio,
+            "timeframes": dict(payload.get("timeframes") or {}),
+            "descriptive_metrics": descriptive,
+            "risk_adjusted_metrics": risk_adj,
+            "sample_quality": sample_quality,
+            "data_quality": data_quality,
+            # Backward-compatible aliases for existing OPS frontend fields.
+            "realized_pnl": portfolio.get("realised_net_pnl_usd"),
+            "unrealized_pnl": portfolio.get("unrealised_gross_pnl_usd"),
+        }
+    )
+
+
+def apply_performance_aliases_to_timeframe_traders(
+    plane: dict[str, Any],
+    performance_payload: dict[str, Any],
+) -> None:
+    """Overlay canonical performance onto trader cards / portfolio aliases.
+
+    Does not touch risk fields. Does not recompute PnL.
+    """
+    per_tf = dict(performance_payload.get("timeframes") or {})
+    portfolio = dict(performance_payload.get("portfolio") or {})
+    for entry in plane.get("traders") or []:
+        tf = str(entry.get("timeframe") or "")
+        tf_perf = per_tf.get(tf) or {}
+        entry["realized_pnl_usd"] = tf_perf.get("realised_net_pnl_usd")
+        entry["unrealized_pnl_usd"] = tf_perf.get("unrealised_gross_pnl_usd")
+        entry["closed_trades"] = tf_perf.get("closed_trade_count")
+        entry["closed_trade_count"] = tf_perf.get("closed_trade_count")
+        # Keep book-derived open_position_count for risk; overlay canonical count
+        # when adapter provides it (parity expected).
+        if tf_perf.get("open_position_count") is not None:
+            entry["performance_open_position_count"] = tf_perf.get("open_position_count")
+        entry["performance_wins"] = tf_perf.get("wins")
+        entry["performance_losses"] = tf_perf.get("losses")
+        entry["total_fees_usd"] = tf_perf.get("total_fees_usd")
+        entry["total_slippage_usd"] = tf_perf.get("total_slippage_usd")
+        entry["latest_trade_tip"] = tf_perf.get("latest_trade_tip")
+        entry["latest_position_tip"] = tf_perf.get("latest_position_tip")
+        entry["performance_source"] = PERFORMANCE_ADAPTER_PATH
+
+    port = plane.setdefault("portfolio", {})
+    port["realized_pnl"] = portfolio.get("realised_net_pnl_usd")
+    port["unrealized_pnl"] = portfolio.get("unrealised_gross_pnl_usd")
+    port["realised_gross_pnl_usd"] = portfolio.get("realised_gross_pnl_usd")
+    port["realised_net_pnl_usd"] = portfolio.get("realised_net_pnl_usd")
+    port["unrealised_gross_pnl_usd"] = portfolio.get("unrealised_gross_pnl_usd")
+    port["unrealised_net_pnl_usd"] = portfolio.get("unrealised_net_pnl_usd")
+    port["total_gross_pnl_usd"] = portfolio.get("total_gross_pnl_usd")
+    port["total_net_pnl_usd"] = portfolio.get("total_net_pnl_usd")
+    port["total_fees_usd"] = portfolio.get("total_fees_usd")
+    port["total_slippage_usd"] = portfolio.get("total_slippage_usd")
+    port["initial_equity_usd"] = portfolio.get("initial_equity_usd")
+    port["closed_equity_usd"] = portfolio.get("closed_equity_usd")
+    port["mark_to_market_equity_usd"] = portfolio.get("mark_to_market_equity_usd")
+    port["closed_trade_count"] = portfolio.get("closed_trade_count")
+    port["performance_open_position_count"] = portfolio.get("open_position_count")
+    port["mtm_basis"] = portfolio.get("mtm_basis")
+    port["mark_price"] = portfolio.get("mark_price")
+    port["mark_timestamp"] = portfolio.get("mark_timestamp")
+    port["mark_status"] = portfolio.get("mark_status")
+    port["performance_source"] = PERFORMANCE_ADAPTER_PATH
+
+
+def clear_performance_aliases_on_timeframe_traders(plane: dict[str, Any]) -> None:
+    """On performance failure: null PnL aliases (never coerce to 0)."""
+    for entry in plane.get("traders") or []:
+        entry["realized_pnl_usd"] = None
+        entry["unrealized_pnl_usd"] = None
+        entry["closed_trades"] = None
+        entry["closed_trade_count"] = None
+        entry["performance_source"] = None
+        entry["performance_status"] = "SOURCE_UNAVAILABLE"
+    port = plane.setdefault("portfolio", {})
+    port["realized_pnl"] = None
+    port["unrealized_pnl"] = None
+    port["closed_trade_count"] = None
+    port["performance_source"] = None
+    port["performance_status"] = "SOURCE_UNAVAILABLE"
+
+
+def build_trading_operations_block(
+    *,
+    timeframe_traders: dict[str, Any],
+    performance: dict[str, Any] | None,
+    performance_error: str | None = None,
+) -> dict[str, Any]:
+    """OPS Trading Operations groups: manager / risk / performance."""
+    port = (timeframe_traders or {}).get("portfolio") or {}
+    risk = {
+        "max_risk_usd": port.get("max_risk_usd"),
+        "portfolio_max_risk_usd": port.get("portfolio_max_risk_usd"),
+        "reserved_open_risk_usd": port.get("reserved_open_risk_usd"),
+        "gross_open_risk_usd": port.get("gross_open_risk_usd"),
+        "available_risk_usd": port.get("available_risk_usd"),
+        "risk_utilisation_pct": port.get("risk_utilisation_pct"),
+        "risk_status": port.get("risk_status"),
+        "risk_semantics": port.get("risk_semantics"),
+        "per_timeframe": [
+            {
+                "timeframe": t.get("timeframe"),
+                "reserved_risk_usd": t.get("reserved_risk_usd"),
+                "open_risk_usd": t.get("open_risk_usd"),
+                "risk_status": t.get("risk_status"),
+            }
+            for t in (timeframe_traders or {}).get("traders") or []
+        ],
+    }
+    if performance is None:
+        perf_section: dict[str, Any] = {
+            "status": "UNKNOWN",
+            "error": performance_error or "trading_performance unavailable",
+            "source": {"adapter": PERFORMANCE_ADAPTER_PATH},
+        }
+    else:
+        perf_section = performance
+    return {
+        "manager": (timeframe_traders or {}).get("manager") or {},
+        "risk": risk,
+        "performance": perf_section,
+    }
 
 
 def s4_activated() -> bool:
@@ -791,7 +983,6 @@ def build_paper() -> dict[str, Any]:
 
 
 # VIS0B — canonical manager risk for OPS (observability only; never invent $0).
-MANAGER_PORTFOLIO_SUMMARY_PATH = ROOT / "data/trading/manager/portfolio_summary.json"
 RISK_SOURCE_STALE_SECONDS = 30 * 60
 RISK_SEMANTICS_RESERVED_OPEN = "reserved_open_risk"
 
@@ -988,9 +1179,15 @@ def _resolve_aggregate_portfolio_risk(
     }
 
 
-def build_timeframe_traders() -> dict[str, Any]:
+def build_timeframe_traders(
+    *,
+    performance_payload: dict[str, Any] | None = None,
+    load_performance: bool = True,
+) -> dict[str, Any]:
     """S4.1 read-only view: manager, command bus, four independent trader books.
 
+    Process + risk from books/manager. Performance PnL overlays from
+    ``trading_performance_truth`` only (no parallel OPS economics calculator).
     Data binding only — no new visual language, no writes.
     """
     activation = _read_json(S4_ACTIVATION_PATH)
@@ -1044,8 +1241,6 @@ def build_timeframe_traders() -> dict[str, Any]:
             bus["error"] = f"{type(exc).__name__}: {exc}"
 
     traders: list[dict[str, Any]] = []
-    realized_total = 0.0
-    unrealized_total = 0.0
     book_open_positions = 0
     tf_attribution_gaps = 0
     process_by_tf: dict[str, dict[str, Any]] = {}
@@ -1078,10 +1273,12 @@ def build_timeframe_traders() -> dict[str, Any]:
             "risk_source_tip": portfolio_tip_s,
             "risk_freshness": "UNAVAILABLE",
             "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
-            "realized_pnl_usd": 0.0,
-            "unrealized_pnl_usd": 0.0,
+            # Performance aliases filled only from trading_performance_truth.
+            "realized_pnl_usd": None,
+            "unrealized_pnl_usd": None,
             "open_position_count": 0,
-            "closed_trades": 0,
+            "closed_trades": None,
+            "closed_trade_count": None,
             "last_command_id": None,
             "last_command_intent": None,
             "command_cursor": None,
@@ -1115,19 +1312,12 @@ def build_timeframe_traders() -> dict[str, Any]:
                         entry["entry_price"] = _sf(position_row.get("entry_price"))
                         entry["quantity"] = _sf(position_row.get("quantity"))
                         book_open_positions += 1
-            trades_path = book / "trades.parquet"
-            if trades_path.exists():
-                trades = pd.read_parquet(trades_path)
-                entry["closed_trades"] = int(len(trades))
-                if len(trades) and "net_pnl_usd" in trades.columns:
-                    entry["realized_pnl_usd"] = float(
-                        pd.to_numeric(trades["net_pnl_usd"], errors="coerce").fillna(0).sum()
-                    )
+            # Intentionally do NOT sum trades.parquet for realised PnL / closed counts.
+            # Canonical performance comes from trading_performance_truth only.
         except Exception as exc:  # noqa: BLE001
             entry["error"] = f"{type(exc).__name__}: {exc}"
         trader_view = ((portfolio.get("traders") or {}).get(tf)) or {}
-        if trader_view.get("unrealized_pnl_usd") is not None:
-            entry["unrealized_pnl_usd"] = _sf(trader_view.get("unrealized_pnl_usd")) or 0.0
+        # Do not copy manager unrealised into OPS — adapter owns MTM basis.
         risk_fields = _resolve_reserved_open_risk_usd(
             open_position_count=int(entry["open_position_count"] or 0),
             trader_view=trader_view,
@@ -1138,8 +1328,6 @@ def build_timeframe_traders() -> dict[str, Any]:
         if entry["open_position_count"] and entry.get("reserved_risk_usd") is None:
             tf_attribution_gaps += 1
         entry["last_command"] = commands_by_tf.get(tf)
-        realized_total += float(entry["realized_pnl_usd"] or 0.0)
-        unrealized_total += float(entry["unrealized_pnl_usd"] or 0.0)
         traders.append(entry)
 
     aggregate = _resolve_aggregate_portfolio_risk(portfolio, book_open_positions=book_open_positions)
@@ -1148,7 +1336,7 @@ def build_timeframe_traders() -> dict[str, Any]:
     elif aggregate.get("risk_status") == "SOURCE_UNAVAILABLE":
         aggregate["observability_health"] = "DEGRADED_OBSERVABILITY"
 
-    return {
+    plane = {
         "entity_type": "TIMEFRAME_TRADING_PLANE",
         "activated": activation is not None,
         "activation_timestamp": (activation or {}).get("activation_timestamp"),
@@ -1185,8 +1373,10 @@ def build_timeframe_traders() -> dict[str, Any]:
             "risk_freshness": aggregate["risk_freshness"],
             "risk_semantics": aggregate["risk_semantics"],
             "observability_health": aggregate["observability_health"],
-            "realized_pnl": realized_total,
-            "unrealized_pnl": unrealized_total,
+            # Aliases filled only from canonical performance adapter.
+            "realized_pnl": None,
+            "unrealized_pnl": None,
+            "closed_trade_count": None,
             "risk_aggregation": "GROSS_NO_NETTING",
         },
         "read_only": True,
@@ -1194,6 +1384,18 @@ def build_timeframe_traders() -> dict[str, Any]:
         "real_execution": False,
         "exchange_calls": 0,
     }
+
+    perf = performance_payload
+    if perf is None and load_performance:
+        try:
+            perf = _build_canonical_trading_performance_truth()
+        except Exception as exc:  # noqa: BLE001
+            plane["performance_load_error"] = f"{type(exc).__name__}: {exc}"
+            clear_performance_aliases_on_timeframe_traders(plane)
+            return plane
+    if perf is not None:
+        apply_performance_aliases_to_timeframe_traders(plane, perf)
+    return plane
 
 
 def build_context_chain() -> dict[str, Any]:
@@ -1459,7 +1661,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         section_errors["paper"] = f"{type(exc).__name__}: {exc}"
 
     try:
-        timeframe_traders = build_timeframe_traders()
+        timeframe_traders = build_timeframe_traders(load_performance=False)
     except Exception as exc:  # noqa: BLE001
         timeframe_traders = {
             "activated": s4_activated(),
@@ -1468,6 +1670,27 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
         }
         section_errors["trader_truth"] = f"{type(exc).__name__}: {exc}"
+
+    trading_operations: dict[str, Any]
+    performance_section: dict[str, Any] | None = None
+    try:
+        perf_raw = _build_canonical_trading_performance_truth()
+        performance_section = project_trading_performance_for_ops(perf_raw)
+        if isinstance(timeframe_traders, dict) and timeframe_traders.get("traders") is not None:
+            apply_performance_aliases_to_timeframe_traders(timeframe_traders, perf_raw)
+        trading_operations = build_trading_operations_block(
+            timeframe_traders=timeframe_traders if isinstance(timeframe_traders, dict) else {},
+            performance=performance_section,
+        )
+    except Exception as exc:  # noqa: BLE001
+        section_errors["trading_performance"] = f"{type(exc).__name__}: {exc}"
+        if isinstance(timeframe_traders, dict) and timeframe_traders.get("traders") is not None:
+            clear_performance_aliases_on_timeframe_traders(timeframe_traders)
+        trading_operations = build_trading_operations_block(
+            timeframe_traders=timeframe_traders if isinstance(timeframe_traders, dict) else {},
+            performance=None,
+            performance_error=section_errors["trading_performance"],
+        )
 
     paper_proc = next((p for p in processes if p["process_id"] == "paper_controller"), None)
     if paper_proc and isinstance(paper, dict):
@@ -1617,6 +1840,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         "context_chain": context_chain,
         "paper": paper,
         "timeframe_traders": timeframe_traders,
+        "trading_operations": trading_operations,
         "runtime_uptime": runtime_uptime,
         "known_limitations": known_limitations,
         "legacy_components": legacy_components,
