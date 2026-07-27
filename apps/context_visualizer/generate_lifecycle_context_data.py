@@ -373,41 +373,22 @@ def build_uncertainty_segments(candle_rows: list[dict[str, Any]]) -> list[dict[s
 
 
 def build_episode_rows(episodes: pd.DataFrame, latest_candle_ts: pd.Timestamp) -> list[dict[str, Any]]:
-    work = episodes.copy()
-    work["start_time"] = _to_utc_ts(work["start_time"])
-    work["end_time"] = _to_utc_ts(work["end_time"])
-    work = work.dropna(subset=["start_time", "end_time"]).sort_values("start_time").reset_index(drop=True)
+    """Collapse duplicate episode_id carry rows into one continuous visual band."""
+    try:
+        from trading_truth import collapse_lifecycle_episodes
+    except Exception:
+        from apps.context_visualizer.trading_truth import collapse_lifecycle_episodes  # type: ignore
 
-    out: list[dict[str, Any]] = []
-    for _, row in work.iterrows():
-        bars = max(1, _safe_int(row.get("bars_count"), default=1))
-        challenged = _safe_int(row.get("challenged_bars_count"), default=0)
-        challenge_ratio = float(challenged) / float(bars)
-        end_reason = _clean_text(row.get("end_reason"), default="")
-        end_time = row["end_time"]
-        # Keep open episode painted through latest candle when memory lags feed.
-        if "latest open" in end_reason.lower() and latest_candle_ts is not None and pd.notna(latest_candle_ts):
-            if end_time < latest_candle_ts:
-                end_time = latest_candle_ts
-        context = _clean_text(row.get("active_market_context"), default="OBSERVE")
-        out.append(
-            {
-                "episode_id": _safe_int(row.get("episode_id"), default=0),
-                "context": context,
-                "start_time": _iso(row["start_time"]),
-                "end_time": _iso(end_time),
-                "start_time_unix": int(pd.Timestamp(row["start_time"]).timestamp()),
-                "end_time_unix": int(pd.Timestamp(end_time).timestamp()),
-                "bars_count": bars,
-                "duration_minutes": _safe_float(row.get("duration_minutes")) or 0.0,
-                "dominant_lifecycle_state": _clean_text(row.get("dominant_lifecycle_state"), default="UNKNOWN"),
-                "challenged_bars_count": challenged,
-                "challenge_ratio": round(challenge_ratio, 4),
-                "start_reason": _clean_text(row.get("start_reason"), default="UNKNOWN"),
-                "end_reason": end_reason or "UNKNOWN",
-            }
-        )
-    return out
+    latest = latest_candle_ts
+    if latest is not None and pd.notna(latest):
+        latest = pd.Timestamp(latest)
+        if latest.tzinfo is None:
+            latest = latest.tz_localize("UTC")
+        else:
+            latest = latest.tz_convert("UTC")
+    else:
+        latest = None
+    return collapse_lifecycle_episodes(episodes, latest_evaluation=latest)
 
 
 def build_status_line(latest: pd.Series | dict[str, Any]) -> str:

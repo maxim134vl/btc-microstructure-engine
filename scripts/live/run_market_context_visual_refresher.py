@@ -465,14 +465,33 @@ def run_lifecycle_visual_generate() -> dict[str, Any]:
     code = int(gen.main())
     if code != 0:
         raise RuntimeError(f"generate_lifecycle_context_data exit={code}")
-    # Prefer canonical policy context bands + policy_context_trades when research artifacts exist.
+    # Policy/research episode export is diagnostics-only. Never overwrite the
+    # decision-driving lifecycle episode bands used as Active trading context.
     canon = ROOT / "data" / "research" / "paper_simulator" / "canonical_policy_context_episodes.json"
     trades = ROOT / "data" / "research" / "paper_simulator" / "policy_context_trades.json"
     if canon.exists() and trades.exists():
-        sys.path.insert(0, str(ROOT / "scripts" / "research"))
-        import export_policy_context_visual_data as export_mod  # type: ignore
+        try:
+            sys.path.insert(0, str(ROOT / "scripts" / "research"))
+            import export_policy_context_visual_data as export_mod  # type: ignore
 
-        export_mod.export_visual()
+            # Keep a separate shadow/diagnostics artifact if exporter supports it;
+            # do not replace lifecycle_context_episodes.json primary path.
+            if hasattr(export_mod, "export_visual_shadow_only"):
+                export_mod.export_visual_shadow_only()
+            else:
+                shadow_out = PUBLIC_DATA / "shadow_policy_context_episodes.json"
+                payload = json.loads(canon.read_text(encoding="utf-8"))
+                write_json(
+                    shadow_out,
+                    {
+                        "label": "Shadow diagnostics",
+                        "is_active_trading_context": False,
+                        "source": str(canon.relative_to(ROOT)),
+                        "episodes": payload if isinstance(payload, list) else payload.get("episodes") or payload,
+                    },
+                )
+        except Exception:
+            pass
     latest = {}
     latest_path = PUBLIC_DATA / "lifecycle_latest.json"
     if latest_path.exists():
@@ -1975,13 +1994,42 @@ def refresh_once(*, visual_stale_seconds: float, last_good: dict[str, Any]) -> d
             "forbidden_writes": list(FORBIDDEN_WRITE_GLOBS),
         }
 
+        # Canonical timeframe-trader OPEN positions (decision-driving paper books).
+        try:
+            from trading_truth import (  # type: ignore
+                build_trading_truth,
+                open_position_overlay_shapes,
+                write_trading_truth_artifacts,
+            )
+
+            truth = write_trading_truth_artifacts(PUBLIC_DATA, timeframe="ALL")
+            tf_open = truth.get("open_positions") or []
+            tf_shapes = open_position_overlay_shapes(tf_open)
+            overlays["open_positions"] = tf_shapes
+            counts = dict(overlays.get("counts") or {})
+            counts["open_position_overlays"] = len(tf_shapes)
+            counts["live_open_paper_trade_count"] = len(tf_shapes)
+            counts["timeframe_trader_open_position_count"] = len(tf_shapes)
+            overlays["counts"] = counts
+            overlays["open_positions_source"] = "data/trading/timeframe_traders"
+            visual_status["open_positions_count"] = len(tf_shapes)
+            visual_status["trading_truth"] = {
+                "active_episode_id": (truth.get("active_episode") or {}).get("episode_id"),
+                "open_position_count": len(tf_shapes),
+                "path": "apps/context_visualizer/public/data/trading_truth.json",
+            }
+        except Exception as exc:
+            visual_status["trading_truth_error"] = f"{type(exc).__name__}: {exc}"
+
         write_json(CONTEXT_VISUAL_OUT, context_visual)
         write_json(PAPER_OVERLAYS_OUT, overlays)
         write_json(
             OPEN_POSITIONS_OUT,
             {
                 "generated_at_utc": refresh_ts,
+                "source": overlays.get("open_positions_source") or "overlay_shapes",
                 "open_positions": overlays.get("open_positions") or [],
+                "overlay_shapes": overlays.get("open_positions") or [],
                 "count": len(overlays.get("open_positions") or []),
             },
         )

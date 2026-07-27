@@ -1,7 +1,11 @@
 /**
  * Live View: lifecycle context + paper trade overlays.
  * Visual-only. No trading logic. Cache-busted fetches.
+ * Chart geometry only — no trade parameter text on the canvas.
  */
+
+const TF_STORAGE_KEY = "btcml-context-visual-timeframe";
+const VALID_TIMEFRAMES = ["ALL", "M15", "M30", "H1", "H4"];
 
 const state = {
   candles: [],
@@ -11,9 +15,13 @@ const state = {
   visualStatus: null,
   overlays: null,
   normalizedVisualLayer: null,
+  tradingTruth: null,
   openPositions: [],
   closedTrades: [],
   tradeShapes: [],
+  allOpenPositions: [],
+  allClosedTrades: [],
+  allTradeShapes: [],
   tradeResult: null,
   pnlSummary: null,
   controller: null,
@@ -21,6 +29,7 @@ const state = {
   visibleStart: 0,
   visibleEnd: 0,
   range: "latest500",
+  timeframe: "ALL",
   pointer: null,
   dragging: false,
   dragStartX: 0,
@@ -44,6 +53,8 @@ const statusChips = document.getElementById("statusChips");
 const hoverReadout = document.getElementById("hoverReadout");
 const latestTradeBadge = document.getElementById("latestTradeBadge");
 const rangeSelect = document.getElementById("rangeSelect");
+const timeframeSelect = document.getElementById("timeframeSelect");
+const truthBanner = document.getElementById("truthBanner");
 const themeSelect = document.getElementById("themeSelect");
 const sidebarToggle = document.getElementById("sidebarToggle");
 const inspectorPanel = document.getElementById("inspectorPanel");
@@ -494,31 +505,99 @@ function renderStatusChips() {
   ].join("");
 }
 
+function readStoredTimeframe() {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("tf");
+    if (fromUrl && VALID_TIMEFRAMES.includes(fromUrl.toUpperCase())) return fromUrl.toUpperCase();
+    const stored = localStorage.getItem(TF_STORAGE_KEY);
+    if (stored && VALID_TIMEFRAMES.includes(stored)) return stored;
+  } catch (_e) {
+    /* ignore */
+  }
+  return "ALL";
+}
+
+function persistTimeframe(tf) {
+  state.timeframe = tf;
+  try {
+    localStorage.setItem(TF_STORAGE_KEY, tf);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tf", tf);
+    window.history.replaceState({}, "", url.toString());
+  } catch (_e) {
+    /* ignore */
+  }
+  if (timeframeSelect) timeframeSelect.value = tf;
+}
+
+function matchesTimeframe(row) {
+  if (state.timeframe === "ALL") return true;
+  return String(row?.timeframe || "").toUpperCase() === state.timeframe;
+}
+
+function applyTimeframeFilter() {
+  state.openPositions = (state.allOpenPositions || []).filter(matchesTimeframe);
+  state.closedTrades = (state.allClosedTrades || []).filter(matchesTimeframe);
+  state.tradeShapes = (state.allTradeShapes || []).filter((shape) => {
+    const status = String(shape.status || "").toUpperCase();
+    if (status === "OPEN") return matchesTimeframe(shape);
+    if (status === "CLOSED") return matchesTimeframe(shape);
+    // Closed shapes from normalized layer may omit status; keep timeframe filter.
+    return matchesTimeframe(shape);
+  });
+  if (state.overlays) {
+    state.overlays.open_positions = state.openPositions;
+    state.overlays.closed_trades = state.closedTrades;
+    state.overlays.trade_shapes = state.tradeShapes;
+  }
+}
+
+function updateTruthBanner() {
+  if (!truthBanner) return;
+  const truth = state.tradingTruth || {};
+  const banner = truth.banner || {};
+  const dq = truth.data_quality || {};
+  const openN = (state.openPositions || []).length;
+  const closedN = (state.closedTrades || []).length;
+  const ep = truth.active_episode?.episode_id ?? state.latest?.open_episode_id ?? "—";
+  const lag = banner.dashboard_data_lag_seconds;
+  const lagText = lag == null ? "—" : `${Math.round(Number(lag))}s`;
+  const stale = Boolean(banner.stale) || String(state.visualStatus?.visual_data_status || "").includes("STALE");
+  const lines = [
+    `Trading runtime: ${banner.trading_runtime || "LIVE PAPER"}`,
+    `Real execution: ${banner.real_execution || "DISABLED"}`,
+    `Pipeline: ${banner.pipeline || "HEALTHY"}`,
+    `TF ${state.timeframe} · open ${openN} · closed ${closedN} · ep ${ep}`,
+    stale ? `STALE DATA · lag ${lagText}` : `Dashboard lag ${lagText}`,
+  ];
+  if (!closedN && openN > 0) {
+    lines.push("No closed trades for selected timeframe");
+  }
+  if (dq.missing_sources && dq.missing_sources.length) {
+    lines.push("Trading data unavailable");
+  }
+  truthBanner.textContent = lines.join(" · ");
+  truthBanner.classList.toggle("is-stale", stale);
+}
+
 function updateStatusLine() {
   if (!statusLine || !sourceLine) return;
   const latest = state.latest || {};
-  const context = latest.active_market_context || "OBSERVE";
-  const lifecycle = latest.lifecycle_state || "NO_ACTIVE_CONTEXT";
+  const truthEp = state.tradingTruth?.active_episode;
+  const context = truthEp?.context || latest.active_market_context || "OBSERVE";
+  const lifecycle = truthEp?.lifecycle_state || latest.lifecycle_state || "NO_ACTIVE_CONTEXT";
   const age = latest.active_context_age_bars;
-  if (context === "OBSERVE") {
-    statusLine.textContent = "Current context";
-    statusLine.title = `${context} · ${lifecycle} · ${actionLabel(Boolean(latest.action_allowed))}`;
-  } else {
-    statusLine.textContent = "Current context";
-    statusLine.title = `${context} · ${lifecycle} · age ${age ?? 0} bars · ${actionLabel(Boolean(latest.action_allowed))}`;
-  }
-  const vs = state.visualStatus || {};
-  const oc = state.overlays?.counts || {};
-  const entries = vs.entries_count ?? oc.entry_markers ?? 0;
-  const exits = vs.exits_count ?? oc.exit_markers ?? 0;
-  const openN = vs.open_positions_count ?? (state.openPositions || []).length;
-  const closedN = vs.closed_trades_count ?? (state.closedTrades || []).length;
-  const lastId = vs.last_trade_id || state.overlays?.last_trade_id || "—";
-  const lastRes = vs.last_trade_result || state.overlays?.last_trade_result || "—";
-  sourceLine.textContent = `entries ${entries} · exits ${exits} · open ${openN} · closed ${closedN} · last ${lastId} · ${lastRes}`;
+  const epId = truthEp?.episode_id ?? latest.open_episode_id;
+  statusLine.textContent = epId != null ? `Active trading context · ep ${epId}` : "Active trading context";
+  statusLine.title = `${context} · ${lifecycle} · age ${age ?? 0} bars · ${actionLabel(Boolean(latest.action_allowed))} · UTC`;
+  const openN = (state.openPositions || []).length;
+  const closedN = (state.closedTrades || []).length;
+  const shadow = state.tradingTruth?.shadow_diagnostics;
+  sourceLine.textContent = `open ${openN} · closed ${closedN}` + (shadow ? ` · shadow diag ${shadow.calibrated_context || "—"}` : "");
   sourceLine.title = sourceLine.textContent;
   renderStatusChips();
   updateRefreshLine();
+  updateTruthBanner();
   renderControllerTimeline();
   renderTradeResultPanel();
   renderPnlPanel();
@@ -527,8 +606,13 @@ function updateStatusLine() {
 
 function renderTradeResultPanel() {
   if (!paperTradeResultPanel) return;
+  const openN = (state.openPositions || []).length;
   const tr = state.tradeResult;
   if (!tr || !tr.has_closed_trade) {
+    if (openN > 0) {
+      paperTradeResultPanel.innerHTML = `<p class="lifecycle-empty">${openN} open paper positions<br/>No closed trades for selected timeframe</p>`;
+      return;
+    }
     paperTradeResultPanel.innerHTML = `<p class="lifecycle-empty">No closed paper trade yet.</p>`;
     return;
   }
@@ -1377,15 +1461,42 @@ async function loadAllVisualData() {
   }
   state.latest = latest && typeof latest === "object" ? latest : {};
   state.visualStatus = await loadOptional("./data/visual_status.json", {});
+  state.tradingTruth = await loadOptional("./data/trading_truth.json", null);
   state.normalizedVisualLayer = await loadOptional("./data/normalized_trade_render_layer.json", { trades: [] });
   const normalizedRows = Array.isArray(state.normalizedVisualLayer?.trades) ? state.normalizedVisualLayer.trades : [];
-  state.tradeShapes = normalizedRows.map(normalizedTradeToShape).filter((shape) => shape.trade_id);
-  state.closedTrades = state.tradeShapes.filter((shape) => String(shape.status || "").toUpperCase() === "CLOSED");
-  state.openPositions = state.tradeShapes.filter((shape) => String(shape.status || "").toUpperCase() === "OPEN");
+  const closedFromNormalized = normalizedRows
+    .map(normalizedTradeToShape)
+    .filter((shape) => shape.trade_id && String(shape.status || "CLOSED").toUpperCase() !== "OPEN");
+  const openPayload = await loadOptional("./data/open_positions.json", { open_positions: [], overlay_shapes: [] });
+  const openFromTruth = Array.isArray(openPayload.overlay_shapes) && openPayload.overlay_shapes.length
+    ? openPayload.overlay_shapes
+    : Array.isArray(openPayload.open_positions)
+      ? openPayload.open_positions.map((row) => ({
+          ...row,
+          trade_id: row.position_id || row.trade_id,
+          status: "OPEN",
+          entry_ts: row.entry_timestamp || row.entry_ts,
+          entry_price: row.entry_price,
+          stop_loss_price: row.stop_price || row.stop_loss_price,
+          take_profit_price: row.take_profit_price,
+          timeframe: row.timeframe,
+        }))
+      : [];
+  const truthClosed = Array.isArray(state.tradingTruth?.closed_trades)
+    ? state.tradingTruth.closed_trades.map((row) => ({
+        ...row,
+        status: "CLOSED",
+        entry_ts: row.entry_timestamp,
+        exit_ts: row.exit_timestamp,
+        stop_loss_price: row.stop_price,
+        net_pnl: row.realized_pnl,
+      }))
+    : [];
+  state.allClosedTrades = truthClosed.length ? truthClosed : closedFromNormalized;
+  state.allOpenPositions = openFromTruth;
+  state.allTradeShapes = [...state.allClosedTrades, ...state.allOpenPositions];
   state.overlays = await loadOptional("./data/paper_trade_overlays.json", { entries: [], exits: [], counts: {}, trade_shapes: [] });
-  state.overlays.trade_shapes = state.tradeShapes;
-  state.overlays.closed_trades = state.closedTrades;
-  state.overlays.open_positions = state.openPositions;
+  applyTimeframeFilter();
   state.tradeResult = await loadOptional("./data/trade_result_summary.json", null);
   state.pnlSummary = await loadOptional("./data/pnl_summary.json", null);
   state.controller = await loadOptional("./data/controller_cycles.json", { cycles: [], actions: [] });
@@ -1437,6 +1548,7 @@ async function init() {
     return;
   }
   initThemeControls();
+  persistTimeframe(readStoredTimeframe());
   try {
     await loadAllVisualData();
     applyRange(true);
@@ -1447,6 +1559,14 @@ async function init() {
       rangeSelect.addEventListener("change", () => {
         state.range = rangeSelect.value;
         applyRange(true);
+        renderChart();
+      });
+    }
+    if (timeframeSelect) {
+      timeframeSelect.addEventListener("change", () => {
+        persistTimeframe(timeframeSelect.value);
+        applyTimeframeFilter();
+        updateStatusLine();
         renderChart();
       });
     }

@@ -37,6 +37,16 @@
         </div>
         <div class="lifecycle-status-right">
           <label class="lifecycle-range">
+            Timeframe
+            <select id="timeframeSelect" aria-label="Paper trading timeframe">
+              <option value="ALL" selected>ALL</option>
+              <option value="M15">M15</option>
+              <option value="M30">M30</option>
+              <option value="H1">H1</option>
+              <option value="H4">H4</option>
+            </select>
+          </label>
+          <label class="lifecycle-range">
             Range
             <select id="rangeSelect" aria-label="Visible range">
               <option value="latest500" selected>Last 500 bars</option>
@@ -47,6 +57,7 @@
               <option value="all">All</option>
             </select>
           </label>
+          <div id="truthBanner" class="lifecycle-truth-banner" aria-live="polite" style="font-size:0.72rem;line-height:1.25;color:var(--text-muted);max-width:14rem;text-align:right">Trading runtime: LIVE PAPER</div>
           <label class="lifecycle-theme-toggle">
             Theme
             <select id="themeSelect" class="lifecycle-theme-select" aria-label="Theme">
