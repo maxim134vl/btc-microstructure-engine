@@ -1,8 +1,8 @@
-"""VIS2B→VIS3A layout / DOM / panel removal / generator hook regressions."""
+"""VIS3C — marker contract + generator hook + DOM single-chart regression (replaces VIS2B GRID asserts)."""
 
 from __future__ import annotations
 
-import os
+import json
 import re
 import sys
 from pathlib import Path
@@ -14,34 +14,40 @@ sys.path.insert(0, str(ROOT / "apps" / "context_visualizer"))
 PUBLIC = ROOT / "apps" / "context_visualizer" / "public"
 INDEX = PUBLIC / "index.html"
 APP_JS = PUBLIC / "lifecycle_app.js"
-GEN = ROOT / "apps" / "context_visualizer" / "generate_lifecycle_context_data.py"
 
 
-def test_four_chart_containers_and_no_global_strip():
+def test_tradingview_marker_contract_in_js():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "drawLongEntryMarker" in js
+    assert "drawShortEntryMarker" in js
+    assert "drawExitMarker" in js
+    assert "▲" in js
+    assert "▼" in js
+    assert "×" in js
+    assert "public_number" in js
+    assert "OPEN" in js
+    assert "display_label" in js
+
+
+def test_single_chart_host_no_static_foreign_canvases():
     html = INDEX.read_text(encoding="utf-8")
-    assert 'id="globalLifecycleStrip"' not in html
-    assert 'id="globalLifecycleCanvas"' not in html
+    # Static HTML must not pre-create four canvases
     for tf in ("M15", "M30", "H1", "H4"):
-        assert f'id="chart-{tf}"' in html
-        assert f'data-tf="{tf}"' in html
-    assert 'value="GRID"' in html
+        assert f'id="chart-{tf}"' not in html
+    assert 'id="tfChartHost"' in html
+    assert "tf-nav" in html
     assert 'id="lifecycleCanvas"' not in html
     assert "paperPnlBlock" not in html
     assert "modelMetricsBlock" not in html
-    assert "Detailed PnL" not in html
-    assert "Trading Model Evaluation Metrics" not in html
 
 
-def test_js_has_no_ctx_trade_identity_helper_and_no_pnl_renderers():
+def test_js_standalone_api():
     js = APP_JS.read_text(encoding="utf-8")
-    assert "function contextNumber" not in js
-    assert "renderPnlPanel" not in js
-    assert "renderModelMetricsPanel" not in js
-    assert "VALID_MODES" in js
-    assert "GRID" in js
-    assert "trade_id" in js
-    assert re.search(r"CTX \$\{", js) is None
+    assert "parseStandaloneTf" in js
+    assert "mountStandalonePanel" in js
+    assert "foreignChartsInDom" in js
     assert "preserveViewportAcrossReload" in js
+    assert "__VIS3C__" in js
 
 
 def test_generator_hook_default_off(tmp_path, monkeypatch):
@@ -62,10 +68,16 @@ def test_generator_hook_explicit_candidate_path(tmp_path, monkeypatch):
     assert path == out
     assert out.exists()
     text = out.read_text(encoding="utf-8")
-    assert "timeframe_chart_truth_v2" in text or "timeframe_chart_truth_v1" in text
-    assert "M15" in text
-    assert "global_lifecycle" in text
-    assert "context_segments" in text
+    assert "timeframe_chart_truth_v3" in text or "timeframe_chart_truth_v2" in text
+    payload = json.loads(text)
+    assert "M15" in payload.get("timeframes", {})
+    assert "context_segments" in (payload["timeframes"]["M15"] or {})
+    if payload.get("schema_version") == "timeframe_chart_truth_v3":
+        ents = (payload["timeframes"]["M15"].get("closed_trades") or []) + (
+            payload["timeframes"]["M15"].get("open_positions") or []
+        )
+        if ents:
+            assert ents[0].get("public_number", "").startswith("M15_")
 
 
 def test_ops_files_untouched_marker():
@@ -76,3 +88,10 @@ def test_ops_files_untouched_marker():
     ]
     for path in forbidden:
         assert path.exists()
+
+
+def test_marker_pairing_uses_same_public_number():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "publicNumber(entity)" in js
+    assert re.search(r"drawExitMarker\(ctx,\s*x2,\s*y,\s*label", js)
+    assert "selectedTradeKey" in js

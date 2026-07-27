@@ -23,7 +23,7 @@
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./lifecycle.css?v=ops-style-polish" />
     <style>
-      /* VIS3A: equal 2×2 workspace; no global lifecycle strip */
+      /* VIS3C: one standalone TF chart per URL — no multi-panel GRID in DOM */
       .tf-grid-shell { display: flex; flex-direction: column; gap: 8px; width: 100%; min-height: 0; flex: 1; min-width: 0; }
       .tf-workspace-toolbar {
         display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -36,29 +36,32 @@
       }
       .tf-workspace-toolbar button:hover { border-color: var(--text-muted); }
       .tf-workspace-toolbar .hint { color: var(--text-muted); font-size: 0.72rem; }
-      .tf-chart-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        grid-template-rows: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+      .tf-nav {
+        display: flex; gap: 4px; align-items: center;
+        margin-right: 8px;
+      }
+      .tf-nav a {
+        appearance: none; text-decoration: none;
+        border: 1px solid var(--panel-border); background: var(--panel-bg);
+        color: var(--text-secondary); border-radius: 6px; padding: 3px 9px;
+        font: inherit; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
+      }
+      .tf-nav a:hover { color: var(--text-primary); border-color: var(--text-muted); }
+      .tf-nav a[aria-current="page"] {
+        color: var(--text-primary);
+        border-color: var(--accent-info, #64d2ff);
+        background: rgba(100, 210, 255, 0.12);
+      }
+      .tf-chart-host {
+        display: flex;
         flex: 1;
         min-height: 0;
         min-width: 0;
       }
-      .tf-chart-grid[data-mode="M15"] .tf-chart-panel:not([data-tf="M15"]),
-      .tf-chart-grid[data-mode="M30"] .tf-chart-panel:not([data-tf="M30"]),
-      .tf-chart-grid[data-mode="H1"] .tf-chart-panel:not([data-tf="H1"]),
-      .tf-chart-grid[data-mode="H4"] .tf-chart-panel:not([data-tf="H4"]) { display: none; }
-      .tf-chart-grid[data-mode="M15"],
-      .tf-chart-grid[data-mode="M30"],
-      .tf-chart-grid[data-mode="H1"],
-      .tf-chart-grid[data-mode="H4"] {
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: minmax(0, 1fr);
-      }
       .tf-chart-panel {
         display: flex;
         flex-direction: column;
+        flex: 1;
         min-width: 0;
         min-height: 0;
         border: 1px solid var(--panel-border);
@@ -105,12 +108,6 @@
         color: var(--text-secondary); min-height: 2.2rem;
       }
       #tradeDetailPanel.hidden { display: none; }
-      @media (max-width: 960px) {
-        .tf-chart-grid[data-mode="GRID"] {
-          grid-template-columns: minmax(0, 1fr);
-          grid-template-rows: repeat(4, minmax(180px, 1fr));
-        }
-      }
     </style>
   </head>
   <body class="lifecycle-surface ops-surface">
@@ -118,7 +115,7 @@
       <div id="viewerErrorPanel" class="lifecycle-error-panel hidden" role="alert" aria-live="assertive"></div>
       <header class="lifecycle-status" aria-label="Chart workspace status">
         <div class="lifecycle-status-left">
-          <div class="lifecycle-status-main" id="statusLine">TF chart workspace</div>
+          <div class="lifecycle-status-main" id="statusLine">TF chart · standalone</div>
           <div class="lifecycle-chip-row" id="statusChips" aria-label="Status chips"></div>
         </div>
         <div class="lifecycle-status-center">
@@ -126,16 +123,12 @@
           <span id="sourceLine" class="lifecycle-source-line" hidden>source</span>
         </div>
         <div class="lifecycle-status-right">
-          <label class="lifecycle-range">
-            Charts
-            <select id="timeframeSelect" aria-label="Chart layout mode">
-              <option value="GRID" selected>GRID</option>
-              <option value="M15">M15</option>
-              <option value="M30">M30</option>
-              <option value="H1">H1</option>
-              <option value="H4">H4</option>
-            </select>
-          </label>
+          <nav class="tf-nav" id="tfNav" aria-label="Timeframe pages">
+            <a href="./index.html?tf=M15" data-tf="M15">M15</a>
+            <a href="./index.html?tf=M30" data-tf="M30">M30</a>
+            <a href="./index.html?tf=H1" data-tf="H1">H1</a>
+            <a href="./index.html?tf=H4" data-tf="H4">H4</a>
+          </nav>
           <label class="lifecycle-range">
             History pack
             <select id="rangeSelect" aria-label="Loaded history pack">
@@ -163,66 +156,17 @@
       <main class="lifecycle-main lifecycle-main-split">
         <div class="tf-grid-shell" id="tfGridShell">
           <div class="tf-workspace-toolbar" aria-label="Viewport controls">
-            <button type="button" id="btnResetView" aria-label="Reset viewports">Reset</button>
+            <button type="button" id="btnResetView" aria-label="Reset viewport">Reset</button>
             <button type="button" id="btnFitView" aria-label="Fit loaded history">Fit</button>
             <button type="button" id="btnGoLatest" aria-label="Go to latest">Go to latest</button>
-            <span class="hint">Wheel = zoom · Drag = pan · UTC · No global lifecycle strip</span>
+            <span class="hint">Wheel = zoom · Drag = pan · UTC · Standalone TF · No global lifecycle strip</span>
           </div>
-          <div class="tf-chart-grid" id="tfChartGrid" data-mode="GRID">
-            <section class="tf-chart-panel" data-tf="M15" aria-label="M15 chart">
-              <header class="tf-chart-header" id="header-M15"></header>
-              <div class="tf-chart-nav">
-                <button type="button" data-nav="reset" data-tf="M15">Reset</button>
-                <button type="button" data-nav="fit" data-tf="M15">Fit</button>
-                <button type="button" data-nav="latest" data-tf="M15">Latest</button>
-              </div>
-              <div class="tf-chart-body">
-                <canvas id="chart-M15" class="tf-chart-canvas" data-tf="M15" role="img" aria-label="M15 candlestick chart"></canvas>
-                <div class="tf-chart-empty" id="empty-M15" hidden>SOURCE_UNAVAILABLE</div>
-              </div>
-            </section>
-            <section class="tf-chart-panel" data-tf="M30" aria-label="M30 chart">
-              <header class="tf-chart-header" id="header-M30"></header>
-              <div class="tf-chart-nav">
-                <button type="button" data-nav="reset" data-tf="M30">Reset</button>
-                <button type="button" data-nav="fit" data-tf="M30">Fit</button>
-                <button type="button" data-nav="latest" data-tf="M30">Latest</button>
-              </div>
-              <div class="tf-chart-body">
-                <canvas id="chart-M30" class="tf-chart-canvas" data-tf="M30" role="img" aria-label="M30 candlestick chart"></canvas>
-                <div class="tf-chart-empty" id="empty-M30" hidden>SOURCE_UNAVAILABLE</div>
-              </div>
-            </section>
-            <section class="tf-chart-panel" data-tf="H1" aria-label="H1 chart">
-              <header class="tf-chart-header" id="header-H1"></header>
-              <div class="tf-chart-nav">
-                <button type="button" data-nav="reset" data-tf="H1">Reset</button>
-                <button type="button" data-nav="fit" data-tf="H1">Fit</button>
-                <button type="button" data-nav="latest" data-tf="H1">Latest</button>
-              </div>
-              <div class="tf-chart-body">
-                <canvas id="chart-H1" class="tf-chart-canvas" data-tf="H1" role="img" aria-label="H1 candlestick chart"></canvas>
-                <div class="tf-chart-empty" id="empty-H1" hidden>SOURCE_UNAVAILABLE</div>
-              </div>
-            </section>
-            <section class="tf-chart-panel" data-tf="H4" aria-label="H4 chart">
-              <header class="tf-chart-header" id="header-H4"></header>
-              <div class="tf-chart-nav">
-                <button type="button" data-nav="reset" data-tf="H4">Reset</button>
-                <button type="button" data-nav="fit" data-tf="H4">Fit</button>
-                <button type="button" data-nav="latest" data-tf="H4">Latest</button>
-              </div>
-              <div class="tf-chart-body">
-                <canvas id="chart-H4" class="tf-chart-canvas" data-tf="H4" role="img" aria-label="H4 candlestick chart"></canvas>
-                <div class="tf-chart-empty" id="empty-H4" hidden>SOURCE_UNAVAILABLE</div>
-              </div>
-            </section>
-          </div>
+          <div class="tf-chart-host" id="tfChartHost" data-mode="standalone"></div>
           <div id="tradeDetailPanel" class="hidden" aria-live="polite"></div>
         </div>
         <div id="hoverReadout" class="lifecycle-hover-readout hidden" aria-live="polite"></div>
       </main>
     </div>
-    <script src="./lifecycle_app.js?v=vis3a-workspace"></script>
+    <script src="./lifecycle_app.js?v=vis3c-standalone"></script>
   </body>
 </html>

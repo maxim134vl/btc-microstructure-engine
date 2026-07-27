@@ -1,19 +1,23 @@
 /**
- * VIS3A Chart Workspace: equal 2×2 TF panels, pan/zoom, per-TF context bands,
- * isolated trades, selection, SL/TP off-screen cues. No global lifecycle strip.
- * Visual-only. Cache-busted fetches. Trade identity = trade_id / position_id.
+ * VIS3C Standalone TF charts: one chart per ?tf= URL, historical context bands,
+ * TF-isolated trades, TradingView-style markers with stable TF_N numbers.
+ * Visual-only. Cache-busted fetches. No global lifecycle strip. No GRID DOM.
  */
 
-const TF_STORAGE_KEY = "btcml-context-visual-chart-mode";
-const VALID_MODES = ["GRID", "M15", "M30", "H1", "H4"];
 const TIMEFRAMES = ["M15", "M30", "H1", "H4"];
 const THEME_STORAGE_KEY = "btcml-context-visual-theme";
 const POLL_INTERVAL_MS = 15_000;
 const DEFAULT_VISIBLE = { M15: 144, M30: 96, H1: 96, H4: null };
 
+function parseStandaloneTf() {
+  const params = new URLSearchParams(window.location.search);
+  const raw = (params.get("tf") || "M15").toUpperCase();
+  return TIMEFRAMES.includes(raw) ? raw : "M15";
+}
+
 const state = {
   truth: null,
-  mode: "GRID",
+  activeTf: parseStandaloneTf(),
   range: "latest500",
   charts: {},
   selectedTradeKey: null,
@@ -28,10 +32,14 @@ const truthBanner = document.getElementById("truthBanner");
 const hoverReadout = document.getElementById("hoverReadout");
 const tradeDetailPanel = document.getElementById("tradeDetailPanel");
 const rangeSelect = document.getElementById("rangeSelect");
-const timeframeSelect = document.getElementById("timeframeSelect");
 const themeSelect = document.getElementById("themeSelect");
-const tfChartGrid = document.getElementById("tfChartGrid");
+const tfChartHost = document.getElementById("tfChartHost");
 const errorPanel = document.getElementById("viewerErrorPanel");
+const tfNav = document.getElementById("tfNav");
+
+function activeTimeframes() {
+  return [state.activeTf];
+}
 
 function cssVar(name, fallback) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -90,6 +98,11 @@ function tradeKey(entity) {
   return entity.trade_id || entity.position_id || null;
 }
 
+function publicNumber(entity) {
+  if (!entity) return "";
+  return entity.public_number || entity.display_label || "";
+}
+
 function resolveTheme(mode) {
   if (mode === "light" || mode === "dark") return mode;
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -125,7 +138,7 @@ function candidateTruthCandidates() {
   if (override) return [override];
   return [
     "./data/timeframe_chart_truth.json",
-    "/data/candidate/architecture_recovery/vis3a_functional_chart_workspace/timeframe_chart_truth.json",
+    "/data/candidate/architecture_recovery/vis3c_standalone_tf_charts/timeframe_chart_truth.json",
   ];
 }
 
@@ -162,6 +175,38 @@ function defaultSpan(tf, n) {
   const pref = DEFAULT_VISIBLE[tf];
   if (pref == null) return Math.max(1, n);
   return Math.max(20, Math.min(n, pref));
+}
+
+function mountStandalonePanel(tf) {
+  if (!tfChartHost) return;
+  tfChartHost.innerHTML = "";
+  tfChartHost.dataset.tf = tf;
+  const section = document.createElement("section");
+  section.className = "tf-chart-panel";
+  section.dataset.tf = tf;
+  section.setAttribute("aria-label", `${tf} chart`);
+  section.innerHTML = `
+    <header class="tf-chart-header" id="header-${tf}"></header>
+    <div class="tf-chart-nav">
+      <button type="button" data-nav="reset" data-tf="${tf}">Reset</button>
+      <button type="button" data-nav="fit" data-tf="${tf}">Fit</button>
+      <button type="button" data-nav="latest" data-tf="${tf}">Latest</button>
+    </div>
+    <div class="tf-chart-body">
+      <canvas id="chart-${tf}" class="tf-chart-canvas" data-tf="${tf}" role="img" aria-label="${tf} candlestick chart"></canvas>
+      <div class="tf-chart-empty" id="empty-${tf}" hidden>SOURCE_UNAVAILABLE</div>
+    </div>
+  `;
+  tfChartHost.appendChild(section);
+}
+
+function syncTfNav(tf) {
+  if (!tfNav) return;
+  tfNav.querySelectorAll("a[data-tf]").forEach((a) => {
+    const active = a.getAttribute("data-tf") === tf;
+    if (active) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
 }
 
 function initChartState(tf) {
@@ -258,7 +303,7 @@ function geometry(chart) {
   const canvas = chart.canvas;
   const w = canvas.clientWidth || 100;
   const h = canvas.clientHeight || 100;
-  const pad = { top: 14, right: 10, bottom: 28, left: 54 };
+  const pad = { top: 18, right: 10, bottom: 36, left: 54 };
   const plotW = Math.max(10, w - pad.left - pad.right);
   const plotH = Math.max(10, h - pad.top - pad.bottom);
   const rows = chart.visible;
@@ -272,7 +317,7 @@ function geometry(chart) {
     minP = (minP || 0) - 1;
     maxP = (maxP || 0) + 1;
   }
-  const padP = (maxP - minP) * 0.06;
+  const padP = (maxP - minP) * 0.08;
   minP -= padP;
   maxP += padP;
   const n = Math.max(1, rows.length);
@@ -293,7 +338,7 @@ function geometry(chart) {
       return Math.max(0, Math.min(n - 1, Math.floor(rel * n)));
     },
     inPlotY(y) {
-      return y >= pad.top && y <= pad.top + plotH;
+      return y >= pad.top - 12 && y <= pad.top + plotH + 16;
     },
   };
 }
@@ -317,7 +362,11 @@ function timeIndex(rows, ts) {
 function drawContextBands(chart, tfBlock, g) {
   const ctx = chart.ctx;
   const colors = chartColors();
-  const segments = Array.isArray(tfBlock.context_segments) ? tfBlock.context_segments : [];
+  const segments = Array.isArray(tfBlock.context_segments)
+    ? tfBlock.context_segments
+    : Array.isArray(tfBlock.context_history)
+      ? tfBlock.context_history
+      : [];
   if (!segments.length || !chart.visible.length) return;
   const firstTs = parseTs(chart.visible[0].timestamp);
   const lastTs = parseTs(chart.visible[chart.visible.length - 1].timestamp);
@@ -391,26 +440,45 @@ function drawCandles(chart, tfBlock) {
   return g;
 }
 
-function drawEntryMarker(ctx, x, y, side, selected, colors) {
+/** TradingView-like LONG entry: arrow below candle low. */
+function drawLongEntryMarker(ctx, x, yBelow, label, selected, colors) {
   const size = selected ? 7 : 5;
-  ctx.fillStyle = side === "SHORT" ? colors.negative : colors.tradeEntry;
+  ctx.fillStyle = colors.tradeEntry;
   ctx.beginPath();
-  if (side === "SHORT") {
-    ctx.moveTo(x, y + size);
-    ctx.lineTo(x - size, y - size);
-    ctx.lineTo(x + size, y - size);
-  } else {
-    ctx.moveTo(x, y - size);
-    ctx.lineTo(x - size, y + size);
-    ctx.lineTo(x + size, y + size);
-  }
+  ctx.moveTo(x, yBelow - size);
+  ctx.lineTo(x - size, yBelow + size);
+  ctx.lineTo(x + size, yBelow + size);
   ctx.closePath();
   ctx.fill();
   ctx.strokeStyle = colors.markerStroke;
   ctx.stroke();
+  ctx.fillStyle = selected ? colors.text : colors.tradeEntry;
+  ctx.font = `${selected ? 11 : 10}px ${colors.mono}`;
+  ctx.textAlign = "center";
+  ctx.fillText(`▲ ${label}`, x, yBelow + size + 12);
+  ctx.textAlign = "left";
 }
 
-function drawExitMarker(ctx, x, y, selected, colors) {
+/** TradingView-like SHORT entry: arrow above candle high. */
+function drawShortEntryMarker(ctx, x, yAbove, label, selected, colors) {
+  const size = selected ? 7 : 5;
+  ctx.fillStyle = colors.negative;
+  ctx.beginPath();
+  ctx.moveTo(x, yAbove + size);
+  ctx.lineTo(x - size, yAbove - size);
+  ctx.lineTo(x + size, yAbove - size);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = colors.markerStroke;
+  ctx.stroke();
+  ctx.fillStyle = selected ? colors.text : colors.negative;
+  ctx.font = `${selected ? 11 : 10}px ${colors.mono}`;
+  ctx.textAlign = "center";
+  ctx.fillText(`▼ ${label}`, x, yAbove - size - 4);
+  ctx.textAlign = "left";
+}
+
+function drawExitMarker(ctx, x, y, label, selected, colors) {
   const size = selected ? 6 : 4;
   ctx.strokeStyle = colors.tradeExit;
   ctx.lineWidth = selected ? 2.5 : 2;
@@ -421,6 +489,11 @@ function drawExitMarker(ctx, x, y, selected, colors) {
   ctx.lineTo(x - size, y + size);
   ctx.stroke();
   ctx.lineWidth = 1;
+  ctx.fillStyle = selected ? colors.text : colors.tradeExit;
+  ctx.font = `${selected ? 11 : 10}px ${colors.mono}`;
+  ctx.textAlign = "center";
+  ctx.fillText(`× ${label}`, x, y - size - 4);
+  ctx.textAlign = "left";
 }
 
 function drawOverlays(chart, tfBlock, g) {
@@ -443,9 +516,13 @@ function drawOverlays(chart, tfBlock, g) {
 
   const drawOne = (entity, kind) => {
     const key = tradeKey(entity);
+    const label = publicNumber(entity);
+    if (!label || /[0-9a-f]{8}-[0-9a-f-]{20,}/i.test(label)) {
+      // Refuse to paint raw long IDs on canvas.
+    }
     const isSel = selected && key === selected;
     const dim = selected && !isSel;
-    const alpha = dim ? 0.25 : 1;
+    const alpha = dim ? 0.22 : 1;
     ctx.save();
     ctx.globalAlpha = alpha;
     const iEntry = timeIndex(chart.visible, parseTs(entity.entry_timestamp));
@@ -453,6 +530,8 @@ function drawOverlays(chart, tfBlock, g) {
     const x1 = iEntry == null ? null : g.xAt(iEntry);
     const x2 = iExit == null ? null : g.xAt(iExit);
     const tipX = g.xAt(chart.visible.length - 1);
+    const side = String(entity.side || "LONG").toUpperCase();
+    const entryCandle = iEntry == null ? null : chart.visible[iEntry];
 
     if (kind === "closed" && x1 != null && x2 != null && entity.entry_price != null && entity.exit_price != null) {
       ctx.strokeStyle = isSel ? colors.connector : colors.dim;
@@ -464,18 +543,23 @@ function drawOverlays(chart, tfBlock, g) {
       ctx.lineWidth = 1;
     }
 
-    if (x1 != null && entity.entry_price != null) {
-      const y = g.yAt(entity.entry_price);
-      if (g.inPlotY(y)) {
-        drawEntryMarker(ctx, x1, y, entity.side || "LONG", isSel, colors);
-        chart.hitRegions.push({ key, x: x1, y, entity, kind });
+    if (x1 != null && entryCandle && label) {
+      if (side === "SHORT") {
+        const y = g.yAt(entryCandle.high) - 10;
+        drawShortEntryMarker(ctx, x1, y, label, isSel, colors);
+        chart.hitRegions.push({ key, x: x1, y, entity, kind, role: "entry" });
+      } else {
+        const y = g.yAt(entryCandle.low) + 10;
+        drawLongEntryMarker(ctx, x1, y, label, isSel, colors);
+        chart.hitRegions.push({ key, x: x1, y, entity, kind, role: "entry" });
       }
     }
-    if (kind === "closed" && x2 != null && entity.exit_price != null) {
+
+    if (kind === "closed" && x2 != null && entity.exit_price != null && label) {
       const y = g.yAt(entity.exit_price);
       if (g.inPlotY(y)) {
-        drawExitMarker(ctx, x2, y, isSel, colors);
-        chart.hitRegions.push({ key, x: x2, y, entity, kind });
+        drawExitMarker(ctx, x2, y, label, isSel, colors);
+        chart.hitRegions.push({ key, x: x2, y, entity, kind, role: "exit" });
       }
     }
 
@@ -564,10 +648,12 @@ function renderHeader(tf, tfBlock) {
   const pstatus = st.position_status || "FLAT";
   const bar = contract.latest_confirmed_close || "—";
   const barShort = String(bar).replace(/:\d{2}Z$/, "Z");
+  const segCount = (tfBlock.context_segments || tfBlock.context_history || []).length;
   chart.header.innerHTML = `
     <span class="tf-name">${tf}</span>
     <span class="tf-context">${fmt(st.directional_state)} · ${fmt(st.manager_instruction)}</span>
     <span>${side} · ${pstatus}</span>
+    <span title="Historical TF context segments">${segCount} ctx</span>
     <span title="Latest confirmed bar close (UTC)">bar ${barShort}</span>
     <span>R ${fmtPnl(perf.realised_net_pnl_usd)} / U ${fmtPnl(perf.unrealised_net_pnl_usd ?? perf.unrealised_gross_pnl_usd)}</span>
   `;
@@ -601,6 +687,7 @@ function preserveViewportAcrossReload(chart, nextCandles) {
 
 function renderTfChart(tf) {
   const chart = state.charts[tf];
+  if (!chart) return;
   const tfBlock = (state.truth && state.truth.timeframes && state.truth.timeframes[tf]) || {};
   const candles = selectCandles(tfBlock.candles || [], state.range);
   if (!chart._bootstrapped) {
@@ -628,18 +715,23 @@ function renderTfChart(tf) {
 }
 
 function renderAll() {
-  TIMEFRAMES.forEach(renderTfChart);
+  activeTimeframes().forEach(renderTfChart);
 }
 
 function updateStatus() {
-  if (statusLine) statusLine.textContent = "TF chart workspace · UTC · paper_only";
+  const tf = state.activeTf;
+  if (statusLine) statusLine.textContent = `${tf} standalone · UTC · paper_only`;
   if (statusChips) {
-    statusChips.innerHTML = TIMEFRAMES.map((tf) => {
-      const block = (state.truth.timeframes || {})[tf] || {};
-      const st = block.state || {};
-      const ctx = st.directional_state || "—";
-      return `<span class="lifecycle-chip">${tf}:${ctx}</span>`;
-    }).join("");
+    const block = (state.truth.timeframes || {})[tf] || {};
+    const st = block.state || {};
+    const closed = (block.closed_trades || []).length;
+    const opens = (block.open_positions || []).length;
+    const segs = (block.context_segments || []).length;
+    statusChips.innerHTML = [
+      `<span class="lifecycle-chip">${tf}:${st.directional_state || "—"}</span>`,
+      `<span class="lifecycle-chip">${segs} ctx</span>`,
+      `<span class="lifecycle-chip">${closed} closed / ${opens} open</span>`,
+    ].join("");
   }
   if (refreshLine) refreshLine.textContent = `truth ${state.truth.generated_at || "—"}`;
   if (sourceLine) {
@@ -647,7 +739,7 @@ function updateStatus() {
     sourceLine.textContent = state.truth.__loaded_from || "timeframe_chart_truth";
   }
   if (truthBanner) {
-    truthBanner.textContent = "LIVE PAPER · equal TF workspace · OPS summary deferred (OPS3A)";
+    truthBanner.textContent = "LIVE PAPER · standalone TF · OPS summary deferred (OPS3A)";
   }
 }
 
@@ -658,15 +750,16 @@ function formatTradeDetail(entity, tf) {
       ? `episode ${entity.episode_id}`
       : "episode UNPROVEN";
   return [
-    `<strong>${entity.status || "—"} ${entity.side || ""}</strong>`,
+    `<strong>${publicNumber(entity) || "—"}</strong>`,
+    `${entity.status || "—"} ${entity.side || ""}`,
     `TF ${entity.timeframe || tf}`,
-    `trade ${entity.trade_id || "—"}`,
-    `position ${entity.position_id || "—"}`,
     `entry ${entity.entry_timestamp || "—"} @ ${fmt(entity.entry_price)}`,
     `exit ${entity.exit_timestamp || "—"} @ ${fmt(entity.exit_price)}`,
     `PnL ${fmtPnl(entity.net_realised_pnl_usd)}`,
     `fees ${fmt(entity.fees_usd)} slippage ${fmt(entity.slippage_usd)}`,
     `SL ${fmt(entity.stop_price)} TP ${fmt(entity.take_profit_price)}`,
+    `trade_id ${entity.trade_id || "—"}`,
+    `position_id ${entity.position_id || "—"}`,
     episode,
   ].join(" · ");
 }
@@ -687,7 +780,7 @@ function selectTrade(entity, tf) {
 
 function hitTest(chart, x, y) {
   let best = null;
-  let bestDist = 14;
+  let bestDist = 16;
   (chart.hitRegions || []).forEach((hit) => {
     const d = Math.hypot(hit.x - x, hit.y - y);
     if (d < bestDist) {
@@ -700,7 +793,7 @@ function hitTest(chart, x, y) {
 
 function bindChartInteractions(tf) {
   const chart = state.charts[tf];
-  const canvas = chart.canvas;
+  const canvas = chart && chart.canvas;
   if (!canvas) return;
 
   canvas.addEventListener("pointerdown", (event) => {
@@ -788,32 +881,18 @@ function bindChartInteractions(tf) {
   }, { passive: false });
 }
 
-function setMode(mode) {
-  const next = VALID_MODES.includes(mode) ? mode : "GRID";
-  state.mode = next;
-  if (tfChartGrid) tfChartGrid.dataset.mode = next;
-  if (timeframeSelect) timeframeSelect.value = next;
-  try {
-    localStorage.setItem(TF_STORAGE_KEY, next);
-  } catch (_e) {
-    /* ignore */
-  }
-  // Preserve per-TF viewports; only re-layout + redraw.
-  requestAnimationFrame(() => renderAll());
-}
-
 function resetAllViewports() {
-  TIMEFRAMES.forEach((tf) => setDefaultViewport(state.charts[tf]));
+  activeTimeframes().forEach((tf) => setDefaultViewport(state.charts[tf]));
   renderAll();
 }
 
 function fitAllViewports() {
-  TIMEFRAMES.forEach((tf) => fitViewport(state.charts[tf]));
+  activeTimeframes().forEach((tf) => fitViewport(state.charts[tf]));
   renderAll();
 }
 
 function latestAllViewports() {
-  TIMEFRAMES.forEach((tf) => goLatest(state.charts[tf]));
+  activeTimeframes().forEach((tf) => goLatest(state.charts[tf]));
   renderAll();
 }
 
@@ -829,30 +908,21 @@ async function refresh() {
 }
 
 function boot() {
-  TIMEFRAMES.forEach(initChartState);
-  TIMEFRAMES.forEach(bindChartInteractions);
-
-  let savedMode = "GRID";
-  try {
-    savedMode = localStorage.getItem(TF_STORAGE_KEY) || "GRID";
-  } catch (_e) {
-    savedMode = "GRID";
-  }
-  if (savedMode === "ALL") savedMode = "GRID";
-  setMode(savedMode);
+  const tf = state.activeTf;
+  mountStandalonePanel(tf);
+  syncTfNav(tf);
+  initChartState(tf);
+  bindChartInteractions(tf);
 
   if (rangeSelect) {
     rangeSelect.addEventListener("change", () => {
       state.range = rangeSelect.value;
-      TIMEFRAMES.forEach((tf) => {
-        const chart = state.charts[tf];
-        chart._bootstrapped = false;
+      activeTimeframes().forEach((t) => {
+        const chart = state.charts[t];
+        if (chart) chart._bootstrapped = false;
       });
       renderAll();
     });
-  }
-  if (timeframeSelect) {
-    timeframeSelect.addEventListener("change", () => setMode(timeframeSelect.value));
   }
   if (themeSelect) {
     let theme = "system";
@@ -874,14 +944,14 @@ function boot() {
   document.getElementById("btnGoLatest")?.addEventListener("click", latestAllViewports);
   document.querySelectorAll(".tf-chart-nav button").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const tf = btn.getAttribute("data-tf");
+      const navTf = btn.getAttribute("data-tf");
       const nav = btn.getAttribute("data-nav");
-      const chart = state.charts[tf];
+      const chart = state.charts[navTf];
       if (!chart) return;
       if (nav === "reset") setDefaultViewport(chart);
       if (nav === "fit") fitViewport(chart);
       if (nav === "latest") goLatest(chart);
-      renderTfChart(tf);
+      renderTfChart(navTf);
     });
   });
 
@@ -892,26 +962,33 @@ function boot() {
 
 boot();
 
-window.__VIS3A__ = {
-  VALID_MODES,
+window.__VIS3C__ = {
   TIMEFRAMES,
   DEFAULT_VISIBLE,
   getState: () => state,
+  activeTf: () => state.activeTf,
+  activeTimeframes,
+  parseStandaloneTf,
+  mountStandalonePanel,
   setDefaultViewport,
   fitViewport,
   goLatest,
   applyVisibleWindow,
   preserveViewportAcrossReload,
+  publicNumber,
   hasGlobalStrip: () => Boolean(document.querySelector("[data-global-lifecycle-strip]")),
   hasPnlPanel: () => Boolean(document.getElementById("paperPnlBlock") || document.getElementById("paperPnlPanel")),
   hasMetricsPanel: () => Boolean(document.getElementById("modelMetricsBlock") || document.getElementById("modelMetricsPanel")),
-  chartCanvases: () => TIMEFRAMES.map((tf) => document.getElementById(`chart-${tf}`)),
-  equalGridCss: () => {
-    if (!tfChartGrid) return false;
-    const cs = getComputedStyle(tfChartGrid);
-    return cs.display === "grid" && /minmax\(0,\s*1fr\)/.test(cs.gridTemplateColumns.replace(/\s+/g, ""));
+  chartCanvases: () => activeTimeframes().map((tf) => document.getElementById(`chart-${tf}`)),
+  chartPanelsInDom: () => Array.from(document.querySelectorAll(".tf-chart-panel")).map((el) => el.getAttribute("data-tf")),
+  foreignChartsInDom: () => {
+    const active = state.activeTf;
+    return Array.from(document.querySelectorAll(".tf-chart-panel, canvas.tf-chart-canvas"))
+      .map((el) => el.getAttribute("data-tf"))
+      .filter((t) => t && t !== active);
   },
 };
 
-// Back-compat read-only hook used by older audits
-window.__VIS2B__ = window.__VIS3A__;
+// Back-compat read-only hooks used by older audits
+window.__VIS3A__ = window.__VIS3C__;
+window.__VIS2B__ = window.__VIS3C__;

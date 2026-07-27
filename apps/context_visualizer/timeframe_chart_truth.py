@@ -36,7 +36,7 @@ from multi_timeframe_availability import (  # noqa: E402
     build_completed_bars,
 )
 
-SCHEMA_VERSION = "timeframe_chart_truth_v2"
+SCHEMA_VERSION = "timeframe_chart_truth_v3"
 TIMEFRAMES = ("M15", "M30", "H1", "H4")
 DEFAULT_WINDOW_DAYS = 7
 COMMAND_MEMORY = ROOT / "data" / "trading" / "manager" / "timeframe_command_memory.parquet"
@@ -54,7 +54,7 @@ CANDIDATE_DIR = (
     / "data"
     / "candidate"
     / "architecture_recovery"
-    / "vis3a_functional_chart_workspace"
+    / "vis3c_standalone_tf_charts"
 )
 
 
@@ -592,7 +592,10 @@ def load_closed_trades_for_tf(
                 "net_realised_pnl_usd": _f(raw.get("net_pnl_usd")),
                 "fees_usd": _f(raw.get("fees_usd")),
                 "slippage_usd": _f(raw.get("slippage_usd")),
-                "display_label": f"{timeframe} · {_short_id(trade_id)}",
+                "display_label": None,  # filled by assign_tf_ordinals
+                "public_number": None,
+                "ordinal": None,
+                "created_at": _iso(raw.get("created_at") or raw.get("entry_ts")),
                 "manager_cycle_id": _txt(meta.get("manager_cycle_id")),
                 "command_id": _txt(raw.get("command_id") or meta.get("command_id")),
                 "stamped_lifecycle_episode_id": stamped,
@@ -600,7 +603,7 @@ def load_closed_trades_for_tf(
                 "source_book": f"TIMEFRAME_TRADER_{timeframe}",
             }
         )
-    rows.sort(key=lambda r: (r.get("exit_timestamp") or "", r.get("trade_id") or ""))
+    rows.sort(key=lambda r: (r.get("entry_timestamp") or "", r.get("trade_id") or ""))
     return rows
 
 
@@ -655,7 +658,10 @@ def load_open_positions_for_tf(
                 "stop_price": stop,
                 "take_profit_price": take,
                 "quantity": _f(raw.get("quantity") or meta.get("quantity_btc")),
-                "display_label": f"{timeframe} · {_short_id(position_id)}",
+                "display_label": None,  # filled by assign_tf_ordinals
+                "public_number": None,
+                "ordinal": None,
+                "created_at": _iso(raw.get("created_at") or raw.get("opened_at") or entry_ts),
                 "manager_cycle_id": _txt(meta.get("manager_cycle_id")),
                 "command_id": _txt(raw.get("command_id") or meta.get("command_id")),
                 "stamped_lifecycle_episode_id": stamped,
@@ -665,6 +671,46 @@ def load_open_positions_for_tf(
         )
     rows.sort(key=lambda r: (r.get("entry_timestamp") or "", r.get("position_id") or ""))
     return rows
+
+
+def assign_tf_ordinals(
+    timeframe: str,
+    *,
+    closed_trades: list[dict[str, Any]],
+    open_positions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Stable per-TF public numbers: M15_1, M15_2, ...
+
+    Order: entry_timestamp asc → created_at asc → trade_id/position_id tie-break.
+    Open and closed share one ordinal space so open→closed keeps the same number.
+    """
+    entities: list[dict[str, Any]] = []
+    for row in closed_trades:
+        entities.append(row)
+    for row in open_positions:
+        entities.append(row)
+
+    def _sort_key(entity: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            entity.get("entry_timestamp") or "",
+            entity.get("created_at") or entity.get("entry_timestamp") or "",
+            entity.get("trade_id") or entity.get("position_id") or "",
+        )
+
+    entities.sort(key=_sort_key)
+    mapping: dict[str, str] = {}
+    for idx, entity in enumerate(entities, start=1):
+        public = f"{timeframe}_{idx}"
+        entity["ordinal"] = idx
+        entity["public_number"] = public
+        entity["display_label"] = public
+        key = entity.get("trade_id") or entity.get("position_id") or public
+        mapping[str(key)] = public
+    return {
+        "timeframe": timeframe,
+        "count": len(entities),
+        "mapping": mapping,
+    }
 
 
 def build_global_lifecycle(
@@ -864,6 +910,7 @@ def build_timeframe_chart_truth(
         state = load_tf_state(tf)
         closed = load_closed_trades_for_tf(tf, episode_by_id=episode_by_id)
         opens = load_open_positions_for_tf(tf, episode_by_id=episode_by_id)
+        number_map = assign_tf_ordinals(tf, closed_trades=closed, open_positions=opens)
         contaminants = assert_entities_tf_isolated(closed + opens, timeframe=tf)
         panel_status = "OK"
         if contaminants:
@@ -914,9 +961,11 @@ def build_timeframe_chart_truth(
             "candles": candle_block.get("candles") or [],
             "state": state,
             "context_segments": context_segments,
+            "context_history": context_segments,
             "context_source": "timeframe_command_memory",
             "open_positions": opens if panel_status == "OK" else [],
             "closed_trades": closed if panel_status == "OK" else [],
+            "trade_numbering": number_map,
             "panel_status": panel_status,
             "contamination": contaminants,
             "performance": perf.get(tf) or {},
@@ -937,7 +986,9 @@ def build_timeframe_chart_truth(
         "visual_contract": {
             "global_lifecycle_strip": False,
             "per_tf_context_bands": True,
-            "equal_grid": True,
+            "equal_grid": False,
+            "standalone_tf_urls": True,
+            "trade_public_numbers": True,
             "timezone": "UTC",
         },
         "timeframes": timeframes,
