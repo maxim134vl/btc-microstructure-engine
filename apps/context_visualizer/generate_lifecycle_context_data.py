@@ -483,7 +483,9 @@ def write_json(path: Path, payload: Any) -> None:
     with tmp.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
-    tmp.replace(path)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
     # Patch 1: read-model metadata sidecar only.
     try:
         if path.name == "lifecycle_latest.json":
@@ -499,6 +501,32 @@ def write_json(path: Path, payload: Any) -> None:
             )
     except Exception:
         pass
+
+
+def emit_timeframe_chart_truth_if_enabled() -> Path | None:
+    """VIS2B/VIS2C hook: atomic timeframe_chart_truth write when explicitly enabled.
+
+    Default OFF so live refresher does not write the new payload during VIS2B.
+    Enable later with ENABLE_TIMEFRAME_CHART_TRUTH=1 or TIMEFRAME_CHART_TRUTH_OUT=<path>.
+    """
+    explicit = (os.environ.get("TIMEFRAME_CHART_TRUTH_OUT") or "").strip()
+    enabled = (os.environ.get("ENABLE_TIMEFRAME_CHART_TRUTH") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not explicit and not enabled:
+        return None
+    try:
+        from timeframe_chart_truth import PUBLIC_CHART_TRUTH, write_timeframe_chart_truth
+    except Exception as exc:  # pragma: no cover - optional path
+        print(f"WARN: timeframe_chart_truth unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+    target = Path(explicit) if explicit else PUBLIC_CHART_TRUTH
+    write_timeframe_chart_truth(target)
+    print(f"timeframe_chart_truth written: {target}")
+    return target
 
 
 def main() -> int:
@@ -583,6 +611,7 @@ def main() -> int:
     print(f"output episodes: {EPISODES_OUT}")
     print(f"output latest: {LATEST_OUT}")
     print(f"output uncertainty: {UNCERTAINTY_OUT}")
+    emit_timeframe_chart_truth_if_enabled()
     return 0
 
 

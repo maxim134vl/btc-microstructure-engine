@@ -22,6 +22,71 @@
     </script>
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./lifecycle.css?v=ops-style-polish" />
+    <style>
+      /* VIS2B: four native TF charts + singular global strip */
+      .tf-grid-shell { display: flex; flex-direction: column; gap: 10px; width: 100%; min-height: 0; flex: 1; }
+      #globalLifecycleStrip {
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius-md);
+        background: var(--panel-bg);
+        padding: 8px 10px;
+        min-height: 56px;
+      }
+      #globalLifecycleStrip canvas { width: 100%; height: 44px; display: block; }
+      .tf-chart-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
+        gap: 10px;
+        flex: 1;
+        min-height: 0;
+      }
+      .tf-chart-grid[data-mode="M15"] .tf-chart-panel:not([data-tf="M15"]),
+      .tf-chart-grid[data-mode="M30"] .tf-chart-panel:not([data-tf="M30"]),
+      .tf-chart-grid[data-mode="H1"] .tf-chart-panel:not([data-tf="H1"]),
+      .tf-chart-grid[data-mode="H4"] .tf-chart-panel:not([data-tf="H4"]) { display: none; }
+      .tf-chart-grid[data-mode="M15"],
+      .tf-chart-grid[data-mode="M30"],
+      .tf-chart-grid[data-mode="H1"],
+      .tf-chart-grid[data-mode="H4"] {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+      }
+      .tf-chart-panel {
+        display: flex;
+        flex-direction: column;
+        min-height: 220px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius-md);
+        background: var(--chart-bg);
+        overflow: hidden;
+      }
+      .tf-chart-header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        align-items: baseline;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--panel-border);
+        font-size: var(--font-sm);
+        color: var(--text-secondary);
+      }
+      .tf-chart-header .tf-name { color: var(--text-primary); font-weight: 600; letter-spacing: 0.02em; }
+      .tf-chart-body { position: relative; flex: 1; min-height: 180px; }
+      .tf-chart-body canvas { width: 100%; height: 100%; display: block; }
+      .tf-chart-empty {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: var(--text-muted); font-size: var(--font-sm); pointer-events: none;
+      }
+      .lifecycle-main-split { grid-template-columns: 1fr; }
+      .lifecycle-side { display: none !important; }
+      @media (max-width: 960px) {
+        .tf-chart-grid[data-mode="GRID"] {
+          grid-template-columns: 1fr;
+          grid-template-rows: repeat(4, minmax(220px, 1fr));
+        }
+      }
+    </style>
   </head>
   <body class="lifecycle-surface ops-surface">
     <div class="lifecycle-shell" id="viewerRoot">
@@ -37,9 +102,9 @@
         </div>
         <div class="lifecycle-status-right">
           <label class="lifecycle-range">
-            Timeframe
-            <select id="timeframeSelect" aria-label="Paper trading timeframe">
-              <option value="ALL" selected>ALL</option>
+            Charts
+            <select id="timeframeSelect" aria-label="Chart layout mode">
+              <option value="GRID" selected>GRID</option>
               <option value="M15">M15</option>
               <option value="M30">M30</option>
               <option value="H1">H1</option>
@@ -66,53 +131,49 @@
               <option value="light">Light</option>
             </select>
           </label>
-          <button type="button" id="sidebarToggle" class="lifecycle-btn lifecycle-sidebar-toggle" aria-expanded="true">
-            Panels
-          </button>
           <a class="lifecycle-debug-link" href="./debug.html">Debug</a>
         </div>
       </header>
 
       <main class="lifecycle-main lifecycle-main-split">
-        <div class="lifecycle-chart-wrap">
-          <canvas id="lifecycleCanvas"></canvas>
-          <div id="latestTradeBadge" class="latest-trade-badge" aria-live="polite" hidden></div>
-          <div id="hoverReadout" class="lifecycle-hover-readout hidden" aria-live="polite"></div>
+        <div class="tf-grid-shell" id="tfGridShell">
+          <section id="globalLifecycleStrip" aria-label="Global lifecycle strip">
+            <canvas id="globalLifecycleCanvas" height="44"></canvas>
+          </section>
+          <div class="tf-chart-grid" id="tfChartGrid" data-mode="GRID">
+            <section class="tf-chart-panel" data-tf="M15" aria-label="M15 chart">
+              <header class="tf-chart-header" id="header-M15"></header>
+              <div class="tf-chart-body">
+                <canvas id="chart-M15" class="tf-chart-canvas" data-tf="M15"></canvas>
+                <div class="tf-chart-empty" id="empty-M15" hidden>SOURCE_UNAVAILABLE</div>
+              </div>
+            </section>
+            <section class="tf-chart-panel" data-tf="M30" aria-label="M30 chart">
+              <header class="tf-chart-header" id="header-M30"></header>
+              <div class="tf-chart-body">
+                <canvas id="chart-M30" class="tf-chart-canvas" data-tf="M30"></canvas>
+                <div class="tf-chart-empty" id="empty-M30" hidden>SOURCE_UNAVAILABLE</div>
+              </div>
+            </section>
+            <section class="tf-chart-panel" data-tf="H1" aria-label="H1 chart">
+              <header class="tf-chart-header" id="header-H1"></header>
+              <div class="tf-chart-body">
+                <canvas id="chart-H1" class="tf-chart-canvas" data-tf="H1"></canvas>
+                <div class="tf-chart-empty" id="empty-H1" hidden>SOURCE_UNAVAILABLE</div>
+              </div>
+            </section>
+            <section class="tf-chart-panel" data-tf="H4" aria-label="H4 chart">
+              <header class="tf-chart-header" id="header-H4"></header>
+              <div class="tf-chart-body">
+                <canvas id="chart-H4" class="tf-chart-canvas" data-tf="H4"></canvas>
+                <div class="tf-chart-empty" id="empty-H4" hidden>SOURCE_UNAVAILABLE</div>
+              </div>
+            </section>
+          </div>
         </div>
-        <aside class="lifecycle-side" id="lifecycleSide" aria-label="Paper trade metrics">
-          <div class="lifecycle-dev-panels" hidden aria-hidden="true">
-            <div class="lifecycle-side-block" id="inspectorBlock" hidden>
-              <h2>Inspector</h2>
-              <div id="inspectorPanel" class="lifecycle-card-body">
-                <p class="lifecycle-empty">Click an entry/exit marker or trade shape.</p>
-              </div>
-            </div>
-            <div class="lifecycle-side-block" id="controllerActionsBlock" hidden>
-              <h2>Controller actions</h2>
-              <div id="controllerTimeline" class="lifecycle-timeline lifecycle-card-body"></div>
-            </div>
-            <div class="lifecycle-side-block" id="paperTradeResultBlock" hidden>
-              <h2>Paper trade result</h2>
-              <div id="paperTradeResultPanel" class="lifecycle-card-body">
-                <p class="lifecycle-empty">No closed paper trade yet.</p>
-              </div>
-            </div>
-          </div>
-          <div class="lifecycle-side-block" id="paperPnlBlock" data-main-container="true">
-            <h2>Detailed PnL</h2>
-            <div id="paperPnlPanel" class="lifecycle-card-body">
-              <p class="lifecycle-empty">Loading…</p>
-            </div>
-          </div>
-          <div class="lifecycle-side-block" id="modelMetricsBlock" data-main-container="true">
-            <h2>Trading Model Evaluation Metrics</h2>
-            <div id="modelMetricsPanel" class="lifecycle-card-body">
-              <p class="lifecycle-empty">Loading…</p>
-            </div>
-          </div>
-        </aside>
+        <div id="hoverReadout" class="lifecycle-hover-readout hidden" aria-live="polite"></div>
       </main>
     </div>
-    <script src="./lifecycle_app.js?v=ops-style-polish"></script>
+    <script src="./lifecycle_app.js?v=vis2b-four-tf"></script>
   </body>
 </html>
