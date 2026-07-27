@@ -1,6 +1,6 @@
 /**
- * VIS3C Standalone TF charts: one chart per ?tf= URL, historical context bands,
- * TF-isolated trades, TradingView-style markers with stable TF_N numbers.
+ * VIS3C + trade-render fix: standalone ?tf= charts, stable TF_N numbers,
+ * TradingView Long/Short position zones (Entry/SL/TP), visible TF context bands.
  * Visual-only. Cache-busted fetches. No global lifecycle strip. No GRID DOM.
  */
 
@@ -54,15 +54,19 @@ function chartColors() {
     info: cssVar("--accent-info", "#64d2ff"),
     grid: cssVar("--chart-grid", "rgba(255,255,255,0.045)"),
     axis: cssVar("--chart-axis", "#6e7380"),
-    longZone: cssVar("--long-zone", "rgba(48, 209, 88, 0.14)"),
-    shortZone: cssVar("--short-zone", "rgba(255, 69, 58, 0.14)"),
-    observeZone: "rgba(100, 210, 255, 0.08)",
+    longZone: cssVar("--long-zone", "rgba(48, 209, 88, 0.22)"),
+    shortZone: cssVar("--short-zone", "rgba(255, 69, 58, 0.20)"),
+    observeZone: "rgba(100, 210, 255, 0.16)",
     connector: cssVar("--connector", "rgba(255, 214, 10, 0.7)"),
     markerStroke: cssVar("--marker-stroke", "rgba(255,255,255,0.65)"),
     tradeEntry: cssVar("--trade-entry-color", "#0a84ff"),
     tradeExit: cssVar("--trade-exit-color", "#ff9f0a"),
     tradeStop: cssVar("--trade-stop-color", "#ff453a"),
     tradeTake: cssVar("--trade-take-color", "#30d158"),
+    riskFill: "rgba(255, 69, 58, 0.18)",
+    riskFillSel: "rgba(255, 69, 58, 0.32)",
+    rewardFill: "rgba(48, 209, 88, 0.18)",
+    rewardFillSel: "rgba(48, 209, 88, 0.32)",
     muted: cssVar("--text-muted", "#6e7380"),
     text: cssVar("--text-primary", "#f5f5f7"),
     mono: cssVar("--font-mono", "ui-monospace, SF Mono, Menlo, monospace"),
@@ -98,9 +102,66 @@ function tradeKey(entity) {
   return entity.trade_id || entity.position_id || null;
 }
 
-function publicNumber(entity) {
+function isStableTfNumber(label, tf) {
+  if (!label || !tf) return false;
+  return new RegExp(`^${String(tf).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}_\\d+$`).test(String(label));
+}
+
+/** Never paint hex / UUID / "M15 · e3ee3129" on the canvas. */
+function publicNumber(entity, tf) {
   if (!entity) return "";
-  return entity.public_number || entity.display_label || "";
+  const tfName = tf || entity.timeframe || state.activeTf;
+  for (const candidate of [entity.public_number, entity.display_label]) {
+    if (isStableTfNumber(candidate, tfName)) return String(candidate);
+  }
+  return "";
+}
+
+function fmtPrice(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/**
+ * Stable TF_N when payload still has legacy display_label (e.g. live v2).
+ * Same order as adapter assign_tf_ordinals: entry → created_at → id.
+ */
+function ensureTfOrdinals(tf, tfBlock) {
+  if (!tfBlock) return;
+  const closed = Array.isArray(tfBlock.closed_trades) ? tfBlock.closed_trades : [];
+  const opens = Array.isArray(tfBlock.open_positions) ? tfBlock.open_positions : [];
+  const entities = closed.concat(opens);
+  if (!entities.length) return;
+  if (entities.every((e) => isStableTfNumber(e.public_number, tf))) return;
+  const sorted = entities.slice().sort((a, b) => {
+    const ka = [
+      a.entry_timestamp || "",
+      a.created_at || a.entry_timestamp || "",
+      a.trade_id || a.position_id || "",
+    ].join("\0");
+    const kb = [
+      b.entry_timestamp || "",
+      b.created_at || b.entry_timestamp || "",
+      b.trade_id || b.position_id || "",
+    ].join("\0");
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return 0;
+  });
+  sorted.forEach((entity, idx) => {
+    const label = `${tf}_${idx + 1}`;
+    entity.ordinal = idx + 1;
+    entity.public_number = label;
+    entity.display_label = label;
+  });
+}
+
+function finitePrice(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function resolveTheme(mode) {
@@ -138,6 +199,7 @@ function candidateTruthCandidates() {
   if (override) return [override];
   return [
     "./data/timeframe_chart_truth.json",
+    "/data/candidate/architecture_recovery/vis_trade_render_context_fix/timeframe_chart_truth.json",
     "/data/candidate/architecture_recovery/vis3c_standalone_tf_charts/timeframe_chart_truth.json",
   ];
 }
@@ -299,7 +361,7 @@ function goLatest(chart) {
   applyVisibleWindow(chart);
 }
 
-function geometry(chart) {
+function geometry(chart, priceExtras) {
   const canvas = chart.canvas;
   const w = canvas.clientWidth || 100;
   const h = canvas.clientHeight || 100;
@@ -312,6 +374,12 @@ function geometry(chart) {
   rows.forEach((c) => {
     minP = Math.min(minP, c.low, c.open, c.close);
     maxP = Math.max(maxP, c.high, c.open, c.close);
+  });
+  (priceExtras || []).forEach((p) => {
+    const n = finitePrice(p);
+    if (n == null) return;
+    minP = Math.min(minP, n);
+    maxP = Math.max(maxP, n);
   });
   if (!Number.isFinite(minP) || !Number.isFinite(maxP) || minP === maxP) {
     minP = (minP || 0) - 1;
@@ -341,6 +409,16 @@ function geometry(chart) {
       return y >= pad.top - 12 && y <= pad.top + plotH + 16;
     },
   };
+}
+
+function collectVisiblePriceExtras(chart, tfBlock) {
+  const extras = [];
+  const entities = (tfBlock.open_positions || []).concat(tfBlock.closed_trades || []);
+  entities.forEach((e) => {
+    if ((e.timeframe || chart.tf) !== chart.tf) return;
+    extras.push(e.entry_price, e.exit_price, e.stop_price, e.take_profit_price);
+  });
+  return extras;
 }
 
 function timeIndex(rows, ts) {
@@ -381,12 +459,24 @@ function drawContextBands(chart, tfBlock, g) {
     if (i0 == null || i1 == null) return;
     const x1 = g.xAt(Math.min(i0, i1)) - (g.plotW / chart.visible.length) * 0.5;
     const x2 = g.xAt(Math.max(i0, i1)) + (g.plotW / chart.visible.length) * 0.5;
+    const width = Math.max(2, x2 - x1);
     const name = String(seg.directional_state || "").toUpperCase();
     let fill = colors.observeZone;
-    if (name.includes("LONG")) fill = colors.longZone;
-    if (name.includes("SHORT")) fill = colors.shortZone;
+    let accent = colors.info;
+    if (name.includes("LONG")) {
+      fill = colors.longZone;
+      accent = colors.positive;
+    }
+    if (name.includes("SHORT")) {
+      fill = colors.shortZone;
+      accent = colors.negative;
+    }
     ctx.fillStyle = fill;
-    ctx.fillRect(x1, g.pad.top, Math.max(2, x2 - x1), g.plotH);
+    ctx.fillRect(x1, g.pad.top, width, g.plotH);
+    ctx.fillStyle = accent;
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(x1, g.pad.top, width, 3);
+    ctx.globalAlpha = 1;
   });
 }
 
@@ -400,7 +490,7 @@ function drawCandles(chart, tfBlock) {
   ctx.clearRect(0, 0, w, h);
   const rows = chart.visible;
   if (!rows.length) return;
-  const g = geometry(chart);
+  const g = geometry(chart, collectVisiblePriceExtras(chart, tfBlock));
   drawContextBands(chart, tfBlock, g);
   ctx.strokeStyle = colors.grid;
   ctx.lineWidth = 1;
@@ -440,7 +530,6 @@ function drawCandles(chart, tfBlock) {
   return g;
 }
 
-/** TradingView-like LONG entry: arrow below candle low. */
 function drawLongEntryMarker(ctx, x, yBelow, label, selected, colors) {
   const size = selected ? 7 : 5;
   ctx.fillStyle = colors.tradeEntry;
@@ -452,14 +541,8 @@ function drawLongEntryMarker(ctx, x, yBelow, label, selected, colors) {
   ctx.fill();
   ctx.strokeStyle = colors.markerStroke;
   ctx.stroke();
-  ctx.fillStyle = selected ? colors.text : colors.tradeEntry;
-  ctx.font = `${selected ? 11 : 10}px ${colors.mono}`;
-  ctx.textAlign = "center";
-  ctx.fillText(`▲ ${label}`, x, yBelow + size + 12);
-  ctx.textAlign = "left";
 }
 
-/** TradingView-like SHORT entry: arrow above candle high. */
 function drawShortEntryMarker(ctx, x, yAbove, label, selected, colors) {
   const size = selected ? 7 : 5;
   ctx.fillStyle = colors.negative;
@@ -471,11 +554,6 @@ function drawShortEntryMarker(ctx, x, yAbove, label, selected, colors) {
   ctx.fill();
   ctx.strokeStyle = colors.markerStroke;
   ctx.stroke();
-  ctx.fillStyle = selected ? colors.text : colors.negative;
-  ctx.font = `${selected ? 11 : 10}px ${colors.mono}`;
-  ctx.textAlign = "center";
-  ctx.fillText(`▼ ${label}`, x, yAbove - size - 4);
-  ctx.textAlign = "left";
 }
 
 function drawExitMarker(ctx, x, y, label, selected, colors) {
@@ -489,11 +567,13 @@ function drawExitMarker(ctx, x, y, label, selected, colors) {
   ctx.lineTo(x - size, y + size);
   ctx.stroke();
   ctx.lineWidth = 1;
-  ctx.fillStyle = selected ? colors.text : colors.tradeExit;
-  ctx.font = `${selected ? 11 : 10}px ${colors.mono}`;
-  ctx.textAlign = "center";
-  ctx.fillText(`× ${label}`, x, y - size - 4);
-  ctx.textAlign = "left";
+}
+
+function drawZoneRect(ctx, x1, x2, yA, yB, fill) {
+  const top = Math.min(yA, yB);
+  const height = Math.max(1, Math.abs(yB - yA));
+  ctx.fillStyle = fill;
+  ctx.fillRect(x1, top, Math.max(2, x2 - x1), height);
 }
 
 function drawOverlays(chart, tfBlock, g) {
@@ -512,130 +592,138 @@ function drawOverlays(chart, tfBlock, g) {
   const opens = (tfBlock.open_positions || []).filter((p) => (p.timeframe || chart.tf) === chart.tf);
   const closed = (tfBlock.closed_trades || []).filter((t) => (t.timeframe || chart.tf) === chart.tf);
   const selected = state.selectedTradeKey;
-  const offscreen = { tpAbove: null, slBelow: null, tpBelow: null, slAbove: null };
 
-  const drawOne = (entity, kind) => {
-    const key = tradeKey(entity);
-    const label = publicNumber(entity);
-    if (!label || /[0-9a-f]{8}-[0-9a-f-]{20,}/i.test(label)) {
-      // Refuse to paint raw long IDs on canvas.
+  const rows = [];
+  closed.forEach((entity) => rows.push({ entity, kind: "closed" }));
+  opens.forEach((entity) => rows.push({ entity, kind: "open" }));
+  rows.sort((a, b) => {
+    const aSel = tradeKey(a.entity) === selected ? 1 : 0;
+    const bSel = tradeKey(b.entity) === selected ? 1 : 0;
+    const aOpen = a.kind === "open" ? 1 : 0;
+    const bOpen = b.kind === "open" ? 1 : 0;
+    return aSel - bSel || aOpen - bOpen;
+  });
+
+  const labelSlots = [];
+  const placeLabel = (x, yPreferred, text, color, selectedLabel) => {
+    let y = yPreferred;
+    let guard = 0;
+    while (guard < 8 && labelSlots.some((s) => Math.abs(s.x - x) < 56 && Math.abs(s.y - y) < 12)) {
+      y += 12;
+      guard += 1;
     }
-    const isSel = selected && key === selected;
-    const dim = selected && !isSel;
-    const alpha = dim ? 0.22 : 1;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    const iEntry = timeIndex(chart.visible, parseTs(entity.entry_timestamp));
-    const iExit = kind === "closed" ? timeIndex(chart.visible, parseTs(entity.exit_timestamp)) : null;
-    const x1 = iEntry == null ? null : g.xAt(iEntry);
-    const x2 = iExit == null ? null : g.xAt(iExit);
-    const tipX = g.xAt(chart.visible.length - 1);
-    const side = String(entity.side || "LONG").toUpperCase();
-    const entryCandle = iEntry == null ? null : chart.visible[iEntry];
-
-    if (kind === "closed" && x1 != null && x2 != null && entity.entry_price != null && entity.exit_price != null) {
-      ctx.strokeStyle = isSel ? colors.connector : colors.dim;
-      ctx.lineWidth = isSel ? 2 : 1;
-      ctx.beginPath();
-      ctx.moveTo(x1, g.yAt(entity.entry_price));
-      ctx.lineTo(x2, g.yAt(entity.exit_price));
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    }
-
-    if (x1 != null && entryCandle && label) {
-      if (side === "SHORT") {
-        const y = g.yAt(entryCandle.high) - 10;
-        drawShortEntryMarker(ctx, x1, y, label, isSel, colors);
-        chart.hitRegions.push({ key, x: x1, y, entity, kind, role: "entry" });
-      } else {
-        const y = g.yAt(entryCandle.low) + 10;
-        drawLongEntryMarker(ctx, x1, y, label, isSel, colors);
-        chart.hitRegions.push({ key, x: x1, y, entity, kind, role: "entry" });
-      }
-    }
-
-    if (kind === "closed" && x2 != null && entity.exit_price != null && label) {
-      const y = g.yAt(entity.exit_price);
-      if (g.inPlotY(y)) {
-        drawExitMarker(ctx, x2, y, label, isSel, colors);
-        chart.hitRegions.push({ key, x: x2, y, entity, kind, role: "exit" });
-      }
-    }
-
-    if (kind === "open" && x1 != null && entity.entry_price != null) {
-      const yEntry = g.yAt(entity.entry_price);
-      ctx.strokeStyle = colors.tradeEntry;
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      ctx.moveTo(x1, yEntry);
-      ctx.lineTo(tipX, yEntry);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = colors.text;
-      ctx.font = `10px ${colors.mono}`;
-      if (isSel || !selected) ctx.fillText("OPEN", tipX - 34, yEntry - 6);
-
-      if (entity.stop_price != null) {
-        const y = g.yAt(entity.stop_price);
-        if (g.inPlotY(y)) {
-          ctx.strokeStyle = colors.tradeStop;
-          ctx.setLineDash([3, 3]);
-          ctx.beginPath();
-          ctx.moveTo(x1, y);
-          ctx.lineTo(tipX, y);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.fillStyle = colors.tradeStop;
-          ctx.fillText("SL", tipX - 18, y - 4);
-        } else if (entity.stop_price < g.minP) {
-          offscreen.slBelow = entity.stop_price;
-        } else if (entity.stop_price > g.maxP) {
-          offscreen.slAbove = entity.stop_price;
-        }
-      }
-      if (entity.take_profit_price != null) {
-        const y = g.yAt(entity.take_profit_price);
-        if (g.inPlotY(y)) {
-          ctx.strokeStyle = colors.tradeTake;
-          ctx.setLineDash([3, 3]);
-          ctx.beginPath();
-          ctx.moveTo(x1, y);
-          ctx.lineTo(tipX, y);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.fillStyle = colors.tradeTake;
-          ctx.fillText("TP", tipX - 18, y - 4);
-        } else if (entity.take_profit_price > g.maxP) {
-          offscreen.tpAbove = entity.take_profit_price;
-        } else if (entity.take_profit_price < g.minP) {
-          offscreen.tpBelow = entity.take_profit_price;
-        }
-      }
-    }
-    ctx.restore();
+    labelSlots.push({ x, y });
+    ctx.fillStyle = color;
+    ctx.font = `${selectedLabel ? 11 : 10}px ${colors.mono}`;
+    ctx.textAlign = "left";
+    ctx.fillText(text, x + 6, y);
   };
 
-  closed.forEach((t) => drawOne(t, "closed"));
-  opens.forEach((p) => drawOne(p, "open"));
+  rows.forEach(({ entity, kind }, rowIdx) => {
+    const key = tradeKey(entity);
+    const label = publicNumber(entity, chart.tf);
+    if (!label) return;
+    const isSel = selected && key === selected;
+    const dim = selected && !isSel;
+    ctx.save();
+    ctx.globalAlpha = dim ? 0.2 : 1;
 
-  ctx.font = `11px ${colors.mono}`;
-  if (offscreen.tpAbove != null) {
-    ctx.fillStyle = colors.tradeTake;
-    ctx.fillText(`TP ↑ ${fmt(offscreen.tpAbove)}`, g.pad.left + 6, g.pad.top + 12);
-  }
-  if (offscreen.slAbove != null) {
-    ctx.fillStyle = colors.tradeStop;
-    ctx.fillText(`SL ↑ ${fmt(offscreen.slAbove)}`, g.pad.left + 6, g.pad.top + 26);
-  }
-  if (offscreen.slBelow != null) {
-    ctx.fillStyle = colors.tradeStop;
-    ctx.fillText(`SL ↓ ${fmt(offscreen.slBelow)}`, g.pad.left + 6, g.pad.top + g.plotH - 4);
-  }
-  if (offscreen.tpBelow != null) {
-    ctx.fillStyle = colors.tradeTake;
-    ctx.fillText(`TP ↓ ${fmt(offscreen.tpBelow)}`, g.pad.left + 6, g.pad.top + g.plotH - 18);
-  }
+    const entry = finitePrice(entity.entry_price);
+    const stop = finitePrice(entity.stop_price);
+    const take = finitePrice(entity.take_profit_price);
+    const exitPx = finitePrice(entity.exit_price);
+    const side = String(entity.side || "LONG").toUpperCase();
+    const iEntry = timeIndex(chart.visible, parseTs(entity.entry_timestamp));
+    if (iEntry == null || entry == null) {
+      ctx.restore();
+      return;
+    }
+    let iEnd = chart.visible.length - 1;
+    if (kind === "closed") {
+      const ix = timeIndex(chart.visible, parseTs(entity.exit_timestamp));
+      if (ix != null) iEnd = ix;
+    }
+    const x1 = g.xAt(Math.min(iEntry, iEnd));
+    const x2 = g.xAt(Math.max(iEntry, iEnd));
+    const yEntry = g.yAt(entry);
+    const entryCandle = chart.visible[iEntry];
+
+    if (take != null) {
+      drawZoneRect(ctx, x1, x2, yEntry, g.yAt(take), isSel ? colors.rewardFillSel : colors.rewardFill);
+      ctx.strokeStyle = colors.tradeTake;
+      ctx.lineWidth = isSel ? 2 : 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x1, g.yAt(take));
+      ctx.lineTo(x2, g.yAt(take));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (isSel || !selected) {
+        placeLabel(x2, g.yAt(take) - 2, `TP ${fmtPrice(take)}`, colors.tradeTake, isSel);
+      }
+    }
+    if (stop != null) {
+      drawZoneRect(ctx, x1, x2, yEntry, g.yAt(stop), isSel ? colors.riskFillSel : colors.riskFill);
+      ctx.strokeStyle = colors.tradeStop;
+      ctx.lineWidth = isSel ? 2 : 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x1, g.yAt(stop));
+      ctx.lineTo(x2, g.yAt(stop));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (isSel || !selected) {
+        placeLabel(x2, g.yAt(stop) + 10, `SL ${fmtPrice(stop)}`, colors.tradeStop, isSel);
+      }
+    }
+
+    ctx.strokeStyle = colors.tradeEntry;
+    ctx.lineWidth = isSel ? 2.25 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x1, yEntry);
+    ctx.lineTo(x2, yEntry);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+
+    const statusBit = kind === "open" ? " · OPEN" : "";
+    const entryLabel = `${label}  Entry  ${fmtPrice(entry)}${statusBit}`;
+    const yLabelBase = side === "SHORT"
+      ? g.yAt(entryCandle.high) - 14 - (rowIdx % 3) * 12
+      : g.yAt(entryCandle.low) + 14 + (rowIdx % 3) * 12;
+    if (side === "SHORT") {
+      drawShortEntryMarker(ctx, x1, g.yAt(entryCandle.high) - 8, label, isSel, colors);
+    } else {
+      drawLongEntryMarker(ctx, x1, g.yAt(entryCandle.low) + 8, label, isSel, colors);
+    }
+    placeLabel(x1, yLabelBase, entryLabel, isSel ? colors.text : colors.tradeEntry, isSel);
+    chart.hitRegions.push({ key, x: x1, y: yLabelBase, entity, kind, role: "entry" });
+
+    if (kind === "closed" && exitPx != null) {
+      const yExit = g.yAt(exitPx);
+      drawExitMarker(ctx, x2, yExit, label, isSel, colors);
+      if (isSel || !selected) {
+        placeLabel(x2, yExit - 10, `× ${label}  Exit  ${fmtPrice(exitPx)}`, colors.tradeExit, isSel);
+      }
+      chart.hitRegions.push({ key, x: x2, y: yExit, entity, kind, role: "exit" });
+    }
+
+    const yTop = Math.min(yEntry, take != null ? g.yAt(take) : yEntry, stop != null ? g.yAt(stop) : yEntry);
+    const yBot = Math.max(yEntry, take != null ? g.yAt(take) : yEntry, stop != null ? g.yAt(stop) : yEntry);
+    chart.hitRegions.push({
+      key,
+      x: (x1 + x2) / 2,
+      y: yEntry,
+      entity,
+      kind,
+      role: "zone",
+      x1,
+      x2,
+      yTop,
+      yBot,
+    });
+
+    ctx.restore();
+  });
 }
 
 function renderHeader(tf, tfBlock) {
@@ -689,6 +777,7 @@ function renderTfChart(tf) {
   const chart = state.charts[tf];
   if (!chart) return;
   const tfBlock = (state.truth && state.truth.timeframes && state.truth.timeframes[tf]) || {};
+  ensureTfOrdinals(tf, tfBlock);
   const candles = selectCandles(tfBlock.candles || [], state.range);
   if (!chart._bootstrapped) {
     chart.candles = candles;
@@ -750,14 +839,14 @@ function formatTradeDetail(entity, tf) {
       ? `episode ${entity.episode_id}`
       : "episode UNPROVEN";
   return [
-    `<strong>${publicNumber(entity) || "—"}</strong>`,
+    `<strong>${publicNumber(entity, tf) || "—"}</strong>`,
     `${entity.status || "—"} ${entity.side || ""}`,
     `TF ${entity.timeframe || tf}`,
-    `entry ${entity.entry_timestamp || "—"} @ ${fmt(entity.entry_price)}`,
-    `exit ${entity.exit_timestamp || "—"} @ ${fmt(entity.exit_price)}`,
+    `entry ${entity.entry_timestamp || "—"} @ ${fmtPrice(entity.entry_price)}`,
+    `exit ${entity.exit_timestamp || "—"} @ ${fmtPrice(entity.exit_price)}`,
     `PnL ${fmtPnl(entity.net_realised_pnl_usd)}`,
     `fees ${fmt(entity.fees_usd)} slippage ${fmt(entity.slippage_usd)}`,
-    `SL ${fmt(entity.stop_price)} TP ${fmt(entity.take_profit_price)}`,
+    `SL ${fmtPrice(entity.stop_price)} TP ${fmtPrice(entity.take_profit_price)}`,
     `trade_id ${entity.trade_id || "—"}`,
     `position_id ${entity.position_id || "—"}`,
     episode,
@@ -780,8 +869,18 @@ function selectTrade(entity, tf) {
 
 function hitTest(chart, x, y) {
   let best = null;
-  let bestDist = 16;
+  let bestDist = 18;
   (chart.hitRegions || []).forEach((hit) => {
+    if (hit.role === "zone" && hit.x1 != null && hit.x2 != null && hit.yTop != null && hit.yBot != null) {
+      if (x >= hit.x1 && x <= hit.x2 && y >= hit.yTop && y <= hit.yBot) {
+        const d = Math.abs(y - hit.y);
+        if (d < bestDist + 40) {
+          bestDist = Math.min(bestDist, d);
+          best = hit;
+        }
+        return;
+      }
+    }
     const d = Math.hypot(hit.x - x, hit.y - y);
     if (d < bestDist) {
       bestDist = d;
@@ -976,6 +1075,9 @@ window.__VIS3C__ = {
   applyVisibleWindow,
   preserveViewportAcrossReload,
   publicNumber,
+  isStableTfNumber,
+  ensureTfOrdinals,
+  fmtPrice,
   hasGlobalStrip: () => Boolean(document.querySelector("[data-global-lifecycle-strip]")),
   hasPnlPanel: () => Boolean(document.getElementById("paperPnlBlock") || document.getElementById("paperPnlPanel")),
   hasMetricsPanel: () => Boolean(document.getElementById("modelMetricsBlock") || document.getElementById("modelMetricsPanel")),

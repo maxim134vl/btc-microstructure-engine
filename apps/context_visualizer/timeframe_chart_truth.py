@@ -54,7 +54,7 @@ CANDIDATE_DIR = (
     / "data"
     / "candidate"
     / "architecture_recovery"
-    / "vis3c_standalone_tf_charts"
+    / "vis_trade_render_context_fix"
 )
 
 
