@@ -790,6 +790,204 @@ def build_paper() -> dict[str, Any]:
     }
 
 
+# VIS0B — canonical manager risk for OPS (observability only; never invent $0).
+MANAGER_PORTFOLIO_SUMMARY_PATH = ROOT / "data/trading/manager/portfolio_summary.json"
+RISK_SOURCE_STALE_SECONDS = 30 * 60
+RISK_SEMANTICS_RESERVED_OPEN = "reserved_open_risk"
+
+
+def _parse_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _risk_freshness(tip: str | None, *, now: datetime | None = None) -> str:
+    """Freshness of a manager risk tip. Unchanged open positions are not stale by themselves."""
+    if not tip:
+        return "UNAVAILABLE"
+    try:
+        stamp = datetime.fromisoformat(str(tip).replace("Z", "+00:00"))
+    except Exception:
+        return "UNAVAILABLE"
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    age = ((now or datetime.now(timezone.utc)) - stamp.astimezone(timezone.utc)).total_seconds()
+    if age < 0:
+        return "FRESH"
+    if age <= RISK_SOURCE_STALE_SECONDS:
+        return "FRESH"
+    if age <= RISK_SOURCE_STALE_SECONDS * 4:
+        return "CARRIED_FORWARD"
+    return "STALE"
+
+
+def _resolve_reserved_open_risk_usd(
+    *,
+    open_position_count: int,
+    trader_view: dict[str, Any],
+    position_row: dict[str, Any] | None,
+    portfolio_tip: str | None,
+) -> dict[str, Any]:
+    """Resolve per-TF reserved open risk. Missing never becomes 0 when a position is open."""
+    tip = portfolio_tip
+    if open_position_count <= 0:
+        return {
+            "reserved_risk_usd": 0.0,
+            "open_risk_usd": 0.0,
+            "risk_status": "ZERO_CONFIRMED",
+            "risk_source": "flat_no_open_position",
+            "risk_source_tip": tip,
+            "risk_freshness": _risk_freshness(tip) if tip else "FRESH",
+            "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+        }
+
+    # Level 2 — manager portfolio_summary traders[TF].open_risk_usd (entry-gate peer).
+    if "open_risk_usd" in trader_view and trader_view.get("open_risk_usd") is not None:
+        value = _sf(trader_view.get("open_risk_usd"))
+        if value is None:
+            pass
+        else:
+            status = "ZERO_CONFIRMED" if abs(float(value)) < 1e-12 else "AVAILABLE"
+            freshness = _risk_freshness(tip)
+            if freshness == "STALE":
+                return {
+                    "reserved_risk_usd": None,
+                    "open_risk_usd": None,
+                    "risk_status": "SOURCE_STALE",
+                    "risk_source": "manager_portfolio_summary.traders[].open_risk_usd",
+                    "risk_source_tip": tip,
+                    "risk_freshness": freshness,
+                    "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+                }
+            return {
+                "reserved_risk_usd": float(value),
+                "open_risk_usd": float(value),
+                "risk_status": status,
+                "risk_source": "manager_portfolio_summary.traders[].open_risk_usd",
+                "risk_source_tip": tip,
+                "risk_freshness": freshness,
+                "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+            }
+
+    # Level 3 — same formula PaperTraderEngine.snapshot uses (metadata approved_risk_usd).
+    meta = _parse_json_object((position_row or {}).get("metadata_json"))
+    approved = _sf(meta.get("approved_risk_usd"))
+    if approved is None:
+        approved = _sf((position_row or {}).get("risk_amount_usd"))
+    if approved is not None:
+        status = "ZERO_CONFIRMED" if abs(float(approved)) < 1e-12 else "AVAILABLE"
+        return {
+            "reserved_risk_usd": float(approved),
+            "open_risk_usd": float(approved),
+            "risk_status": status,
+            "risk_source": "position.metadata_json.approved_risk_usd",
+            "risk_source_tip": tip,
+            "risk_freshness": _risk_freshness(tip) if tip else "CARRIED_FORWARD",
+            "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+        }
+
+    # Level 4 — explicit unavailable (never coerce open+missing → 0).
+    return {
+        "reserved_risk_usd": None,
+        "open_risk_usd": None,
+        "risk_status": "ATTRIBUTION_UNAVAILABLE",
+        "risk_source": None,
+        "risk_source_tip": tip,
+        "risk_freshness": "UNAVAILABLE",
+        "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+    }
+
+
+def _resolve_aggregate_portfolio_risk(
+    portfolio: dict[str, Any],
+    *,
+    book_open_positions: int,
+) -> dict[str, Any]:
+    """Level 1 aggregate risk from manager portfolio_summary (entry-gate source)."""
+    tip = portfolio.get("generated_at") or portfolio.get("evaluation_timestamp")
+    tip_s = None if tip is None else str(tip)
+    freshness = _risk_freshness(tip_s)
+    has_manager = bool(portfolio) and (
+        portfolio.get("gross_open_risk_usd") is not None
+        or portfolio.get("portfolio_max_risk_usd") is not None
+        or portfolio.get("available_risk_usd") is not None
+    )
+    if not has_manager:
+        return {
+            "max_risk_usd": None,
+            "portfolio_max_risk_usd": None,
+            "reserved_open_risk_usd": None,
+            "gross_open_risk_usd": None,
+            "available_risk_usd": None,
+            "risk_utilisation_pct": None,
+            "open_positions": book_open_positions,
+            "open_position_count": book_open_positions,
+            "risk_source": None,
+            "risk_source_tip": tip_s,
+            "risk_status": "SOURCE_UNAVAILABLE",
+            "risk_freshness": "UNAVAILABLE",
+            "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+            "observability_health": "DEGRADED_OBSERVABILITY",
+        }
+
+    if freshness == "STALE":
+        open_count = portfolio.get("open_positions")
+        open_count_i = book_open_positions if open_count is None else int(open_count)
+        return {
+            "max_risk_usd": None,
+            "portfolio_max_risk_usd": None,
+            "reserved_open_risk_usd": None,
+            "gross_open_risk_usd": None,
+            "available_risk_usd": None,
+            "risk_utilisation_pct": None,
+            "open_positions": open_count_i,
+            "open_position_count": open_count_i,
+            "risk_source": "data/trading/manager/portfolio_summary.json",
+            "risk_source_tip": tip_s,
+            "risk_status": "SOURCE_STALE",
+            "risk_freshness": freshness,
+            "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+            "observability_health": "DEGRADED_OBSERVABILITY",
+        }
+
+    max_risk = _sf(portfolio.get("portfolio_max_risk_usd"))
+    reserved = _sf(portfolio.get("gross_open_risk_usd"))
+    available = _sf(portfolio.get("available_risk_usd"))
+    if available is None and max_risk is not None and reserved is not None:
+        available = max(0.0, float(max_risk) - float(reserved))
+    util = None
+    if max_risk is not None and float(max_risk) > 0 and reserved is not None:
+        util = round(100.0 * float(reserved) / float(max_risk), 6)
+    open_count = portfolio.get("open_positions")
+    open_count_i = book_open_positions if open_count is None else int(open_count)
+    status = "AVAILABLE"
+    if reserved is not None and abs(float(reserved)) < 1e-12:
+        status = "ZERO_CONFIRMED"
+    return {
+        "max_risk_usd": max_risk,
+        "portfolio_max_risk_usd": max_risk,
+        "reserved_open_risk_usd": reserved,
+        "gross_open_risk_usd": reserved,
+        "available_risk_usd": available,
+        "risk_utilisation_pct": util,
+        "open_positions": open_count_i,
+        "open_position_count": open_count_i,
+        "risk_source": "data/trading/manager/portfolio_summary.json",
+        "risk_source_tip": tip_s,
+        "risk_status": status,
+        "risk_freshness": freshness,
+        "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+        "observability_health": "OPERATIONAL",
+    }
+
+
 def build_timeframe_traders() -> dict[str, Any]:
     """S4.1 read-only view: manager, command bus, four independent trader books.
 
@@ -797,7 +995,9 @@ def build_timeframe_traders() -> dict[str, Any]:
     """
     activation = _read_json(S4_ACTIVATION_PATH)
     manager_latest = _read_json(ROOT / "data/runtime/timeframe_manager_latest.json") or {}
-    portfolio = _read_json(ROOT / "data/trading/manager/portfolio_summary.json") or {}
+    portfolio = _read_json(MANAGER_PORTFOLIO_SUMMARY_PATH) or {}
+    portfolio_tip = portfolio.get("generated_at") or portfolio.get("evaluation_timestamp")
+    portfolio_tip_s = None if portfolio_tip is None else str(portfolio_tip)
     bus_path = ROOT / "data/trading/manager/timeframe_command_memory.parquet"
     bus: dict[str, Any] = {
         "path": "data/trading/manager/timeframe_command_memory.parquet",
@@ -844,10 +1044,10 @@ def build_timeframe_traders() -> dict[str, Any]:
             bus["error"] = f"{type(exc).__name__}: {exc}"
 
     traders: list[dict[str, Any]] = []
-    gross_risk = 0.0
     realized_total = 0.0
     unrealized_total = 0.0
-    open_positions = 0
+    book_open_positions = 0
+    tf_attribution_gaps = 0
     process_by_tf: dict[str, dict[str, Any]] = {}
     try:
         for proc in inspect_processes():
@@ -871,7 +1071,13 @@ def build_timeframe_traders() -> dict[str, Any]:
             "direction": "FLAT",
             "entry_price": None,
             "quantity": None,
-            "open_risk_usd": 0.0,
+            "open_risk_usd": None,
+            "reserved_risk_usd": None,
+            "risk_status": "SOURCE_UNAVAILABLE",
+            "risk_source": None,
+            "risk_source_tip": portfolio_tip_s,
+            "risk_freshness": "UNAVAILABLE",
+            "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
             "realized_pnl_usd": 0.0,
             "unrealized_pnl_usd": 0.0,
             "open_position_count": 0,
@@ -887,6 +1093,7 @@ def build_timeframe_traders() -> dict[str, Any]:
         entry["last_command_id"] = state.get("last_command_id")
         entry["last_command_intent"] = state.get("last_command_intent") or state.get("last_intent")
         entry["command_cursor"] = state.get("cursor_evaluation_timestamp") or state.get("command_cursor")
+        position_row: dict[str, Any] | None = None
         try:
             import pandas as pd
 
@@ -902,13 +1109,12 @@ def build_timeframe_traders() -> dict[str, Any]:
                     open_rows = frame[frame["status"].astype(str).str.upper() == "OPEN"]
                     entry["open_position_count"] = int(len(open_rows))
                     if len(open_rows):
-                        row = open_rows.iloc[-1].to_dict()
-                        entry["open_position_id"] = row.get("position_id")
-                        entry["direction"] = str(row.get("direction") or "FLAT").upper()
-                        entry["entry_price"] = _sf(row.get("entry_price"))
-                        entry["quantity"] = _sf(row.get("quantity"))
-                        entry["open_risk_usd"] = _sf(row.get("risk_amount_usd")) or 0.0
-                        open_positions += 1
+                        position_row = open_rows.iloc[-1].to_dict()
+                        entry["open_position_id"] = position_row.get("position_id")
+                        entry["direction"] = str(position_row.get("direction") or "FLAT").upper()
+                        entry["entry_price"] = _sf(position_row.get("entry_price"))
+                        entry["quantity"] = _sf(position_row.get("quantity"))
+                        book_open_positions += 1
             trades_path = book / "trades.parquet"
             if trades_path.exists():
                 trades = pd.read_parquet(trades_path)
@@ -922,13 +1128,26 @@ def build_timeframe_traders() -> dict[str, Any]:
         trader_view = ((portfolio.get("traders") or {}).get(tf)) or {}
         if trader_view.get("unrealized_pnl_usd") is not None:
             entry["unrealized_pnl_usd"] = _sf(trader_view.get("unrealized_pnl_usd")) or 0.0
+        risk_fields = _resolve_reserved_open_risk_usd(
+            open_position_count=int(entry["open_position_count"] or 0),
+            trader_view=trader_view,
+            position_row=position_row,
+            portfolio_tip=portfolio_tip_s,
+        )
+        entry.update(risk_fields)
+        if entry["open_position_count"] and entry.get("reserved_risk_usd") is None:
+            tf_attribution_gaps += 1
         entry["last_command"] = commands_by_tf.get(tf)
-        gross_risk += float(entry["open_risk_usd"] or 0.0)
         realized_total += float(entry["realized_pnl_usd"] or 0.0)
         unrealized_total += float(entry["unrealized_pnl_usd"] or 0.0)
         traders.append(entry)
 
-    portfolio_max_risk = _sf(portfolio.get("portfolio_max_risk_usd")) or 1000.0
+    aggregate = _resolve_aggregate_portfolio_risk(portfolio, book_open_positions=book_open_positions)
+    if tf_attribution_gaps and aggregate.get("risk_status") in {"AVAILABLE", "ZERO_CONFIRMED"}:
+        aggregate["observability_health"] = "OPERATIONAL_WITH_LIMITATIONS"
+    elif aggregate.get("risk_status") == "SOURCE_UNAVAILABLE":
+        aggregate["observability_health"] = "DEGRADED_OBSERVABILITY"
+
     return {
         "entity_type": "TIMEFRAME_TRADING_PLANE",
         "activated": activation is not None,
@@ -948,14 +1167,24 @@ def build_timeframe_traders() -> dict[str, Any]:
         "command_bus": bus,
         "traders": traders,
         "portfolio": {
-            "open_positions": open_positions,
+            "open_positions": aggregate["open_positions"],
+            "open_position_count": aggregate["open_position_count"],
             "gross_long_notional": _sf(portfolio.get("gross_long_notional")),
             "gross_short_notional": _sf(portfolio.get("gross_short_notional")),
             "net_notional": _sf(portfolio.get("net_notional")),
             "net_notional_semantics": "REPORTING_ONLY_NEVER_NETTED",
-            "gross_open_risk_usd": gross_risk,
-            "portfolio_max_risk_usd": portfolio_max_risk,
-            "available_risk_usd": max(0.0, portfolio_max_risk - gross_risk),
+            "gross_open_risk_usd": aggregate["gross_open_risk_usd"],
+            "reserved_open_risk_usd": aggregate["reserved_open_risk_usd"],
+            "portfolio_max_risk_usd": aggregate["portfolio_max_risk_usd"],
+            "max_risk_usd": aggregate["max_risk_usd"],
+            "available_risk_usd": aggregate["available_risk_usd"],
+            "risk_utilisation_pct": aggregate["risk_utilisation_pct"],
+            "risk_source": aggregate["risk_source"],
+            "risk_source_tip": aggregate["risk_source_tip"],
+            "risk_status": aggregate["risk_status"],
+            "risk_freshness": aggregate["risk_freshness"],
+            "risk_semantics": aggregate["risk_semantics"],
+            "observability_health": aggregate["observability_health"],
             "realized_pnl": realized_total,
             "unrealized_pnl": unrealized_total,
             "risk_aggregation": "GROSS_NO_NETTING",
