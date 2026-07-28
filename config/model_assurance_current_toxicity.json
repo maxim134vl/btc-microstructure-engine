@@ -1,0 +1,21 @@
+{
+  "schema_version": "model_assurance_current_toxicity_v1",
+  "monitoring_mode": "LIVE_CURRENT",
+  "runtime_impact": "NON_BLOCKING",
+  "poll_interval_seconds": 5,
+  "context": {
+    "minimum_move_bps": 10.0,
+    "false_direction_horizon": "3X",
+    "false_direction_mae_to_mfe_ratio": 2.0,
+    "premature_max_lifecycle_fraction": 0.5,
+    "overstay_min_mfe_bps": 20.0,
+    "overstay_giveback_ratio": 0.8,
+    "flip_instability_max_flips": 3,
+    "flip_instability_window_timeframes": 2
+  },
+  "trade": {
+    "severe_loss_r_lte": -1.25,
+    "risk_tolerance_usd": 0.01,
+    "pnl_reconciliation_tolerance_usd": 0.01
+  }
+}
