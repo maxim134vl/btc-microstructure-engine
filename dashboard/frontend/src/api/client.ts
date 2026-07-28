@@ -125,6 +125,7 @@ export async function softFetchOpsSnapshot(
 }
 
 export async function fetchDebugSnapshot(): Promise<unknown> {
+  const { getApiBase } = await import("./baseUrl");
   const response = await fetch(`${getApiBase()}/debug/snapshot`);
   const payload = await response.json().catch(() => null);
   if (!response.ok) {

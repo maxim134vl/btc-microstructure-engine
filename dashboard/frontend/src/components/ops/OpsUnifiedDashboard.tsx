@@ -26,6 +26,12 @@ import {
   isPhantomProcessId,
   unavailableCaption,
 } from "./unifiedDisplay";
+import {
+  mapActiveRuntimeSeverity,
+  mapOverallAssuranceSeverity,
+  mapPromotionSeverity,
+  mapRuntimeSafetySeverity,
+} from "./assuranceCardSeverity";
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
@@ -97,6 +103,33 @@ function SummaryCard({
         <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-[12px] font-semibold uppercase tracking-[0.06em] text-ds-text-tertiary">{title}</h3>
           <StatusIndicator status={status} size="sm" />
+        </div>
+        <div className="space-y-1 text-[13px] text-ds-text-primary">{children}</div>
+      </div>
+    </Card>
+  );
+}
+
+/** Model Assurance top cards — show mapping label as-is (do not inherit overall CRITICAL). */
+function AssuranceSummaryCard({
+  title,
+  status,
+  children,
+}: {
+  title: string;
+  status: ResolvedStatus;
+  children: ReactNode;
+}) {
+  return (
+    <Card className="relative p-3.5">
+      <div className="ops-card-shimmer" aria-hidden />
+      <div className="relative">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-[12px] font-semibold uppercase tracking-[0.06em] text-ds-text-tertiary">{title}</h3>
+          <span className="inline-flex items-center gap-2 text-[13px] font-medium text-ds-text-primary">
+            <StatusDot tone={status.tone} className="h-2.5 w-2.5" />
+            <span>{status.label}</span>
+          </span>
         </div>
         <div className="space-y-1 text-[13px] text-ds-text-primary">{children}</div>
       </div>
@@ -278,27 +311,14 @@ export function OpsUnifiedDashboard({
   );
 
   const assuranceOverall = String(assurance?.overall_assurance_status || assurance?.status || "MISSING_SOURCE");
-  const assuranceStatus: ResolvedStatus = liveConnected
-    ? {
-        domain: "system",
-        key:
-          assuranceOverall.includes("CRITICAL")
-            ? "critical"
-            : assuranceOverall.includes("WARNING")
-              ? "warning"
-              : assuranceOverall.includes("STALE") || assuranceOverall.includes("MISSING")
-                ? "degraded"
-                : "operational",
-        label: assuranceOverall,
-        tone:
-          assuranceOverall.includes("CRITICAL")
-            ? "critical"
-            : assuranceOverall.includes("WARNING")
-              ? "warning"
-              : assuranceOverall.includes("STALE") || assuranceOverall.includes("MISSING")
-                ? "degraded"
-                : "operational",
-      }
+  const overallCardStatus: ResolvedStatus = liveConnected
+    ? mapOverallAssuranceSeverity(assuranceOverall)
+    : translateOpsLevel("GREY", "engine");
+  const activeRuntimeCardStatus: ResolvedStatus = liveConnected
+    ? mapActiveRuntimeSeverity(assurance?.active_runtime)
+    : translateOpsLevel("GREY", "engine");
+  const runtimeSafetyCardStatus: ResolvedStatus = liveConnected
+    ? mapRuntimeSafetySeverity(assurance?.runtime_safety_status)
     : translateOpsLevel("GREY", "engine");
 
   const driftSummary = (assurance?.drift_monitoring?.summary || {}) as Record<string, unknown>;
@@ -310,6 +330,18 @@ export function OpsUnifiedDashboard({
   const promoBlockers = Array.isArray(assurance?.promotion_blockers)
     ? assurance!.promotion_blockers!
     : [];
+  const promotionCardStatus: ResolvedStatus = liveConnected
+    ? mapPromotionSeverity({
+        promotion_execution_status: String(govSummary.promotion_execution_status || "DISABLED"),
+        promotion_control: assurance?.promotion_control,
+        candidate_status: String(shadowSummary.candidate_status || assurance?.candidate_shadow?.status || "NONE_REGISTERED"),
+        eligibility_status: String(govSummary.eligibility_status || "NOT_APPLICABLE"),
+        environment_blockers: envBlockers,
+        blockers: promoBlockers,
+        active_model_change_performed: Boolean(govSummary.active_model_change_performed),
+        gate_status: assurance?.governance_promotion?.status,
+      })
+    : translateOpsLevel("GREY", "engine");
 
   const activeFailures =
     snapshot.health_dimensions?.runtime?.current_failures_count ??
@@ -692,28 +724,28 @@ export function OpsUnifiedDashboard({
               CURRENT ACTIVE MODEL · observational · non-blocking for paper runtime · promotion controlled by governance gate
             </p>
             <div className="grid gap-3.5 md:grid-cols-2 xl:grid-cols-4">
-              <SummaryCard title="Overall" status={assuranceStatus}>
+              <AssuranceSummaryCard title="Overall" status={overallCardStatus}>
                 <p>{liveConnected ? assuranceOverall : "—"}</p>
                 <p className="text-[12px] text-ds-text-secondary">
                   Cause: {liveConnected ? assurance?.overall_cause || envBlockers[0] || "—" : "—"}
                 </p>
-              </SummaryCard>
-              <SummaryCard title="Active Runtime" status={assuranceStatus}>
+              </AssuranceSummaryCard>
+              <AssuranceSummaryCard title="Active Runtime" status={activeRuntimeCardStatus}>
                 <p>{liveConnected ? assurance?.active_runtime?.model_id || "—" : "—"}</p>
                 <p className="text-[12px] text-ds-text-secondary">
                   {liveConnected
                     ? `${assurance?.active_runtime?.model_version || "—"} · ${assurance?.active_runtime?.paper_epoch_id || "—"}`
                     : "—"}
                 </p>
-              </SummaryCard>
-              <SummaryCard title="Runtime Safety" status={assuranceStatus}>
+              </AssuranceSummaryCard>
+              <AssuranceSummaryCard title="Runtime Safety" status={runtimeSafetyCardStatus}>
                 <p>{liveConnected ? assurance?.runtime_safety_status || "—" : "—"}</p>
                 <p className="text-[12px] text-ds-text-secondary">
                   paper_only={String(liveConnected ? assurance?.active_runtime?.paper_only ?? true : "—")} · real_execution=
                   {String(liveConnected ? assurance?.active_runtime?.real_execution ?? false : "—")}
                 </p>
-              </SummaryCard>
-              <SummaryCard title="Promotion" status={assuranceStatus}>
+              </AssuranceSummaryCard>
+              <AssuranceSummaryCard title="Promotion" status={promotionCardStatus}>
                 <p>
                   {liveConnected
                     ? String(govSummary.promotion_execution_status || "DISABLED")
@@ -724,7 +756,7 @@ export function OpsUnifiedDashboard({
                     ? `control=${assurance?.promotion_control || "GOVERNANCE_GATE"} · impact=${assurance?.runtime_impact || "NON_BLOCKING"}`
                     : "—"}
                 </p>
-              </SummaryCard>
+              </AssuranceSummaryCard>
             </div>
             <div className="grid gap-3.5 md:grid-cols-2 xl:grid-cols-4">
               <Panel title="Behavioral Validation">
