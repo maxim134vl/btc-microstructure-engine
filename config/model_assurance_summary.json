@@ -1,0 +1,17 @@
+{
+  "schema_version": "model_assurance_summary_v1",
+  "poll_interval_seconds": 5,
+  "source_stale_after_seconds": 30,
+  "registry_stale_after_seconds": 3600,
+  "display_fingerprint_characters": 12,
+  "module_freshness_seconds": {
+    "behavioral_validation": 30,
+    "external_data": 30,
+    "economic_validation": 120,
+    "current_toxicity": 30,
+    "incident_correlation": 30,
+    "drift_monitoring": 30,
+    "candidate_shadow": 30,
+    "governance_promotion": 30
+  }
+}

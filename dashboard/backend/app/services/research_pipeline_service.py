@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -1269,6 +1270,52 @@ async def build_model_summary_snapshot(
     )
 
 
+def load_model_assurance_payload() -> dict[str, Any]:
+    """Read canonical MODEL-9 summary only — do not re-aggregate MODEL-0…8 here."""
+    path = Path(REPO_ROOT) / "data" / "model_assurance" / "summary" / "latest_summary.json"
+    if not path.exists():
+        return {
+            "status": "MISSING_SOURCE",
+            "overall_assurance_status": "MISSING_SOURCE",
+            "runtime_safety_status": "UNKNOWN",
+            "runtime_impact": "NON_BLOCKING",
+            "promotion_control": "GOVERNANCE_GATE",
+            "scope": "CURRENT_ACTIVE_MODEL_ONLY",
+            "missing_sources": ["latest_summary"],
+            "stale_sources": [],
+            "promotion_blockers": [],
+            "environment_blockers": [],
+            "current_blockers": [],
+            "current_incidents": [],
+            "current_toxic_events": [],
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "status": "MISSING_SOURCE",
+            "overall_assurance_status": "MISSING_SOURCE",
+            "runtime_safety_status": "UNKNOWN",
+            "runtime_impact": "NON_BLOCKING",
+            "promotion_control": "GOVERNANCE_GATE",
+            "scope": "CURRENT_ACTIVE_MODEL_ONLY",
+            "missing_sources": ["latest_summary"],
+            "stale_sources": [],
+            "promotion_blockers": [],
+            "environment_blockers": [],
+            "current_blockers": [],
+            "current_incidents": [],
+            "current_toxic_events": [],
+        }
+    return payload if isinstance(payload, dict) else {
+        "status": "MISSING_SOURCE",
+        "overall_assurance_status": "MISSING_SOURCE",
+        "runtime_safety_status": "UNKNOWN",
+        "runtime_impact": "NON_BLOCKING",
+        "promotion_control": "GOVERNANCE_GATE",
+    }
+
+
 async def build_research_pipeline_snapshot() -> dict[str, Any]:
     sources = build_model_summary_sources()
     pipeline = await build_pipeline_sync_status()
@@ -1279,6 +1326,7 @@ async def build_research_pipeline_snapshot() -> dict[str, Any]:
     shadow = await build_shadow_inference_snapshot(sources)
     toxic = await build_toxic_box_snapshot(sources)
     model_summary = await build_model_summary_snapshot(governance, drift, shadow, sources)
+    model_assurance = load_model_assurance_payload()
 
     ribbon_extensions = [
         {
@@ -1345,5 +1393,6 @@ async def build_research_pipeline_snapshot() -> dict[str, Any]:
         "toxic_box": toxic,
         "drift_monitoring": drift,
         "model_summary": model_summary,
+        "model_assurance": model_assurance,
         "ribbon_extensions": ribbon_extensions,
     }

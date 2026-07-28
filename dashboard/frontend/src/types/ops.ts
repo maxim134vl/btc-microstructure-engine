@@ -25,6 +25,8 @@ export interface OpsSnapshot {
   research_pipeline?: ResearchPipelineSnapshot;
   runtime_failure_audit?: RuntimeFailureAuditSummary;
   runtime_skipped_engine_audit?: RuntimeSkippedEngineAuditSummary;
+  /** offline fallback marker when live :8080 is unavailable */
+  snapshot_mode?: string;
   /** Patch 4.2 / final cleanup canonical runtime truth plane */
   overall_health?: string;
   overall_reason?: string;
@@ -86,8 +88,11 @@ export interface RuntimeTruthContextChain {
   last_result?: string;
   health?: string;
   health_reason?: string;
+  safe_upstream_tip?: string | null;
   final_context_tip?: string | null;
+  lifecycle_tip?: string | null;
   decision_tip?: string | null;
+  last_poll?: string | null;
 }
 
 export interface RuntimeTruthPaper {
@@ -138,6 +143,7 @@ export interface RuntimeTruthCommandBus {
   rows?: number | null;
   duplicate_command_ids?: number | null;
   latest_evaluation_timestamp?: string | null;
+  latest_evaluation_period?: string | null;
   health?: string;
 }
 
@@ -264,8 +270,8 @@ export interface StabilitySummary {
   last_disconnect?: string | null;
   last_timeout?: string | null;
   last_pipeline_stall?: string | null;
-  restart_count: number;
-  disconnect_count: number;
+  restart_count?: number | null;
+  disconnect_count?: number | null;
   last_write_at?: string | null;
   last_consume_at?: string | null;
   recent_events: StabilityEvent[];
@@ -301,6 +307,7 @@ export interface EngineRow {
   engine: string;
   short_name: string;
   status: EngineStatus;
+  level?: OpsLevel;
   classification?: ComponentClass;
   affects_health?: boolean;
   ignored_by_health?: boolean;
@@ -360,15 +367,16 @@ export interface CollectorRow {
 }
 
 export interface PipelineSummary {
-  current_cycle: number;
-  average_cycle_duration_s?: number;
-  uptime_seconds: number;
-  failed_engine_count: number;
-  failed_required_engine_count?: number;
-  failed_optional_engine_count?: number;
-  timeout_count?: number;
-  timeout_optional_count?: number;
-  stalled_engine_count: number;
+  current_cycle?: number | null;
+  average_cycle_duration_s?: number | null;
+  last_cycle_duration_s?: number | null;
+  uptime_seconds?: number | null;
+  failed_engine_count?: number | null;
+  failed_required_engine_count?: number | null;
+  failed_optional_engine_count?: number | null;
+  timeout_count?: number | null;
+  timeout_optional_count?: number | null;
+  stalled_engine_count?: number | null;
   current_stalled_engine_count?: number;
   historical_stalled_engine_count?: number;
   latest_historical_stall_at?: string | null;
@@ -385,9 +393,9 @@ export interface HealthSummary {
   reasons: string[];
   critical_reasons?: string[];
   degraded_reasons?: string[];
-  cpu_percent: number;
-  memory_percent: number;
-  disk_percent: number;
+  cpu_percent?: number | null;
+  memory_percent?: number | null;
+  disk_percent?: number | null;
   deferred_engine_count?: number;
   optional_offline_count?: number;
   display_status?: string;
@@ -457,7 +465,63 @@ export interface ResearchPipelineSnapshot {
   toxic_box: ToxicBoxSnapshot;
   drift_monitoring?: DriftMonitoringSnapshot;
   model_summary?: ModelSummarySnapshot;
+  /** Canonical MODEL-9 unified assurance payload (replace on each refresh). */
+  model_assurance?: ModelAssuranceSnapshot;
   ribbon_extensions?: RibbonItem[];
+}
+
+export interface ModelAssuranceModuleSection {
+  module_id?: string;
+  status?: string | null;
+  health_status?: string;
+  runtime_impact?: string;
+  summary?: Record<string, unknown>;
+  updated_at?: string | null;
+  source_path?: string;
+}
+
+export interface ModelAssuranceSnapshot {
+  status?: string;
+  schema_version?: string;
+  generated_at?: string;
+  scope?: string;
+  overall_assurance_status?: string;
+  overall_cause?: string | null;
+  runtime_safety_status?: string;
+  runtime_impact?: string;
+  promotion_control?: string;
+  active_runtime?: {
+    status?: string;
+    registry_record_id?: string;
+    model_id?: string;
+    model_version?: string;
+    model_type?: string;
+    runtime_fingerprint?: string;
+    paper_epoch_id?: string;
+    paper_epoch_activated_at?: string;
+    paper_only?: boolean;
+    real_execution?: boolean;
+  };
+  behavioral_validation?: ModelAssuranceModuleSection;
+  external_data?: ModelAssuranceModuleSection;
+  economic_validation?: ModelAssuranceModuleSection;
+  current_toxicity?: ModelAssuranceModuleSection;
+  incident_correlation?: ModelAssuranceModuleSection;
+  drift_monitoring?: ModelAssuranceModuleSection;
+  candidate_shadow?: ModelAssuranceModuleSection;
+  governance_promotion?: ModelAssuranceModuleSection;
+  service_health?: Record<string, string>;
+  promotion_blockers?: string[];
+  environment_blockers?: string[];
+  warnings?: string[];
+  informational_conditions?: string[];
+  source_snapshot_timestamps?: Record<string, string | null>;
+  stale_sources?: string[];
+  missing_sources?: string[];
+  current_blockers?: string[];
+  current_incidents?: unknown[];
+  current_toxic_events?: unknown[];
+  historical_counters_excluded?: boolean;
 }
 
 export interface PipelineSyncStatus {
