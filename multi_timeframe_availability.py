@@ -93,6 +93,14 @@ def is_bar_completed(*, bar_open: Any, timeframe: str, evaluation_timestamp: Any
     return close_ts <= eval_ts
 
 
+def allow_provisional_unclosed_bar(*, evaluation_mode: str | None) -> bool:
+    """Closed-bar pipeline must keep rejecting unclosed bars.
+
+    Only the explicit LIVE1A intrabar path may evaluate provisional open bars.
+    """
+    return str(evaluation_mode or "").upper() == "PROVISIONAL_INTRABAR"
+
+
 def load_m15_candles(path: Path = CANDLE_PATH) -> pd.DataFrame:
     if not path.exists():
         raise MTFAvailabilityError(f"DATASET_MISSING: {path}")

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any  # causal cutoff markers for provisional localize_bar
 
 import pandas as pd
 
@@ -56,7 +56,18 @@ def derive_rejection_flags(row: pd.Series) -> tuple[bool, bool]:
     return lower_rej, upper_rej
 
 
-def localize_bar(row: pd.Series) -> dict[str, Any]:
+def localize_bar(
+    row: pd.Series,
+    *,
+    is_closed: bool = True,
+    causal_cutoff_timestamp: Any = None,
+    causal_cutoff_monotonic_ns: Any = None,
+) -> dict[str, Any]:
+    """Localize one bar. Closed-bar default remains backward compatible.
+
+    Provisional intrabar callers pass ``is_closed=False`` and causal cutoffs.
+    Provisional outputs must not be written into completed-bar canonical memory.
+    """
     lower_rej, upper_rej = derive_rejection_flags(row)
     spread = float(row["spread"])
     low = float(row["low"])
@@ -84,7 +95,7 @@ def localize_bar(row: pd.Series) -> dict[str, Any]:
         zone_high = max(open_price, close_price)
 
     elv = volume * ratio
-    return {
+    out = {
         "timestamp": row["timestamp"],
         "estimated_local_volume": elv,
         "total_volume": volume,
@@ -96,7 +107,13 @@ def localize_bar(row: pd.Series) -> dict[str, Any]:
         "zone_width": zone_high - zone_low,
         "lower_rejection": bool(lower_rej),
         "upper_rejection": bool(upper_rej),
+        "is_closed": bool(is_closed),
     }
+    if not is_closed:
+        out["evaluation_mode"] = "PROVISIONAL_INTRABAR"
+        out["causal_cutoff_timestamp"] = causal_cutoff_timestamp
+        out["causal_cutoff_monotonic_ns"] = causal_cutoff_monotonic_ns
+    return out
 
 
 def resolve_localization_for_structure(

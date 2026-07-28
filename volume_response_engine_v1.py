@@ -164,622 +164,45 @@ recent_delta_efficiency = (
 )
 
 # =====================================
-# RELATIVE CONTEXT
+# RELATIVE CONTEXT + RESPONSE (shared evaluator)
 # =====================================
 
-if latest_localization is None or (
-    _VOLUME_LOCALIZATION_LIVE
-    and localization_join_status != "EXACT_FRESH_MATCH"
-):
-    relative_volume = float("nan")
-else:
-    relative_volume = (
+from btc_ml.cognition.volume_response_evaluate import evaluate_response_row
 
-        latest_localization[
-            "estimated_local_volume"
-        ]
+_loc_hist = localization.copy() if len(localization) else localization
+_geo_hist = geometry.copy() if len(geometry) else geometry
+_rxn_hist = reactions.copy() if len(reactions) else reactions
 
-        /
-
-        recent_local_volume.mean()
-
-    )
-
-relative_spread = (
-
-    latest_geometry[
-        "spread"
-    ]
-
-    /
-
-    recent_spread.mean()
-
+_eval = evaluate_response_row(
+    latest_localization,
+    structure_row=latest_structure,
+    geometry_row=latest_geometry,
+    classification_row=latest_classification,
+    reaction_row=latest_reaction,
+    localization_history=_loc_hist,
+    geometry_history=_geo_hist,
+    reactions_history=_rxn_hist,
+    causal_cutoff=source_candle_timestamp,
+    live_v1=_VOLUME_LOCALIZATION_LIVE,
+    localization_join_status=localization_join_status if _VOLUME_LOCALIZATION_LIVE else "LEGACY_V2_TIP_CARRY",
 )
 
-relative_efficiency = (
-
-    abs(
-        latest_reaction[
-            "delta_efficiency"
-        ]
-    )
-
-    /
-
-    (
-        recent_delta_efficiency
-        .abs()
-        .mean()
-    )
-
-)
-
-# =====================================
-# GEOMETRY
-# =====================================
-
-upper_rejection = (
-    latest_geometry[
-        "upper_rejection"
-    ]
-)
-
-lower_rejection = (
-    latest_geometry[
-        "lower_rejection"
-    ]
-)
-
-close_position = (
-    latest_geometry[
-        "close_position"
-    ]
-)
-
-spread_zscore = (
-    latest_geometry[
-        "spread_zscore"
-    ]
-)
-
-body = (
-    latest_geometry[
-        "body"
-    ]
-)
-
-spread = (
-    latest_geometry[
-        "spread"
-    ]
-)
-
-# =====================================
-# VOLUME CLASS
-# =====================================
-
-volume_class = (
-    latest_classification[
-        "volume_class"
-    ]
-)
-
-participation_state = (
-    "NORMAL_PARTICIPATION"
-)
-
-participation_adjustment = 0
-
-climax_state = (
-    "NO_CLIMAX"
-)
-
-# =====================================
-# LOCALIZED VOLUME
-# Proven mapping: localization.behavior → localized_behavior (identity).
-# Live-v1 missing/stale/ambiguous → null (never 0 / never "neutral").
-# =====================================
-
-if _VOLUME_LOCALIZATION_LIVE:
-    if latest_localization is not None and localization_join_status == "EXACT_FRESH_MATCH":
-        localized_behavior = latest_localization["behavior"]
-        estimated_local_volume = latest_localization["estimated_local_volume"]
-        volume_concentration = latest_localization["volume_concentration"]
-    else:
-        localized_behavior = None
-        estimated_local_volume = None
-        volume_concentration = None
-else:
-    localized_behavior = latest_localization["behavior"]
-    estimated_local_volume = latest_localization["estimated_local_volume"]
-    volume_concentration = latest_localization["volume_concentration"]
-
-# =====================================
-# REACTION
-# =====================================
-
-delta = (
-    latest_structure[
-        "delta"
-    ]
-)
-
-if estimated_local_volume is None or (
-    isinstance(estimated_local_volume, float) and pd.isna(estimated_local_volume)
-):
-    delta_efficiency = float("nan")
-else:
-    delta_efficiency = (
-        delta / estimated_local_volume
-    )
-
-price_change = (
-    latest_structure[
-        "close"
-    ] - latest_structure[
-        "open"
-    ]
-)
-
-# =====================================
-# EFFORT VS RESULT
-# =====================================
-
-effort_score = (
-
-    (
-
-        relative_volume
-
-    )
-
-    +
-
-    (
-
-        abs(delta_efficiency)
-
-    )
-
-    +
-
-    (
-
-        relative_spread
-
-    )
-
-) / 3
-
-effort_score += (
-    participation_adjustment
-)
-
-# =====================================
-# RESULT QUALITY
-# =====================================
-
-close_acceptance = (
-
-    abs(
-        close_position - 0.5
-    ) * 2
-
-)
-
-# -------------------------------------
-
-spread_efficiency = (
-
-    relative_spread
-
-    *
-
-    close_acceptance
-
-)
-
-# -------------------------------------
-
-rejection_penalty = 0
-
-if (
-    upper_rejection == True
-):
-
-    rejection_penalty += 0.4
-
-if (
-    lower_rejection == True
-):
-
-    rejection_penalty += 0.4
-
-# -------------------------------------
-
-result_score = (
-
-    (
-        close_acceptance
-    )
-
-    +
-
-    (
-        spread_efficiency
-    )
-
-    -
-
-    rejection_penalty
-
-)
-
-# -------------------------------------
-
-effort_result_ratio = (
-
-    result_score
-
-    /
-
-    (
-        effort_score + 0.001
-    )
-
-)
-
-# -------------------------------------
-
-normalized_result = (
-
-    effort_result_ratio
-
-    *
-
-    (
-        1 / (
-            1 +
-            rejection_penalty
-        )
-    )
-
-)
-
-# =====================================
-# CLIMACTIC PARTICIPATION
-# =====================================
-
-if "climax" in volume_class:
-
-    participation_state = (
-        "CLIMACTIC_PARTICIPATION"
-    )
-
-    participation_adjustment = 0.5
-
-    if normalized_result < 0:
-
-        climax_state = (
-            "CLIMAX_EXHAUSTION"
-        )
-
-    elif normalized_result > 0.5:
-
-        climax_state = (
-            "CLIMAX_CONTINUATION"
-        )
-
-    else:
-
-        climax_state = (
-            "CLIMAX_ABSORPTION"
-        )
-
-# =====================================
-# RESPONSE ENGINE
-# =====================================
-
-volume_event = (
-    "NEUTRAL_VOLUME"
-)
-
-continuation_quality = (
-    "NEUTRAL"
-)
-
-# -------------------------------------
-# STOPPING VOLUME
-# -------------------------------------
-
-if (
-
-    relative_volume > 1.8
-
-    and
-
-    abs(delta_efficiency) < 0.3
-
-    and
-
-    (
-        upper_rejection == True
-        or
-        lower_rejection == True
-    )
-
-):
-
-    volume_event = (
-        "STOPPING_VOLUME"
-    )
-
-# -------------------------------------
-# ABSORPTION
-# -------------------------------------
-
-if (
-
-    localized_behavior == (
-        "localized_absorption"
-    )
-
-    and
-
-    abs(delta_efficiency) < 0.3
-
-):
-
-    volume_event = (
-        "ABSORPTION_VOLUME"
-    )
-
-# -------------------------------------
-# CONTINUATION VOLUME
-# -------------------------------------
-
-if (
-
-    body > (
-        spread * 0.7
-    )
-
-    and
-
-    abs(delta_efficiency) > 1.0
-
-    and
-
-    relative_spread > 1.5
-
-):
-
-    volume_event = (
-        "CONTINUATION_VOLUME"
-    )
-
-# -------------------------------------
-# EXHAUSTION VOLUME
-# -------------------------------------
-
-if (
-
-    relative_volume > 2.0
-
-    and
-
-    abs(delta_efficiency) < 0.2
-
-):
-
-    volume_event = (
-        "EXHAUSTION_VOLUME"
-    )
-
-# =====================================
-# EFFORT RESULT INTERPRETATION
-# =====================================
-
-effort_result_state = (
-    "BALANCED_RESPONSE"
-)
-
-# -------------------------------------
-# ABSORPTION
-# -------------------------------------
-
-if (
-
-    effort_score > 1.2
-
-    and
-
-    normalized_result < 0.6
-
-):
-
-    effort_result_state = (
-        "ABSORPTION_RESPONSE"
-    )
-
-# -------------------------------------
-# STRONG ACCEPTANCE
-# -------------------------------------
-
-elif (
-
-    effort_score > 1.2
-
-    and
-
-    normalized_result > 1.0
-
-):
-
-    effort_result_state = (
-        "EFFICIENT_CONTINUATION"
-    )
-
-# -------------------------------------
-# EXHAUSTION
-# -------------------------------------
-
-elif (
-
-    relative_volume > 2
-
-    and
-
-    normalized_result < 0.4
-
-):
-
-    effort_result_state = (
-        "EXHAUSTION_RESPONSE"
-    )
-
-# =====================================
-# UNFINISHED AUCTION
-# =====================================
-
-unfinished_auction = False
-
-unfinished_reason = (
-    "NONE"
-)
-
-# -------------------------------------
-# HIGH EFFORT / POOR RESULT
-# -------------------------------------
-
-if (
-
-    effort_score > 1.0
-
-    and
-
-    normalized_result < 0.3
-
-):
-
-    unfinished_auction = True
-
-    unfinished_reason = (
-        "INEFFICIENT_AUCTION"
-    )
-
-# -------------------------------------
-# DISTRIBUTION WITHOUT EXPANSION
-# -------------------------------------
-
-if (
-
-    localized_behavior == (
-        "localized_distribution"
-    )
-
-    and
-
-    relative_spread < 1.0
-
-):
-
-    unfinished_auction = True
-
-    unfinished_reason = (
-        "DISTRIBUTION_NOT_RESOLVED"
-    )
-
-# -------------------------------------
-# REJECTION FAILURE
-# -------------------------------------
-
-if (
-
-    (
-        upper_rejection == True
-        or
-        lower_rejection == True
-    )
-
-    and
-
-    abs(normalized_result) < 0.2
-
-):
-
-    unfinished_auction = True
-
-    unfinished_reason = (
-        "REJECTION_WITHOUT_RESOLUTION"
-    )
-
-# =====================================
-# CONTINUATION QUALITY
-# =====================================
-
-if (
-
-    volume_event == (
-        "CONTINUATION_VOLUME"
-    )
-
-    and
-
-    close_position > 0.8
-
-):
-
-    continuation_quality = (
-        "STRONG_ACCEPTANCE"
-    )
-
-# -------------------------------------
-
-elif (
-
-    volume_event == (
-        "CONTINUATION_VOLUME"
-    )
-
-    and
-
-    close_position < 0.5
-
-):
-
-    continuation_quality = (
-        "FAILED_CONTINUATION"
-    )
-
-# -------------------------------------
-
-elif (
-
-    volume_event == (
-        "STOPPING_VOLUME"
-    )
-
-):
-
-    continuation_quality = (
-        "AUCTION_STALLED"
-    )
-
-# -------------------------------------
-
-elif (
-
-    volume_event == (
-        "ABSORPTION_VOLUME"
-    )
-
-):
-
-    continuation_quality = (
-        "PASSIVE_DEFENSE"
-    )
+volume_event = _eval["volume_event"]
+continuation_quality = _eval["continuation_quality"]
+volume_class = _eval["volume_class"]
+participation_state = _eval["participation_state"]
+relative_volume = _eval["relative_volume"]
+relative_spread = _eval["relative_spread"]
+climax_state = _eval["climax_state"]
+effort_score = _eval["effort_score"]
+result_score = _eval["result_score"]
+normalized_result = _eval["normalized_result"]
+effort_result_state = _eval["effort_result_state"]
+unfinished_auction = _eval["unfinished_auction"]
+unfinished_reason = _eval["unfinished_reason"]
+localized_behavior = _eval["localized_behavior"]
+estimated_local_volume = _eval.get("estimated_local_volume")
+volume_concentration = _eval.get("volume_concentration")
 
 # =====================================
 # OUTPUT
@@ -833,7 +256,7 @@ print(
     round(
         relative_volume,
         2
-    )
+    ) if relative_volume == relative_volume else relative_volume
 )
 
 print()
@@ -846,7 +269,7 @@ print(
     round(
         relative_spread,
         2
-    )
+    ) if relative_spread == relative_spread else relative_spread
 )
 
 print()
@@ -869,7 +292,7 @@ print(
     round(
         effort_score,
         2
-    )
+    ) if effort_score == effort_score else effort_score
 )
 
 print()
@@ -882,7 +305,7 @@ print(
     round(
         result_score,
         2
-    )
+    ) if result_score == result_score else result_score
 )
 
 print()
@@ -895,7 +318,7 @@ print(
     round(
         normalized_result,
         2
-    )
+    ) if normalized_result == normalized_result else normalized_result
 )
 
 print()

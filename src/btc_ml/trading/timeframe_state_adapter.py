@@ -143,9 +143,24 @@ def resolve_timeframe_state(
     timeframe: str,
     evaluation_timestamp: Any,
     sources: TimeframeSources,
+    allow_provisional: bool = False,
+    evaluation_mode: str | None = None,
+    provisional_lifecycle: dict[str, Any] | None = None,
+    causal_cutoff_timestamp: Any = None,
+    causal_cutoff_monotonic_ns: Any = None,
+    model_version: str | None = None,
 ) -> dict[str, Any]:
+    """Resolve per-TF state.
+
+    Closed-bar default unchanged. Provisional intrabar path only when
+    ``allow_provisional=True`` and ``evaluation_mode=PROVISIONAL_INTRABAR``.
+    Provisional results are never treated as manager-actionable closed tips.
+    """
     tf = str(timeframe or "").upper()
     evaluation_ts = _ts(evaluation_timestamp)
+    provisional = bool(
+        allow_provisional and str(evaluation_mode or "").upper() == "PROVISIONAL_INTRABAR"
+    )
     base: dict[str, Any] = {
         "timeframe": tf,
         "evaluation_timestamp": _iso(evaluation_ts),
@@ -171,12 +186,39 @@ def resolve_timeframe_state(
         "persistence_score": None,
         "structural_rank": None,
         "location_bias": None,
+        "is_closed": not provisional,
+        "evaluation_mode": "PROVISIONAL_INTRABAR" if provisional else "CLOSED_BAR",
+        "causal_cutoff_timestamp": _iso(causal_cutoff_timestamp) if causal_cutoff_timestamp else None,
+        "causal_cutoff_monotonic_ns": causal_cutoff_monotonic_ns,
+        "model_version": model_version,
         "source_lineage": {
             "availability": str(AVAILABILITY_MEMORY.relative_to(ROOT)),
             "lifecycle": str(LIFECYCLE_MEMORY.relative_to(ROOT)),
             "synthesis": str(SYNTHESIS_MEMORY.relative_to(ROOT)),
         },
     }
+
+    if provisional and provisional_lifecycle is not None:
+        direction, direction_reason = _lifecycle_direction(dict(provisional_lifecycle))
+        phase = str(provisional_lifecycle.get("lifecycle_state") or "UNKNOWN").upper()
+        raw_episode = provisional_lifecycle.get("context_episode_id")
+        episode = None if raw_episode is None else f"{tf}:{raw_episode}"
+        base.update(
+            {
+                "availability_status": "PROVISIONAL_INTRABAR",
+                "availability_reason": "explicit provisional evaluation mode",
+                "timeframe_state": str(provisional_lifecycle.get("active_market_context") or "UNKNOWN").upper(),
+                "timeframe_direction": direction,
+                "direction_reason": direction_reason,
+                "lifecycle_episode_id": episode,
+                "lifecycle_phase": phase,
+                "lifecycle_row_timestamp": _iso(evaluation_ts),
+                "actionable": False,  # never feed old manager
+                "no_action_reason": "PROVISIONAL_NOT_ROUTED_TO_MANAGER",
+                "is_closed": False,
+            }
+        )
+        return base
 
     if tf in UNSUPPORTED_TIMEFRAMES:
         base.update(
