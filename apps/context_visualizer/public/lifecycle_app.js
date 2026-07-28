@@ -22,6 +22,7 @@ const state = {
   charts: {},
   selectedTradeKey: null,
   pollTimer: null,
+  activePaperEpochId: null,
 };
 
 const statusLine = document.getElementById("statusLine");
@@ -197,20 +198,30 @@ function candidateTruthCandidates() {
   const params = new URLSearchParams(window.location.search);
   const override = params.get("chart_truth");
   if (override) return [override];
-  return [
-    "./data/timeframe_chart_truth.json",
-    "/data/candidate/architecture_recovery/vis_trade_render_context_fix/timeframe_chart_truth.json",
-    "/data/candidate/architecture_recovery/vis3c_standalone_tf_charts/timeframe_chart_truth.json",
-  ];
+  // Active workspace only. Candidate recovery archives retain legacy markers and
+  // must not be used as fallback once LIVE1B epoch charts are available.
+  return ["./data/timeframe_chart_truth.json"];
 }
 
 async function loadChartTruth() {
   const errors = [];
   for (const path of candidateTruthCandidates()) {
     try {
-      const payload = await loadJson(path);
+      const epochHint = state.activePaperEpochId || "active";
+      const url = `${path}${path.includes("?") ? "&" : "?"}epoch=${encodeURIComponent(epochHint)}&schema=v4&t=${Date.now()}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${path} → ${res.status}`);
+      const payload = await res.json();
       if (payload && payload.schema_version && payload.timeframes) {
         payload.__loaded_from = path;
+        state.activePaperEpochId = payload.active_paper_epoch_id || null;
+        // Hard replace trade layers — empty array clears previous markers.
+        Object.keys(payload.timeframes || {}).forEach((tf) => {
+          const block = payload.timeframes[tf] || {};
+          block.closed_trades = filterActiveEpochTrades(block.closed_trades || [], payload.active_paper_epoch_id);
+          block.open_positions = filterActiveEpochTrades(block.open_positions || [], payload.active_paper_epoch_id);
+          payload.timeframes[tf] = block;
+        });
         return payload;
       }
     } catch (err) {
@@ -218,6 +229,24 @@ async function loadChartTruth() {
     }
   }
   throw new Error(`timeframe_chart_truth unavailable\n${errors.join("\n")}`);
+}
+
+function filterActiveEpochTrades(rows, activeEpochId) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!activeEpochId) {
+    // Without an active LIVE1B epoch id on the payload, still drop unmarked legacy
+    // rows that lack paper_epoch_id when schema is v4+.
+    return list;
+  }
+  return list.filter((row) => {
+    if (!row || typeof row !== "object") return false;
+    const eid = String(row.paper_epoch_id || "").trim();
+    if (!eid) return false;
+    if (eid !== String(activeEpochId)) return false;
+    const status = String(row.status || row.void_status || "").toUpperCase();
+    if (status === "VOID_PRE_INTRABAR_RULE_CONTRACT" || status.startsWith("VOID_")) return false;
+    return true;
+  });
 }
 
 function selectCandles(candles, range) {
@@ -530,7 +559,7 @@ function drawCandles(chart, tfBlock) {
   return g;
 }
 
-function drawLongEntryMarker(ctx, x, yBelow, label, selected, colors) {
+function drawLongEntryMarker(ctx, x, yBelow, selected, colors) {
   const size = selected ? 7 : 5;
   ctx.fillStyle = colors.tradeEntry;
   ctx.beginPath();
@@ -543,7 +572,7 @@ function drawLongEntryMarker(ctx, x, yBelow, label, selected, colors) {
   ctx.stroke();
 }
 
-function drawShortEntryMarker(ctx, x, yAbove, label, selected, colors) {
+function drawShortEntryMarker(ctx, x, yAbove, selected, colors) {
   const size = selected ? 7 : 5;
   ctx.fillStyle = colors.negative;
   ctx.beginPath();
@@ -556,7 +585,7 @@ function drawShortEntryMarker(ctx, x, yAbove, label, selected, colors) {
   ctx.stroke();
 }
 
-function drawExitMarker(ctx, x, y, label, selected, colors) {
+function drawExitMarker(ctx, x, y, selected, colors) {
   const size = selected ? 6 : 4;
   ctx.strokeStyle = colors.tradeExit;
   ctx.lineWidth = selected ? 2.5 : 2;
@@ -589,8 +618,14 @@ function drawOverlays(chart, tfBlock, g) {
     ctx.fillText("TF_SOURCE_CONTAMINATION", g.pad.left + 8, g.pad.top + 18);
     return;
   }
-  const opens = (tfBlock.open_positions || []).filter((p) => (p.timeframe || chart.tf) === chart.tf);
-  const closed = (tfBlock.closed_trades || []).filter((t) => (t.timeframe || chart.tf) === chart.tf);
+  const opens = filterActiveEpochTrades(tfBlock.open_positions || [], state.truth && state.truth.active_paper_epoch_id)
+    .filter((p) => (p.timeframe || chart.tf) === chart.tf);
+  const closed = filterActiveEpochTrades(tfBlock.closed_trades || [], state.truth && state.truth.active_paper_epoch_id)
+    .filter((t) => (t.timeframe || chart.tf) === chart.tf);
+  // Empty arrays clear previous hitRegions (already reset above).
+  if (!opens.length && !closed.length) {
+    return;
+  }
   const selected = state.selectedTradeKey;
 
   const rows = [];
@@ -605,18 +640,31 @@ function drawOverlays(chart, tfBlock, g) {
   });
 
   const labelSlots = [];
-  const placeLabel = (x, yPreferred, text, color, selectedLabel) => {
+  const placeCompact = (x, yPreferred, text, color, selectedLabel) => {
     let y = yPreferred;
+    let xPos = x;
     let guard = 0;
-    while (guard < 8 && labelSlots.some((s) => Math.abs(s.x - x) < 56 && Math.abs(s.y - y) < 12)) {
-      y += 12;
+    while (
+      guard < 10
+      && labelSlots.some((s) => Math.abs(s.x - xPos) < 42 && Math.abs(s.y - y) < 11)
+    ) {
+      y += (guard % 2 === 0 ? -12 : 12);
+      if (guard > 4) xPos += 8;
       guard += 1;
     }
-    labelSlots.push({ x, y });
+    labelSlots.push({ x: xPos, y });
+    ctx.font = `${selectedLabel ? "bold 11" : "10"}px ${colors.mono}`;
+    ctx.textAlign = "center";
+    const metrics = ctx.measureText(text);
+    const padX = 4;
+    const boxW = metrics.width + padX * 2;
+    const boxH = selectedLabel ? 14 : 12;
+    ctx.fillStyle = selectedLabel ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.28)";
+    ctx.fillRect(xPos - boxW / 2, y - boxH + 2, boxW, boxH);
     ctx.fillStyle = color;
-    ctx.font = `${selectedLabel ? 11 : 10}px ${colors.mono}`;
+    ctx.fillText(text, xPos, y);
     ctx.textAlign = "left";
-    ctx.fillText(text, x + 6, y);
+    return { x: xPos, y };
   };
 
   rows.forEach(({ entity, kind }, rowIdx) => {
@@ -645,6 +693,7 @@ function drawOverlays(chart, tfBlock, g) {
     }
     const x1 = g.xAt(Math.min(iEntry, iEnd));
     const x2 = g.xAt(Math.max(iEntry, iEnd));
+    const xMid = (x1 + x2) / 2;
     const yEntry = g.yAt(entry);
     const entryCandle = chart.visible[iEntry];
 
@@ -659,7 +708,10 @@ function drawOverlays(chart, tfBlock, g) {
       ctx.stroke();
       ctx.setLineDash([]);
       if (isSel || !selected) {
-        placeLabel(x2, g.yAt(take) - 2, `TP ${fmtPrice(take)}`, colors.tradeTake, isSel);
+        ctx.fillStyle = colors.tradeTake;
+        ctx.font = `9px ${colors.mono}`;
+        ctx.textAlign = "left";
+        ctx.fillText("TP", x2 + 3, g.yAt(take) + 3);
       }
     }
     if (stop != null) {
@@ -673,7 +725,10 @@ function drawOverlays(chart, tfBlock, g) {
       ctx.stroke();
       ctx.setLineDash([]);
       if (isSel || !selected) {
-        placeLabel(x2, g.yAt(stop) + 10, `SL ${fmtPrice(stop)}`, colors.tradeStop, isSel);
+        ctx.fillStyle = colors.tradeStop;
+        ctx.font = `9px ${colors.mono}`;
+        ctx.textAlign = "left";
+        ctx.fillText("SL", x2 + 3, g.yAt(stop) + 3);
       }
     }
 
@@ -685,25 +740,29 @@ function drawOverlays(chart, tfBlock, g) {
     ctx.stroke();
     ctx.lineWidth = 1;
 
-    const statusBit = kind === "open" ? " · OPEN" : "";
-    const entryLabel = `${label}  Entry  ${fmtPrice(entry)}${statusBit}`;
-    const yLabelBase = side === "SHORT"
-      ? g.yAt(entryCandle.high) - 14 - (rowIdx % 3) * 12
-      : g.yAt(entryCandle.low) + 14 + (rowIdx % 3) * 12;
+    // Compact entry marker only (no text on marker)
     if (side === "SHORT") {
-      drawShortEntryMarker(ctx, x1, g.yAt(entryCandle.high) - 8, label, isSel, colors);
+      drawShortEntryMarker(ctx, x1, g.yAt(entryCandle.high) - 8, isSel, colors);
+      chart.hitRegions.push({ key, x: x1, y: g.yAt(entryCandle.high) - 8, entity, kind, role: "entry" });
     } else {
-      drawLongEntryMarker(ctx, x1, g.yAt(entryCandle.low) + 8, label, isSel, colors);
+      drawLongEntryMarker(ctx, x1, g.yAt(entryCandle.low) + 8, isSel, colors);
+      chart.hitRegions.push({ key, x: x1, y: g.yAt(entryCandle.low) + 8, entity, kind, role: "entry" });
     }
-    placeLabel(x1, yLabelBase, entryLabel, isSel ? colors.text : colors.tradeEntry, isSel);
-    chart.hitRegions.push({ key, x: x1, y: yLabelBase, entity, kind, role: "entry" });
+
+    // Single TF_N label centered on trade span, near entry line (not on candle body)
+    const yLabelPreferred = yEntry - 10 - (rowIdx % 3) * 11;
+    const placed = placeCompact(
+      xMid,
+      yLabelPreferred,
+      label,
+      isSel ? colors.text : colors.tradeEntry,
+      isSel,
+    );
+    chart.hitRegions.push({ key, x: placed.x, y: placed.y, entity, kind, role: "label" });
 
     if (kind === "closed" && exitPx != null) {
       const yExit = g.yAt(exitPx);
-      drawExitMarker(ctx, x2, yExit, label, isSel, colors);
-      if (isSel || !selected) {
-        placeLabel(x2, yExit - 10, `× ${label}  Exit  ${fmtPrice(exitPx)}`, colors.tradeExit, isSel);
-      }
+      drawExitMarker(ctx, x2, yExit, isSel, colors);
       chart.hitRegions.push({ key, x: x2, y: yExit, entity, kind, role: "exit" });
     }
 
@@ -711,7 +770,7 @@ function drawOverlays(chart, tfBlock, g) {
     const yBot = Math.max(yEntry, take != null ? g.yAt(take) : yEntry, stop != null ? g.yAt(stop) : yEntry);
     chart.hitRegions.push({
       key,
-      x: (x1 + x2) / 2,
+      x: xMid,
       y: yEntry,
       entity,
       kind,

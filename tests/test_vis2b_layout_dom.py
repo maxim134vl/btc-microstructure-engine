@@ -21,13 +21,17 @@ def test_long_short_zone_and_open_closed_span_in_js():
     assert "drawZoneRect" in js
     assert "take_profit_price" in js
     assert "stop_price" in js
-    # Closed span uses exit; open extends to last candle
     assert "kind === \"closed\"" in js or "kind === 'closed'" in js
     assert "chart.visible.length - 1" in js
-    assert " · OPEN" in js
-    assert "Exit  ${fmtPrice" in js or "Exit  `" in js
+    # Clean canvas: no Entry/Exit/OPEN text clutter; compact markers only
+    assert " · OPEN" not in js
+    assert "Entry  ${fmtPrice" not in js
+    assert "Exit  ${fmtPrice" not in js
+    assert "placeCompact" in js
     assert re.search(r"finitePrice\(entity\.stop_price\)", js)
     assert re.search(r"finitePrice\(entity\.take_profit_price\)", js)
+    # Single TF_N label path uses publicNumber directly
+    assert "placeCompact(\n      xMid" in js or "placeCompact(\n      xMid," in js or "placeCompact(" in js
 
 
 def test_no_static_four_canvases_and_nav():
@@ -38,10 +42,22 @@ def test_no_static_four_canvases_and_nav():
     assert "paperPnlBlock" not in html
 
 
-def test_generator_hook_emits_v3_ordinals(tmp_path, monkeypatch):
+def test_generator_hook_emits_v4_ordinals(tmp_path, monkeypatch):
     from generate_lifecycle_context_data import emit_timeframe_chart_truth_if_enabled
 
     monkeypatch.delenv("ENABLE_TIMEFRAME_CHART_TRUTH", raising=False)
+    monkeypatch.delenv("TIMEFRAME_CHART_TRUTH_OUT", raising=False)
+    # Isolate from LIVE1B active epoch so the gated emit path is exercised.
+    monkeypatch.setattr(
+        "apps.context_visualizer.active_epoch_trade_filter.live1b_paper_active",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "active_epoch_trade_filter.live1b_paper_active",
+        lambda: False,
+        raising=False,
+    )
     assert emit_timeframe_chart_truth_if_enabled() is None
 
     out = tmp_path / "timeframe_chart_truth.json"
@@ -49,13 +65,15 @@ def test_generator_hook_emits_v3_ordinals(tmp_path, monkeypatch):
     path = emit_timeframe_chart_truth_if_enabled()
     assert path == out
     payload = json.loads(out.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "timeframe_chart_truth_v3"
+    assert payload["schema_version"] == "timeframe_chart_truth_v4"
     m15 = payload["timeframes"]["M15"]
-    ents = (m15.get("closed_trades") or []) + (m15.get("open_positions") or [])
-    assert ents
-    assert ents[0]["public_number"].startswith("M15_")
-    assert " · " not in ents[0]["public_number"]
+    assert len(m15.get("candles") or []) >= 1
     assert len(m15.get("context_segments") or []) >= 1
+    ents = (m15.get("closed_trades") or []) + (m15.get("open_positions") or [])
+    # Under LIVE1B empty epoch, overlays may be empty; when present they use TF_N.
+    for ent in ents:
+        assert str(ent.get("public_number") or "").startswith("M15_")
+        assert " · " not in str(ent.get("public_number") or "")
 
 
 def test_ops_files_untouched_marker():

@@ -36,7 +36,7 @@ from multi_timeframe_availability import (  # noqa: E402
     build_completed_bars,
 )
 
-SCHEMA_VERSION = "timeframe_chart_truth_v3"
+SCHEMA_VERSION = "timeframe_chart_truth_v4"
 TIMEFRAMES = ("M15", "M30", "H1", "H4")
 DEFAULT_WINDOW_DAYS = 7
 COMMAND_MEMORY = ROOT / "data" / "trading" / "manager" / "timeframe_command_memory.parquet"
@@ -550,18 +550,23 @@ def load_closed_trades_for_tf(
     *,
     episode_by_id: dict[int, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    # LIVE1B: do not surface voided legacy closed-bar trades in the active chart.
+    from active_epoch_trade_filter import (  # type: ignore
+        active_paper_epoch_id,
+        filter_active_epoch_rows,
+        live1b_paper_active,
+    )
+
     try:
-        from apps.context_visualizer.trading_truth import _live1b_active, _load_live1b_closed_trades
+        from trading_truth import _load_live1b_closed_trades  # type: ignore
     except Exception:
         try:
-            from trading_truth import _live1b_active, _load_live1b_closed_trades  # type: ignore
+            from apps.context_visualizer.trading_truth import _load_live1b_closed_trades  # type: ignore
         except Exception:
-            _live1b_active = None  # type: ignore
             _load_live1b_closed_trades = None  # type: ignore
-    if _live1b_active and _live1b_active():
-        rows = _load_live1b_closed_trades(timeframe=timeframe)
-        # Chart expects episode linkage fields; leave unproven empty for new epoch.
+
+    if live1b_paper_active():
+        rows = _load_live1b_closed_trades(timeframe=timeframe) if _load_live1b_closed_trades else []
+        rows = filter_active_epoch_rows(rows, active_epoch_id=active_paper_epoch_id())
         for row in rows:
             row.setdefault("episode_status", "UNPROVEN")
             row.setdefault("episode_link_reason", "LIVE1B_NEW_EPOCH")
@@ -594,8 +599,7 @@ def load_closed_trades_for_tf(
         take = _f(raw.get("take_profit_price"))
         if take is None:
             take = _f(meta.get("take_profit_price"))
-        rows.append(
-            {
+        row = {
                 "trade_id": trade_id,
                 "position_id": _txt(raw.get("position_id")),
                 "timeframe": timeframe,
@@ -618,10 +622,12 @@ def load_closed_trades_for_tf(
                 "manager_cycle_id": _txt(meta.get("manager_cycle_id")),
                 "command_id": _txt(raw.get("command_id") or meta.get("command_id")),
                 "stamped_lifecycle_episode_id": stamped,
+                "paper_epoch_id": _txt(raw.get("paper_epoch_id") or meta.get("paper_epoch_id")),
                 **link,
                 "source_book": f"TIMEFRAME_TRADER_{timeframe}",
             }
-        )
+        rows.append(row)
+    rows = filter_active_epoch_rows(rows)
     rows.sort(key=lambda r: (r.get("entry_timestamp") or "", r.get("trade_id") or ""))
     return rows
 
@@ -631,16 +637,23 @@ def load_open_positions_for_tf(
     *,
     episode_by_id: dict[int, dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    from active_epoch_trade_filter import (  # type: ignore
+        active_paper_epoch_id,
+        filter_active_epoch_rows,
+        live1b_paper_active,
+    )
+
     try:
-        from apps.context_visualizer.trading_truth import _live1b_active, _load_live1b_open_positions
+        from trading_truth import _load_live1b_open_positions  # type: ignore
     except Exception:
         try:
-            from trading_truth import _live1b_active, _load_live1b_open_positions  # type: ignore
+            from apps.context_visualizer.trading_truth import _load_live1b_open_positions  # type: ignore
         except Exception:
-            _live1b_active = None  # type: ignore
             _load_live1b_open_positions = None  # type: ignore
-    if _live1b_active and _live1b_active():
-        rows = _load_live1b_open_positions(timeframe=timeframe)
+
+    if live1b_paper_active():
+        rows = _load_live1b_open_positions(timeframe=timeframe) if _load_live1b_open_positions else []
+        rows = filter_active_epoch_rows(rows, active_epoch_id=active_paper_epoch_id())
         for row in rows:
             row.setdefault("episode_status", "UNPROVEN")
             row.setdefault("episode_link_reason", "LIVE1B_NEW_EPOCH")
@@ -700,10 +713,12 @@ def load_open_positions_for_tf(
                 "manager_cycle_id": _txt(meta.get("manager_cycle_id")),
                 "command_id": _txt(raw.get("command_id") or meta.get("command_id")),
                 "stamped_lifecycle_episode_id": stamped,
+                "paper_epoch_id": _txt(raw.get("paper_epoch_id") or meta.get("paper_epoch_id")),
                 **link,
                 "source_book": f"TIMEFRAME_TRADER_{timeframe}",
             }
         )
+    rows = filter_active_epoch_rows(rows)
     rows.sort(key=lambda r: (r.get("entry_timestamp") or "", r.get("position_id") or ""))
     return rows
 
@@ -1028,7 +1043,39 @@ def build_timeframe_chart_truth(
         },
         "timeframes": timeframes,
         "data_quality": data_quality,
-        "runtime": {"paper_only": True, "execution_enabled": False},
+        "runtime": {
+            "paper_only": True,
+            "execution_enabled": False,
+            "real_execution": False,
+        },
+        **_trade_overlay_meta(timeframes),
+    }
+
+
+def _trade_overlay_meta(timeframes: dict[str, Any]) -> dict[str, Any]:
+    from active_epoch_trade_filter import active_paper_epoch_id, live1b_paper_active  # type: ignore
+
+    closed_n = 0
+    open_n = 0
+    marker_n = 0
+    for panel in timeframes.values():
+        closed = panel.get("closed_trades") or []
+        opens = panel.get("open_positions") or []
+        closed_n += len(closed)
+        open_n += len(opens)
+        # entry+exit markers for closed; entry marker for open
+        marker_n += len(closed) * 2 + len(opens)
+    eid = active_paper_epoch_id()
+    return {
+        "active_paper_epoch_id": eid,
+        "trade_overlay_source": (
+            "LIVE1B_INTRABAR_PAPER_EPOCH" if live1b_paper_active() else "TIMEFRAME_TRADER_BOOKS"
+        ),
+        "legacy_excluded": bool(live1b_paper_active()),
+        "trade_marker_count": marker_n,
+        "open_position_overlay_count": open_n,
+        "closed_trade_overlay_count": closed_n,
+        "cache_key": f"chart_trades:{eid or 'none'}:{SCHEMA_VERSION}",
     }
 
 

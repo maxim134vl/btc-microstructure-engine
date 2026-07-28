@@ -967,8 +967,65 @@ def _render_open_position_row(row: Any, mark_price: float | None) -> dict[str, A
     }
 
 
+def _live1b_active_epoch_id() -> str | None:
+    """Return active LIVE1B paper epoch id, or None when not in LIVE1B mode."""
+    try:
+        sys.path.insert(0, str(ROOT / "apps" / "context_visualizer"))
+        from active_epoch_trade_filter import active_paper_epoch_id, live1b_paper_active  # type: ignore
+
+        if live1b_paper_active():
+            return active_paper_epoch_id()
+    except Exception:
+        return None
+    return None
+
+
 def build_normalized_trade_render_layer(generated_at: str, mark_price: float | None) -> dict[str, Any]:
     import pandas as pd
+
+    # LIVE1B: active charts must not render archived/legacy paper books.
+    live1b_epoch = _live1b_active_epoch_id()
+    if live1b_epoch:
+        columns = [*REQUIRED_TRADE_RENDER_COLUMNS, *TRADE_RENDER_EXTRA_COLUMNS]
+        frame = pd.DataFrame([], columns=columns)
+        NORMALIZED_TRADE_RENDER_LAYER_PARQUET.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_parquet(NORMALIZED_TRADE_RENDER_LAYER_PARQUET, index=False)
+        payload = {
+            "generated_at_utc": generated_at,
+            "active_paper_epoch_id": live1b_epoch,
+            "trade_overlay_source": "LIVE1B_INTRABAR_PAPER_EPOCH",
+            "legacy_excluded": True,
+            "source_closed": f"data/trading/intrabar_paper/{live1b_epoch}/books/trades.jsonl",
+            "source_open": f"data/trading/intrabar_paper/{live1b_epoch}/books/positions.jsonl",
+            "secondary_research_layer": _rel(POLICY_CONTEXT_SECONDARY_SOURCE),
+            "economics_version": CANONICAL_ECONOMICS_VERSION,
+            "canonical_view": {"status": "LIVE1B_EMPTY_ACTIVE_EPOCH", "paper_epoch_id": live1b_epoch},
+            "json_path": _rel(NORMALIZED_TRADE_RENDER_LAYER_JSON),
+            "parquet_path": _rel(NORMALIZED_TRADE_RENDER_LAYER_PARQUET),
+            "xlsx_path": _rel(NORMALIZED_TRADE_RENDER_LAYER_XLSX),
+            "renderer_source": True,
+            "trade_identity": "trade_id",
+            "context_id_role": "label_only",
+            "closed_trade_count": 0,
+            "open_trade_count": 0,
+            "total_render_trade_count": 0,
+            "source_closed_trade_count": 0,
+            "source_open_trade_count": 0,
+            "one_row_per_trade": True,
+            "required_columns": list(REQUIRED_TRADE_RENDER_COLUMNS),
+            "trades": [],
+            "cache_key": f"chart_trades:{live1b_epoch}:normalized_v1",
+            "validation": {
+                "duplicate_trade_ids": [],
+                "missing_required_render_fields": [],
+                "render_layer_count_matches_sources": True,
+                "controller_ledger_used_for_render": False,
+                "one_shot_rows_excluded_from_render": True,
+                "legacy_excluded": True,
+            },
+        }
+        write_json(NORMALIZED_TRADE_RENDER_LAYER_JSON, payload)
+        return payload
 
     # Rebuild the canonical union (archived legacy closed book + timeframe
     # trader tail) so the chart always reflects the settled books, then render
@@ -1187,6 +1244,44 @@ def _shape_from_normalized_trade(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_overlays_from_trade_render_layer(layer: dict[str, Any]) -> dict[str, Any]:
+    live1b_epoch = _live1b_active_epoch_id()
+    if live1b_epoch or layer.get("legacy_excluded") is True:
+        try:
+            sys.path.insert(0, str(ROOT / "apps" / "context_visualizer"))
+            from active_epoch_trade_filter import empty_trade_overlay_payload  # type: ignore
+
+            payload = empty_trade_overlay_payload(active_epoch_id=live1b_epoch or layer.get("active_paper_epoch_id"))
+        except Exception:
+            payload = {
+                "active_paper_epoch_id": live1b_epoch,
+                "legacy_excluded": True,
+                "entries": [],
+                "exits": [],
+                "trade_shapes": [],
+                "closed_trades": [],
+                "open_positions": [],
+                "restated_trades": [],
+                "superseded_paper_trades": [],
+                "counts": {
+                    "entry_markers": 0,
+                    "exit_markers": 0,
+                    "closed_trade_overlays": 0,
+                    "open_position_overlays": 0,
+                    "trade_shapes": 0,
+                    "trade_marker_count": 0,
+                    "open_position_overlay_count": 0,
+                    "closed_trade_overlay_count": 0,
+                    "visible_stop_loss_line_count": 0,
+                    "visible_take_profit_line_count": 0,
+                },
+            }
+        payload["generated_at_utc"] = layer.get("generated_at_utc")
+        payload["mark_price"] = None
+        payload["paper_only"] = True
+        payload["real_execution"] = False
+        payload["trade_layer_source"] = "LIVE1B_INTRABAR_PAPER_EPOCH"
+        return ensure_latest_trade_explainability(payload)
+
     rows = [dict(row) for row in layer.get("trades") or [] if isinstance(row, dict)]
     shapes = [_shape_from_normalized_trade(row) for row in rows]
     closed = [shape for shape in shapes if str(shape.get("status") or "").upper() == "CLOSED"]
@@ -1551,6 +1646,25 @@ def ensure_latest_trade_explainability(overlays: dict[str, Any]) -> dict[str, An
 
 
 def build_paper_overlays(mark_price: float | None) -> dict[str, Any]:
+    # LIVE1B: active charts must not render voided/legacy closed-bar overlays.
+    try:
+        sys.path.insert(0, str(ROOT / "apps" / "context_visualizer"))
+        from active_epoch_trade_filter import (  # type: ignore
+            active_paper_epoch_id,
+            empty_trade_overlay_payload,
+            live1b_paper_active,
+        )
+
+        if live1b_paper_active():
+            payload = empty_trade_overlay_payload(active_epoch_id=active_paper_epoch_id())
+            payload["generated_at_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            payload["mark_price"] = mark_price
+            payload["paper_only"] = True
+            payload["real_execution"] = False
+            return ensure_latest_trade_explainability(payload)
+    except Exception:
+        pass
+
     from visual_paper_trade_overlay_builder import (  # type: ignore
         build_paper_overlays as _build,
     )
@@ -2008,14 +2122,27 @@ def refresh_once(*, visual_stale_seconds: float, last_good: dict[str, Any]) -> d
             overlays["open_positions"] = tf_shapes
             counts = dict(overlays.get("counts") or {})
             counts["open_position_overlays"] = len(tf_shapes)
+            counts["open_position_overlay_count"] = len(tf_shapes)
             counts["live_open_paper_trade_count"] = len(tf_shapes)
             counts["timeframe_trader_open_position_count"] = len(tf_shapes)
+            counts["trade_marker_count"] = len(tf_shapes) + len(overlays.get("closed_trades") or []) * 2
+            counts["closed_trade_overlay_count"] = len(overlays.get("closed_trades") or [])
             overlays["counts"] = counts
-            overlays["open_positions_source"] = "data/trading/timeframe_traders"
+            epoch_id = truth.get("active_paper_epoch_id")
+            if truth.get("legacy_excluded") and epoch_id:
+                overlays["open_positions_source"] = f"data/trading/intrabar_paper/{epoch_id}/books"
+                overlays["active_paper_epoch_id"] = epoch_id
+                overlays["legacy_excluded"] = True
+                overlays["trade_overlay_source"] = "LIVE1B_INTRABAR_PAPER_EPOCH"
+            else:
+                overlays["open_positions_source"] = "data/trading/timeframe_traders"
             visual_status["open_positions_count"] = len(tf_shapes)
+            visual_status["active_paper_epoch_id"] = epoch_id
+            visual_status["legacy_excluded"] = bool(truth.get("legacy_excluded"))
             visual_status["trading_truth"] = {
                 "active_episode_id": (truth.get("active_episode") or {}).get("episode_id"),
                 "open_position_count": len(tf_shapes),
+                "active_paper_epoch_id": epoch_id,
                 "path": "apps/context_visualizer/public/data/trading_truth.json",
             }
         except Exception as exc:
@@ -2028,17 +2155,23 @@ def refresh_once(*, visual_stale_seconds: float, last_good: dict[str, Any]) -> d
             {
                 "generated_at_utc": refresh_ts,
                 "source": overlays.get("open_positions_source") or "overlay_shapes",
+                "active_paper_epoch_id": overlays.get("active_paper_epoch_id"),
+                "legacy_excluded": bool(overlays.get("legacy_excluded")),
                 "open_positions": overlays.get("open_positions") or [],
                 "overlay_shapes": overlays.get("open_positions") or [],
                 "count": len(overlays.get("open_positions") or []),
+                "open_position_overlay_count": len(overlays.get("open_positions") or []),
             },
         )
         write_json(
             CLOSED_TRADES_OUT,
             {
                 "generated_at_utc": refresh_ts,
+                "active_paper_epoch_id": overlays.get("active_paper_epoch_id"),
+                "legacy_excluded": bool(overlays.get("legacy_excluded")),
                 "closed_trades": overlays.get("closed_trades") or [],
                 "count": len(overlays.get("closed_trades") or []),
+                "closed_trade_overlay_count": len(overlays.get("closed_trades") or []),
             },
         )
         write_json(CONTROLLER_CYCLES_OUT, cycles)

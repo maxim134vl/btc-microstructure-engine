@@ -504,11 +504,16 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def emit_timeframe_chart_truth_if_enabled() -> Path | None:
-    """VIS2B/VIS2C hook: atomic timeframe_chart_truth write when explicitly enabled.
+    """Atomic timeframe_chart_truth write.
 
-    Default OFF so live refresher does not write the new payload during VIS2B.
-    Enable later with ENABLE_TIMEFRAME_CHART_TRUTH=1 or TIMEFRAME_CHART_TRUTH_OUT=<path>.
+    Always ON under LIVE1B so active charts cannot retain legacy markers.
+    Otherwise requires ENABLE_TIMEFRAME_CHART_TRUTH=1 or TIMEFRAME_CHART_TRUTH_OUT.
     """
+    try:
+        from active_epoch_trade_filter import live1b_paper_active  # type: ignore
+    except Exception:
+        live1b_paper_active = lambda: False  # type: ignore
+
     explicit = (os.environ.get("TIMEFRAME_CHART_TRUTH_OUT") or "").strip()
     enabled = (os.environ.get("ENABLE_TIMEFRAME_CHART_TRUTH") or "").strip().lower() in {
         "1",
@@ -516,7 +521,7 @@ def emit_timeframe_chart_truth_if_enabled() -> Path | None:
         "yes",
         "on",
     }
-    if not explicit and not enabled:
+    if not explicit and not enabled and not live1b_paper_active():
         return None
     try:
         from timeframe_chart_truth import PUBLIC_CHART_TRUTH, write_timeframe_chart_truth

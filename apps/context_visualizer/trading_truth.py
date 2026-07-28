@@ -639,6 +639,22 @@ def write_trading_truth_artifacts(output_dir: Path, *, timeframe: str = "ALL") -
     open_positions = truth["open_positions"]
     shapes = open_position_overlay_shapes(open_positions)
 
+    try:
+        from active_epoch_trade_filter import active_paper_epoch_id, live1b_paper_active  # type: ignore
+    except Exception:
+        live1b_paper_active = lambda: False  # type: ignore
+        active_paper_epoch_id = lambda: None  # type: ignore
+
+    epoch_id = active_paper_epoch_id() if live1b_paper_active() else None
+    truth["active_paper_epoch_id"] = epoch_id
+    truth["legacy_excluded"] = bool(live1b_paper_active())
+    truth["trade_overlay_source"] = (
+        "LIVE1B_INTRABAR_PAPER_EPOCH" if live1b_paper_active() else "TIMEFRAME_TRADER_BOOKS"
+    )
+    truth["trade_marker_count"] = len(open_positions) + len(truth.get("closed_trades") or []) * 2
+    truth["open_position_overlay_count"] = len(open_positions)
+    truth["closed_trade_overlay_count"] = len(truth.get("closed_trades") or [])
+
     (output_dir / "trading_truth.json").write_text(
         json.dumps(truth, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -647,10 +663,17 @@ def write_trading_truth_artifacts(output_dir: Path, *, timeframe: str = "ALL") -
         json.dumps(
             {
                 "generated_at_utc": truth["generated_at"],
-                "source": "data/trading/timeframe_traders",
+                "source": (
+                    f"data/trading/intrabar_paper/{epoch_id}/books"
+                    if live1b_paper_active()
+                    else "data/trading/timeframe_traders"
+                ),
+                "active_paper_epoch_id": epoch_id,
+                "legacy_excluded": bool(live1b_paper_active()),
                 "open_positions": open_positions,
                 "overlay_shapes": shapes,
                 "count": len(open_positions),
+                "open_position_overlay_count": len(open_positions),
             },
             indent=2,
             ensure_ascii=False,

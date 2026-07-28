@@ -29,7 +29,7 @@ def truth():
 
 def test_candidate_dir_and_schema(truth):
     assert "vis_trade_render_context_fix" in str(CANDIDATE_DIR)
-    assert truth["schema_version"] == "timeframe_chart_truth_v3"
+    assert truth["schema_version"] == "timeframe_chart_truth_v4"
     assert truth["visual_contract"]["trade_public_numbers"] is True
     assert truth["visual_contract"]["per_tf_context_bands"] is True
     assert truth["visual_contract"]["global_lifecycle_strip"] is False
