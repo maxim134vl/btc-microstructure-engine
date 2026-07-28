@@ -50,6 +50,98 @@ FEATURE_CATEGORICAL = (
 )
 TIMEFRAMES = ("M15", "M30", "H1", "H4")
 
+SOURCE_AGG = "BINANCE_SPOT_BTCUSDT_AGGTRADE"
+SOURCE_BOOK = "BINANCE_SPOT_BTCUSDT_BOOKTICKER"
+SOURCE_M15 = "BINANCE_SPOT_BTCUSDT_M15_KLINE"
+
+# Dependency-scoped suppression: only metrics that truly depend on a source.
+INPUT_METRICS_BY_SOURCE: dict[str, set[str]] = {
+    SOURCE_AGG: {
+        "trade_return_bps",
+        "absolute_trade_return_bps",
+        "quantity",
+        "quote_notional",
+        "trade_interarrival_ms",
+        "trades_per_minute",
+    },
+    SOURCE_BOOK: {
+        "spread_bps",
+        "mid_return_bps",
+        "book_update_interarrival_ms",
+    },
+    SOURCE_M15: set(),  # completed-bar structural — not agg/book input
+}
+
+# Feature groups from cognition health dependencies.
+FEATURE_METRICS_BY_SOURCE: dict[str, set[str]] = {
+    SOURCE_AGG: set(FEATURE_NUMERIC) | set(FEATURE_CATEGORICAL),
+    SOURCE_BOOK: set(),  # execution BBO — not feature cognition
+    SOURCE_M15: {"structural_rank", "location_bias"},
+}
+
+
+def load_active_open_data_quality_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Currently OPEN external-data issues only (RESOLVED cancels prior OPEN)."""
+    open_map: dict[str, dict[str, Any]] = {}
+    for row in events:
+        if str(row.get("branch") or "") != "EXTERNAL_DATA":
+            continue
+        key = f"{row.get('source_id')}|{row.get('subtype')}"
+        status = str(row.get("status") or "").upper()
+        if status == "OPEN":
+            open_map[key] = row
+        elif status == "RESOLVED":
+            open_map.pop(key, None)
+    return list(open_map.values())
+
+
+def compute_data_quality_suppression(open_events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Map currently OPEN source issues → dependent input/feature metrics only."""
+    suppressed_input: set[str] = set()
+    suppressed_feature: set[str] = set()
+    by_source: dict[str, list[str]] = {}
+    sources: list[str] = []
+    active: list[dict[str, Any]] = []
+    for ev in open_events:
+        sid = str(ev.get("source_id") or "")
+        if not sid:
+            continue
+        sources.append(sid)
+        active.append(
+            {
+                "source_id": sid,
+                "subtype": ev.get("subtype"),
+                "severity": ev.get("severity"),
+                "status": "OPEN",
+                "detected_at": ev.get("detected_at") or ev.get("event_time"),
+                "observed_value": ev.get("observed_value"),
+                "threshold": ev.get("threshold"),
+                "toxic_event_id": ev.get("toxic_event_id"),
+            }
+        )
+        in_metrics = sorted(INPUT_METRICS_BY_SOURCE.get(sid, set()))
+        feat_metrics = sorted(FEATURE_METRICS_BY_SOURCE.get(sid, set()))
+        suppressed_input |= set(in_metrics)
+        suppressed_feature |= set(feat_metrics)
+        labels = [f"input:-:{m}" for m in in_metrics] + [
+            f"feature:*:{m}" for m in feat_metrics
+        ]
+        by_source.setdefault(sid, [])
+        for lab in labels:
+            if lab not in by_source[sid]:
+                by_source[sid].append(lab)
+    return {
+        "data_quality_status": "ACTIVE_OPEN_ISSUES" if open_events else "CLEAR",
+        "active_data_quality_events": active,
+        "suppressed_sources": sorted(set(sources)),
+        "suppressed_input_metrics": suppressed_input,
+        "suppressed_feature_metrics": suppressed_feature,
+        "suppressed_metrics_by_source": by_source,
+        "suppression_reason": (
+            "OPEN_SOURCE_DEPENDENCY_MATCH" if open_events else "NO_OPEN_DATA_QUALITY_EVENTS"
+        ),
+    }
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
@@ -74,6 +166,13 @@ def paths(repo_root: Path | None = None) -> dict[str, Path]:
         / "external_data"
         / "snapshots"
         / "latest_summary.json",
+        "external_events": root
+        / "data"
+        / "model_assurance"
+        / "toxic_box"
+        / "external_data"
+        / "events"
+        / "external_data_events.jsonl",
         "external_sources": root
         / "data"
         / "model_assurance"
@@ -256,9 +355,20 @@ class MetricTracker:
         self.status = "NOT_EVALUABLE"
 
     def set_suppressed(self, suppressed: bool) -> None:
+        was = self.suppressed
         self.suppressed = suppressed
         if suppressed:
             self.status = "SUPPRESSED_DATA_QUALITY"
+            self.pending_severity = None
+            self.pending_count = 0
+            return
+        if was and not suppressed:
+            if self.not_evaluable:
+                self.status = "NOT_EVALUABLE"
+            elif self.baseline_status != "FROZEN":
+                self.status = "COLLECTING_BASELINE"
+            else:
+                self.status = "STABLE"
             self.pending_severity = None
             self.pending_count = 0
 
@@ -758,6 +868,8 @@ def build_summary(
     trackers: dict[str, MetricTracker],
     last_drift_event_at: str | None,
     last_resolved_at: str | None,
+    suppression: dict[str, Any] | None = None,
+    external_summary_updated_at: str | None = None,
 ) -> dict[str, Any]:
     by_branch: dict[str, list[str]] = defaultdict(list)
     baseline_status_by_branch: dict[str, str] = {}
@@ -767,10 +879,14 @@ def build_summary(
     critical_metrics: list[str] = []
     not_evaluable_metrics: list[str] = []
     suppressed_metrics: list[str] = []
+    suppressed_metrics_by_source: dict[str, list[str]] = defaultdict(list)
     counts_by_branch: dict[str, int] = defaultdict(int)
     counts_by_metric: dict[str, int] = defaultdict(int)
     counts_by_timeframe: dict[str, int] = defaultdict(int)
     frozen = 0
+    supp = suppression or {}
+    suppressed_input = set(supp.get("suppressed_input_metrics") or [])
+    suppressed_feature = set(supp.get("suppressed_feature_metrics") or [])
 
     for tr in trackers.values():
         by_branch[tr.branch].append(tr.status)
@@ -793,30 +909,58 @@ def build_summary(
         elif tr.status == "SUPPRESSED_DATA_QUALITY":
             suppressed_metrics.append(label)
 
+    # Attribute suppressed labels back to sources from the plan
+    for sid, labels in (supp.get("suppressed_metrics_by_source") or {}).items():
+        for lab in labels:
+            # expand feature:* to concrete suppressed labels
+            if lab.startswith("feature:*:"):
+                field = lab.split(":", 2)[-1]
+                for sm in suppressed_metrics:
+                    if sm.startswith("feature:") and sm.endswith(f":{field}"):
+                        if sm not in suppressed_metrics_by_source[sid]:
+                            suppressed_metrics_by_source[sid].append(sm)
+            elif lab.startswith("input:"):
+                metric = lab.split(":")[-1]
+                concrete = f"input:-:{metric}"
+                if concrete in suppressed_metrics and concrete not in suppressed_metrics_by_source[sid]:
+                    suppressed_metrics_by_source[sid].append(concrete)
+
+    def _branch_status(branch: str) -> str:
+        statuses = by_branch.get(branch) or []
+        if not statuses:
+            return "COLLECTING_BASELINE"
+        actionable = [s for s in statuses if s not in {"SUPPRESSED_DATA_QUALITY", "NOT_EVALUABLE"}]
+        if actionable:
+            return max_status(actionable)
+        if all(s == "SUPPRESSED_DATA_QUALITY" for s in statuses):
+            return "SUPPRESSED_DATA_QUALITY"
+        if any(s == "NOT_EVALUABLE" for s in statuses):
+            return "NOT_EVALUABLE"
+        return "COLLECTING_BASELINE"
+
     for branch, statuses in by_branch.items():
-        # branch status ignores single-window (already gated in tracker.status)
-        if all(s == "COLLECTING_BASELINE" for s in statuses):
-            baseline_status_by_branch[branch] = "COLLECTING"
-        elif any(s == "SUPPRESSED_DATA_QUALITY" for s in statuses) and all(
-            s in {"SUPPRESSED_DATA_QUALITY", "COLLECTING_BASELINE", "NOT_EVALUABLE"} for s in statuses
-        ):
-            baseline_status_by_branch[branch] = "SUPPRESSED_DATA_QUALITY"
-        elif any(s == "COLLECTING_BASELINE" for s in statuses):
+        actionable = [s for s in statuses if s not in {"SUPPRESSED_DATA_QUALITY", "NOT_EVALUABLE"}]
+        if not actionable:
+            baseline_status_by_branch[branch] = (
+                "SUPPRESSED_DATA_QUALITY"
+                if any(s == "SUPPRESSED_DATA_QUALITY" for s in statuses)
+                else "COLLECTING"
+            )
+        elif any(s == "COLLECTING_BASELINE" for s in actionable):
             baseline_status_by_branch[branch] = "COLLECTING"
         else:
             baseline_status_by_branch[branch] = "FROZEN" if all(
                 t.baseline_status == "FROZEN"
                 for t in trackers.values()
                 if t.branch == branch and not t.not_evaluable and not t.suppressed
-            ) or not any(t.branch == branch and not t.not_evaluable and not t.suppressed for t in trackers.values()) else "PARTIAL"
+            ) else "PARTIAL"
 
     branch_status = {
-        "input": max_status(by_branch.get("input") or ["COLLECTING_BASELINE"]),
-        "feature": max_status(by_branch.get("feature") or ["COLLECTING_BASELINE"]),
-        "context": max_status(by_branch.get("context") or ["COLLECTING_BASELINE"]),
-        "performance": max_status(by_branch.get("performance") or ["COLLECTING_BASELINE"]),
+        "input": _branch_status("input"),
+        "feature": _branch_status("feature"),
+        "context": _branch_status("context"),
+        "performance": _branch_status("performance"),
     }
-    # Empty branches with no trackers stay COLLECTING_BASELINE / NO eligible
     for b in ("input", "feature", "context", "performance"):
         if b not in by_branch:
             branch_status[b] = "COLLECTING_BASELINE"
@@ -857,6 +1001,12 @@ def build_summary(
         "critical_metrics": critical_metrics,
         "not_evaluable_metrics": not_evaluable_metrics,
         "suppressed_metrics": suppressed_metrics,
+        "data_quality_status": supp.get("data_quality_status", "CLEAR"),
+        "active_data_quality_events": supp.get("active_data_quality_events") or [],
+        "suppressed_sources": supp.get("suppressed_sources") or [],
+        "suppressed_metrics_by_source": dict(suppressed_metrics_by_source),
+        "suppression_reason": supp.get("suppression_reason", "NO_OPEN_DATA_QUALITY_EVENTS"),
+        "external_summary_updated_at": external_summary_updated_at,
         "counts_by_branch": dict(counts_by_branch),
         "counts_by_metric": dict(counts_by_metric),
         "counts_by_timeframe": dict(counts_by_timeframe),
@@ -899,8 +1049,10 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
         }
 
     ext_summary = load_json(p["external_summary"]) or {}
-    ext_status = str(ext_summary.get("status") or "")
-    suppress_input_feature = ext_status in {"CURRENT_DEGRADED", "CURRENT_CRITICAL"}
+    open_events = load_active_open_data_quality_events(read_jsonl(p["external_events"]))
+    suppression = compute_data_quality_suppression(open_events)
+    suppressed_input = set(suppression.get("suppressed_input_metrics") or [])
+    suppressed_feature = set(suppression.get("suppressed_feature_metrics") or [])
 
     trackers: dict[str, MetricTracker] = {}
     state_blob = dict(checkpoint.get("trackers") or {})
@@ -954,7 +1106,8 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
                 "evidence": {
                     "window_id": w.get("window_id"),
                     "window_index": w.get("window_index"),
-                    "external_data_status": ext_status,
+                    "data_quality_status": suppression.get("data_quality_status"),
+                    "active_data_quality_events": suppression.get("active_data_quality_events"),
                 },
             }
             if _persist_unique(p["events"], event, id_field="drift_event_id", existing=existing_events):
@@ -980,9 +1133,9 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             config=config,
             state_blob=state_blob,
         )
-        if suppress_input_feature:
+        if metric in suppressed_input:
+            # Proven open source issue — do not admit into baseline
             tr.set_suppressed(True)
-            tr.observations += len(values)
             continue
         tr.set_suppressed(False)
         handle_windows(tr.add_values(values), tr)
@@ -1006,9 +1159,8 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             config=config,
             state_blob=state_blob,
         )
-        if suppress_input_feature:
+        if field in suppressed_feature:
             tr.set_suppressed(True)
-            tr.observations += len(values)
             continue
         tr.set_suppressed(False)
         handle_windows(tr.add_values(values), tr)
@@ -1018,7 +1170,6 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             key = f"feature|{tf}|{field}"
             if key in trackers:
                 continue
-            # only mark if field never observed globally
             if any(k.endswith(f"|{field}") and trackers[k].observations > 0 for k in trackers):
                 continue
             tr = _ensure_tracker(
@@ -1032,7 +1183,7 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
                 config=config,
                 state_blob=state_blob,
             )
-            if suppress_input_feature:
+            if field in suppressed_feature:
                 tr.set_suppressed(True)
             else:
                 tr.mark_not_evaluable("NOT_EVALUABLE_SOURCE_FIELD_MISSING")
@@ -1126,8 +1277,12 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
                 config=config,
                 state_blob=state_blob,
             )
-            if branch in {"input", "feature"} and suppress_input_feature:
+            if branch == "input" and metric in suppressed_input:
                 tr.set_suppressed(True)
+            elif branch == "feature" and metric in suppressed_feature:
+                tr.set_suppressed(True)
+            elif branch in {"input", "feature"}:
+                tr.set_suppressed(False)
 
     checkpoint["trackers"] = {k: t.to_state() for k, t in trackers.items()}
     checkpoint["paper_epoch_id"] = active.get("paper_epoch_id")
@@ -1139,10 +1294,9 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
         trackers=trackers,
         last_drift_event_at=last_event_at,
         last_resolved_at=last_resolved,
+        suppression=suppression,
+        external_summary_updated_at=ext_summary.get("updated_at"),
     )
-    if suppress_input_feature:
-        summary["external_data_status"] = ext_status
-        summary["suppressed_reason"] = "DATA_QUALITY_FAILURE_NOT_DRIFT"
     atomic_write_json(p["summary"], summary)
     atomic_write_json(
         p["current_metrics"],
