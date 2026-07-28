@@ -147,10 +147,12 @@ def registry_paths(repo_root: Path | None = None) -> dict[str, Path]:
         "root": base,
         "models_jsonl": base / "models" / "model_registry.jsonl",
         "active_model": base / "active" / "active_model.json",
+        "candidate_model": base / "candidate" / "candidate_model.json",
         "registry_status": base / "registry_status.json",
         "identity_config": root / "config" / "model_assurance_active_runtime.json",
         "execution_config": root / "config" / "intrabar_paper_execution.json",
         "active_epoch": root / "data" / "trading" / "paper_epochs" / "active.json",
+        "candidates_dir": root / "config" / "model_candidates",
     }
 
 
@@ -300,15 +302,30 @@ def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
 
 
 def _write_status_and_active(paths: dict[str, Path], record: dict[str, Any]) -> None:
+    cand_payload = None
+    if paths["candidate_model"].exists():
+        try:
+            loaded = json.loads(paths["candidate_model"].read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and str(loaded.get("record_status") or "") == "CANDIDATE_REGISTERED":
+                cand_payload = loaded
+        except Exception:
+            cand_payload = None
     status = {
         "status": "ACTIVE_REGISTERED",
         "active_model_id": record["model_id"],
         "active_model_version": record["model_version"],
-        "candidate_status": "NONE_REGISTERED",
-        "shadow_status": "NONE_REGISTERED",
+        "candidate_status": (
+            cand_payload.get("record_status") if cand_payload else "NONE_REGISTERED"
+        ),
+        "candidate_model_id": (cand_payload or {}).get("model_id"),
+        "candidate_model_version": (cand_payload or {}).get("model_version"),
+        "shadow_status": "CANDIDATE_REGISTERED" if cand_payload else "NONE_REGISTERED",
         "runtime_impact": "NON_BLOCKING",
-        "promotion_status": "NOT_APPLICABLE_NO_CANDIDATE",
+        "promotion_status": (
+            "BLOCKED_UNTIL_SHADOW_EVIDENCE" if cand_payload else "NOT_APPLICABLE_NO_CANDIDATE"
+        ),
         "active_registry_record_id": record["registry_record_id"],
+        "candidate_registry_record_id": (cand_payload or {}).get("registry_record_id"),
         "paper_epoch_id": record.get("paper_epoch_id"),
         "runtime_fingerprint": record.get("runtime_fingerprint"),
         "updated_at": _utc_now(),
@@ -466,3 +483,216 @@ def read_registry_status(*, repo_root: Path | None = None) -> dict[str, Any]:
     except Exception:
         return {"status": "CORRUPT_STATUS"}
     return payload if isinstance(payload, dict) else {"status": "CORRUPT_STATUS"}
+
+
+# ---------------------------------------------------------------------------
+# Candidate registry (MODEL-7) — prediction/shadow only, never replaces ACTIVE
+# ---------------------------------------------------------------------------
+
+FORBIDDEN_CANDIDATE_FLAGS = (
+    "execution_enabled",
+    "real_execution",
+    "paper_execution",
+    "order_routing",
+)
+
+
+def validate_candidate_descriptor(descriptor: dict[str, Any]) -> None:
+    """Raise ValueError if candidate violates the safety contract."""
+    for flag in FORBIDDEN_CANDIDATE_FLAGS:
+        if bool(descriptor.get(flag)) is True:
+            raise ValueError(f"CANDIDATE_REJECTED_{flag.upper()}_TRUE")
+    if descriptor.get("execution_enabled") is not False:
+        raise ValueError("CANDIDATE_REJECTED_EXECUTION_ENABLED_REQUIRED_FALSE")
+    if descriptor.get("prediction_only") is not True:
+        raise ValueError("CANDIDATE_REJECTED_PREDICTION_ONLY_REQUIRED")
+    if descriptor.get("shadow_only") is not True:
+        raise ValueError("CANDIDATE_REJECTED_SHADOW_ONLY_REQUIRED")
+    for key in ("model_id", "model_version", "model_type"):
+        if not str(descriptor.get(key) or "").strip():
+            raise ValueError(f"CANDIDATE_REJECTED_MISSING_{key.upper()}")
+
+
+def build_candidate_record(
+    descriptor: dict[str, Any],
+    *,
+    repo_root: Path | None = None,
+    registered_at: str | None = None,
+) -> dict[str, Any]:
+    validate_candidate_descriptor(descriptor)
+    feature_hash = str(descriptor.get("feature_schema_hash") or compute_feature_schema_hash())
+    data_hash = str(descriptor.get("data_schema_hash") or compute_data_schema_hash())
+    commit = str(descriptor.get("source_commit") or resolve_source_commit(repo_root))
+    cognition = str(descriptor.get("cognition_version") or "UNKNOWN")
+    rule = str(descriptor.get("rule_contract_version") or "SHADOW_NO_EXECUTION")
+    fingerprint = str(
+        descriptor.get("runtime_fingerprint")
+        or compute_runtime_fingerprint(
+            model_id=str(descriptor["model_id"]),
+            model_version=str(descriptor["model_version"]),
+            model_type=str(descriptor["model_type"]),
+            cognition_version=cognition,
+            rule_contract_version=rule,
+            source_commit=commit,
+            feature_schema_hash=feature_hash,
+            data_schema_hash=data_hash,
+            execution_config_hash="SHADOW_NONE",
+            risk_config_hash="SHADOW_NONE",
+        )
+    )
+    return {
+        "registry_record_id": f"REGC_{uuid.uuid4().hex}",
+        "model_id": str(descriptor["model_id"]),
+        "model_version": str(descriptor["model_version"]),
+        "model_role": "CANDIDATE",
+        "model_type": str(descriptor["model_type"]),
+        "cognition_version": cognition,
+        "rule_contract_version": rule,
+        "feature_schema_version": str(
+            descriptor.get("feature_schema_version") or f"SHA256:{feature_hash}"
+        ),
+        "data_schema_version": str(descriptor.get("data_schema_version") or f"SHA256:{data_hash}"),
+        "source_commit": commit,
+        "runtime_fingerprint": fingerprint,
+        "execution_capability": "NONE",
+        "prediction_only": True,
+        "shadow_only": True,
+        "execution_enabled": False,
+        "adapter_module": descriptor.get("adapter_module"),
+        "adapter_class": descriptor.get("adapter_class"),
+        "registered_at": registered_at or _utc_now(),
+        "record_status": "CANDIDATE_REGISTERED",
+    }
+
+
+def _refresh_registry_status_with_candidate(
+    *,
+    repo_root: Path | None,
+    candidate: dict[str, Any] | None,
+) -> None:
+    paths = registry_paths(repo_root)
+    active = read_active_runtime(repo_root=repo_root) or {}
+    status = {
+        "status": active.get("record_status") or "ACTIVE_REGISTERED",
+        "active_model_id": active.get("model_id"),
+        "active_model_version": active.get("model_version"),
+        "candidate_status": (
+            candidate.get("record_status") if candidate else "NONE_REGISTERED"
+        ),
+        "candidate_model_id": (candidate or {}).get("model_id"),
+        "candidate_model_version": (candidate or {}).get("model_version"),
+        "shadow_status": (
+            "CANDIDATE_REGISTERED"
+            if candidate and candidate.get("record_status") == "CANDIDATE_REGISTERED"
+            else "NONE_REGISTERED"
+        ),
+        "runtime_impact": "NON_BLOCKING",
+        "promotion_status": (
+            "BLOCKED_UNTIL_SHADOW_EVIDENCE" if candidate else "NOT_APPLICABLE_NO_CANDIDATE"
+        ),
+        "active_registry_record_id": active.get("registry_record_id"),
+        "candidate_registry_record_id": (candidate or {}).get("registry_record_id"),
+        "paper_epoch_id": active.get("paper_epoch_id"),
+        "runtime_fingerprint": active.get("runtime_fingerprint"),
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_json(paths["registry_status"], status)
+
+
+def register_candidate(
+    descriptor: dict[str, Any] | None = None,
+    *,
+    config_path: Path | str | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Register a prediction-only / shadow-only candidate. Never promotes to ACTIVE."""
+    if descriptor is None:
+        if config_path is None:
+            return {"status": "CANDIDATE_REJECTED_MISSING_CONFIG", "candidate": None}
+        path = Path(config_path)
+        descriptor = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        record = build_candidate_record(descriptor, repo_root=repo_root)
+    except ValueError as exc:
+        return {"status": str(exc), "candidate": None, "registry_record_id": None}
+
+    paths = registry_paths(repo_root)
+    existing = read_candidate(repo_root=repo_root)
+    if (
+        existing
+        and existing.get("model_id") == record["model_id"]
+        and existing.get("model_version") == record["model_version"]
+        and existing.get("runtime_fingerprint") == record["runtime_fingerprint"]
+        and existing.get("record_status") == "CANDIDATE_REGISTERED"
+    ):
+        _atomic_write_json(paths["candidate_model"], existing)
+        _refresh_registry_status_with_candidate(repo_root=repo_root, candidate=existing)
+        return {
+            "status": "ALREADY_REGISTERED",
+            "candidate": existing,
+            "registry_record_id": existing.get("registry_record_id"),
+        }
+
+    _append_jsonl(paths["models_jsonl"], record)
+    _atomic_write_json(paths["candidate_model"], record)
+    _refresh_registry_status_with_candidate(repo_root=repo_root, candidate=record)
+    return {
+        "status": "CANDIDATE_REGISTERED",
+        "candidate": record,
+        "registry_record_id": record["registry_record_id"],
+    }
+
+
+def read_candidate(*, repo_root: Path | None = None) -> dict[str, Any] | None:
+    path = registry_paths(repo_root)["candidate_model"]
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("record_status") or "") not in {"CANDIDATE_REGISTERED", "RETIRED", "REJECTED"}:
+        return None
+    return payload
+
+
+def read_candidate_status(*, repo_root: Path | None = None) -> dict[str, Any]:
+    cand = read_candidate(repo_root=repo_root)
+    if cand is None or str(cand.get("record_status") or "") != "CANDIDATE_REGISTERED":
+        return {
+            "candidate_status": "NONE_REGISTERED",
+            "candidate_model_id": None,
+            "candidate_model_version": None,
+            "registry_record_id": None,
+            "execution_capability": None,
+        }
+    return {
+        "candidate_status": cand.get("record_status"),
+        "candidate_model_id": cand.get("model_id"),
+        "candidate_model_version": cand.get("model_version"),
+        "registry_record_id": cand.get("registry_record_id"),
+        "execution_capability": cand.get("execution_capability"),
+        "runtime_fingerprint": cand.get("runtime_fingerprint"),
+    }
+
+
+def retire_candidate(
+    *,
+    reason: str,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    paths = registry_paths(repo_root)
+    cand = read_candidate(repo_root=repo_root)
+    if cand is None or str(cand.get("record_status") or "") != "CANDIDATE_REGISTERED":
+        return {"status": "NO_CANDIDATE_REGISTERED", "candidate": None}
+    retired = dict(cand)
+    retired["record_status"] = "RETIRED"
+    retired["model_role"] = "RETIRED"
+    retired["retired_at"] = _utc_now()
+    retired["retire_reason"] = str(reason or "UNSPECIFIED")
+    _append_jsonl(paths["models_jsonl"], retired)
+    _atomic_write_json(paths["candidate_model"], retired)
+    _refresh_registry_status_with_candidate(repo_root=repo_root, candidate=None)
+    return {"status": "CANDIDATE_RETIRED", "candidate": retired}

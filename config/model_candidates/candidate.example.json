@@ -1,0 +1,16 @@
+{
+  "model_id": "EXAMPLE_CANDIDATE_NOT_REGISTERED",
+  "model_version": "EXAMPLE_V0",
+  "model_type": "RESEARCH_CANDIDATE",
+  "cognition_version": "EXAMPLE_COGNITION",
+  "rule_contract_version": "SHADOW_NO_EXECUTION",
+  "prediction_only": true,
+  "shadow_only": true,
+  "execution_enabled": false,
+  "real_execution": false,
+  "paper_execution": false,
+  "order_routing": false,
+  "adapter_module": null,
+  "adapter_class": null,
+  "notes": "Example only — never auto-registered."
+}
