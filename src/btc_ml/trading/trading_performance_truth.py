@@ -641,6 +641,47 @@ def build_trading_performance_truth(
     if active_epoch and str(active_epoch.get("rule_contract_version") or "").startswith("INTRABAR_RULES"):
         summary = build_intrabar_epoch_performance_summary(epoch=active_epoch)  # type: ignore[misc]
         void = legacy_void_marker() if legacy_void_marker else None
+        initial = float(summary["initial_equity_usd"])
+        equity = float(summary["equity_usd"])
+        realized = float(summary["realized_pnl_usd"])
+        per_tf = {
+            tf: {
+                "timeframe": tf,
+                "closed_trade_count": 0,
+                "open_position_count": 0,
+                "realised_net_pnl_usd": 0.0,
+                "unrealised_gross_pnl_usd": 0.0,
+                "unrealised_net_pnl_usd": 0.0,
+                "wins": 0,
+                "losses": 0,
+                "total_fees_usd": 0.0,
+                "total_slippage_usd": 0.0,
+                "latest_trade_tip": None,
+                "latest_position_tip": None,
+            }
+            for tf in SUPPORTED_TIMEFRAMES
+        }
+        for tf, pos in (summary.get("positions_by_timeframe") or {}).items():
+            if tf in per_tf:
+                per_tf[tf]["open_position_count"] = 1
+        # Attribute closed trades by timeframe when present
+        try:
+            from btc_ml.trading.intrabar_paper.ops_adapter import _read_jsonl
+
+            books_dir = Path(summary["source_books"])
+            for trade in _read_jsonl(books_dir / "trades.jsonl"):
+                tf = str(trade.get("timeframe") or "")
+                if tf not in per_tf:
+                    continue
+                per_tf[tf]["closed_trade_count"] += 1
+                net = float(trade.get("net_pnl_usd") or 0.0)
+                per_tf[tf]["realised_net_pnl_usd"] += net
+                if net > 0:
+                    per_tf[tf]["wins"] += 1
+                elif net < 0:
+                    per_tf[tf]["losses"] += 1
+        except Exception:
+            pass
         return {
             "schema_version": SCHEMA_VERSION,
             "generated_at": generated_at or _utc_now(),
@@ -649,15 +690,37 @@ def build_trading_performance_truth(
             "real_execution_enabled": False,
             "legacy_excluded": True,
             "legacy_void": void,
-            "initial_equity_usd": summary["initial_equity_usd"],
+            "initial_equity_usd": initial,
+            "closed_trades": [],
+            "open_positions": [],
+            "portfolio": {
+                "initial_equity_usd": initial,
+                "closed_equity_usd": equity,
+                "mark_to_market_equity_usd": equity,
+                "realised_gross_pnl_usd": realized,
+                "realised_net_pnl_usd": realized,
+                "unrealised_gross_pnl_usd": 0.0,
+                "unrealised_net_pnl_usd": 0.0,
+                "total_gross_pnl_usd": realized,
+                "total_net_pnl_usd": realized,
+                "total_fees_usd": 0.0,
+                "total_slippage_usd": 0.0,
+                "closed_trade_count": int(summary["trades_count"]),
+                "open_position_count": int(summary["active_positions"]),
+                "mark_price": None,
+                "mark_timestamp": None,
+                "mark_status": "NOT_REQUIRED_EMPTY_BOOK",
+                "mtm_basis": MTM_BASIS_GROSS,
+            },
+            "timeframes": per_tf,
             "equity": {
-                "initial_usd": summary["initial_equity_usd"],
-                "closed_equity_usd": summary["equity_usd"],
-                "mtm_equity_usd": summary["equity_usd"],
+                "initial_usd": initial,
+                "closed_equity_usd": equity,
+                "mtm_equity_usd": equity,
             },
             "pnl": {
-                "realised_gross_usd": summary["realized_pnl_usd"],
-                "realised_net_usd": summary["realized_pnl_usd"],
+                "realised_gross_usd": realized,
+                "realised_net_usd": realized,
                 "unrealised_gross_usd": 0.0,
                 "unrealised_net_usd": 0.0,
                 "fees_usd": 0.0,
@@ -680,6 +743,34 @@ def build_trading_performance_truth(
                 "drawdown": summary["drawdown"],
                 "sharpe": summary["sharpe"],
                 "calmar": summary["calmar"],
+            },
+            "descriptive_metrics": {
+                "status": "EMPTY_EPOCH" if int(summary["trades_count"]) == 0 else "AVAILABLE",
+                "win_rate": summary["win_rate"],
+                "profit_factor": summary["profit_factor"],
+            },
+            "risk_adjusted_metrics": {
+                "status": "INSUFFICIENT_HISTORY",
+                "sharpe": summary["sharpe"],
+                "calmar": summary["calmar"],
+                "drawdown": summary["drawdown"],
+                "reasons": ["LIVE1B_NEW_EPOCH_NO_CLOSED_TRADES"]
+                if int(summary["trades_count"]) == 0
+                else [],
+            },
+            "sample_status": {
+                "descriptive": "EMPTY_EPOCH" if int(summary["trades_count"]) == 0 else "AVAILABLE",
+                "risk_adjusted": "INSUFFICIENT_HISTORY",
+            },
+            "data_quality": {
+                "reconciliation_status": "OK",
+                "legacy_excluded": True,
+            },
+            "source_policy": {
+                "mark_source": "LIVE1B_INTRABAR_PAPER_EPOCH",
+                "included_sources": [summary["source_books"]],
+                "excluded_sources": list(EXCLUDED_SOURCE_CATEGORIES)
+                + ["LEGACY_CLOSED_BAR_TIMEFRAME_TRADERS"],
             },
             "intrabar_epoch_summary": summary,
             "source": "LIVE1B_INTRABAR_PAPER_EPOCH",

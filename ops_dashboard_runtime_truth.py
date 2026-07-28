@@ -272,31 +272,67 @@ def build_trading_operations_block(
     }
 
 
+def live1b_paper_active() -> bool:
+    """True when INTRABAR_RULES_V1 paper epoch owns active execution."""
+    path = ROOT / "data/trading/paper_epochs/active.json"
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if str(payload.get("epoch_status") or "").upper() != "ACTIVE":
+        return False
+    return str(payload.get("rule_contract_version") or "").startswith("INTRABAR_RULES")
+
+
+def live1b_active_epoch() -> dict[str, Any] | None:
+    path = ROOT / "data/trading/paper_epochs/active.json"
+    if not live1b_paper_active():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def s4_activated() -> bool:
     """True once the S4.1 manager/trader architecture owns paper execution."""
     return S4_ACTIVATION_PATH.exists()
 
 
 def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
-    activated = s4_activated()
+    live1b = live1b_paper_active()
+    activated = s4_activated() and not live1b
     specs: list[tuple[str, tuple[str, ...], bool]] = [
         ("live_feed", ("live_binance_intrabar_feed.py",), True),
         ("canonical_pipeline", ("run.py",), True),
         ("context_refresher", ("run_context_refresh_daemon.py",), True),
         # Legacy global controller is required only until the S4.1 cutover.
-        ("paper_controller", ("bounded_paper_trading_controller_auto_ledger",), not activated),
+        ("paper_controller", ("bounded_paper_trading_controller_auto_ledger",), not activated and not live1b),
         ("ops_backend", ("run_api.py", "dashboard/backend"), False),
         ("dashboard_refresher", ("run_market_context_visual_refresher.py",), False),
-        ("timeframe_manager", ("timeframe_manager_daemon.py",), activated),
     ]
-    specs.extend(
-        (
-            f"trader_{tf}",
-            (f"timeframe_trader_daemon.py --timeframe {tf}",),
-            activated,
+    if live1b:
+        specs.extend(
+            [
+                ("intrabar_cognition", ("run_intrabar_cognition_service.py",), True),
+                ("intrabar_paper_manager", ("run_intrabar_paper_manager.py",), True),
+            ]
         )
-        for tf in S4_TIMEFRAMES
-    )
+    else:
+        specs.append(("timeframe_manager", ("timeframe_manager_daemon.py",), activated))
+        specs.extend(
+            (
+                f"trader_{tf}",
+                (f"timeframe_trader_daemon.py --timeframe {tf}",),
+                activated,
+            )
+            for tf in S4_TIMEFRAMES
+        )
     return tuple(specs)
 
 
@@ -1179,17 +1215,190 @@ def _resolve_aggregate_portfolio_risk(
     }
 
 
+def _build_live1b_timeframe_traders(
+    *,
+    performance_payload: dict[str, Any] | None = None,
+    load_performance: bool = True,
+) -> dict[str, Any]:
+    """Active LIVE1B plane: epoch books only; legacy S4 books excluded."""
+    epoch = live1b_active_epoch() or {}
+    paper_health = _read_json(ROOT / "data/runtime/intrabar_paper_health.json") or {}
+    cognition_health = _read_json(ROOT / "data/runtime/intrabar_cognition_health.json") or {}
+    eid = str(epoch.get("paper_epoch_id") or paper_health.get("paper_epoch_id") or "")
+    books_root = ROOT / "data/trading/intrabar_paper" / eid / "books"
+    initial = float(epoch.get("initial_equity_usd") or paper_health.get("initial_equity_usd") or 100000.0)
+    equity = float(paper_health.get("equity_usd") if paper_health.get("equity_usd") is not None else initial)
+    realized = float(paper_health.get("realized_pnl_usd") or 0.0)
+
+    manager_proc = {}
+    cognition_proc = {}
+    try:
+        for proc in inspect_processes():
+            if proc.get("process_id") == "intrabar_paper_manager":
+                manager_proc = proc
+            if proc.get("process_id") == "intrabar_cognition":
+                cognition_proc = proc
+    except Exception:
+        pass
+
+    manager_alive = bool(manager_proc.get("alive")) or bool(paper_health)
+    lanes = paper_health.get("execution_lanes") or {
+        tf: "ACTIVE" if manager_alive else "INACTIVE" for tf in S4_TIMEFRAMES
+    }
+    open_by_tf = paper_health.get("active_positions_by_timeframe") or {}
+
+    traders: list[dict[str, Any]] = []
+    open_count = 0
+    for tf in S4_TIMEFRAMES:
+        pos = open_by_tf.get(tf) or {}
+        has_pos = bool(pos)
+        if has_pos:
+            open_count += 1
+        lane = str(lanes.get(tf) or ("ACTIVE" if manager_alive else "INACTIVE")).upper()
+        traders.append(
+            {
+                "timeframe": tf,
+                "entity_type": "INTRABAR_PAPER_EXECUTION_LANE",
+                "book_path": f"data/trading/intrabar_paper/{eid}/books",
+                "book_exists": books_root.exists(),
+                "pid": manager_proc.get("pid"),
+                "alive": manager_alive,
+                "process_health": "RUNNING" if manager_alive else "STOPPED",
+                "execution_lane": lane,
+                "execution_lane_status": lane,
+                "open_position_id": None,
+                "direction": str(pos.get("side") or "FLAT").upper() if has_pos else "FLAT",
+                "entry_price": pos.get("entry_price"),
+                "quantity": pos.get("quantity"),
+                "open_risk_usd": 0.0 if not has_pos else None,
+                "reserved_risk_usd": 0.0 if not has_pos else None,
+                "risk_status": "ZERO_CONFIRMED" if not has_pos else "AVAILABLE",
+                "risk_source": "LIVE1B_INTRABAR_PAPER_HEALTH",
+                "risk_source_tip": paper_health.get("updated_at"),
+                "risk_freshness": "FRESH",
+                "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+                "realized_pnl_usd": 0.0,
+                "unrealized_pnl_usd": 0.0,
+                "open_position_count": 1 if has_pos else 0,
+                "closed_trades": 0,
+                "closed_trade_count": 0,
+                "last_command_id": (paper_health.get("last_command") or {}).get("command_id")
+                if isinstance(paper_health.get("last_command"), dict)
+                else None,
+                "last_command_intent": None,
+                "command_cursor": paper_health.get("last_consumed_context_event_id"),
+                "book_tip": None,
+                "paper_only": True,
+                "execution_enabled": False,
+                "paper_epoch_id": eid,
+            }
+        )
+
+    plane = {
+        "entity_type": "INTRABAR_PAPER_TRADING_PLANE",
+        "activated": True,
+        "activation_mode": "LIVE1B_INTRABAR_RULES_V1",
+        "paper_epoch_id": eid,
+        "activation_timestamp": epoch.get("activated_at"),
+        "supported_timeframes": list(S4_TIMEFRAMES),
+        "unsupported_timeframes": {"D1": "TIMEFRAME_NOT_LIVE/NO_LIVE_STAGE2_WRITER"},
+        "d1_trader": False,
+        "legacy_excluded": True,
+        "legacy_void_status": "VOID_PRE_INTRABAR_RULE_CONTRACT",
+        "manager": {
+            "display_name": "Paper Manager",
+            "status": "CONNECTED" if manager_alive else "DISCONNECTED",
+            "process_id": "intrabar_paper_manager",
+            "pid": manager_proc.get("pid") or paper_health.get("pid"),
+            "manager_cycle_id": None,
+            "evaluation_timestamp": paper_health.get("updated_at"),
+            "generated_at": paper_health.get("updated_at"),
+            "commands": {},
+            "writes_paper_ledger": True,
+            "writes_cognition": False,
+            "directional_netting": False,
+            "context_consumer": str(
+                paper_health.get("context_consumer_status")
+                or ("CONNECTED" if manager_alive else "DISCONNECTED")
+            ),
+            "intrabar_cognition": {
+                "status": "CONNECTED" if cognition_proc.get("alive") else "DISCONNECTED",
+                "pid": cognition_proc.get("pid") or cognition_health.get("pid"),
+            },
+        },
+        "command_bus": {
+            "path": "data/cognition/intrabar_context_events",
+            "exists": (ROOT / "data/cognition/intrabar_context_events").exists(),
+            "append_only": True,
+            "rows": 0,
+            "health": "CONNECTED" if manager_alive else "DISCONNECTED",
+            "source": "INTRABAR_CONTEXT_JOURNAL",
+        },
+        "traders": traders,
+        "portfolio": {
+            "open_positions": open_count,
+            "open_position_count": open_count,
+            "gross_long_notional": 0.0,
+            "gross_short_notional": 0.0,
+            "net_notional": 0.0,
+            "net_notional_semantics": "REPORTING_ONLY_NEVER_NETTED",
+            "gross_open_risk_usd": 0.0,
+            "reserved_open_risk_usd": 0.0,
+            "portfolio_max_risk_usd": 1000.0,
+            "max_risk_usd": 1000.0,
+            "available_risk_usd": 1000.0,
+            "risk_utilisation_pct": 0.0,
+            "risk_source": "LIVE1B_INTRABAR_PAPER_EPOCH",
+            "risk_source_tip": paper_health.get("updated_at"),
+            "risk_status": "ZERO_CONFIRMED" if open_count == 0 else "AVAILABLE",
+            "risk_freshness": "FRESH",
+            "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+            "observability_health": "OPERATIONAL",
+            "realized_pnl": realized,
+            "unrealized_pnl": float(paper_health.get("unrealized_pnl_usd") or 0.0),
+            "closed_trade_count": int(paper_health.get("trades_count") or 0),
+            "initial_equity_usd": initial,
+            "closed_equity_usd": equity,
+            "mark_to_market_equity_usd": equity,
+            "risk_aggregation": "GROSS_NO_NETTING",
+            "paper_epoch_id": eid,
+        },
+        "execution_lanes": {tf: str(lanes.get(tf) or "ACTIVE") for tf in S4_TIMEFRAMES},
+        "read_only": True,
+        "paper_only": True,
+        "real_execution": False,
+        "exchange_calls": 0,
+    }
+
+    perf = performance_payload
+    if perf is None and load_performance:
+        try:
+            perf = _build_canonical_trading_performance_truth()
+        except Exception as exc:  # noqa: BLE001
+            plane["performance_load_error"] = f"{type(exc).__name__}: {exc}"
+            clear_performance_aliases_on_timeframe_traders(plane)
+            return plane
+    if perf is not None:
+        apply_performance_aliases_to_timeframe_traders(plane, perf)
+    return plane
+
+
 def build_timeframe_traders(
     *,
     performance_payload: dict[str, Any] | None = None,
     load_performance: bool = True,
 ) -> dict[str, Any]:
-    """S4.1 read-only view: manager, command bus, four independent trader books.
+    """S4.1 / LIVE1B read-only view.
 
-    Process + risk from books/manager. Performance PnL overlays from
-    ``trading_performance_truth`` only (no parallel OPS economics calculator).
-    Data binding only — no new visual language, no writes.
+    When LIVE1B epoch is ACTIVE, legacy closed-bar books and portfolio_summary
+    are excluded from the active plane. Single paper manager owns all TF lanes.
     """
+    if live1b_paper_active():
+        return _build_live1b_timeframe_traders(
+            performance_payload=performance_payload,
+            load_performance=load_performance,
+        )
+
     activation = _read_json(S4_ACTIVATION_PATH)
     manager_latest = _read_json(ROOT / "data/runtime/timeframe_manager_latest.json") or {}
     portfolio = _read_json(MANAGER_PORTFOLIO_SUMMARY_PATH) or {}
@@ -1479,7 +1688,32 @@ def compute_overall_health(
         p["process_id"] == "timeframe_manager" or str(p["process_id"]).startswith("trader_")
         for p in processes
     )
-    if s4_activated() and s4_roles_tracked:
+    live1b_roles_tracked = any(
+        p["process_id"] in {"intrabar_cognition", "intrabar_paper_manager"} for p in processes
+    )
+    if live1b_paper_active() and live1b_roles_tracked:
+        down("intrabar_cognition", "INTRABAR_COGNITION_DOWN", "CRITICAL")
+        down("intrabar_paper_manager", "INTRABAR_PAPER_MANAGER_DOWN", "ERROR")
+        # Legacy closed-bar stack must stay stopped under LIVE1B.
+        for pid_name, alert_id in (
+            ("timeframe_manager", "LEGACY_TIMEFRAME_MANAGER_RUNNING_AFTER_LIVE1B"),
+            *((f"trader_{tf}", f"LEGACY_TRADER_RUNNING_AFTER_LIVE1B_{tf}") for tf in S4_TIMEFRAMES),
+        ):
+            legacy = by_id.get(pid_name)
+            if legacy and legacy.get("health") == "RUNNING":
+                alerts.append(
+                    {
+                        "alert_id": alert_id,
+                        "severity": "CRITICAL",
+                        "component": pid_name,
+                        "message": f"{pid_name} running after LIVE1B cutover",
+                        "reason_code": "LEGACY_AND_LIVE1B_CONCURRENT",
+                        "started_at": utc_now(),
+                        "last_seen": utc_now(),
+                        "active": True,
+                    }
+                )
+    elif s4_activated() and s4_roles_tracked:
         # After the S4.1 cutover the legacy global controller must stay stopped and
         # the manager plus four independent traders own paper execution.
         down("timeframe_manager", "TIMEFRAME_MANAGER_DOWN", "ERROR")
@@ -1697,21 +1931,46 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         paper["process_health"] = paper_proc["health"]
         paper["pid"] = paper_proc["pid"]
         if paper_proc["health"] != "RUNNING":
-            if timeframe_traders.get("activated"):
-                paper["representation"] = "MIGRATED_TO_TIMEFRAME_TRADERS"
+            if live1b_paper_active() or timeframe_traders.get("activated"):
+                paper["representation"] = (
+                    "MIGRATED_TO_INTRABAR_PAPER"
+                    if live1b_paper_active()
+                    else "MIGRATED_TO_TIMEFRAME_TRADERS"
+                )
                 paper["display_status"] = "MIGRATED"
                 paper["requirement"] = "NOT_REQUIRED"
                 paper["health"] = "HEALTHY"
                 paper["is_controller_failure"] = False
-                paper["health_reason"] = "legacy_global_controller_stopped_at_s4_1_cutover"
-                paper["legacy_ledger_role"] = "READ_ONLY_HISTORICAL_BOOK"
-                paper["detail"] = "Replaced by independent M15, M30, H1 and H4 traders"
+                paper["health_reason"] = (
+                    "legacy_global_controller_stopped_at_live1b_cutover"
+                    if live1b_paper_active()
+                    else "legacy_global_controller_stopped_at_s4_1_cutover"
+                )
+                paper["legacy_ledger_role"] = "READ_ONLY_ARCHIVED_VOID"
+                paper["detail"] = (
+                    "Replaced by LIVE1B intrabar paper manager (M15/M30/H1/H4 lanes)"
+                    if live1b_paper_active()
+                    else "Replaced by independent M15, M30, H1 and H4 traders"
+                )
             else:
                 paper["representation"] = "STOPPED"
                 paper["display_status"] = "FAILED"
                 paper["requirement"] = "REQUIRED"
                 paper["health"] = "BROKEN"
                 paper["is_controller_failure"] = True
+
+    if live1b_paper_active() and isinstance(paper, dict):
+        paper_mgr = next((p for p in processes if p["process_id"] == "intrabar_paper_manager"), None)
+        paper["paper_epoch_id"] = (live1b_active_epoch() or {}).get("paper_epoch_id")
+        paper["paper_mode"] = True
+        paper["real_execution"] = False
+        paper["controller"] = "intrabar_paper_manager"
+        if paper_mgr:
+            paper["intrabar_paper_manager_health"] = paper_mgr.get("health")
+            paper["intrabar_paper_manager_pid"] = paper_mgr.get("pid")
+            paper["intrabar_paper_manager_status"] = (
+                "CONNECTED" if paper_mgr.get("health") == "RUNNING" else "DISCONNECTED"
+            )
 
     try:
         context_chain = build_context_chain()
@@ -1822,6 +2081,64 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
 
     runtime_uptime = pipeline_runtime_uptime(processes)
 
+    live1b_epoch = live1b_active_epoch() if live1b_paper_active() else None
+    paper_health = _read_json(ROOT / "data/runtime/intrabar_paper_health.json") or {}
+    cognition_health = _read_json(ROOT / "data/runtime/intrabar_cognition_health.json") or {}
+    live1b_block = None
+    if live1b_epoch is not None:
+        by_id = {p["process_id"]: p for p in processes}
+        live1b_block = {
+            "status": "ACTIVE",
+            "paper_epoch_id": live1b_epoch.get("paper_epoch_id"),
+            "activated_at": live1b_epoch.get("activated_at"),
+            "paper_mode": True,
+            "real_execution": False,
+            "intrabar_cognition": {
+                "status": "CONNECTED"
+                if (by_id.get("intrabar_cognition") or {}).get("health") == "RUNNING"
+                else "DISCONNECTED",
+                "pid": (by_id.get("intrabar_cognition") or {}).get("pid")
+                or cognition_health.get("pid"),
+            },
+            "paper_manager": {
+                "status": "CONNECTED"
+                if (by_id.get("intrabar_paper_manager") or {}).get("health") == "RUNNING"
+                else "DISCONNECTED",
+                "pid": (by_id.get("intrabar_paper_manager") or {}).get("pid")
+                or paper_health.get("pid"),
+            },
+            "context_consumer": {
+                "status": str(
+                    paper_health.get("context_consumer_status")
+                    or (
+                        "CONNECTED"
+                        if (by_id.get("intrabar_paper_manager") or {}).get("health") == "RUNNING"
+                        else "DISCONNECTED"
+                    )
+                ),
+                "last_consumed_context_event_id": paper_health.get(
+                    "last_consumed_context_event_id"
+                ),
+            },
+            "execution_lanes": {
+                tf: str((paper_health.get("execution_lanes") or {}).get(tf) or "ACTIVE")
+                for tf in S4_TIMEFRAMES
+            },
+            "active_history": {
+                "signals": 0,
+                "orders": 0,
+                "fills": 0,
+                "trades": int(paper_health.get("trades_count") or 0),
+                "positions": int(
+                    len(paper_health.get("active_positions_by_timeframe") or {})
+                ),
+                "equity_usd": paper_health.get("equity_usd"),
+                "realized_pnl_usd": paper_health.get("realized_pnl_usd"),
+                "unrealized_pnl_usd": paper_health.get("unrealized_pnl_usd"),
+            },
+            "legacy_archive_path": "data/paper_trading/archive/pre_intrabar_rules_20260728_110636",
+        }
+
     return {
         "generated_at": utc_now(),
         "schema_version": SCHEMA_VERSION,
@@ -1841,6 +2158,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         "paper": paper,
         "timeframe_traders": timeframe_traders,
         "trading_operations": trading_operations,
+        "live1b_paper": live1b_block,
         "runtime_uptime": runtime_uptime,
         "known_limitations": known_limitations,
         "legacy_components": legacy_components,

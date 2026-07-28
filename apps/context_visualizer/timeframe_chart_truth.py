@@ -550,6 +550,25 @@ def load_closed_trades_for_tf(
     *,
     episode_by_id: dict[int, dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    # LIVE1B: do not surface voided legacy closed-bar trades in the active chart.
+    try:
+        from apps.context_visualizer.trading_truth import _live1b_active, _load_live1b_closed_trades
+    except Exception:
+        try:
+            from trading_truth import _live1b_active, _load_live1b_closed_trades  # type: ignore
+        except Exception:
+            _live1b_active = None  # type: ignore
+            _load_live1b_closed_trades = None  # type: ignore
+    if _live1b_active and _live1b_active():
+        rows = _load_live1b_closed_trades(timeframe=timeframe)
+        # Chart expects episode linkage fields; leave unproven empty for new epoch.
+        for row in rows:
+            row.setdefault("episode_status", "UNPROVEN")
+            row.setdefault("episode_link_reason", "LIVE1B_NEW_EPOCH")
+            row.setdefault("episode_id", None)
+            row.setdefault("episode_key", None)
+            row.setdefault("net_realised_pnl_usd", row.get("realized_pnl"))
+        return rows
     path = TRADER_BOOKS_ROOT / timeframe / "trades.parquet"
     if not path.exists():
         return []
@@ -612,6 +631,22 @@ def load_open_positions_for_tf(
     *,
     episode_by_id: dict[int, dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    try:
+        from apps.context_visualizer.trading_truth import _live1b_active, _load_live1b_open_positions
+    except Exception:
+        try:
+            from trading_truth import _live1b_active, _load_live1b_open_positions  # type: ignore
+        except Exception:
+            _live1b_active = None  # type: ignore
+            _load_live1b_open_positions = None  # type: ignore
+    if _live1b_active and _live1b_active():
+        rows = _load_live1b_open_positions(timeframe=timeframe)
+        for row in rows:
+            row.setdefault("episode_status", "UNPROVEN")
+            row.setdefault("episode_link_reason", "LIVE1B_NEW_EPOCH")
+            row.setdefault("episode_id", None)
+            row.setdefault("episode_key", None)
+        return rows
     path = TRADER_BOOKS_ROOT / timeframe / "positions.parquet"
     if not path.exists():
         return []

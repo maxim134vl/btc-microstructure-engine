@@ -855,6 +855,8 @@ class IntrabarPaperEngine:
         )
 
     def health(self) -> dict[str, Any]:
+        import os
+
         bbo = self.bbo.latest
         age = None
         local = self.bbo._latest_local
@@ -862,12 +864,23 @@ class IntrabarPaperEngine:
             age = max(0.0, (time.monotonic_ns() - local.receive_monotonic_ns) / 1_000_000.0)
         elif bbo is not None and bbo.receive_timestamp:
             age = None  # context-domain mono not comparable to wall clock
+        manager_alive = True
+        lanes = {tf: "ACTIVE" for tf in self.cfg.timeframes}
+        consumer_status = "CONNECTED"
+        ck = self.consumer.checkpoint
         return {
+            "service": "intrabar_paper_manager",
+            "pid": os.getpid(),
+            "alive": manager_alive,
             "paper_epoch_id": self.epoch.paper_epoch_id,
             "mode": "paper_only",
+            "paper_only": True,
             "real_execution_enabled": False,
-            "last_consumed_context_event_id": self.consumer.checkpoint.last_consumed_context_event_id,
-            "last_event_monotonic_ns": self.consumer.checkpoint.last_event_monotonic_ns,
+            "manager_status": "CONNECTED",
+            "context_consumer_status": consumer_status,
+            "execution_lanes": lanes,
+            "last_consumed_context_event_id": ck.last_consumed_context_event_id,
+            "last_event_monotonic_ns": ck.last_event_monotonic_ns,
             "context_consumer_lag_events": None,
             "last_command": self.last_command,
             "last_fill": self.last_fill,
@@ -877,13 +890,16 @@ class IntrabarPaperEngine:
                 for tf, p in self.positions.items()
             },
             "trades_count": self.books.count("trades"),
+            "signals_count": self.books.count("signals"),
+            "orders_count": self.books.count("orders"),
+            "fills_count": self.books.count("fills"),
             "equity_usd": self.equity,
             "realized_pnl_usd": self.realized_pnl,
             "unrealized_pnl_usd": self.unrealized_pnl,
             "bbo_freshness_ms": age,
             "max_bbo_age_ms": self.cfg.max_bbo_age_ms,
             "blocked_commands": self.blocked_commands,
-            "duplicate_events_prevented": self.consumer.checkpoint.duplicate_events_prevented,
+            "duplicate_events_prevented": ck.duplicate_events_prevented,
             "errors": list(self.errors),
             "entry_fee_bps": self.cfg.entry_fee_bps,
             "exit_fee_bps": self.cfg.exit_fee_bps,

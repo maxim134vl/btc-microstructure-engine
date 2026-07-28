@@ -29,6 +29,132 @@ ARBITRATION = ROOT / "data" / "cognition" / "auction_context_arbitration_memory.
 
 TIMEFRAMES = ("M15", "M30", "H1", "H4")
 DIRECTIONAL = {"LONG_CONTEXT", "SHORT_CONTEXT"}
+ACTIVE_EPOCH_PATH = ROOT / "data" / "trading" / "paper_epochs" / "active.json"
+
+
+def _live1b_active() -> bool:
+    if not ACTIVE_EPOCH_PATH.exists():
+        return False
+    try:
+        payload = json.loads(ACTIVE_EPOCH_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if str(payload.get("epoch_status") or "").upper() != "ACTIVE":
+        return False
+    return str(payload.get("rule_contract_version") or "").startswith("INTRABAR_RULES")
+
+
+def _live1b_books_root() -> Path | None:
+    if not _live1b_active():
+        return None
+    try:
+        payload = json.loads(ACTIVE_EPOCH_PATH.read_text(encoding="utf-8"))
+        eid = str(payload.get("paper_epoch_id") or "")
+    except Exception:
+        return None
+    if not eid:
+        return None
+    return ROOT / "data" / "trading" / "intrabar_paper" / eid / "books"
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _load_live1b_open_positions(*, timeframe: str | None = None) -> list[dict[str, Any]]:
+    books = _live1b_books_root()
+    if books is None:
+        return []
+    selected = TIMEFRAMES if timeframe in (None, "", "ALL") else (str(timeframe).upper(),)
+    latest: dict[str, dict[str, Any]] = {}
+    for row in _read_jsonl(books / "positions.jsonl"):
+        pid = str(row.get("position_id") or "")
+        if pid:
+            latest[pid] = row
+    out: list[dict[str, Any]] = []
+    for row in latest.values():
+        tf = str(row.get("timeframe") or "").upper()
+        if tf not in selected:
+            continue
+        if str(row.get("status") or "").upper() != "OPEN":
+            continue
+        out.append(
+            {
+                "position_id": _txt(row.get("position_id")),
+                "timeframe": tf,
+                "status": "OPEN",
+                "side": (_txt(row.get("side")) or "LONG").upper(),
+                "entry_timestamp": _iso(row.get("opened_at")),
+                "entry_price": _f(row.get("entry_price")),
+                "quantity": _f(row.get("quantity")),
+                "notional": None,
+                "stop_price": _f(row.get("stop_loss_price")),
+                "take_profit_price": _f(row.get("take_profit_price")),
+                "unrealized_pnl": 0.0,
+                "episode_key": _txt(row.get("lifecycle_episode_id")),
+                "exit_timestamp": None,
+                "exit_price": None,
+                "realized_pnl": None,
+                "symbol": "BTCUSDT",
+                "command_id": _txt(row.get("entry_command_id")),
+                "source_book": f"INTRABAR_PAPER_{tf}",
+                "visual_kind": "OPEN_POSITION",
+                "paper_epoch_id": _txt(row.get("paper_epoch_id")),
+            }
+        )
+    out.sort(key=lambda r: (r.get("timeframe") or "", r.get("entry_timestamp") or ""))
+    return out
+
+
+def _load_live1b_closed_trades(*, timeframe: str | None = None) -> list[dict[str, Any]]:
+    books = _live1b_books_root()
+    if books is None:
+        return []
+    selected = TIMEFRAMES if timeframe in (None, "", "ALL") else (str(timeframe).upper(),)
+    out: list[dict[str, Any]] = []
+    for row in _read_jsonl(books / "trades.jsonl"):
+        tf = str(row.get("timeframe") or "").upper()
+        if tf not in selected:
+            continue
+        exit_ts = _iso(row.get("exit_ts"))
+        if not exit_ts:
+            continue
+        out.append(
+            {
+                "trade_id": _txt(row.get("trade_id")),
+                "timeframe": tf,
+                "status": "CLOSED",
+                "side": (_txt(row.get("side")) or "LONG").upper(),
+                "entry_timestamp": _iso(row.get("entry_ts")),
+                "exit_timestamp": exit_ts,
+                "entry_price": _f(row.get("entry_price")),
+                "exit_price": _f(row.get("exit_price")),
+                "quantity": _f(row.get("quantity")),
+                "notional": None,
+                "stop_price": _f(row.get("stop_loss_price")),
+                "take_profit_price": _f(row.get("take_profit_price")),
+                "realized_pnl": _f(row.get("net_pnl_usd")),
+                "symbol": "BTCUSDT",
+                "source_book": f"INTRABAR_PAPER_{tf}",
+                "visual_kind": "CLOSED_TRADE",
+                "paper_epoch_id": _txt(row.get("paper_epoch_id")),
+            }
+        )
+    out.sort(key=lambda r: (r.get("timeframe") or "", r.get("exit_timestamp") or ""))
+    return out
 
 
 def _utc_now_iso() -> str:
@@ -98,7 +224,13 @@ def book_paths(timeframe: str) -> dict[str, str]:
 
 
 def load_open_positions(*, timeframe: str | None = None) -> list[dict[str, Any]]:
-    """Return OPEN positions from canonical timeframe trader books."""
+    """Return OPEN positions from active paper books.
+
+    LIVE1B: legacy closed-bar timeframe_traders books are excluded from the
+    active view (archive/void only).
+    """
+    if _live1b_active():
+        return _load_live1b_open_positions(timeframe=timeframe)
     selected = TIMEFRAMES if timeframe in (None, "", "ALL") else (str(timeframe).upper(),)
     rows: list[dict[str, Any]] = []
     for tf in selected:
@@ -148,6 +280,8 @@ def load_open_positions(*, timeframe: str | None = None) -> list[dict[str, Any]]
 
 
 def load_closed_trades(*, timeframe: str | None = None) -> list[dict[str, Any]]:
+    if _live1b_active():
+        return _load_live1b_closed_trades(timeframe=timeframe)
     selected = TIMEFRAMES if timeframe in (None, "", "ALL") else (str(timeframe).upper(),)
     rows: list[dict[str, Any]] = []
     for tf in selected:

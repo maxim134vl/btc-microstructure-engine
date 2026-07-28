@@ -1691,6 +1691,7 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         "context_chain": (runtime_truth or {}).get("context_chain") or {},
         "paper": (runtime_truth or {}).get("paper") or {},
         "timeframe_traders": (runtime_truth or {}).get("timeframe_traders") or {},
+        "live1b_paper": (runtime_truth or {}).get("live1b_paper"),
         "known_limitations": (runtime_truth or {}).get("known_limitations") or [],
         "legacy_components": (runtime_truth or {}).get("legacy_components") or [],
     }
