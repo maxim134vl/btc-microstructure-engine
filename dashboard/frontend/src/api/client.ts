@@ -16,11 +16,11 @@ async function opsWsUrl(): Promise<string> {
  * Soft-fetch timeout.
  *
  * Evidence (VIS1D/OPS2A): `build_runtime_truth_snapshot()` locally observed up to ~1.86s;
- * warm HTTP snapshots are usually ~10–50ms, but cold/full builds can exceed the legacy
- * 1500ms abort and leave the UI latched offline. 5000ms covers observed builds with margin
- * without unbounded waits.
+ * warm HTTP snapshots are usually ~10–50ms, but cold/full builds (incl. MODEL-9 research
+ * pipeline) were observed ~9s and exceeded the legacy 5000ms abort, latching the UI offline.
+ * 15000ms covers observed cold builds with margin without unbounded waits.
  */
-export const DEFAULT_SOFT_FETCH_TIMEOUT_MS = 5000;
+export const DEFAULT_SOFT_FETCH_TIMEOUT_MS = 15000;
 
 /** Normal poll while reconnecting / offline. */
 export const OPS_RECONNECT_POLL_MS = 4000;

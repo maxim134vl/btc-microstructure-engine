@@ -1270,50 +1270,83 @@ async def build_model_summary_snapshot(
     )
 
 
-def load_model_assurance_payload() -> dict[str, Any]:
-    """Read canonical MODEL-9 summary only — do not re-aggregate MODEL-0…8 here."""
-    path = Path(REPO_ROOT) / "data" / "model_assurance" / "summary" / "latest_summary.json"
-    if not path.exists():
-        return {
-            "status": "MISSING_SOURCE",
-            "overall_assurance_status": "MISSING_SOURCE",
-            "runtime_safety_status": "UNKNOWN",
-            "runtime_impact": "NON_BLOCKING",
-            "promotion_control": "GOVERNANCE_GATE",
-            "scope": "CURRENT_ACTIVE_MODEL_ONLY",
-            "missing_sources": ["latest_summary"],
-            "stale_sources": [],
-            "promotion_blockers": [],
-            "environment_blockers": [],
-            "current_blockers": [],
-            "current_incidents": [],
-            "current_toxic_events": [],
-        }
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {
-            "status": "MISSING_SOURCE",
-            "overall_assurance_status": "MISSING_SOURCE",
-            "runtime_safety_status": "UNKNOWN",
-            "runtime_impact": "NON_BLOCKING",
-            "promotion_control": "GOVERNANCE_GATE",
-            "scope": "CURRENT_ACTIVE_MODEL_ONLY",
-            "missing_sources": ["latest_summary"],
-            "stale_sources": [],
-            "promotion_blockers": [],
-            "environment_blockers": [],
-            "current_blockers": [],
-            "current_incidents": [],
-            "current_toxic_events": [],
-        }
-    return payload if isinstance(payload, dict) else {
+def _model_assurance_missing(*, reason: str) -> dict[str, Any]:
+    return {
         "status": "MISSING_SOURCE",
         "overall_assurance_status": "MISSING_SOURCE",
         "runtime_safety_status": "UNKNOWN",
         "runtime_impact": "NON_BLOCKING",
         "promotion_control": "GOVERNANCE_GATE",
+        "scope": "CURRENT_ACTIVE_MODEL_ONLY",
+        "error_reason": reason,
+        "missing_sources": ["latest_summary"],
+        "stale_sources": [],
+        "promotion_blockers": [],
+        "environment_blockers": [],
+        "current_blockers": [],
+        "current_incidents": [],
+        "current_toxic_events": [],
     }
+
+
+def _json_safe(value: Any, *, depth: int = 0) -> Any:
+    """Coerce MODEL-9 payload values to JSON-serializable primitives."""
+    if depth > 12:
+        return None
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):  # NaN/Inf
+            return None
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v, depth=depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v, depth=depth + 1) for v in value]
+    if isinstance(value, set):
+        return sorted(_json_safe(v, depth=depth + 1) for v in value)
+    # numpy / enum / unexpected objects
+    try:
+        import numpy as np  # type: ignore
+
+        if isinstance(value, np.generic):
+            py = value.item()
+            return _json_safe(py, depth=depth + 1)
+    except Exception:
+        pass
+    if hasattr(value, "value") and not isinstance(value, (bytes, bytearray)):
+        try:
+            return _json_safe(getattr(value, "value"), depth=depth + 1)
+        except Exception:
+            pass
+    return str(value)
+
+
+def load_model_assurance_payload() -> dict[str, Any]:
+    """Read canonical MODEL-9 summary only — never raise into the OPS endpoint."""
+    path = Path(REPO_ROOT) / "data" / "model_assurance" / "summary" / "latest_summary.json"
+    try:
+        if not path.exists():
+            return _model_assurance_missing(reason="latest_summary.json not found")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return _model_assurance_missing(reason="latest_summary.json is not an object")
+        safe = _json_safe(payload)
+        if not isinstance(safe, dict):
+            return _model_assurance_missing(reason="latest_summary.json failed JSON sanitization")
+        # Prove serializability before attaching to OPS response.
+        json.dumps(safe, allow_nan=False)
+        return safe
+    except Exception as exc:
+        return {
+            **_model_assurance_missing(reason=f"{type(exc).__name__}: {exc}"),
+            "status": "ERROR",
+            "overall_assurance_status": "ERROR",
+        }
 
 
 async def build_research_pipeline_snapshot() -> dict[str, Any]:
@@ -1326,7 +1359,14 @@ async def build_research_pipeline_snapshot() -> dict[str, Any]:
     shadow = await build_shadow_inference_snapshot(sources)
     toxic = await build_toxic_box_snapshot(sources)
     model_summary = await build_model_summary_snapshot(governance, drift, shadow, sources)
-    model_assurance = load_model_assurance_payload()
+    try:
+        model_assurance = load_model_assurance_payload()
+    except Exception as exc:
+        model_assurance = {
+            **_model_assurance_missing(reason=f"{type(exc).__name__}: {exc}"),
+            "status": "ERROR",
+            "overall_assurance_status": "ERROR",
+        }
 
     ribbon_extensions = [
         {

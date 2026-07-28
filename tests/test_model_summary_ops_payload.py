@@ -117,3 +117,79 @@ def test_real_toxic_box_legacy_only_when_no_fresh_toxic_metrics() -> None:
     diag = ms["model_summary_sources"]["diagnostics_primary"]
     assert diag["freshness_status"] == "CURRENT"
     assert str(diag["generated_at"]).startswith("2026-07")
+
+
+def test_ops_payload_includes_valid_model_assurance() -> None:
+    from app.services.research_pipeline_service import load_model_assurance_payload
+
+    ma = load_model_assurance_payload()
+    snap = asyncio.run(build_research_pipeline_snapshot())
+    assert "model_assurance" in snap
+    assert snap["model_assurance"].get("overall_assurance_status") == ma.get("overall_assurance_status")
+    assert snap["model_assurance"].get("runtime_safety_status") in {
+        "SAFE_PAPER_ONLY",
+        "UNKNOWN",
+        "LIVE_EXECUTION",
+        "MISSING_SOURCE",
+        "ERROR",
+    }
+    # Full research pipeline still builds when assurance is present.
+    assert snap.get("pipeline") is not None
+    assert snap.get("decision_layer") is not None
+
+
+def test_ops_payload_survives_missing_or_malformed_model_assurance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import app.services.research_pipeline_service as rps
+    from app.config import REPO_ROOT as REAL_REPO_ROOT
+
+    summary_dir = tmp_path / "data" / "model_assurance" / "summary"
+    summary_dir.mkdir(parents=True)
+    monkeypatch.setattr(rps, "REPO_ROOT", tmp_path)
+
+    ma_missing = rps.load_model_assurance_payload()
+    assert ma_missing.get("status") in {"MISSING_SOURCE", "ERROR"}
+    assert ma_missing.get("runtime_safety_status") == "UNKNOWN"
+    assert ma_missing.get("error_reason")
+
+    bad = summary_dir / "latest_summary.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    ma_bad = rps.load_model_assurance_payload()
+    assert ma_bad.get("status") in {"MISSING_SOURCE", "ERROR"}
+    assert ma_bad.get("error_reason")
+
+    # Endpoint assembly must still succeed when assurance loader returns ERROR.
+    monkeypatch.setattr(rps, "REPO_ROOT", REAL_REPO_ROOT)
+    monkeypatch.setattr(
+        rps,
+        "load_model_assurance_payload",
+        lambda: {
+            "status": "ERROR",
+            "overall_assurance_status": "ERROR",
+            "runtime_safety_status": "UNKNOWN",
+            "error_reason": "forced test error",
+            "missing_sources": ["latest_summary"],
+            "stale_sources": [],
+            "promotion_blockers": [],
+            "environment_blockers": [],
+            "current_blockers": [],
+            "current_incidents": [],
+            "current_toxic_events": [],
+        },
+    )
+    snap = asyncio.run(rps.build_research_pipeline_snapshot())
+    assert snap["model_assurance"]["status"] == "ERROR"
+    assert snap.get("pipeline") is not None
+    assert snap.get("decision_layer") is not None
+
+
+def test_model_assurance_payload_is_json_serializable() -> None:
+    import json
+    from app.services.research_pipeline_service import load_model_assurance_payload
+
+    ma = load_model_assurance_payload()
+    encoded = json.dumps(ma, allow_nan=False)
+    assert isinstance(encoded, str)
+    roundtrip = json.loads(encoded)
+    assert isinstance(roundtrip, dict)
