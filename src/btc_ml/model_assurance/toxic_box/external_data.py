@@ -452,9 +452,17 @@ def append_toxicity_transition(
     return row
 
 
+def _event_order_key(index: int, row: dict[str, Any]) -> tuple:
+    """Sort by detected_at, then stable JSONL row order."""
+    stamp = str(row.get("detected_at") or row.get("event_time") or "")
+    return (stamp, index)
+
+
 def _open_issues_from_events(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Reconstruct currently-active issues: latest causal state per source_id|subtype."""
     open_map: dict[str, dict[str, Any]] = {}
-    for row in events:
+    ordered = sorted(enumerate(events), key=lambda item: _event_order_key(item[0], item[1]))
+    for _, row in ordered:
         if str(row.get("branch") or "") != "EXTERNAL_DATA":
             continue
         key = f"{row.get('source_id')}|{row.get('subtype')}"
@@ -464,6 +472,70 @@ def _open_issues_from_events(events: list[dict[str, Any]]) -> dict[str, dict[str
         elif status == "RESOLVED":
             open_map.pop(key, None)
     return open_map
+
+
+def reconstruct_active_open_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Currently OPEN external-data issues only (historical OPEN after RESOLVED excluded)."""
+    return list(_open_issues_from_events(events).values())
+
+
+def _enrich_source_current_state(
+    sources: list[dict[str, Any]],
+    *,
+    events: list[dict[str, Any]],
+    active_open: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach active issue fields to each source snapshot from reconstructed journal state."""
+    by_source_open: dict[str, list[dict[str, Any]]] = {}
+    for ev in active_open:
+        sid = str(ev.get("source_id") or "")
+        by_source_open.setdefault(sid, []).append(ev)
+
+    last_issue_at: dict[str, str | None] = {}
+    last_resolved_at: dict[str, str | None] = {}
+    for row in events:
+        if str(row.get("branch") or "") != "EXTERNAL_DATA":
+            continue
+        sid = str(row.get("source_id") or "")
+        if not sid:
+            continue
+        det = row.get("detected_at") or row.get("event_time")
+        if det and (last_issue_at.get(sid) is None or str(det) >= str(last_issue_at.get(sid))):
+            last_issue_at[sid] = str(det)
+        res = row.get("resolved_at")
+        if res and (last_resolved_at.get(sid) is None or str(res) >= str(last_resolved_at.get(sid))):
+            last_resolved_at[sid] = str(res)
+
+    out: list[dict[str, Any]] = []
+    for snap in sources:
+        row = dict(snap)
+        sid = str(row.get("source_id") or "")
+        active = by_source_open.get(sid) or []
+        row["active_issues"] = [
+            {
+                "subtype": a.get("subtype"),
+                "severity": a.get("severity"),
+                "status": "OPEN",
+                "detected_at": a.get("detected_at") or a.get("event_time"),
+                "toxic_event_id": a.get("toxic_event_id"),
+                "observed_value": a.get("observed_value"),
+                "threshold": a.get("threshold"),
+            }
+            for a in active
+        ]
+        row["active_issue_count"] = len(active)
+        row["last_issue_at"] = last_issue_at.get(sid)
+        row["last_resolved_at"] = last_resolved_at.get(sid)
+        # Prefer live-cycle source_health; if absent, derive from active issues
+        if not row.get("source_health"):
+            if any(str(a.get("severity") or "").upper() == "CRITICAL" for a in active):
+                row["source_health"] = "CRITICAL"
+            elif active:
+                row["source_health"] = "DEGRADED"
+            else:
+                row["source_health"] = "HEALTHY"
+        out.append(row)
+    return out
 
 
 def _service_started_at(cognition: dict[str, Any] | None) -> datetime | None:
@@ -841,7 +913,8 @@ def build_external_data_summary(
     unavailable = sum(
         1 for s in sources if s.get("source_health") in {"CRITICAL", "UNAVAILABLE"}
     )
-    open_events = [e for e in events if str(e.get("status")).upper() == "OPEN"]
+    # Only currently active issues (OPEN after latest RESOLVED for same key is excluded)
+    open_events = reconstruct_active_open_events(events)
     watch = sum(1 for e in open_events if e.get("severity") == "WATCH")
     warning = sum(1 for e in open_events if e.get("severity") == "WARNING")
     critical = sum(1 for e in open_events if e.get("severity") == "CRITICAL")
@@ -852,11 +925,14 @@ def build_external_data_summary(
         sub = str(e.get("subtype"))
         counts_by_source[sid] = counts_by_source.get(sid, 0) + 1
         counts_by_subtype[sub] = counts_by_subtype.get(sub, 0) + 1
+
     last_event_at = None
     last_resolved_at = None
-    for e in events:
-        if e.get("detected_at"):
-            last_event_at = e.get("detected_at")
+    for index, e in sorted(enumerate(events), key=lambda item: _event_order_key(item[0], item[1])):
+        _ = index
+        stamp = e.get("detected_at") or e.get("event_time")
+        if stamp:
+            last_event_at = stamp
         if e.get("resolved_at"):
             last_resolved_at = e.get("resolved_at")
 
@@ -864,7 +940,7 @@ def build_external_data_summary(
         status = "STARTING"
     elif critical > 0 or unavailable > 0:
         status = "CURRENT_CRITICAL"
-    elif warning > 0 or degraded > 0:
+    elif warning > 0 or watch > 0 or degraded > 0:
         status = "CURRENT_DEGRADED"
     else:
         status = "CURRENT_HEALTHY"
@@ -1004,6 +1080,12 @@ def evaluate_external_sources(
         )
 
     events_all = _read_jsonl(p["events"])
+    # Rebuild from full journal so restart/checkpoint cannot leave stale OPEN counts
+    open_issues = _open_issues_from_events(events_all)
+    active_open = list(open_issues.values())
+    source_snapshots = _enrich_source_current_state(
+        source_snapshots, events=events_all, active_open=active_open
+    )
     summary = build_external_data_summary(
         active=active,
         sources=source_snapshots,

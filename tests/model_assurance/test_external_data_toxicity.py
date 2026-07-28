@@ -306,3 +306,121 @@ def test_future_timestamp_and_missing_book_exchange_ts_ok(tmp_path: Path, monkey
     assert ("BINANCE_SPOT_BTCUSDT_BOOKTICKER", "DATA_SCHEMA_BREAK", "OPEN") in subtypes
     # missing book exchange ts must not create FUTURE_LEAKAGE on book
     assert ("BINANCE_SPOT_BTCUSDT_BOOKTICKER", "DATA_FUTURE_LEAKAGE", "OPEN") not in subtypes
+
+
+def _evt(source_id: str, subtype: str, status: str, *, detected_at: str, resolved_at=None, severity="WARNING"):
+    row = {
+        "branch": "EXTERNAL_DATA",
+        "source_id": source_id,
+        "subtype": subtype,
+        "status": status,
+        "severity": severity,
+        "detected_at": detected_at,
+        "event_time": detected_at,
+        "toxic_event_id": f"TOX_{source_id}_{subtype}_{status}_{detected_at}",
+    }
+    if resolved_at:
+        row["resolved_at"] = resolved_at
+    return row
+
+
+def test_open_then_resolved_summary_is_healthy():
+    events = [
+        _evt("S1", "DATA_STALE", "OPEN", detected_at="2026-07-28T12:00:00Z"),
+        _evt(
+            "S1",
+            "DATA_STALE",
+            "RESOLVED",
+            detected_at="2026-07-28T12:00:00Z",
+            resolved_at="2026-07-28T12:05:00Z",
+        ),
+    ]
+    assert ed.reconstruct_active_open_events(events) == []
+    sources = [{"source_id": "S1", "source_health": "HEALTHY"}]
+    summary = ed.build_external_data_summary(active={}, sources=sources, events=events, starting=False)
+    assert summary["open_events"] == 0
+    assert summary["warning_events"] == 0
+    assert summary["status"] == "CURRENT_HEALTHY"
+    assert summary["last_resolved_at"] == "2026-07-28T12:05:00Z"
+
+
+def test_open_resolved_open_keeps_one_active_issue():
+    events = [
+        _evt("S1", "DATA_STALE", "OPEN", detected_at="2026-07-28T12:00:00Z"),
+        _evt(
+            "S1",
+            "DATA_STALE",
+            "RESOLVED",
+            detected_at="2026-07-28T12:00:00Z",
+            resolved_at="2026-07-28T12:05:00Z",
+        ),
+        _evt("S1", "DATA_STALE", "OPEN", detected_at="2026-07-28T12:10:00Z", severity="WARNING"),
+    ]
+    active = ed.reconstruct_active_open_events(events)
+    assert len(active) == 1
+    assert active[0]["detected_at"] == "2026-07-28T12:10:00Z"
+    sources = [{"source_id": "S1", "source_health": "DEGRADED"}]
+    summary = ed.build_external_data_summary(active={}, sources=sources, events=events, starting=False)
+    assert summary["open_events"] == 1
+    assert summary["warning_events"] == 1
+    assert summary["status"] == "CURRENT_DEGRADED"
+
+
+def test_multiple_historical_pairs_count_only_latest_states():
+    events = [
+        _evt("AGG", "DATA_STALE", "OPEN", detected_at="2026-07-28T11:00:00Z"),
+        _evt(
+            "AGG",
+            "DATA_STALE",
+            "RESOLVED",
+            detected_at="2026-07-28T11:00:00Z",
+            resolved_at="2026-07-28T11:01:00Z",
+        ),
+        _evt("BOOK", "DATA_STALE", "OPEN", detected_at="2026-07-28T11:02:00Z"),
+        _evt(
+            "BOOK",
+            "DATA_STALE",
+            "RESOLVED",
+            detected_at="2026-07-28T11:02:00Z",
+            resolved_at="2026-07-28T11:03:00Z",
+        ),
+        _evt("AGG", "DATA_GAP", "OPEN", detected_at="2026-07-28T11:04:00Z"),
+        _evt(
+            "AGG",
+            "DATA_GAP",
+            "RESOLVED",
+            detected_at="2026-07-28T11:04:00Z",
+            resolved_at="2026-07-28T11:05:00Z",
+        ),
+        # one still open
+        _evt("BOOK", "DATA_SEQUENCE_REWIND", "OPEN", detected_at="2026-07-28T11:06:00Z", severity="CRITICAL"),
+        # duplicate historical open for already-resolved stale must not count
+        _evt("AGG", "DATA_STALE", "OPEN", detected_at="2026-07-28T10:59:00Z"),
+        _evt(
+            "AGG",
+            "DATA_STALE",
+            "RESOLVED",
+            detected_at="2026-07-28T10:59:00Z",
+            resolved_at="2026-07-28T10:59:30Z",
+        ),
+    ]
+    active = ed.reconstruct_active_open_events(events)
+    assert len(active) == 1
+    assert active[0]["source_id"] == "BOOK"
+    assert active[0]["subtype"] == "DATA_SEQUENCE_REWIND"
+    sources = [
+        {"source_id": "AGG", "source_health": "HEALTHY"},
+        {"source_id": "BOOK", "source_health": "CRITICAL"},
+    ]
+    summary = ed.build_external_data_summary(active={}, sources=sources, events=events, starting=False)
+    assert summary["open_events"] == 1
+    assert summary["critical_events"] == 1
+    assert summary["counts_by_source"] == {"BOOK": 1}
+    assert summary["counts_by_subtype"] == {"DATA_SEQUENCE_REWIND": 1}
+    assert summary["status"] == "CURRENT_CRITICAL"
+    enriched = ed._enrich_source_current_state(sources, events=events, active_open=active)
+    by_id = {s["source_id"]: s for s in enriched}
+    assert by_id["AGG"]["active_issue_count"] == 0
+    assert by_id["AGG"]["active_issues"] == []
+    assert by_id["BOOK"]["active_issue_count"] == 1
+    assert by_id["BOOK"]["active_issues"][0]["subtype"] == "DATA_SEQUENCE_REWIND"
