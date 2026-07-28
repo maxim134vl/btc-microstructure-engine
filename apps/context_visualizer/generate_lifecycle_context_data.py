@@ -474,6 +474,55 @@ def build_latest(memory: pd.DataFrame, episodes: list[dict[str, Any]]) -> dict[s
     # Enforce OBSERVE age semantics in visual payload even if upstream is stale.
     if payload["active_market_context"] == "OBSERVE":
         payload["active_context_age_bars"] = 0
+
+    # LIVE1A provisional/lifecycle overrides closed-bar tip for current visual context.
+    live1a_path = BTC_ML_ROOT / "data" / "runtime" / "intrabar_cognition_health.json"
+    try:
+        if live1a_path.exists():
+            cog = json.loads(live1a_path.read_text(encoding="utf-8"))
+            evals = cog.get("last_provisional_eval") if isinstance(cog, dict) else None
+            row = evals.get("M15") if isinstance(evals, dict) else None
+            bars = cog.get("partial_bars") if isinstance(cog, dict) else None
+            bar = bars.get("M15") if isinstance(bars, dict) else None
+            if isinstance(row, dict):
+                mc = _clean_text(row.get("market_context") or row.get("active"), default="OBSERVE")
+                life = _clean_text(row.get("lifecycle"), default="NO_ACTIVE_CONTEXT")
+                if life == "NO_ACTIVE_CONTEXT" or mc in {"OBSERVE", "STAND_ASIDE"}:
+                    active_ctx, bias = "OBSERVE", "NONE"
+                    life = "NO_ACTIVE_CONTEXT"
+                elif mc.upper().startswith("LONG"):
+                    active_ctx, bias = "LONG_CONTEXT", "LONG"
+                elif mc.upper().startswith("SHORT"):
+                    active_ctx, bias = "SHORT_CONTEXT", "SHORT"
+                else:
+                    active_ctx, bias = "OBSERVE", "NONE"
+                    life = "NO_ACTIVE_CONTEXT"
+                payload["source"] = "LIVE1A_INTRABAR_CONTEXT"
+                payload["active_market_context"] = active_ctx
+                payload["lifecycle_state"] = life
+                payload["timeframe"] = "M15"
+                payload["lifecycle_episode_id"] = row.get("lifecycle_episode_id") or row.get("episode_id")
+                last_event = cog.get("last_context_event") if isinstance(cog.get("last_context_event"), dict) else {}
+                payload["context_event_id"] = (
+                    row.get("context_event_id")
+                    or row.get("event_id")
+                    or last_event.get("event_id")
+                    or last_event.get("context_event_id")
+                )
+                payload["context_started_at"] = row.get("context_started_at") or row.get("active_context_started_at")
+                payload["causal_cutoff_timestamp"] = (
+                    (bar or {}).get("causal_cutoff_timestamp") if isinstance(bar, dict) else None
+                )
+                payload["source_timestamp"] = cog.get("updated_at") or payload.get("causal_cutoff_timestamp")
+                payload["timestamp"] = payload.get("causal_cutoff_timestamp") or cog.get("updated_at") or payload.get("timestamp")
+                payload["intended_side"] = bias
+                if active_ctx == "OBSERVE":
+                    payload["open_episode_id"] = None
+                    payload["open_episode_context"] = None
+                    payload["active_context_age_bars"] = 0
+    except Exception:
+        pass
+
     payload["status_line"] = build_status_line(payload)
     return payload
 
@@ -580,10 +629,16 @@ def main() -> int:
         CONTEXT_VISUAL_OUT,
         {
             "generated_at_utc": _iso(pd.Timestamp.now(tz="UTC")),
-            "source": "generate_lifecycle_context_data",
+            "source": latest.get("source") or "generate_lifecycle_context_data",
             "latest": latest,
             "active_market_context": latest.get("active_market_context"),
             "lifecycle_state": latest.get("lifecycle_state"),
+            "timeframe": latest.get("timeframe"),
+            "lifecycle_episode_id": latest.get("lifecycle_episode_id") or latest.get("open_episode_id"),
+            "context_event_id": latest.get("context_event_id"),
+            "context_started_at": latest.get("context_started_at"),
+            "causal_cutoff_timestamp": latest.get("causal_cutoff_timestamp"),
+            "source_timestamp": latest.get("source_timestamp") or latest.get("timestamp"),
             "latest_decision_timestamp": latest.get("timestamp"),
             "candles_count": len(candle_rows),
             "episodes_count": len(episode_rows),

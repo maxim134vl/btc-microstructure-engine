@@ -548,6 +548,24 @@ export interface DecisionLayerSnapshot {
   snapshot_id?: string;
   timestamp?: string;
   rows?: Record<string, number>;
+  /** LIVE1A lineage (OPS1.4) */
+  source?: string;
+  source_name?: string;
+  source_timestamp?: string | null;
+  source_stale?: boolean;
+  stale?: boolean;
+  timeframe?: string | null;
+  lifecycle_state?: string | null;
+  lifecycle_episode_id?: string | null;
+  context_event_id?: string | null;
+  context_started_at?: string | null;
+  causal_cutoff_timestamp?: string | null;
+  context_source_timestamp?: string | null;
+  decision_reason?: string | null;
+  active_market_context?: string | null;
+  paper_action_candidate?: string | null;
+  intended_side?: string | null;
+  by_timeframe?: Record<string, unknown>;
 }
 
 export interface ArtifactFreshness {

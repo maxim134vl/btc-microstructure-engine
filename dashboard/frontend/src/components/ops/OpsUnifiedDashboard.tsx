@@ -593,6 +593,7 @@ export function OpsUnifiedDashboard({
                 <MetricLine label="Decision tip" value={liveConnected ? snapshot.context_chain?.decision_tip || "—" : "—"} />
               </Panel>
               <Panel title="Trading State">
+                <MetricLine label="Timeframe" value={liveConnected ? decision?.timeframe || "—" : "—"} />
                 <MetricLine label="Trading state" value={liveConnected ? decision?.trading_state || "—" : "—"} />
                 <MetricLine label="Market state" value={liveConnected ? decision?.market_state || "—" : "—"} />
                 <MetricLine label="Directional bias" value={liveConnected ? decision?.market_bias || "—" : "—"} />
@@ -607,7 +608,11 @@ export function OpsUnifiedDashboard({
                           : "NO"
                       : "—"
                   }
-                  hint={liveConnected ? decision?.execution_posture || decision?.status_label || undefined : unavailableCaption(generatedAt)}
+                  hint={liveConnected ? decision?.decision_reason || undefined : unavailableCaption(generatedAt)}
+                />
+                <MetricLine
+                  label="Intent"
+                  value={liveConnected ? decision?.execution_posture || decision?.paper_action_candidate || "—" : "—"}
                 />
               </Panel>
             </div>

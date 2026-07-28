@@ -142,6 +142,11 @@ def _decision_status_label(
 
 
 DECISION_SOURCE_FRESH_LAG_SECONDS = 30 * 60
+LIVE1A_MAX_AGE_SECONDS = 120.0
+LIVE1A_SOURCE_NAME = "LIVE1A_INTRABAR_CONTEXT"
+LIVE1A_HEALTH_REL = Path("data") / "runtime" / "intrabar_cognition_health.json"
+LIVE1B_HEALTH_REL = Path("data") / "runtime" / "intrabar_paper_health.json"
+LIVE1A_TIMEFRAME_ORDER = ("M15", "M30", "H1", "H4")
 DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
 DIRECTIONAL_PAPER_ACTIONS = frozenset({"INTENT_OPEN_LONG", "INTENT_OPEN_SHORT"})
 
@@ -241,6 +246,266 @@ def _context_status_label(row: dict[str, Any]) -> str | None:
     if paper_action in DIRECTIONAL_PAPER_ACTIONS:
         return paper_action
     return active_context or lifecycle_state
+
+
+def _read_runtime_json(relative: Path) -> dict[str, Any] | None:
+    path = Path(REPO_ROOT) / relative
+    try:
+        if not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def load_live1a_intrabar_health() -> dict[str, Any] | None:
+    """Canonical LIVE1A health for OPS Trading State (overrideable in tests)."""
+    return _read_runtime_json(LIVE1A_HEALTH_REL)
+
+
+def load_live1b_paper_health() -> dict[str, Any] | None:
+    """Canonical LIVE1B paper health for matching decision/intent fields."""
+    return _read_runtime_json(LIVE1B_HEALTH_REL)
+
+
+def _map_live1a_context_fields(
+    market_context: str | None,
+    lifecycle_state: str | None,
+) -> tuple[str, str, str]:
+    """Return (trading_state, market_state, directional_bias)."""
+    mc = (market_context or "OBSERVE").strip().upper()
+    life = (lifecycle_state or "").strip().upper()
+    if life == "NO_ACTIVE_CONTEXT" or mc in {"", "OBSERVE", "STAND_ASIDE", "NONE", "NO_ACTIVE_CONTEXT"}:
+        return "OBSERVE", "OBSERVE", "NONE"
+    if mc in {"LONG", "LONG_CONTEXT"} or mc.startswith("LONG"):
+        return "LONG_CONTEXT", "LONG_CONTEXT", "LONG"
+    if mc in {"SHORT", "SHORT_CONTEXT"} or mc.startswith("SHORT"):
+        return "SHORT_CONTEXT", "SHORT_CONTEXT", "SHORT"
+    return "OBSERVE", "OBSERVE", "NONE"
+
+
+def _select_live1a_primary_timeframe(evals: dict[str, Any]) -> str:
+    """Pick one explicit TF; never silently mix directional states across TFs."""
+    directional: list[str] = []
+    for tf in LIVE1A_TIMEFRAME_ORDER:
+        row = evals.get(tf) if isinstance(evals, dict) else None
+        if not isinstance(row, dict):
+            continue
+        trading_state, _, _ = _map_live1a_context_fields(
+            row.get("market_context") or row.get("active"),
+            row.get("lifecycle"),
+        )
+        if trading_state in DIRECTIONAL_CONTEXTS:
+            directional.append(tf)
+    if len(directional) == 1:
+        return directional[0]
+    if len(directional) > 1:
+        # Stable explicit choice — card must advertise this timeframe.
+        return directional[0]
+    return "M15"
+
+
+def _live1b_decision_fields(
+    paper: dict[str, Any] | None,
+    *,
+    timeframe: str,
+    lifecycle_episode_id: str | None,
+    context_event_id: str | None,
+) -> tuple[bool, str, str | None]:
+    """entry_eligible, intent/execution_posture, decision_reason from matching LIVE1B decision only."""
+    if not paper:
+        return False, "NONE", None
+
+    decision = paper.get("last_decision") if isinstance(paper.get("last_decision"), dict) else None
+    command = paper.get("last_command") if isinstance(paper.get("last_command"), dict) else None
+    candidate = decision or command
+    if not isinstance(candidate, dict):
+        return False, "NONE", None
+
+    cand_tf = _clean_token(candidate.get("timeframe"))
+    cand_episode = _clean_token(
+        candidate.get("lifecycle_episode_id") or candidate.get("episode_id")
+    )
+    cand_event = _clean_token(
+        candidate.get("context_event_id") or candidate.get("event_id")
+    )
+    paper_epoch = _clean_token(paper.get("paper_epoch_id"))
+    cand_epoch = _clean_token(candidate.get("paper_epoch_id"))
+
+    if cand_tf and cand_tf.upper() != timeframe.upper():
+        return False, "NONE", "TIMEFRAME_MISMATCH"
+    if paper_epoch and cand_epoch and paper_epoch != cand_epoch:
+        return False, "NONE", "PAPER_EPOCH_MISMATCH"
+    if lifecycle_episode_id and cand_episode and cand_episode != lifecycle_episode_id:
+        return False, "NONE", "EPISODE_MISMATCH"
+    if context_event_id and cand_event and cand_event != context_event_id:
+        return False, "NONE", "EVENT_MISMATCH"
+    if lifecycle_episode_id and not cand_episode and not cand_event:
+        return False, "NONE", None
+    if context_event_id and not cand_event and not cand_episode:
+        return False, "NONE", None
+
+    intent = _clean_token(
+        candidate.get("intent")
+        or candidate.get("execution_posture")
+        or candidate.get("paper_action_candidate")
+    ) or "NONE"
+    eligible = _to_bool(
+        candidate.get("entry_eligible")
+        if "entry_eligible" in candidate
+        else candidate.get("action_allowed")
+    )
+    reason = _clean_token(
+        candidate.get("decision_reason")
+        or candidate.get("block_reason")
+        or candidate.get("reason")
+    )
+    return bool(eligible) if eligible is not None else False, intent, reason
+
+
+def build_live1a_decision_layer_payload(
+    cog: dict[str, Any] | None,
+    paper: dict[str, Any] | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Build Trading State card from LIVE1A provisional/lifecycle (+ matching LIVE1B decision)."""
+    if not isinstance(cog, dict):
+        return None
+    evals = cog.get("last_provisional_eval")
+    if not isinstance(evals, dict) or not evals:
+        return None
+
+    now_utc = pd.Timestamp(now or datetime.now(timezone.utc))
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.tz_localize("UTC")
+    else:
+        now_utc = now_utc.tz_convert("UTC")
+    updated_at = _parse_utc_timestamp(cog.get("updated_at"))
+    age_s = None if updated_at is None else max((now_utc - updated_at).total_seconds(), 0.0)
+    stale = updated_at is None or (age_s is not None and age_s > LIVE1A_MAX_AGE_SECONDS)
+
+    timeframe = _select_live1a_primary_timeframe(evals)
+    row = evals.get(timeframe) if isinstance(evals.get(timeframe), dict) else {}
+    bars = cog.get("partial_bars") if isinstance(cog.get("partial_bars"), dict) else {}
+    bar = bars.get(timeframe) if isinstance(bars.get(timeframe), dict) else {}
+
+    trading_state, market_state, bias = _map_live1a_context_fields(
+        row.get("market_context") or row.get("active"),
+        row.get("lifecycle"),
+    )
+    lifecycle_state = _clean_token(row.get("lifecycle")) or "NO_ACTIVE_CONTEXT"
+    lifecycle_episode_id = _clean_token(
+        row.get("lifecycle_episode_id") or row.get("episode_id")
+    )
+    context_event_id = _clean_token(row.get("context_event_id") or row.get("event_id"))
+    # Journal tip on cognition health (empty while OBSERVE / no transitions).
+    last_event = cog.get("last_context_event") if isinstance(cog.get("last_context_event"), dict) else {}
+    if not context_event_id:
+        context_event_id = _clean_token(last_event.get("event_id") or last_event.get("context_event_id"))
+    context_started_at = _format_utc_timestamp(
+        _parse_utc_timestamp(row.get("context_started_at") or row.get("active_context_started_at"))
+    )
+    causal_cutoff = _format_utc_timestamp(
+        _parse_utc_timestamp(bar.get("causal_cutoff_timestamp") or row.get("causal_cutoff_timestamp"))
+    ) or _format_utc_timestamp(updated_at)
+    source_ts = _parse_utc_timestamp(causal_cutoff) or updated_at
+
+    entry_eligible, intent, decision_reason = _live1b_decision_fields(
+        paper,
+        timeframe=timeframe,
+        lifecycle_episode_id=lifecycle_episode_id,
+        context_event_id=context_event_id,
+    )
+    # No directional active context → never inherit a stale open intent.
+    if trading_state == "OBSERVE":
+        entry_eligible = False
+        intent = "NONE"
+
+    level = "GREY" if stale else ("GREEN" if entry_eligible else "YELLOW")
+    status_label = "STALE_LIVE1A" if stale else trading_state
+
+    return {
+        "level": level,
+        "status_label": status_label,
+        "market_state": market_state,
+        "market_bias": bias,
+        "rule_id": None,
+        "market_state_confidence": None,
+        "trend_confidence": None,
+        "trading_state": trading_state,
+        "confidence_band": lifecycle_state,
+        "entry_eligible": entry_eligible,
+        "execution_posture": intent,
+        "snapshot_id": _clean_token(cog.get("pid")) or "live1a",
+        "timestamp": _format_utc_timestamp(source_ts),
+        "active_market_context": trading_state,
+        "lifecycle_state": lifecycle_state,
+        "candidate_context": None,
+        "paper_action_candidate": intent,
+        "intended_side": bias,
+        "timeframe": timeframe,
+        "lifecycle_episode_id": lifecycle_episode_id,
+        "context_event_id": context_event_id,
+        "context_started_at": context_started_at,
+        "causal_cutoff_timestamp": causal_cutoff,
+        "context_source_timestamp": _format_utc_timestamp(source_ts),
+        "decision_reason": decision_reason,
+        "source": LIVE1A_SOURCE_NAME,
+        "source_name": LIVE1A_SOURCE_NAME,
+        "source_timestamp": _format_utc_timestamp(source_ts),
+        "source_reference_timestamp": _format_utc_timestamp(updated_at),
+        "source_lag_seconds": age_s,
+        "source_stale": stale,
+        "stale": stale,
+        "freshness_warning": (
+            f"LIVE1A health is stale: {int(age_s)}s since updated_at."
+            if stale and age_s is not None
+            else ("LIVE1A health has no usable updated_at." if stale else None)
+        ),
+        "freshness": {
+            "source_name": LIVE1A_SOURCE_NAME,
+            "source_timestamp": _format_utc_timestamp(source_ts),
+            "reference_timestamp": _format_utc_timestamp(updated_at),
+            "lag_seconds": age_s,
+            "max_lag_seconds": LIVE1A_MAX_AGE_SECONDS,
+            "is_stale": stale,
+            "warning": (
+                f"LIVE1A health is stale: {int(age_s)}s since updated_at."
+                if stale and age_s is not None
+                else None
+            ),
+        },
+        "rows": {
+            "live1a_intrabar_cognition_health": 1,
+            "live1b_intrabar_paper_health": 1 if paper else 0,
+        },
+        "by_timeframe": {
+            tf: {
+                "timeframe": tf,
+                "trading_state": _map_live1a_context_fields(
+                    (evals.get(tf) or {}).get("market_context") if isinstance(evals.get(tf), dict) else None,
+                    (evals.get(tf) or {}).get("lifecycle") if isinstance(evals.get(tf), dict) else None,
+                )[0],
+                "lifecycle_state": _clean_token((evals.get(tf) or {}).get("lifecycle"))
+                if isinstance(evals.get(tf), dict)
+                else None,
+                "lifecycle_episode_id": _clean_token(
+                    (evals.get(tf) or {}).get("lifecycle_episode_id")
+                    or (evals.get(tf) or {}).get("episode_id")
+                )
+                if isinstance(evals.get(tf), dict)
+                else None,
+                "causal_cutoff_timestamp": _format_utc_timestamp(
+                    _parse_utc_timestamp((bars.get(tf) or {}).get("causal_cutoff_timestamp"))
+                )
+                if isinstance(bars.get(tf), dict)
+                else None,
+            }
+            for tf in LIVE1A_TIMEFRAME_ORDER
+        },
+    }
 
 
 def _build_context_decision_payload(
@@ -437,6 +702,14 @@ async def build_pipeline_sync_status() -> dict[str, Any]:
 
 
 async def build_decision_layer_snapshot() -> dict[str, Any]:
+    # LIVE1A provisional/lifecycle is the only authoritative Trading State source.
+    live1a_payload = build_live1a_decision_layer_payload(
+        load_live1a_intrabar_health(),
+        load_live1b_paper_health(),
+    )
+    if live1a_payload is not None:
+        return live1a_payload
+
     live_feed = await read_parquet("live_market_feed.parquet", tail=1)
     decision_log = await read_parquet("context_decision_log.parquet", tail=1)
     lifecycle = await read_parquet("market_context_lifecycle_memory.parquet", tail=1)

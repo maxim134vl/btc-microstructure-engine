@@ -283,6 +283,59 @@ def _map_availability_status(raw: str | None) -> str:
     return text or "SOURCE_UNAVAILABLE"
 
 
+LIVE1A_HEALTH = ROOT / "data" / "runtime" / "intrabar_cognition_health.json"
+
+
+def _map_live1a_visual_context(market_context: str | None, lifecycle: str | None) -> tuple[str, str]:
+    """Return (directional_state, direction) from LIVE1A provisional row."""
+    mc = (market_context or "OBSERVE").strip().upper()
+    life = (lifecycle or "").strip().upper()
+    if life == "NO_ACTIVE_CONTEXT" or mc in {"", "OBSERVE", "STAND_ASIDE", "NONE", "NO_ACTIVE_CONTEXT"}:
+        return "OBSERVE", "NONE"
+    if mc in {"LONG", "LONG_CONTEXT"} or mc.startswith("LONG"):
+        return "LONG_CONTEXT", "LONG"
+    if mc in {"SHORT", "SHORT_CONTEXT"} or mc.startswith("SHORT"):
+        return "SHORT_CONTEXT", "SHORT"
+    return "OBSERVE", "NONE"
+
+
+def load_live1a_visual_overlay(timeframe: str) -> dict[str, Any] | None:
+    """Current LIVE1A provisional/lifecycle for visual state (not closed-bar memory)."""
+    cog = _read_json(LIVE1A_HEALTH)
+    if not cog:
+        return None
+    evals = cog.get("last_provisional_eval")
+    if not isinstance(evals, dict):
+        return None
+    row = evals.get(timeframe)
+    if not isinstance(row, dict):
+        return None
+    bars = cog.get("partial_bars") if isinstance(cog.get("partial_bars"), dict) else {}
+    bar = bars.get(timeframe) if isinstance(bars.get(timeframe), dict) else {}
+    directional, direction = _map_live1a_visual_context(
+        row.get("market_context") or row.get("active"),
+        row.get("lifecycle"),
+    )
+    last_event = cog.get("last_context_event") if isinstance(cog.get("last_context_event"), dict) else {}
+    return {
+        "directional_state": directional,
+        "timeframe_direction": direction,
+        "lifecycle_state": _txt(row.get("lifecycle")) or "NO_ACTIVE_CONTEXT",
+        "lifecycle_episode_id": _txt(row.get("lifecycle_episode_id") or row.get("episode_id")),
+        "context_event_id": _txt(
+            row.get("context_event_id")
+            or row.get("event_id")
+            or last_event.get("event_id")
+            or last_event.get("context_event_id")
+        ),
+        "context_started_at": _txt(row.get("context_started_at") or row.get("active_context_started_at")),
+        "causal_cutoff_timestamp": _txt(bar.get("causal_cutoff_timestamp")),
+        "evaluation_timestamp": _txt(cog.get("updated_at") or bar.get("causal_cutoff_timestamp")),
+        "source": "LIVE1A_INTRABAR_CONTEXT",
+        "source_timestamp": _txt(cog.get("updated_at") or bar.get("causal_cutoff_timestamp")),
+    }
+
+
 def load_tf_state(timeframe: str) -> dict[str, Any]:
     avail_payload = _read_json(MTF_AVAILABILITY)
     avail_row = (avail_payload.get("timeframes") or {}).get(timeframe) or {}
@@ -296,7 +349,7 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
     cmd = (manager.get("commands") or {}).get(timeframe) or {}
 
     availability_status = _map_availability_status(_txt(avail_row.get("availability_status")))
-    return {
+    state = {
         "timeframe": timeframe,
         "availability_status": availability_status,
         "availability_raw": _txt(avail_row.get("availability_status")),
@@ -308,7 +361,28 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
         "manager_lifecycle_episode_id": _txt(cmd.get("lifecycle_episode_id")),
         "lifecycle_phase": _txt(cmd.get("lifecycle_phase")),
         "evaluation_timestamp": _txt(cmd.get("evaluation_timestamp") or manager.get("evaluation_timestamp")),
+        "context_event_id": None,
+        "context_started_at": None,
+        "causal_cutoff_timestamp": None,
+        "context_source": "timeframe_command_memory",
     }
+    live1a = load_live1a_visual_overlay(timeframe)
+    if live1a:
+        # LIVE1A provisional/lifecycle overrides stale closed-bar manager command tip.
+        state["directional_state"] = live1a["directional_state"]
+        state["timeframe_direction"] = live1a["timeframe_direction"]
+        state["lifecycle_phase"] = live1a["lifecycle_state"]
+        state["manager_lifecycle_episode_id"] = live1a["lifecycle_episode_id"]
+        state["context_event_id"] = live1a["context_event_id"]
+        state["context_started_at"] = live1a["context_started_at"]
+        state["causal_cutoff_timestamp"] = live1a["causal_cutoff_timestamp"]
+        state["evaluation_timestamp"] = live1a["evaluation_timestamp"]
+        state["context_source"] = live1a["source"]
+        state["source_timestamp"] = live1a["source_timestamp"]
+        if live1a["directional_state"] == "OBSERVE":
+            state["manager_instruction"] = "NO_ACTION"
+            state["manager_lifecycle_episode_id"] = None
+    return state
 
 
 def build_tf_context_segments(
@@ -845,8 +919,45 @@ def build_global_lifecycle(
         if prev is None or ep.get("active"):
             dedup[int(eid)] = ep
     episodes = sorted(dedup.values(), key=lambda r: (r.get("start_timestamp") or "", r.get("episode_id") or 0))
+
+    # LIVE1A provisional overrides closed-bar memory tip for the *active* visual episode.
+    live1a_primary = load_live1a_visual_overlay("M15")
+    if live1a_primary is not None:
+        if live1a_primary["directional_state"] == "OBSERVE":
+            for ep in episodes:
+                ep["active"] = False
+            active = {
+                "episode_id": None,
+                "episode_key": None,
+                "state": "OBSERVE",
+                "lifecycle_state": "NO_ACTIVE_CONTEXT",
+                "start_timestamp": None,
+                "end_timestamp": live1a_primary.get("source_timestamp") or live1a_primary.get("evaluation_timestamp"),
+                "active": False,
+                "source": "LIVE1A_INTRABAR_CONTEXT",
+                "context_event_id": live1a_primary.get("context_event_id"),
+                "causal_cutoff_timestamp": live1a_primary.get("causal_cutoff_timestamp"),
+            }
+        else:
+            active = {
+                "episode_id": live1a_primary.get("lifecycle_episode_id"),
+                "episode_key": live1a_primary.get("lifecycle_episode_id"),
+                "state": live1a_primary["directional_state"],
+                "lifecycle_state": live1a_primary.get("lifecycle_state"),
+                "start_timestamp": live1a_primary.get("context_started_at"),
+                "end_timestamp": live1a_primary.get("source_timestamp") or live1a_primary.get("evaluation_timestamp"),
+                "active": True,
+                "source": "LIVE1A_INTRABAR_CONTEXT",
+                "context_event_id": live1a_primary.get("context_event_id"),
+                "causal_cutoff_timestamp": live1a_primary.get("causal_cutoff_timestamp"),
+            }
+
     return {
-        "source": "market_context_lifecycle_episodes + market_context_lifecycle_memory tip",
+        "source": (
+            "LIVE1A_INTRABAR_CONTEXT"
+            if live1a_primary is not None
+            else "market_context_lifecycle_episodes + market_context_lifecycle_memory tip"
+        ),
         "active_episode": active,
         "episodes": episodes,
         "freshness": {
@@ -971,6 +1082,20 @@ def build_timeframe_chart_truth(
             window_start=window_start,
             window_end=window_end,
         )
+        # When LIVE1A is OBSERVE, drop open-ended directional segments that would paint a false active zone.
+        if state.get("context_source") == "LIVE1A_INTRABAR_CONTEXT" and state.get("directional_state") == "OBSERVE":
+            pruned: list[dict[str, Any]] = []
+            for seg in context_segments:
+                ds = str(seg.get("directional_state") or "").upper()
+                if ds in {"LONG_CONTEXT", "SHORT_CONTEXT", "LONG", "SHORT"}:
+                    # Keep historical closed segments only (end before causal cutoff / now).
+                    end_ts = seg.get("end_timestamp")
+                    if end_ts and state.get("causal_cutoff_timestamp") and str(end_ts) >= str(state.get("causal_cutoff_timestamp")):
+                        continue
+                    if not end_ts:
+                        continue
+                pruned.append(seg)
+            context_segments = pruned
         for entity in closed + opens:
             if entity.get("episode_status") == "UNPROVEN":
                 data_quality["unproven_episode_links"].append(
