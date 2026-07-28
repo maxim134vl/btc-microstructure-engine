@@ -533,6 +533,33 @@ export interface PipelineSyncStatus {
   average_cycle_duration_s?: number | null;
 }
 
+export interface TimeframeTradingState {
+  timeframe: string;
+  trading_state?: string | null;
+  market_state?: string | null;
+  directional_bias?: string | null;
+  lifecycle_state?: string | null;
+  lifecycle_episode_id?: string | null;
+  context_event_id?: string | null;
+  context_started_at?: string | null;
+  entry_eligible?: boolean | null;
+  intent?: string | null;
+  decision_reason?: string | null;
+  causal_cutoff_timestamp?: string | null;
+  last_evaluated_at?: string | null;
+  source?: string | null;
+  stale?: boolean | null;
+  level?: string | null;
+  source_lag_seconds?: number | null;
+}
+
+export interface TradingStatesPanel {
+  source?: string | null;
+  directional_timeframes?: number | null;
+  total_timeframes?: number | null;
+  timeframes?: Record<string, TimeframeTradingState>;
+}
+
 export interface DecisionLayerSnapshot {
   level: OpsLevel;
   status_label?: string;
@@ -542,13 +569,14 @@ export interface DecisionLayerSnapshot {
   market_state_confidence?: number;
   trend_confidence?: number;
   trading_state?: string;
+  trading_states?: TradingStatesPanel;
   confidence_band?: string;
   entry_eligible?: boolean;
   execution_posture?: string;
   snapshot_id?: string;
   timestamp?: string;
   rows?: Record<string, number>;
-  /** LIVE1A lineage (OPS1.4) */
+  /** LIVE1A lineage (OPS1.4 / OPS1.6) */
   source?: string;
   source_name?: string;
   source_timestamp?: string | null;
@@ -565,7 +593,7 @@ export interface DecisionLayerSnapshot {
   active_market_context?: string | null;
   paper_action_candidate?: string | null;
   intended_side?: string | null;
-  by_timeframe?: Record<string, unknown>;
+  by_timeframe?: Record<string, TimeframeTradingState>;
 }
 
 export interface ArtifactFreshness {

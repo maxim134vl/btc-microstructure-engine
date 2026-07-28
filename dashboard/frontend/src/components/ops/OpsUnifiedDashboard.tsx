@@ -32,6 +32,10 @@ import {
   mapPromotionSeverity,
   mapRuntimeSafetySeverity,
 } from "./assuranceCardSeverity";
+import { mapTradingStateTimeframeSeverity } from "./tradingStateCardSeverity";
+import type { TimeframeTradingState } from "../../types/ops";
+
+const TRADING_STATE_TIMEFRAMES = ["M15", "M30", "H1", "H4"] as const;
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
@@ -560,7 +564,7 @@ export function OpsUnifiedDashboard({
         <section className="space-y-2.5" data-section="market-context">
           <SectionLabel>Market Context</SectionLabel>
           <SectionCard>
-            <div className="grid gap-3.5 xl:grid-cols-3">
+            <div className="grid gap-3.5 xl:grid-cols-2">
               <Panel title="MTF Availability" empty={!liveConnected ? "Unavailable" : undefined}>
                 {liveConnected
                   ? (snapshot.multi_timeframe || []).map((row) => {
@@ -592,29 +596,65 @@ export function OpsUnifiedDashboard({
                 <MetricLine label="Lifecycle tip" value={liveConnected ? snapshot.context_chain?.lifecycle_tip || "—" : "—"} />
                 <MetricLine label="Decision tip" value={liveConnected ? snapshot.context_chain?.decision_tip || "—" : "—"} />
               </Panel>
-              <Panel title="Trading State">
-                <MetricLine label="Timeframe" value={liveConnected ? decision?.timeframe || "—" : "—"} />
-                <MetricLine label="Trading state" value={liveConnected ? decision?.trading_state || "—" : "—"} />
-                <MetricLine label="Market state" value={liveConnected ? decision?.market_state || "—" : "—"} />
-                <MetricLine label="Directional bias" value={liveConnected ? decision?.market_bias || "—" : "—"} />
-                <MetricLine
-                  label="Entry eligible"
-                  value={
-                    liveConnected
-                      ? decision?.entry_eligible == null
-                        ? "—"
-                        : decision.entry_eligible
-                          ? "YES"
-                          : "NO"
-                      : "—"
-                  }
-                  hint={liveConnected ? decision?.decision_reason || undefined : unavailableCaption(generatedAt)}
-                />
-                <MetricLine
-                  label="Intent"
-                  value={liveConnected ? decision?.execution_posture || decision?.paper_action_candidate || "—" : "—"}
-                />
-              </Panel>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2 px-0.5">
+                <h3 className="text-[14px] font-semibold text-ds-text-primary">Trading State</h3>
+                <p className="text-[11px] text-ds-text-secondary">
+                  {liveConnected
+                    ? `Directional timeframes: ${
+                        decision?.trading_states?.directional_timeframes ??
+                        Object.values(decision?.trading_states?.timeframes || decision?.by_timeframe || {}).filter(
+                          (row) => {
+                            const state = String((row as TimeframeTradingState)?.trading_state || "").toUpperCase();
+                            return state === "LONG_CONTEXT" || state === "SHORT_CONTEXT";
+                          },
+                        ).length
+                      } / 4`
+                    : unavailableCaption(generatedAt)}
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {TRADING_STATE_TIMEFRAMES.map((tf) => {
+                  const row: TimeframeTradingState | undefined = liveConnected
+                    ? decision?.trading_states?.timeframes?.[tf] || decision?.by_timeframe?.[tf]
+                    : undefined;
+                  const status = liveConnected
+                    ? mapTradingStateTimeframeSeverity(row)
+                    : translateOpsLevel("GREY", "engine");
+                  return (
+                    <Panel
+                      key={tf}
+                      title={tf}
+                      status={status}
+                      empty={!liveConnected ? "Unavailable" : !row ? "UNAVAILABLE" : undefined}
+                    >
+                      {liveConnected && row ? (
+                        <>
+                          <MetricLine label="Trading state" value={row.trading_state || "—"} />
+                          <MetricLine label="Lifecycle" value={row.lifecycle_state || "—"} />
+                          <MetricLine label="Market state" value={row.market_state || "—"} />
+                          <MetricLine label="Directional bias" value={row.directional_bias || "—"} />
+                          <MetricLine
+                            label="Entry eligible"
+                            value={row.entry_eligible == null ? "—" : row.entry_eligible ? "YES" : "NO"}
+                            hint={row.decision_reason || undefined}
+                          />
+                          <MetricLine label="Intent" value={row.intent || "—"} />
+                          <MetricLine label="Episode" value={row.lifecycle_episode_id || "—"} />
+                          <MetricLine label="Context event" value={row.context_event_id || "—"} />
+                          <MetricLine
+                            label="Last evaluated"
+                            value={
+                              row.last_evaluated_at ? formatSourceTimestamp(row.last_evaluated_at) : "—"
+                            }
+                          />
+                        </>
+                      ) : null}
+                    </Panel>
+                  );
+                })}
+              </div>
             </div>
           </SectionCard>
         </section>

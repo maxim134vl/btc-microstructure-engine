@@ -236,7 +236,8 @@ def test_live1a_observe_overrides_legacy_short(monkeypatch) -> None:
     assert payload["market_bias"] == "NONE"
     assert payload["entry_eligible"] is False
     assert payload["execution_posture"] == "NONE"
-    assert payload["timeframe"] == "M15"
+    assert set(payload["trading_states"]["timeframes"]) == {"M15", "M30", "H1", "H4"}
+    assert payload["timeframe"] is None
 
     snapshot = asyncio.run(svc.build_decision_layer_snapshot())
     assert snapshot["source"] == "LIVE1A_INTRABAR_CONTEXT"
