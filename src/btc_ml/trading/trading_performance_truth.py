@@ -620,7 +620,73 @@ def build_trading_performance_truth(
     excluded_legacy_count: int = 4,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    """Build canonical performance payload. Pure read-only function."""
+    """Build canonical performance payload. Pure read-only function.
+
+    LIVE1B: when an ACTIVE INTRABAR_RULES_V1 paper epoch exists, headline metrics
+    come only from that epoch's books. Legacy closed-bar books are excluded.
+    """
+    try:
+        from btc_ml.trading.intrabar_paper.ops_adapter import (
+            build_intrabar_epoch_performance_summary,
+            load_active_paper_epoch,
+            legacy_void_marker,
+        )
+
+        active_epoch = load_active_paper_epoch()
+    except Exception:
+        active_epoch = None
+        build_intrabar_epoch_performance_summary = None  # type: ignore
+        legacy_void_marker = None  # type: ignore
+
+    if active_epoch and str(active_epoch.get("rule_contract_version") or "").startswith("INTRABAR_RULES"):
+        summary = build_intrabar_epoch_performance_summary(epoch=active_epoch)  # type: ignore[misc]
+        void = legacy_void_marker() if legacy_void_marker else None
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": generated_at or _utc_now(),
+            "paper_epoch_id": summary["paper_epoch_id"],
+            "mode": "paper_only",
+            "real_execution_enabled": False,
+            "legacy_excluded": True,
+            "legacy_void": void,
+            "initial_equity_usd": summary["initial_equity_usd"],
+            "equity": {
+                "initial_usd": summary["initial_equity_usd"],
+                "closed_equity_usd": summary["equity_usd"],
+                "mtm_equity_usd": summary["equity_usd"],
+            },
+            "pnl": {
+                "realised_gross_usd": summary["realized_pnl_usd"],
+                "realised_net_usd": summary["realized_pnl_usd"],
+                "unrealised_gross_usd": 0.0,
+                "unrealised_net_usd": 0.0,
+                "fees_usd": 0.0,
+                "slippage_usd": 0.0,
+            },
+            "positions": {
+                "active_count": summary["active_positions"],
+                "by_timeframe": summary["positions_by_timeframe"],
+                "open": [],
+            },
+            "trades": {
+                "closed_count": summary["trades_count"],
+                "closed": [],
+            },
+            "metrics": {
+                "win_rate": summary["win_rate"],
+                "profit_factor": summary["profit_factor"],
+                "daily_return": summary["daily_return"],
+                "annualized_return": summary["annualized_return"],
+                "drawdown": summary["drawdown"],
+                "sharpe": summary["sharpe"],
+                "calmar": summary["calmar"],
+            },
+            "intrabar_epoch_summary": summary,
+            "source": "LIVE1B_INTRABAR_PAPER_EPOCH",
+            "excluded_sources": list(EXCLUDED_SOURCE_CATEGORIES)
+            + ["LEGACY_CLOSED_BAR_TIMEFRAME_TRADERS"],
+        }
+
     root = books_root or PRODUCTION_BOOKS_ROOT
     portfolio_path = portfolio_summary_path or PRODUCTION_PORTFOLIO_SUMMARY
     portfolio = _read_json(portfolio_path)

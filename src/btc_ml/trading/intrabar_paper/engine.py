@@ -1,0 +1,907 @@
+"""Intrabar paper execution engine: context events → causal BBO fills."""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .bbo import CausalBBOStore, fill_price_for
+from .books import EpochBooks
+from .config import IntrabarPaperConfig
+from .consumer import (
+    ENTRY_EVENTS,
+    EXIT_EVENTS,
+    ContextEventConsumer,
+    idempotency_key,
+)
+from .economics import closed_trade_economics, resolve_risk_sizing
+from .epoch import PaperEpoch
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:16]}"
+
+
+@dataclass
+class OpenPosition:
+    position_id: str
+    timeframe: str
+    side: str
+    quantity: float
+    entry_price: float
+    stop_loss_price: float
+    take_profit_price: float
+    risk_amount_usd: float
+    lifecycle_episode_id: str | None
+    context_event_id: str
+    entry_fill_id: str
+    entry_command_id: str
+    entry_monotonic_ns: int
+    traded_episode_ids: set[str] = field(default_factory=set)
+
+
+@dataclass
+class PendingExit:
+    timeframe: str
+    reason: str
+    context_event_id: str
+    command_monotonic_ns: int
+    trigger_type: str
+    trigger_event_id: str
+    trigger_timestamp: str | None
+    trigger_price: float | None
+    flip_to_side: str | None = None
+
+
+class IntrabarPaperEngine:
+    """Per-timeframe single-position paper engine with causal BBO fills."""
+
+    def __init__(
+        self,
+        *,
+        cfg: IntrabarPaperConfig,
+        epoch: PaperEpoch,
+        books: EpochBooks | None = None,
+        consumer: ContextEventConsumer | None = None,
+        activation_monotonic_ns: int | None = None,
+    ) -> None:
+        self.cfg = cfg
+        self.epoch = epoch
+        self.equity = float(epoch.initial_equity_usd)
+        self.realized_pnl = 0.0
+        self.unrealized_pnl = 0.0
+        epoch_root = cfg.books_root / epoch.paper_epoch_id
+        self.books = books or EpochBooks(epoch_root / "books", paper_epoch_id=epoch.paper_epoch_id)
+        ck_path = epoch_root / "context_consumer_checkpoint.json"
+        act_mono = activation_monotonic_ns
+        if act_mono is None:
+            act_mono = epoch.activated_at_monotonic_ns
+        self.consumer = consumer or ContextEventConsumer(
+            journal_root=cfg.context_journal_root,
+            checkpoint_path=ck_path,
+            paper_epoch_id=epoch.paper_epoch_id,
+            activated_at_monotonic_ns=act_mono,
+            activated_at_iso=epoch.activated_at,
+        )
+        self.bbo = CausalBBOStore()
+        self.positions: dict[str, OpenPosition] = {}
+        self.traded_episodes: set[str] = set()
+        self.pending_exits: dict[str, PendingExit] = {}
+        self.blocked_commands = 0
+        self.last_command: dict[str, Any] | None = None
+        self.last_fill: dict[str, Any] | None = None
+        self.last_context_event: dict[str, Any] | None = None
+        self.errors: list[str] = []
+        self._command_seq = 0
+        self.health_path = epoch_root / "health.json"
+        self._restore_open_positions()
+
+    def _restore_open_positions(self) -> None:
+        for row in self.books.open_positions():
+            tf = str(row["timeframe"])
+            ep = row.get("lifecycle_episode_id")
+            pos = OpenPosition(
+                position_id=str(row["position_id"]),
+                timeframe=tf,
+                side=str(row["side"]).upper(),
+                quantity=float(row["quantity"]),
+                entry_price=float(row["entry_price"]),
+                stop_loss_price=float(row["stop_loss_price"]),
+                take_profit_price=float(row["take_profit_price"]),
+                risk_amount_usd=float(row.get("risk_amount_usd") or self.cfg.max_risk_per_trade_usd),
+                lifecycle_episode_id=str(ep) if ep else None,
+                context_event_id=str(row.get("entry_context_event_id") or ""),
+                entry_fill_id=str(row.get("entry_fill_id") or ""),
+                entry_command_id=str(row.get("entry_command_id") or ""),
+                entry_monotonic_ns=int(row.get("entry_monotonic_ns") or 0),
+            )
+            if ep:
+                self.traded_episodes.add(str(ep))
+                pos.traded_episode_ids.add(str(ep))
+            self.positions[tf] = pos
+        for t in self.books.closed_trades():
+            self.realized_pnl += float(t.get("net_pnl_usd") or 0.0)
+            ep = t.get("lifecycle_episode_id")
+            if ep:
+                self.traded_episodes.add(str(ep))
+        self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
+
+    def update_bbo_from_market(
+        self,
+        *,
+        best_bid: float,
+        best_ask: float,
+        receive_monotonic_ns: int,
+        receive_timestamp: str | None = None,
+        book_update_id: str | None = None,
+        source_event_id: str | None = None,
+    ) -> None:
+        self.bbo.update_from_book_ticker(
+            best_bid=best_bid,
+            best_ask=best_ask,
+            receive_monotonic_ns=receive_monotonic_ns,
+            receive_timestamp=receive_timestamp,
+            book_update_id=book_update_id,
+            source_event_id=source_event_id,
+            domain="local",
+        )
+        self._check_tp_sl_on_market(
+            trigger_monotonic_ns=receive_monotonic_ns,
+            trigger_event_id=source_event_id or f"bbo_{receive_monotonic_ns}",
+            trigger_timestamp=receive_timestamp,
+            trade_price=None,
+            use_local_bbo=True,
+        )
+
+    def update_from_trade(
+        self,
+        *,
+        price: float,
+        receive_monotonic_ns: int,
+        receive_timestamp: str | None = None,
+        source_event_id: str | None = None,
+    ) -> None:
+        self._check_tp_sl_on_market(
+            trigger_monotonic_ns=receive_monotonic_ns,
+            trigger_event_id=source_event_id or f"trade_{receive_monotonic_ns}",
+            trigger_timestamp=receive_timestamp,
+            trade_price=float(price),
+            use_local_bbo=True,
+        )
+
+    def process_context_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        """Process one context journal event; returns list of actions taken."""
+        actions: list[dict[str, Any]] = []
+        self.last_context_event = {
+            "context_event_id": event.get("context_event_id") or event.get("event_id"),
+            "event_type": event.get("event_type") or event.get("type"),
+            "timeframe": event.get("timeframe"),
+            "side": event.get("side") or event.get("direction") or event.get("context_side"),
+            "event_monotonic_ns": event.get("event_monotonic_ns"),
+        }
+        self.bbo.update_from_context_event(event)
+        # Retry pending exits first (causal BBO may now be available)
+        for tf in list(self.pending_exits.keys()):
+            done = self._try_pending_exit(tf)
+            if done:
+                actions.append(done)
+
+        etype = str(event.get("event_type") or event.get("type") or "").upper()
+        tf = str(event.get("timeframe") or "").upper()
+        if tf not in self.cfg.timeframes:
+            return actions
+        side = self._event_side(event)
+        mono = int(event.get("event_monotonic_ns") or 0)
+        eid = str(event.get("context_event_id") or event.get("event_id") or _new_id("cev"))
+        episode = event.get("lifecycle_episode_id") or event.get("episode_id")
+
+        if etype == "CONTEXT_FLIP":
+            flip_from = self._context_to_side(
+                event.get("from_side") or event.get("flip_from") or event.get("previous_context")
+            )
+            flip_to = self._context_to_side(
+                event.get("to_side") or event.get("flip_to") or event.get("new_context") or side
+            )
+            # Close existing if opposite
+            pos = self.positions.get(tf)
+            if pos and (not flip_from or pos.side == flip_from):
+                if flip_to and flip_to != pos.side:
+                    exit_act = self._exit_position(
+                        tf=tf,
+                        trigger_type="CONTEXT_FLIP",
+                        trigger_event_id=eid,
+                        trigger_timestamp=event.get("event_timestamp"),
+                        trigger_monotonic_ns=mono,
+                        trigger_price=event.get("context_event_price") or event.get("price"),
+                        context_event_id=eid,
+                        flip_to_side=flip_to,
+                        episode_id=str(episode) if episode else None,
+                    )
+                    if exit_act:
+                        actions.append(exit_act)
+            # Open new side after exit (strict ordering: exit mono < entry mono)
+            if flip_to in {"LONG", "SHORT"}:
+                entry_mono = mono + 1
+                entry_act = self._enter_position(
+                    tf=tf,
+                    side=flip_to,
+                    event_type="CONTEXT_FLIP",
+                    context_event_id=eid,
+                    event_monotonic_ns=entry_mono,
+                    event_timestamp=event.get("event_timestamp"),
+                    context_event_price=event.get("context_event_price") or event.get("price"),
+                    episode_id=str(episode) if episode else None,
+                    event=event,
+                )
+                if entry_act:
+                    actions.append(entry_act)
+            return actions
+
+        if etype == "CONTEXT_START" and side in {"LONG", "SHORT"}:
+            entry_act = self._enter_position(
+                tf=tf,
+                side=side,
+                event_type="CONTEXT_START",
+                context_event_id=eid,
+                event_monotonic_ns=mono,
+                event_timestamp=event.get("event_timestamp"),
+                context_event_price=event.get("context_event_price") or event.get("price"),
+                episode_id=str(episode) if episode else None,
+                event=event,
+            )
+            if entry_act:
+                actions.append(entry_act)
+            return actions
+
+        if etype == "CONTEXT_END":
+            pos = self.positions.get(tf)
+            if pos and (not side or side == pos.side or side in {"OBSERVE", "STAND_ASIDE", ""}):
+                # END for matching side (or end of episode)
+                end_side = side if side in {"LONG", "SHORT"} else pos.side
+                if end_side == pos.side:
+                    exit_act = self._exit_position(
+                        tf=tf,
+                        trigger_type="CONTEXT_END",
+                        trigger_event_id=eid,
+                        trigger_timestamp=event.get("event_timestamp"),
+                        trigger_monotonic_ns=mono,
+                        trigger_price=event.get("context_event_price") or event.get("price"),
+                        context_event_id=eid,
+                        episode_id=str(episode) if episode else None,
+                    )
+                    if exit_act:
+                        actions.append(exit_act)
+            return actions
+
+        # OBSERVE / STAND_ASIDE / unknown — no entry
+        return actions
+
+    def poll_context_journal(self) -> list[dict[str, Any]]:
+        all_actions: list[dict[str, Any]] = []
+        for ev in self.consumer.iter_new_events():
+            actions = self.process_context_event(ev)
+            eid = str(ev.get("context_event_id") or ev.get("event_id") or "")
+            mono = int(ev.get("event_monotonic_ns") or 0)
+            # Mark consumption of the event itself (even if no trade)
+            consume_key = idempotency_key(
+                paper_epoch_id=self.epoch.paper_epoch_id,
+                context_event_id=eid,
+                timeframe=str(ev.get("timeframe") or "NA"),
+                action="CONSUME",
+            )
+            if not self.consumer.already_processed(consume_key):
+                self.consumer.mark_processed(
+                    key=consume_key,
+                    context_event_id=eid,
+                    event_monotonic_ns=mono,
+                    path=ev.get("_journal_path"),
+                    offset=ev.get("_journal_offset"),
+                )
+            self.consumer.save()
+            all_actions.extend(actions)
+        return all_actions
+
+    @staticmethod
+    def _context_to_side(value: Any) -> str:
+        u = str(value or "").upper()
+        if u in {"LONG", "LONG_CONTEXT"}:
+            return "LONG"
+        if u in {"SHORT", "SHORT_CONTEXT"}:
+            return "SHORT"
+        if u in {"OBSERVE", "STAND_ASIDE"}:
+            return u
+        return ""
+
+    def _event_side(self, event: dict[str, Any]) -> str:
+        for k in ("side", "direction", "context_side", "to_side", "new_context"):
+            side = self._context_to_side(event.get(k))
+            if side:
+                return side
+        return ""
+
+    def _next_command_mono(self, base: int) -> int:
+        self._command_seq += 1
+        return int(base) + self._command_seq
+
+    def _enter_position(
+        self,
+        *,
+        tf: str,
+        side: str,
+        event_type: str,
+        context_event_id: str,
+        event_monotonic_ns: int,
+        event_timestamp: str | None,
+        context_event_price: Any,
+        episode_id: str | None,
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        action = "ENTRY"
+        key = idempotency_key(
+            paper_epoch_id=self.epoch.paper_epoch_id,
+            context_event_id=context_event_id,
+            timeframe=tf,
+            action=f"{action}_{side}",
+        )
+        if self.consumer.already_processed(key):
+            return {"status": "DUPLICATE_PREVENTED", "key": key}
+        if side not in {"LONG", "SHORT"}:
+            return None
+        if event_type not in ENTRY_EVENTS:
+            return None
+        if tf in self.positions:
+            self._block("ENTRY_BLOCKED_ACTIVE_POSITION", tf, context_event_id, side)
+            return None
+        # Episode lock applies to CONTEXT_START re-entry, not FLIP close→open.
+        if event_type == "CONTEXT_START" and episode_id and episode_id in self.traded_episodes:
+            self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
+            return None
+
+        bbo, reason, age_ms = self.bbo.resolve_causal(
+            command_monotonic_ns=event_monotonic_ns,
+            max_age_ms=self.cfg.max_bbo_age_ms,
+        )
+        if bbo is None:
+            self._block(reason or "ENTRY_BLOCKED_NO_CAUSAL_BBO", tf, context_event_id, side)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {"status": reason, "timeframe": tf}
+
+        fill_px = fill_price_for(side=side, action="ENTRY", bbo=bbo)
+        sizing = resolve_risk_sizing(cfg=self.cfg, side=side, entry_price=fill_px, equity_usd=self.equity)
+        if not sizing.ok or sizing.quantity is None:
+            self._block(sizing.block_reason or "ENTRY_BLOCKED_RISK", tf, context_event_id, side)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {"status": sizing.block_reason, "timeframe": tf}
+
+        cmd_id = _new_id("cmd")
+        order_id = _new_id("ord")
+        fill_id = _new_id("fill")
+        pos_id = _new_id("pos")
+        signal_id = _new_id("sig")
+        now = _utc_iso()
+        cmd_mono = event_monotonic_ns
+
+        signal = self.books.append(
+            "signals",
+            {
+                "signal_id": signal_id,
+                "timeframe": tf,
+                "side": side,
+                "event_type": event_type,
+                "context_event_id": context_event_id,
+                "lifecycle_episode_id": episode_id,
+                "ts": now,
+                "event_monotonic_ns": event_monotonic_ns,
+            },
+        )
+        command = self.books.append(
+            "commands",
+            {
+                "command_id": cmd_id,
+                "signal_id": signal_id,
+                "timeframe": tf,
+                "side": side,
+                "action": "ENTRY",
+                "context_event_id": context_event_id,
+                "command_monotonic_ns": cmd_mono,
+                "ts": now,
+                "book_update_id": bbo.book_update_id,
+                "best_bid": bbo.best_bid,
+                "best_ask": bbo.best_ask,
+                "bbo_receive_timestamp": bbo.receive_timestamp,
+                "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
+                "bbo_age_ms": age_ms,
+                "context_event_price": context_event_price,
+                "paper_fill_price": fill_px,
+            },
+        )
+        self.books.append(
+            "orders",
+            {
+                "order_id": order_id,
+                "command_id": cmd_id,
+                "timeframe": tf,
+                "side": side,
+                "action": "ENTRY",
+                "quantity": sizing.quantity,
+                "status": "FILLED",
+                "ts": now,
+            },
+        )
+        fill = self.books.append(
+            "fills",
+            {
+                "fill_id": fill_id,
+                "order_id": order_id,
+                "command_id": cmd_id,
+                "timeframe": tf,
+                "side": side,
+                "action": "ENTRY",
+                "gross_entry_price": fill_px,
+                "paper_fill_price": fill_px,
+                "quantity": sizing.quantity,
+                "best_bid": bbo.best_bid,
+                "best_ask": bbo.best_ask,
+                "book_update_id": bbo.book_update_id,
+                "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
+                "bbo_age_ms": age_ms,
+                "context_event_price": context_event_price,
+                "entry_fee_bps": self.cfg.entry_fee_bps,
+                "entry_slippage_bps": self.cfg.entry_slippage_bps,
+                "ts": now,
+                "fill_monotonic_ns": cmd_mono,
+            },
+        )
+        pos_row = self.books.append(
+            "positions",
+            {
+                "position_id": pos_id,
+                "timeframe": tf,
+                "side": side,
+                "status": "OPEN",
+                "quantity": sizing.quantity,
+                "entry_price": fill_px,
+                "stop_loss_price": sizing.stop_loss_price,
+                "take_profit_price": sizing.take_profit_price,
+                "risk_amount_usd": sizing.risk_amount_usd,
+                "lifecycle_episode_id": episode_id,
+                "entry_context_event_id": context_event_id,
+                "entry_fill_id": fill_id,
+                "entry_command_id": cmd_id,
+                "entry_monotonic_ns": cmd_mono,
+                "opened_at": now,
+            },
+        )
+        self.positions[tf] = OpenPosition(
+            position_id=pos_id,
+            timeframe=tf,
+            side=side,
+            quantity=float(sizing.quantity),
+            entry_price=fill_px,
+            stop_loss_price=float(sizing.stop_loss_price or 0.0),
+            take_profit_price=float(sizing.take_profit_price or 0.0),
+            risk_amount_usd=float(sizing.risk_amount_usd),
+            lifecycle_episode_id=episode_id,
+            context_event_id=context_event_id,
+            entry_fill_id=fill_id,
+            entry_command_id=cmd_id,
+            entry_monotonic_ns=cmd_mono,
+        )
+        if episode_id:
+            self.traded_episodes.add(episode_id)
+        self.consumer.mark_processed(
+            key=key,
+            context_event_id=context_event_id,
+            event_monotonic_ns=event_monotonic_ns,
+        )
+        self.last_command = command
+        self.last_fill = fill
+        return {"status": "ENTERED", "position": pos_row, "fill": fill, "signal": signal}
+
+    def _exit_position(
+        self,
+        *,
+        tf: str,
+        trigger_type: str,
+        trigger_event_id: str,
+        trigger_timestamp: str | None,
+        trigger_monotonic_ns: int,
+        trigger_price: Any,
+        context_event_id: str,
+        flip_to_side: str | None = None,
+        episode_id: str | None = None,
+        use_local_bbo: bool = False,
+    ) -> dict[str, Any] | None:
+        pos = self.positions.get(tf)
+        if not pos:
+            return None
+        action = "EXIT"
+        key = idempotency_key(
+            paper_epoch_id=self.epoch.paper_epoch_id,
+            context_event_id=context_event_id,
+            timeframe=tf,
+            action=f"{action}_{pos.side}_{trigger_type}",
+        )
+        if self.consumer.already_processed(key):
+            return {"status": "DUPLICATE_PREVENTED", "key": key}
+
+        if use_local_bbo:
+            bbo, reason, age_ms = self.bbo.resolve_local(
+                command_monotonic_ns=trigger_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
+        else:
+            bbo, reason, age_ms = self.bbo.resolve_causal_exit(
+                command_monotonic_ns=trigger_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
+        if bbo is None:
+            self.pending_exits[tf] = PendingExit(
+                timeframe=tf,
+                reason=reason or "EXIT_PENDING_NO_CAUSAL_BBO",
+                context_event_id=context_event_id,
+                command_monotonic_ns=trigger_monotonic_ns,
+                trigger_type=trigger_type,
+                trigger_event_id=trigger_event_id,
+                trigger_timestamp=trigger_timestamp,
+                trigger_price=float(trigger_price) if trigger_price is not None else None,
+                flip_to_side=flip_to_side,
+            )
+            self.blocked_commands += 1
+            return {"status": reason, "timeframe": tf}
+
+        return self._complete_exit(
+            pos=pos,
+            key=key,
+            bbo=bbo,
+            age_ms=age_ms,
+            trigger_type=trigger_type,
+            trigger_event_id=trigger_event_id,
+            trigger_timestamp=trigger_timestamp,
+            trigger_monotonic_ns=trigger_monotonic_ns,
+            trigger_price=trigger_price,
+            context_event_id=context_event_id,
+            episode_id=episode_id or pos.lifecycle_episode_id,
+        )
+
+    def _try_pending_exit(self, tf: str) -> dict[str, Any] | None:
+        pend = self.pending_exits.get(tf)
+        pos = self.positions.get(tf)
+        if not pend or not pos:
+            return None
+        bbo, reason, age_ms = self.bbo.resolve_causal_exit(
+            command_monotonic_ns=pend.command_monotonic_ns,
+            max_age_ms=self.cfg.max_bbo_age_ms,
+        )
+        if bbo is None:
+            return None
+        key = idempotency_key(
+            paper_epoch_id=self.epoch.paper_epoch_id,
+            context_event_id=pend.context_event_id,
+            timeframe=tf,
+            action=f"EXIT_{pos.side}_{pend.trigger_type}",
+        )
+        del self.pending_exits[tf]
+        return self._complete_exit(
+            pos=pos,
+            key=key,
+            bbo=bbo,
+            age_ms=age_ms,
+            trigger_type=pend.trigger_type,
+            trigger_event_id=pend.trigger_event_id,
+            trigger_timestamp=pend.trigger_timestamp,
+            trigger_monotonic_ns=pend.command_monotonic_ns,
+            trigger_price=pend.trigger_price,
+            context_event_id=pend.context_event_id,
+            episode_id=pos.lifecycle_episode_id,
+        )
+
+    def _complete_exit(
+        self,
+        *,
+        pos: OpenPosition,
+        key: str,
+        bbo: Any,
+        age_ms: float | None,
+        trigger_type: str,
+        trigger_event_id: str,
+        trigger_timestamp: str | None,
+        trigger_monotonic_ns: int,
+        trigger_price: Any,
+        context_event_id: str,
+        episode_id: str | None,
+    ) -> dict[str, Any]:
+        fill_px = fill_price_for(side=pos.side, action="EXIT", bbo=bbo)
+        econ = closed_trade_economics(
+            cfg=self.cfg,
+            side=pos.side,
+            entry_price=pos.entry_price,
+            exit_price=fill_px,
+            quantity=pos.quantity,
+            risk_amount_usd=pos.risk_amount_usd,
+            exit_reason=trigger_type,
+        )
+        now = _utc_iso()
+        cmd_id = _new_id("cmd")
+        order_id = _new_id("ord")
+        fill_id = _new_id("fill")
+        trade_id = _new_id("trd")
+        command = self.books.append(
+            "commands",
+            {
+                "command_id": cmd_id,
+                "timeframe": pos.timeframe,
+                "side": pos.side,
+                "action": "EXIT",
+                "trigger_type": trigger_type,
+                "trigger_event_id": trigger_event_id,
+                "trigger_timestamp": trigger_timestamp,
+                "trigger_monotonic_ns": trigger_monotonic_ns,
+                "trigger_price": trigger_price,
+                "context_event_id": context_event_id,
+                "command_monotonic_ns": trigger_monotonic_ns,
+                "book_update_id": bbo.book_update_id,
+                "best_bid": bbo.best_bid,
+                "best_ask": bbo.best_ask,
+                "bbo_receive_timestamp": bbo.receive_timestamp,
+                "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
+                "bbo_age_ms": age_ms,
+                "fill_bid": bbo.best_bid,
+                "fill_ask": bbo.best_ask,
+                "paper_fill_price": fill_px,
+                "ts": now,
+            },
+        )
+        self.books.append(
+            "orders",
+            {
+                "order_id": order_id,
+                "command_id": cmd_id,
+                "timeframe": pos.timeframe,
+                "side": pos.side,
+                "action": "EXIT",
+                "quantity": pos.quantity,
+                "status": "FILLED",
+                "ts": now,
+            },
+        )
+        fill = self.books.append(
+            "fills",
+            {
+                "fill_id": fill_id,
+                "order_id": order_id,
+                "command_id": cmd_id,
+                "timeframe": pos.timeframe,
+                "side": pos.side,
+                "action": "EXIT",
+                "gross_exit_price": fill_px,
+                "paper_fill_price": fill_px,
+                "quantity": pos.quantity,
+                "fill_bid": bbo.best_bid,
+                "fill_ask": bbo.best_ask,
+                "trigger_type": trigger_type,
+                "trigger_event_id": trigger_event_id,
+                "trigger_timestamp": trigger_timestamp,
+                "trigger_monotonic_ns": trigger_monotonic_ns,
+                "trigger_price": trigger_price,
+                "ts": now,
+            },
+        )
+        trade = self.books.append(
+            "trades",
+            {
+                "trade_id": trade_id,
+                "position_id": pos.position_id,
+                "timeframe": pos.timeframe,
+                "side": pos.side,
+                "quantity": pos.quantity,
+                "entry_price": pos.entry_price,
+                "exit_price": fill_px,
+                "gross_pnl_usd": econ["gross_pnl_usd"],
+                "net_pnl_usd": econ["net_pnl_usd"],
+                "fees_usd": econ["fees_usd"],
+                "slippage_usd": econ["slippage_usd"],
+                "entry_fee_usd": econ["entry_fee_usd"],
+                "exit_fee_usd": econ["exit_fee_usd"],
+                "risk_amount_usd": pos.risk_amount_usd,
+                "exit_reason": trigger_type,
+                "lifecycle_episode_id": episode_id,
+                "entry_ts": None,
+                "exit_ts": now,
+                "status": "CLOSED",
+            },
+        )
+        # Mark position closed via append of closed row (open filter uses status)
+        self.books.append(
+            "positions",
+            {
+                "position_id": pos.position_id,
+                "timeframe": pos.timeframe,
+                "side": pos.side,
+                "status": "CLOSED",
+                "quantity": pos.quantity,
+                "entry_price": pos.entry_price,
+                "exit_price": fill_px,
+                "closed_at": now,
+                "exit_reason": trigger_type,
+                "lifecycle_episode_id": episode_id,
+            },
+        )
+        del self.positions[pos.timeframe]
+        self.realized_pnl += float(econ["net_pnl_usd"])
+        self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
+        self.books.append(
+            "equity_snapshots",
+            {
+                "ts": now,
+                "equity_usd": self.equity,
+                "realized_pnl_usd": self.realized_pnl,
+                "unrealized_pnl_usd": 0.0,
+                "trade_id": trade_id,
+            },
+        )
+        self.consumer.mark_processed(
+            key=key,
+            context_event_id=context_event_id,
+            event_monotonic_ns=trigger_monotonic_ns,
+        )
+        self.last_command = command
+        self.last_fill = fill
+        return {"status": "EXITED", "trade": trade, "fill": fill}
+
+    def _check_tp_sl_on_market(
+        self,
+        *,
+        trigger_monotonic_ns: int,
+        trigger_event_id: str,
+        trigger_timestamp: str | None,
+        trade_price: float | None,
+        use_local_bbo: bool = False,
+    ) -> None:
+        """First causal TP/SL hit wins; uses bid/ask/trade causally available now."""
+        if use_local_bbo:
+            bbo, reason, _age = self.bbo.resolve_local(
+                command_monotonic_ns=trigger_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
+            if bbo is None:
+                return
+        else:
+            bbo = self.bbo.latest
+            if bbo is None:
+                return
+            if bbo.receive_monotonic_ns > trigger_monotonic_ns:
+                return
+        for tf, pos in list(self.positions.items()):
+            # Evaluate using causally available side
+            if pos.side == "LONG":
+                # TP/SL on bid or trade
+                px_bid = bbo.best_bid
+                px_trade = trade_price
+                hit_tp = px_bid >= pos.take_profit_price or (
+                    px_trade is not None and px_trade >= pos.take_profit_price
+                )
+                hit_sl = px_bid <= pos.stop_loss_price or (
+                    px_trade is not None and px_trade <= pos.stop_loss_price
+                )
+            else:
+                px_ask = bbo.best_ask
+                px_trade = trade_price
+                hit_tp = px_ask <= pos.take_profit_price or (
+                    px_trade is not None and px_trade <= pos.take_profit_price
+                )
+                hit_sl = px_ask >= pos.stop_loss_price or (
+                    px_trade is not None and px_trade >= pos.stop_loss_price
+                )
+            # Same cycle: use causal event order — if both, prefer whichever
+            # threshold the market price crossed first by comparing distances
+            # from entry along the move. If both true on one tick, use the
+            # price that actually prints: trade_price if present else quote.
+            if hit_tp and hit_sl:
+                ref = trade_price if trade_price is not None else (
+                    bbo.best_bid if pos.side == "LONG" else bbo.best_ask
+                )
+                d_tp = abs(ref - pos.take_profit_price)
+                d_sl = abs(ref - pos.stop_loss_price)
+                # Closer level is treated as first hit on this causal tick
+                trigger = "TP" if d_tp <= d_sl else "SL"
+            elif hit_tp:
+                trigger = "TP"
+            elif hit_sl:
+                trigger = "SL"
+            else:
+                continue
+            self._exit_position(
+                tf=tf,
+                trigger_type=trigger,
+                trigger_event_id=trigger_event_id,
+                trigger_timestamp=trigger_timestamp,
+                trigger_monotonic_ns=trigger_monotonic_ns,
+                trigger_price=trade_price
+                if trade_price is not None
+                else (bbo.best_bid if pos.side == "LONG" else bbo.best_ask),
+                context_event_id=trigger_event_id,
+                use_local_bbo=use_local_bbo,
+            )
+
+    def _block(self, reason: str, tf: str, context_event_id: str, side: str) -> None:
+        self.blocked_commands += 1
+        self.books.append(
+            "blocked",
+            {
+                "ts": _utc_iso(),
+                "reason": reason,
+                "timeframe": tf,
+                "context_event_id": context_event_id,
+                "side": side,
+            },
+        )
+
+    def health(self) -> dict[str, Any]:
+        bbo = self.bbo.latest
+        age = None
+        local = self.bbo._latest_local
+        if local is not None:
+            age = max(0.0, (time.monotonic_ns() - local.receive_monotonic_ns) / 1_000_000.0)
+        elif bbo is not None and bbo.receive_timestamp:
+            age = None  # context-domain mono not comparable to wall clock
+        return {
+            "paper_epoch_id": self.epoch.paper_epoch_id,
+            "mode": "paper_only",
+            "real_execution_enabled": False,
+            "last_consumed_context_event_id": self.consumer.checkpoint.last_consumed_context_event_id,
+            "last_event_monotonic_ns": self.consumer.checkpoint.last_event_monotonic_ns,
+            "context_consumer_lag_events": None,
+            "last_command": self.last_command,
+            "last_fill": self.last_fill,
+            "last_context_event": self.last_context_event,
+            "active_positions_by_timeframe": {
+                tf: {"side": p.side, "quantity": p.quantity, "entry_price": p.entry_price}
+                for tf, p in self.positions.items()
+            },
+            "trades_count": self.books.count("trades"),
+            "equity_usd": self.equity,
+            "realized_pnl_usd": self.realized_pnl,
+            "unrealized_pnl_usd": self.unrealized_pnl,
+            "bbo_freshness_ms": age,
+            "max_bbo_age_ms": self.cfg.max_bbo_age_ms,
+            "blocked_commands": self.blocked_commands,
+            "duplicate_events_prevented": self.consumer.checkpoint.duplicate_events_prevented,
+            "errors": list(self.errors),
+            "entry_fee_bps": self.cfg.entry_fee_bps,
+            "exit_fee_bps": self.cfg.exit_fee_bps,
+            "entry_slippage_bps": self.cfg.entry_slippage_bps,
+            "exit_slippage_bps": self.cfg.exit_slippage_bps,
+            "max_risk_per_trade_usd": self.cfg.max_risk_per_trade_usd,
+            "initial_equity_usd": self.epoch.initial_equity_usd,
+            "updated_at": _utc_iso(),
+        }
+
+    def write_health(self) -> Path:
+        payload = self.health()
+        self.health_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.health_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+        tmp.replace(self.health_path)
+        # Also publish to runtime for OPS
+        runtime = Path("data/runtime/intrabar_paper_health.json")
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+        return self.health_path

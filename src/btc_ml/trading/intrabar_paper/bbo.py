@@ -1,0 +1,152 @@
+"""Causal BBO store for LIVE1B paper fills."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class CausalBBO:
+    book_update_id: str | None
+    best_bid: float
+    best_ask: float
+    receive_timestamp: str | None
+    receive_monotonic_ns: int
+    source_event_id: str | None = None
+
+    @property
+    def mid(self) -> float:
+        return (self.best_bid + self.best_ask) / 2.0
+
+
+class CausalBBOStore:
+    """Keeps last causal BBO; never returns a future quote.
+
+    Notes:
+    - Context-event BBO and cognition ``event_monotonic_ns`` share one clock.
+    - Manager websocket BBO uses the manager process clock; use
+      ``resolve_local`` / TP-SL path for those updates — do not compare
+      websocket mono against context-event mono.
+    """
+
+    def __init__(self) -> None:
+        self._latest: CausalBBO | None = None
+        self._latest_local: CausalBBO | None = None
+        self.updates = 0
+
+    @property
+    def latest(self) -> CausalBBO | None:
+        return self._latest or self._latest_local
+
+    def update_from_book_ticker(
+        self,
+        *,
+        best_bid: float,
+        best_ask: float,
+        receive_monotonic_ns: int,
+        receive_timestamp: str | None = None,
+        book_update_id: str | None = None,
+        source_event_id: str | None = None,
+        domain: str = "context",
+    ) -> CausalBBO:
+        if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+            raise ValueError("invalid BBO")
+        bbo = CausalBBO(
+            book_update_id=book_update_id,
+            best_bid=float(best_bid),
+            best_ask=float(best_ask),
+            receive_timestamp=receive_timestamp,
+            receive_monotonic_ns=int(receive_monotonic_ns),
+            source_event_id=source_event_id,
+        )
+        if domain == "local":
+            if (
+                self._latest_local is None
+                or bbo.receive_monotonic_ns >= self._latest_local.receive_monotonic_ns
+            ):
+                self._latest_local = bbo
+                self.updates += 1
+            return bbo
+        if self._latest is None or bbo.receive_monotonic_ns >= self._latest.receive_monotonic_ns:
+            self._latest = bbo
+            self.updates += 1
+        return bbo
+
+    def update_from_context_event(self, event: dict[str, Any]) -> CausalBBO | None:
+        bid = event.get("best_bid")
+        ask = event.get("best_ask")
+        mono = event.get("bbo_receive_monotonic_ns") or event.get("event_monotonic_ns")
+        if bid is None or ask is None or mono is None:
+            return None
+        try:
+            return self.update_from_book_ticker(
+                best_bid=float(bid),
+                best_ask=float(ask),
+                receive_monotonic_ns=int(mono),
+                receive_timestamp=event.get("bbo_receive_timestamp") or event.get("event_timestamp"),
+                book_update_id=str(event.get("book_update_id")) if event.get("book_update_id") is not None else None,
+                source_event_id=str(event.get("context_event_id") or event.get("event_id") or ""),
+                domain="context",
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def resolve_causal(
+        self,
+        *,
+        command_monotonic_ns: int,
+        max_age_ms: float,
+    ) -> tuple[CausalBBO | None, str | None, float | None]:
+        """Resolve BBO in the context-event monotonic domain."""
+        bbo = self._latest
+        if bbo is None:
+            return None, "ENTRY_BLOCKED_NO_CAUSAL_BBO", None
+        if bbo.receive_monotonic_ns > int(command_monotonic_ns):
+            return None, "ENTRY_BLOCKED_NO_CAUSAL_BBO", None
+        age_ms = (int(command_monotonic_ns) - bbo.receive_monotonic_ns) / 1_000_000.0
+        if age_ms > float(max_age_ms):
+            return None, "ENTRY_BLOCKED_NO_CAUSAL_BBO", age_ms
+        return bbo, None, age_ms
+
+    def resolve_causal_exit(
+        self,
+        *,
+        command_monotonic_ns: int,
+        max_age_ms: float,
+    ) -> tuple[CausalBBO | None, str | None, float | None]:
+        bbo, reason, age = self.resolve_causal(
+            command_monotonic_ns=command_monotonic_ns,
+            max_age_ms=max_age_ms,
+        )
+        if reason == "ENTRY_BLOCKED_NO_CAUSAL_BBO":
+            return None, "EXIT_PENDING_NO_CAUSAL_BBO", age
+        return bbo, reason, age
+
+    def resolve_local(
+        self,
+        *,
+        command_monotonic_ns: int,
+        max_age_ms: float,
+    ) -> tuple[CausalBBO | None, str | None, float | None]:
+        """Resolve manager-local websocket BBO (TP/SL path)."""
+        bbo = self._latest_local
+        if bbo is None:
+            return None, "EXIT_PENDING_NO_CAUSAL_BBO", None
+        if bbo.receive_monotonic_ns > int(command_monotonic_ns):
+            return None, "EXIT_PENDING_NO_CAUSAL_BBO", None
+        age_ms = (int(command_monotonic_ns) - bbo.receive_monotonic_ns) / 1_000_000.0
+        if age_ms > float(max_age_ms):
+            return None, "EXIT_PENDING_NO_CAUSAL_BBO", age_ms
+        return bbo, None, age_ms
+
+
+def fill_price_for(*, side: str, action: str, bbo: CausalBBO) -> float:
+    """Paper fill contract: entry ask/bid; exit opposite."""
+    side_u = str(side).upper()
+    act = str(action).upper()
+    if act == "ENTRY":
+        return bbo.best_ask if side_u == "LONG" else bbo.best_bid
+    if act == "EXIT":
+        return bbo.best_bid if side_u == "LONG" else bbo.best_ask
+    raise ValueError(f"unknown action {action}")
