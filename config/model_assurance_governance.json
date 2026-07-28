@@ -1,0 +1,21 @@
+{
+  "schema_version": "model_assurance_governance_v1",
+  "promotion_execution_enabled": false,
+  "required_manual_approvals": 1,
+  "shadow": {
+    "minimum_predictions": 1000,
+    "minimum_comparisons": 1000,
+    "minimum_elapsed_hours": 168,
+    "maximum_not_evaluable_ratio": 0.05,
+    "require_zero_execution_entities": true
+  },
+  "environment": {
+    "require_external_data_healthy": true,
+    "block_on_drift_warning": true,
+    "block_on_drift_critical": true,
+    "block_on_confirmed_critical_toxicity": true,
+    "block_on_open_critical_incident": true,
+    "block_on_pnl_reconciliation_mismatch": true
+  },
+  "poll_interval_seconds": 5
+}
