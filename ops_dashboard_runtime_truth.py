@@ -1456,10 +1456,42 @@ def _build_live1b_timeframe_traders(
     cognition_health = _read_json(ROOT / "data/runtime/intrabar_cognition_health.json") or {}
     eid = str(epoch.get("paper_epoch_id") or paper_health.get("paper_epoch_id") or "")
     books_root = ROOT / "data/trading/intrabar_paper" / eid / "books"
-    initial = float(epoch.get("initial_equity_usd") or paper_health.get("initial_equity_usd") or 100000.0)
-    equity = float(paper_health.get("equity_usd") if paper_health.get("equity_usd") is not None else initial)
-    realized = float(paper_health.get("realized_pnl_usd") or 0.0)
-    max_risk = float(paper_health.get("max_risk_per_trade_usd") or 1000.0)
+    sleeves = paper_health.get("sleeves") if isinstance(paper_health.get("sleeves"), dict) else {}
+    capital_model = str(
+        paper_health.get("capital_model")
+        or epoch.get("capital_model")
+        or ("PER_TIMEFRAME_REALIZED_EQUITY" if sleeves else "SHARED_MASTER_REALIZED_EQUITY")
+    )
+    initial = float(
+        paper_health.get("master_initial_equity_usd")
+        if paper_health.get("master_initial_equity_usd") is not None
+        else epoch.get("master_initial_equity_usd")
+        if epoch.get("master_initial_equity_usd") is not None
+        else epoch.get("initial_equity_usd")
+        if epoch.get("initial_equity_usd") is not None
+        else paper_health.get("initial_equity_usd")
+        if paper_health.get("initial_equity_usd") is not None
+        else 100000.0
+    )
+    equity = float(
+        paper_health.get("master_current_equity_usd")
+        if paper_health.get("master_current_equity_usd") is not None
+        else paper_health.get("equity_usd")
+        if paper_health.get("equity_usd") is not None
+        else initial
+    )
+    realized = float(
+        paper_health.get("master_realized_net_pnl_usd")
+        if paper_health.get("master_realized_net_pnl_usd") is not None
+        else paper_health.get("realized_pnl_usd")
+        or 0.0
+    )
+    max_risk = float(
+        paper_health.get("master_risk_capacity_usd")
+        if paper_health.get("master_risk_capacity_usd") is not None
+        else paper_health.get("max_risk_per_trade_usd")
+        or 1000.0
+    )
 
     manager_proc = {}
     cognition_proc = {}
@@ -1541,6 +1573,11 @@ def _build_live1b_timeframe_traders(
             "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
             "realized_pnl_usd": 0.0,
             "unrealized_pnl_usd": 0.0,
+            "initial_equity_usd": None,
+            "current_equity_usd": None,
+            "risk_pct_per_trade": None,
+            "next_risk_budget_usd": None,
+            "available_risk_usd": None,
             "open_position_count": 0,
             "closed_trades": 0,
             "closed_trade_count": 0,
@@ -1632,9 +1669,34 @@ def _build_live1b_timeframe_traders(
                     "open_position_count": 1,
                 }
             )
+        sleeve = sleeves.get(tf) if isinstance(sleeves.get(tf), dict) else None
+        if sleeve is not None:
+            entry.update(
+                {
+                    "initial_equity_usd": _sf(sleeve.get("initial_equity_usd")),
+                    "current_equity_usd": _sf(sleeve.get("current_equity_usd")),
+                    "risk_pct_per_trade": _sf(sleeve.get("risk_pct_per_trade")),
+                    "next_risk_budget_usd": _sf(sleeve.get("next_risk_budget_usd")),
+                    "available_risk_usd": _sf(sleeve.get("available_risk_usd")),
+                    "realized_pnl_usd": _sf(sleeve.get("cumulative_realized_net_pnl_usd")) or 0.0,
+                    "closed_trades": int(sleeve.get("closed_trades_count") or 0),
+                    "closed_trade_count": int(sleeve.get("closed_trades_count") or 0),
+                }
+            )
+            if not has_pos:
+                entry["open_risk_usd"] = float(sleeve.get("open_position_risk_usd") or 0.0)
         traders.append(entry)
 
-    available = max(0.0, max_risk - gross_open_risk)
+    if capital_model == "PER_TIMEFRAME_REALIZED_EQUITY":
+        available = float(
+            paper_health.get("master_available_risk_usd")
+            if paper_health.get("master_available_risk_usd") is not None
+            else max(0.0, max_risk - gross_open_risk)
+        )
+        if paper_health.get("master_open_risk_usd") is not None:
+            gross_open_risk = float(paper_health.get("master_open_risk_usd") or 0.0)
+    else:
+        available = max(0.0, max_risk - gross_open_risk)
     util = round(100.0 * gross_open_risk / max_risk, 6) if max_risk > 0 else 0.0
     mtm_equity = equity + gross_unrealized
 
@@ -1707,6 +1769,15 @@ def _build_live1b_timeframe_traders(
             "mark_to_market_equity_usd": mtm_equity if bbo is not None else equity,
             "risk_aggregation": "GROSS_NO_NETTING",
             "paper_epoch_id": eid,
+            "capital_model": capital_model,
+            "master_initial_equity_usd": initial,
+            "master_current_equity_usd": equity,
+            "master_realized_net_pnl_usd": realized,
+            "master_unrealized_pnl_usd": gross_unrealized if bbo is not None else None,
+            "master_open_risk_usd": gross_open_risk,
+            "master_risk_capacity_usd": max_risk,
+            "master_available_risk_usd": available,
+            "master_open_notional_usd": gross_long_notional + gross_short_notional,
             "mark_price": portfolio_mark,
             "mark_timestamp": mark_ts,
             "mark_side": portfolio_mark_side,

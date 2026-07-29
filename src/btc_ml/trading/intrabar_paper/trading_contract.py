@@ -41,6 +41,13 @@ RISK_DELTA_VIOLATION = "RISK_DELTA_CONTRACT_VIOLATION"
 ZERO_DIFF_MATCH = "ZERO_DIFF_CLONE_REPLAY_MATCH"
 ZERO_DIFF_DIVERGENCE = "ZERO_DIFF_CLONE_REPLAY_DIVERGENCE"
 NEW_EPOCH_ACTIVATION_BLOCKED = "NEW_EPOCH_ACTIVATION_BLOCKED"
+SLEEVE2_NON_CAPITAL_DIFF = "TRD_SLEEVE2_BLOCKED_NON_CAPITAL_CONTRACT_DIFF"
+SLEEVE2_SOURCE_MISMATCH = "TRD_SLEEVE2_BLOCKED_SOURCE_CONTRACT_MISMATCH"
+SLEEVE2_AWAITING_FLAT = "TRD_SLEEVE2_READY_AWAITING_FLAT"
+SLEEVE2_ACTIVE = "TRD_SLEEVE2_PER_TIMEFRAME_CAPITAL_ACTIVE"
+SLEEVE2_FREEZE = "TRD_SLEEVE2_ACTIVATION_FREEZE_REQUIRED"
+EXPECTED_SOURCE_FINGERPRINT = "a6a916a767c6cfe83e9eb4581103d422bfc1adad6a56dfbf8f867930c129cb5a"
+EPOCH_PREFIX_SLEEVE2 = "PER_TF_EQUITY_1PCT_V1_"
 
 # Capital / risk deltas that may differ between parent and derived contracts.
 RISK_DELTA_ALLOWLIST = frozenset(
@@ -60,6 +67,20 @@ RISK_DELTA_ALLOWLIST = frozenset(
         "epoch_identity.paper_epoch_id",
         "epoch_identity.epoch_id",
         "parent_epoch_id",
+    }
+)
+
+# TRD-SLEEVE2 hard allowlist (stricter than EPOCH1 research clone).
+SLEEVE2_CONTRACT_ALLOWLIST = frozenset(
+    {
+        "capital.capital_model",
+        "capital.master_initial_equity_usd",
+        "capital.timeframe_initial_equity_usd",
+        "capital.timeframe_current_equity_source",
+        "capital.risk_budget_source",
+        "capital.risk_pct_per_trade",
+        "position_sizing.equity_basis",
+        "position_sizing.risk_cap_semantics",
     }
 )
 
@@ -555,6 +576,13 @@ def validate_risk_only_diff(diff: dict[str, Any]) -> None:
         raise RuntimeError(f"{RISK_DELTA_VIOLATION}: non-allowlisted diffs: {bad}")
 
 
+def validate_sleeve2_contract_diff(diff: dict[str, Any]) -> None:
+    """Raise if any non-capital sleeve2 field changed."""
+    bad = sorted(k for k in diff if k not in SLEEVE2_CONTRACT_ALLOWLIST)
+    if bad:
+        raise RuntimeError(f"{SLEEVE2_NON_CAPITAL_DIFF}: {bad}")
+
+
 @dataclass
 class CloneResult:
     source_epoch_id: str
@@ -609,6 +637,7 @@ def clone_trading_epoch_contract(
             dotted in RISK_DELTA_ALLOWLIST
             or path in RISK_DELTA_ALLOWLIST
             or path in bare_capital
+            or dotted in SLEEVE2_CONTRACT_ALLOWLIST
         )
         if not allowed:
             raise RuntimeError(f"{RISK_DELTA_VIOLATION}: override not allowlisted: {path}")
@@ -617,13 +646,24 @@ def clone_trading_epoch_contract(
     # Sync derived position_sizing fields only when capital overrides are applied.
     cap = cloned.get("capital") or {}
     override_keys = set(overrides.keys())
+
     def _overrode(*names: str) -> bool:
         return any(n in override_keys or f"capital.{n}" in override_keys for n in names)
 
     if _overrode("capital_model") and "capital_model" in cap:
-        cloned["position_sizing"]["equity_basis"] = cap["capital_model"]
-    if _overrode("risk_budget_source") and "risk_budget_source" in cap:
-        cloned["position_sizing"]["risk_cap_semantics"] = cap["risk_budget_source"]
+        if "position_sizing.equity_basis" not in override_keys:
+            cloned["position_sizing"]["equity_basis"] = cap["capital_model"]
+    if (
+        _overrode("risk_budget_source")
+        and "risk_budget_source" in cap
+        and "position_sizing.risk_cap_semantics" not in override_keys
+    ):
+        # EPOCH1 research clones may mirror formula into risk_cap_semantics.
+        # SLEEVE2 sets an explicit PER_TIMEFRAME_CURRENT_EQUITY_PERCENT instead.
+        if str(cap.get("capital_model")) != "PER_TIMEFRAME_REALIZED_EQUITY":
+            cloned["position_sizing"]["risk_cap_semantics"] = cap["risk_budget_source"]
+        else:
+            cloned["position_sizing"]["risk_cap_semantics"] = "PER_TIMEFRAME_CURRENT_EQUITY_PERCENT"
     if _overrode("risk_pct_per_trade") and isinstance(cap.get("risk_pct_per_trade"), dict):
         pcts = [float(v) for v in cap["risk_pct_per_trade"].values()]
         if pcts and len(set(pcts)) == 1:
@@ -631,11 +671,13 @@ def clone_trading_epoch_contract(
             cloned["position_sizing"]["max_risk_per_trade_pct"] = pcts[0]
     if _overrode("max_risk_per_trade_usd"):
         cloned["position_sizing"]["max_risk_per_trade_usd"] = cap.get("max_risk_per_trade_usd")
+    if _overrode("master_initial_equity_usd") and cap.get("master_initial_equity_usd") is not None:
+        cloned["epoch_identity"]["initial_equity_usd"] = float(cap["master_initial_equity_usd"])
     if _overrode("timeframe_initial_equity_usd") and isinstance(
         cap.get("timeframe_initial_equity_usd"), dict
     ):
         vals = [float(v) for v in cap["timeframe_initial_equity_usd"].values()]
-        if vals and len(set(vals)) == 1:
+        if vals and cap.get("master_initial_equity_usd") is None and len(set(vals)) == 1:
             cloned["epoch_identity"]["initial_equity_usd"] = vals[0]
 
     cloned["parent_epoch_id"] = source_epoch_id
@@ -710,6 +752,7 @@ def risk_delta_overrides_per_tf_equity(
     risk_pct: float = 1.0,
     timeframes: Iterable[str] = ("M15", "M30", "H1", "H4"),
 ) -> dict[str, Any]:
+    """EPOCH1 research clone overrides (may null the USD risk cap)."""
     tfs = list(timeframes)
     return {
         "capital_model": "PER_TIMEFRAME_REALIZED_EQUITY",
@@ -722,6 +765,38 @@ def risk_delta_overrides_per_tf_equity(
         "risk_pct_per_trade": {tf: float(risk_pct) for tf in tfs},
         "max_risk_per_trade_usd": None,
     }
+
+
+def sleeve2_capital_overrides(
+    *,
+    sleeve_initial_equity_usd: float = 100_000.0,
+    risk_pct: float = 1.0,
+    timeframes: Iterable[str] = ("M15", "M30", "H1", "H4"),
+) -> dict[str, Any]:
+    """Production sleeve activation overrides (strict SLEEVE2 allowlist)."""
+    tfs = list(timeframes)
+    master = float(sleeve_initial_equity_usd) * len(tfs)
+    return {
+        "capital_model": "PER_TIMEFRAME_REALIZED_EQUITY",
+        "master_initial_equity_usd": master,
+        "timeframe_initial_equity_usd": {tf: float(sleeve_initial_equity_usd) for tf in tfs},
+        "timeframe_current_equity_source": (
+            "timeframe_initial_equity_usd[tf] + cumulative_realized_net_pnl_usd[tf]"
+        ),
+        "risk_budget_source": "current_equity_usd[tf] * risk_pct_per_trade[tf] / 100",
+        "risk_pct_per_trade": {tf: float(risk_pct) for tf in tfs},
+        "position_sizing.equity_basis": "PER_TIMEFRAME_REALIZED_EQUITY",
+        "position_sizing.risk_cap_semantics": "PER_TIMEFRAME_CURRENT_EQUITY_PERCENT",
+    }
+
+
+def assert_source_fingerprint(manifest: dict[str, Any]) -> str:
+    fp = str(manifest.get("trading_contract_fingerprint") or trading_contract_fingerprint(manifest))
+    if fp != EXPECTED_SOURCE_FINGERPRINT:
+        raise RuntimeError(
+            f"{SLEEVE2_SOURCE_MISMATCH}: got={fp} expected={EXPECTED_SOURCE_FINGERPRINT}"
+        )
+    return fp
 
 
 def compute_risk_budget_usd(

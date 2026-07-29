@@ -509,6 +509,19 @@ export function OpsUnifiedDashboard({
             <div className="grid gap-3.5 xl:grid-cols-2">
               <Panel title="Manager / Portfolio">
                 <MetricLine
+                  label="Master capital"
+                  value={
+                    liveConnected
+                      ? `${usd(portfolio?.master_current_equity_usd ?? portfolio?.closed_equity_usd)} / ${usd(portfolio?.master_initial_equity_usd ?? portfolio?.initial_equity_usd)}`
+                      : "—"
+                  }
+                  hint={
+                    liveConnected
+                      ? `risk capacity ${usd(portfolio?.master_risk_capacity_usd ?? portfolio?.portfolio_max_risk_usd)} · open risk ${usd(portfolio?.master_open_risk_usd ?? portfolio?.gross_open_risk_usd)} · available ${usd(portfolio?.master_available_risk_usd ?? portfolio?.available_risk_usd)}`
+                      : unavailableCaption(generatedAt)
+                  }
+                />
+                <MetricLine
                   label="Command bus"
                   value={liveConnected ? commandBus?.health || "—" : "—"}
                   hint={
@@ -526,7 +539,7 @@ export function OpsUnifiedDashboard({
                   value={liveConnected ? `${usd(portfolio?.gross_open_risk_usd)} / ${usd(portfolio?.portfolio_max_risk_usd)}` : "—"}
                   hint={
                     liveConnected
-                      ? `available ${usd(portfolio?.available_risk_usd)} · open ${portfolio?.open_positions ?? "—"} · notional ${usd(portfolio?.gross_open_notional_usd)}`
+                      ? `available ${usd(portfolio?.available_risk_usd)} · open ${portfolio?.open_positions ?? "—"} · notional ${usd(portfolio?.gross_open_notional_usd ?? portfolio?.master_open_notional_usd)}`
                       : unavailableCaption(generatedAt)
                   }
                 />
@@ -560,6 +573,11 @@ export function OpsUnifiedDashboard({
                             size="sm"
                           />
                         </div>
+                        <p className="mt-1 text-[11px] text-ds-text-secondary">
+                          equity {usd(row.current_equity_usd ?? row.initial_equity_usd)}
+                          {row.next_risk_budget_usd != null ? ` · next risk ${usd(row.next_risk_budget_usd)}` : ""}
+                          {row.risk_pct_per_trade != null ? ` · ${row.risk_pct_per_trade}%` : ""}
+                        </p>
                         {row.direction && row.direction !== "FLAT" ? (
                           <div className="mt-1 space-y-0.5 text-[11px] text-ds-text-secondary">
                             <p>

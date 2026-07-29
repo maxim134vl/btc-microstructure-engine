@@ -21,6 +21,7 @@ from .consumer import (
 )
 from .economics import closed_trade_economics, resolve_risk_sizing
 from .epoch import PaperEpoch
+from .sleeves import SleeveLedger
 
 
 def _utc_iso() -> str:
@@ -80,6 +81,7 @@ class IntrabarPaperEngine:
         self.realized_pnl = 0.0
         self.unrealized_pnl = 0.0
         epoch_root = cfg.books_root / epoch.paper_epoch_id
+        self.epoch_root = epoch_root
         self.books = books or EpochBooks(epoch_root / "books", paper_epoch_id=epoch.paper_epoch_id)
         ck_path = epoch_root / "context_consumer_checkpoint.json"
         act_mono = activation_monotonic_ns
@@ -103,7 +105,34 @@ class IntrabarPaperEngine:
         self.errors: list[str] = []
         self._command_seq = 0
         self.health_path = epoch_root / "health.json"
+        self.trading_contract = self._load_trading_contract(epoch_root)
+        self.sleeves = SleeveLedger.load(epoch_root)
+        self.capital_model = str(
+            ((self.trading_contract or {}).get("capital") or {}).get("capital_model")
+            or ("PER_TIMEFRAME_REALIZED_EQUITY" if self.sleeves is not None else "SHARED_MASTER_REALIZED_EQUITY")
+        )
         self._restore_open_positions()
+        if self.sleeves is not None:
+            self.sleeves.sync_open_from_positions(self.books.open_positions())
+            master = self.sleeves.master_snapshot()
+            self.equity = float(master["master_current_equity_usd"])
+            self.realized_pnl = float(master["master_realized_net_pnl_usd"])
+
+    @staticmethod
+    def _load_trading_contract(epoch_root: Path) -> dict[str, Any] | None:
+        path = Path(epoch_root) / "trading_contract.json"
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if isinstance(raw, dict) and isinstance(raw.get("trading_contract_manifest"), dict):
+            return raw["trading_contract_manifest"]
+        return raw if isinstance(raw, dict) else None
+
+    def _uses_sleeves(self) -> bool:
+        return self.sleeves is not None and self.capital_model == "PER_TIMEFRAME_REALIZED_EQUITY"
 
     def _restore_open_positions(self) -> None:
         for row in self.books.open_positions():
@@ -128,6 +157,13 @@ class IntrabarPaperEngine:
                 self.traded_episodes.add(str(ep))
                 pos.traded_episode_ids.add(str(ep))
             self.positions[tf] = pos
+        if self._uses_sleeves():
+            # Sleeve ledger is the equity source of truth; only recover episode locks.
+            for t in self.books.closed_trades():
+                ep = t.get("lifecycle_episode_id")
+                if ep:
+                    self.traded_episodes.add(str(ep))
+            return
         for t in self.books.closed_trades():
             self.realized_pnl += float(t.get("net_pnl_usd") or 0.0)
             ep = t.get("lifecycle_episode_id")
@@ -380,7 +416,26 @@ class IntrabarPaperEngine:
             return {"status": reason, "timeframe": tf}
 
         fill_px = fill_price_for(side=side, action="ENTRY", bbo=bbo)
-        sizing = resolve_risk_sizing(cfg=self.cfg, side=side, entry_price=fill_px, equity_usd=self.equity)
+        equity_at_entry = float(self.equity)
+        risk_pct_at_entry = float(self.cfg.max_risk_per_trade_pct)
+        risk_budget_usd: float | None = None
+        if self._uses_sleeves() and self.sleeves is not None:
+            sleeve = self.sleeves.get(tf)
+            equity_at_entry = float(sleeve.current_equity_usd)
+            risk_pct_at_entry = float(sleeve.risk_pct_per_trade)
+            risk_budget_usd = float(sleeve.next_risk_budget_usd)
+            sizing = resolve_risk_sizing(
+                cfg=self.cfg,
+                side=side,
+                entry_price=fill_px,
+                equity_usd=equity_at_entry,
+                risk_budget_usd=risk_budget_usd,
+            )
+        else:
+            sizing = resolve_risk_sizing(
+                cfg=self.cfg, side=side, entry_price=fill_px, equity_usd=self.equity
+            )
+            risk_budget_usd = float(sizing.risk_amount_usd)
         if not sizing.ok or sizing.quantity is None:
             self._block(sizing.block_reason or "ENTRY_BLOCKED_RISK", tf, context_event_id, side)
             self.consumer.mark_processed(
@@ -397,6 +452,15 @@ class IntrabarPaperEngine:
         signal_id = _new_id("sig")
         now = _utc_iso()
         cmd_mono = event_monotonic_ns
+        stop_distance_usd = float(sizing.stop_distance or 0.0)
+        notional_usd = float(sizing.entry_notional or 0.0)
+        capital_snap = {
+            "equity_at_entry_usd": equity_at_entry,
+            "risk_pct_at_entry": risk_pct_at_entry,
+            "risk_budget_usd": float(risk_budget_usd or sizing.risk_amount_usd),
+            "stop_distance_usd": stop_distance_usd,
+            "notional_usd": notional_usd,
+        }
 
         signal = self.books.append(
             "signals",
@@ -409,6 +473,8 @@ class IntrabarPaperEngine:
                 "lifecycle_episode_id": episode_id,
                 "ts": now,
                 "event_monotonic_ns": event_monotonic_ns,
+                "quantity": sizing.quantity,
+                **capital_snap,
             },
         )
         command = self.books.append(
@@ -430,6 +496,8 @@ class IntrabarPaperEngine:
                 "bbo_age_ms": age_ms,
                 "context_event_price": context_event_price,
                 "paper_fill_price": fill_px,
+                "quantity": sizing.quantity,
+                **capital_snap,
             },
         )
         self.books.append(
@@ -443,6 +511,7 @@ class IntrabarPaperEngine:
                 "quantity": sizing.quantity,
                 "status": "FILLED",
                 "ts": now,
+                **capital_snap,
             },
         )
         fill = self.books.append(
@@ -467,6 +536,7 @@ class IntrabarPaperEngine:
                 "entry_slippage_bps": self.cfg.entry_slippage_bps,
                 "ts": now,
                 "fill_monotonic_ns": cmd_mono,
+                **capital_snap,
             },
         )
         pos_row = self.books.append(
@@ -487,6 +557,7 @@ class IntrabarPaperEngine:
                 "entry_command_id": cmd_id,
                 "entry_monotonic_ns": cmd_mono,
                 "opened_at": now,
+                **capital_snap,
             },
         )
         self.positions[tf] = OpenPosition(
@@ -504,6 +575,8 @@ class IntrabarPaperEngine:
             entry_command_id=cmd_id,
             entry_monotonic_ns=cmd_mono,
         )
+        if self._uses_sleeves() and self.sleeves is not None:
+            self.sleeves.mark_open(tf, pos_id, float(sizing.risk_amount_usd))
         if episode_id:
             self.traded_episodes.add(episode_id)
         self.consumer.mark_processed(
@@ -745,8 +818,18 @@ class IntrabarPaperEngine:
             },
         )
         del self.positions[pos.timeframe]
-        self.realized_pnl += float(econ["net_pnl_usd"])
-        self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
+        if self._uses_sleeves() and self.sleeves is not None:
+            sleeve = self.sleeves.apply_realized_net_pnl(
+                pos.timeframe, float(econ["net_pnl_usd"]), at=now
+            )
+            master = self.sleeves.master_snapshot()
+            self.realized_pnl = float(master["master_realized_net_pnl_usd"])
+            self.equity = float(master["master_current_equity_usd"])
+            sleeve_equity = float(sleeve.current_equity_usd)
+        else:
+            self.realized_pnl += float(econ["net_pnl_usd"])
+            self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
+            sleeve_equity = self.equity
         self.books.append(
             "equity_snapshots",
             {
@@ -755,6 +838,9 @@ class IntrabarPaperEngine:
                 "realized_pnl_usd": self.realized_pnl,
                 "unrealized_pnl_usd": 0.0,
                 "trade_id": trade_id,
+                "timeframe": pos.timeframe,
+                "timeframe_equity_usd": sleeve_equity,
+                "timeframe_net_pnl_usd": float(econ["net_pnl_usd"]),
             },
         )
         self.consumer.mark_processed(
@@ -868,7 +954,7 @@ class IntrabarPaperEngine:
         lanes = {tf: "ACTIVE" for tf in self.cfg.timeframes}
         consumer_status = "CONNECTED"
         ck = self.consumer.checkpoint
-        return {
+        payload: dict[str, Any] = {
             "service": "intrabar_paper_manager",
             "pid": os.getpid(),
             "alive": manager_alive,
@@ -907,8 +993,27 @@ class IntrabarPaperEngine:
             "exit_slippage_bps": self.cfg.exit_slippage_bps,
             "max_risk_per_trade_usd": self.cfg.max_risk_per_trade_usd,
             "initial_equity_usd": self.epoch.initial_equity_usd,
+            "capital_model": self.capital_model,
             "updated_at": _utc_iso(),
         }
+        if self._uses_sleeves() and self.sleeves is not None:
+            master = self.sleeves.master_snapshot()
+            payload.update(
+                {
+                    "sleeves": {tf: s.to_dict() for tf, s in self.sleeves.sleeves.items()},
+                    "master_initial_equity_usd": master["master_initial_equity_usd"],
+                    "master_current_equity_usd": master["master_current_equity_usd"],
+                    "master_realized_net_pnl_usd": master["master_realized_net_pnl_usd"],
+                    "master_unrealized_pnl_usd": master["master_unrealized_pnl_usd"],
+                    "master_open_risk_usd": master["master_open_risk_usd"],
+                    "master_risk_capacity_usd": master["master_risk_capacity_usd"],
+                    "master_available_risk_usd": master["master_available_risk_usd"],
+                    "equity_usd": master["master_current_equity_usd"],
+                    "realized_pnl_usd": master["master_realized_net_pnl_usd"],
+                    "initial_equity_usd": master["master_initial_equity_usd"],
+                }
+            )
+        return payload
 
     def write_health(self) -> Path:
         payload = self.health()
