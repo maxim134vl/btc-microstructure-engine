@@ -228,6 +228,7 @@ export interface RuntimeTruthSnapshot {
   known_limitations?: RuntimeTruthLimitation[];
   legacy_components?: RuntimeTruthLegacy[];
   timeframe_traders?: RuntimeTruthTimeframeTraders;
+  shadow_economic_correlation?: Record<string, unknown> | null;
 }
 
 

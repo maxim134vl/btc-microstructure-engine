@@ -2508,6 +2508,26 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
     live1b_epoch = live1b_active_epoch() if live1b_paper_active() else None
     paper_health = _read_json(ROOT / "data/runtime/intrabar_paper_health.json") or {}
     cognition_health = _read_json(ROOT / "data/runtime/intrabar_cognition_health.json") or {}
+    shadow_eqcorr = _read_json(
+        ROOT / "data/trading/shadow_economic_correlation/health.json"
+    ) or {}
+    if shadow_eqcorr:
+        shadow_eqcorr = {
+            "mode": shadow_eqcorr.get("mode") or "OBSERVE_ONLY",
+            "read_only": True,
+            "enforcement_enabled": False,
+            "source_epoch_id": shadow_eqcorr.get("source_epoch_id"),
+            "status": shadow_eqcorr.get("status"),
+            "candidate_count": shadow_eqcorr.get("candidate_count"),
+            "closed_outcome_count": shadow_eqcorr.get("closed_outcome_count"),
+            "baseline_match_count": shadow_eqcorr.get("baseline_match_count"),
+            "baseline_divergence_count": shadow_eqcorr.get("baseline_divergence_count"),
+            "open_virtual_positions": shadow_eqcorr.get("open_virtual_positions"),
+            "same_direction_clusters": shadow_eqcorr.get("same_direction_clusters"),
+            "research_valid": shadow_eqcorr.get("research_valid"),
+            "lookahead_violation_count": shadow_eqcorr.get("lookahead_violation_count"),
+            "updated_at": shadow_eqcorr.get("updated_at"),
+        }
     live1b_block = None
     if live1b_epoch is not None:
         by_id = {p["process_id"]: p for p in processes}
@@ -2583,6 +2603,12 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         "timeframe_traders": timeframe_traders,
         "trading_operations": trading_operations,
         "live1b_paper": live1b_block,
+        "shadow_economic_correlation": shadow_eqcorr or {
+            "mode": "OBSERVE_ONLY",
+            "read_only": True,
+            "enforcement_enabled": False,
+            "status": "NOT_STARTED",
+        },
         "runtime_uptime": runtime_uptime,
         "known_limitations": known_limitations,
         "legacy_components": legacy_components,

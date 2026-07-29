@@ -611,6 +611,45 @@ export function OpsUnifiedDashboard({
           </SectionCard>
         </section>
 
+        {/* 3b. Economic Quality & Correlation Shadow (read-only research) */}
+        <section className="space-y-2.5" data-section="shadow-economic-correlation">
+          <SectionLabel>Economic Quality &amp; Correlation Shadow</SectionLabel>
+          <SectionCard>
+            <Panel title="Observe-only research layer">
+              {(() => {
+                const sh = (snapshot as { shadow_economic_correlation?: Record<string, unknown> })
+                  .shadow_economic_correlation;
+                const clusters = (sh?.same_direction_clusters || {}) as Record<string, unknown>;
+                return (
+                  <>
+                    <MetricLine label="Mode" value={String(sh?.mode || "OBSERVE_ONLY")} />
+                    <MetricLine label="Source epoch" value={String(sh?.source_epoch_id || "—")} />
+                    <MetricLine label="Candidates" value={String(sh?.candidate_count ?? "—")} />
+                    <MetricLine label="Closed outcomes" value={String(sh?.closed_outcome_count ?? "—")} />
+                    <MetricLine
+                      label="Baseline parity"
+                      value={`${sh?.baseline_match_count ?? "—"} match / ${sh?.baseline_divergence_count ?? "—"} divergence`}
+                    />
+                    <MetricLine label="Open virtual positions" value={String(sh?.open_virtual_positions ?? "—")} />
+                    <MetricLine
+                      label="Same-direction clusters"
+                      value={`LONG ${String(clusters.BTC_LONG ?? "—")} · SHORT ${String(clusters.BTC_SHORT ?? "—")}`}
+                    />
+                    <MetricLine
+                      label="Research validity"
+                      value={sh?.research_valid == null ? "—" : sh.research_valid ? "VALID" : "INVALID"}
+                    />
+                    <MetricLine label="Lookahead violations" value={String(sh?.lookahead_violation_count ?? "—")} />
+                    <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
+                      Virtual PnL/risk are research-only and never mixed with live paper books.
+                    </p>
+                  </>
+                );
+              })()}
+            </Panel>
+          </SectionCard>
+        </section>
+
         {/* 4. Market Context */}
         <section className="space-y-2.5" data-section="market-context">
           <SectionLabel>Market Context</SectionLabel>
