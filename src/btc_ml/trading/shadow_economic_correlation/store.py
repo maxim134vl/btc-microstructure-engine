@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ class ShadowStore:
         "virtual_positions",
         "virtual_trades",
         "quality_outcomes",
+        "candidate_feature_enrichments",
     )
 
     def __init__(self, root: Path | None = None, *, repo: Path | None = None) -> None:
@@ -28,10 +31,16 @@ class ShadowStore:
         self._lock = threading.Lock()
         for name in self.TABLES:
             (self.root / f"{name}.jsonl").touch(exist_ok=True)
-        for name in ("policy_sleeves.json", "policy_portfolios.json", "checkpoint.json", "health.json", "policy_manifest.json"):
+        for name in (
+            "policy_sleeves.json",
+            "policy_portfolios.json",
+            "checkpoint.json",
+            "health.json",
+            "policy_manifest.json",
+        ):
             p = self.root / name
             if not p.exists():
-                p.write_text("{}\n" if name.endswith(".json") else "{}\n", encoding="utf-8")
+                p.write_text("{}\n", encoding="utf-8")
 
     def _jsonl(self, table: str) -> Path:
         if table not in self.TABLES:
@@ -60,9 +69,12 @@ class ShadowStore:
 
     def write_json(self, name: str, payload: dict[str, Any]) -> Path:
         path = assert_shadow_write_path(self.root / name, repo=self.repo)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        # Unique tmp path avoids cross-process clobber when two writers race.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+        data = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+        with self._lock:
+            tmp.write_text(data, encoding="utf-8")
+            os.replace(tmp, path)
         return path
 
     def read_json(self, name: str) -> dict[str, Any]:

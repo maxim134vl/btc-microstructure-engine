@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
@@ -23,6 +24,21 @@ def _stop(*_a: object) -> None:
     STOP = True
 
 
+def _write_pid(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+
+def _clear_own_pid(path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        if int(path.read_text(encoding="utf-8").strip()) == os.getpid():
+            path.unlink(missing_ok=True)
+    except Exception:
+        return
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--poll-ms", type=int, default=1000)
@@ -34,9 +50,8 @@ def main() -> int:
     engine = ShadowEconomicCorrelationEngine(repo=REPO, strict_epoch=True)
     health = engine.write_health()
     pid_path = REPO / "run" / "shadow_economic_correlation.pid"
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_path.write_text(f"{__import__('os').getpid()}\n", encoding="utf-8")
-    print(json.dumps({"status": "STARTED", "pid": __import__("os").getpid(), "health": health}, default=str), flush=True)
+    _write_pid(pid_path)
+    print(json.dumps({"status": "STARTED", "pid": os.getpid(), "health": health}, default=str), flush=True)
 
     last_health = 0.0
     try:
@@ -45,16 +60,25 @@ def main() -> int:
                 engine.poll_once()
             except Exception as exc:  # noqa: BLE001
                 engine.errors.append(f"poll:{exc}")
-                engine.write_health()
+                try:
+                    engine.write_health()
+                except Exception as hexc:  # noqa: BLE001
+                    engine.errors.append(f"health:{hexc}")
             now = time.time()
             if now - last_health >= args.health_every_s:
-                engine.write_health()
+                try:
+                    engine.write_health()
+                    _write_pid(pid_path)
+                except Exception as hexc:  # noqa: BLE001
+                    engine.errors.append(f"health:{hexc}")
                 last_health = now
             time.sleep(max(0.05, args.poll_ms / 1000.0))
     finally:
-        engine.write_health()
-        if pid_path.exists():
-            pid_path.unlink(missing_ok=True)
+        try:
+            engine.write_health()
+        except Exception:
+            pass
+        _clear_own_pid(pid_path)
     return 0
 
 

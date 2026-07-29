@@ -18,8 +18,20 @@ from . import (
     POLICY_IDS,
     SOURCE_EPOCH_MISMATCH,
     STATUS_ACTIVE,
+    STATUS_ENRICHMENT_ACTIVE,
+    STATUS_ENRICHMENT_AMBIGUOUS,
+    STATUS_ENRICHMENT_BASELINE,
+    STATUS_ENRICHMENT_LOOKAHEAD,
+    STATUS_ENRICHMENT_PARTIAL,
+    STATUS_ENRICHMENT_WRITE,
 )
 from .cluster import build_cluster_snapshot
+from .enrichment import (
+    CausalFeatureEnricher,
+    audit_cognition_sources,
+    policy_manifest_fingerprint,
+    summarize_enrichment_health,
+)
 from .features import build_decision_time_features, parse_ts, utc_now
 from .marginal import marginal_contribution
 from .outcomes import build_quality_outcome, scale_net_pnl
@@ -122,6 +134,7 @@ class ShadowEconomicCorrelationEngine:
         ck = self.store.read_json("checkpoint.json")
         self.processed_candidates: set[str] = set(ck.get("processed_candidates") or [])
         self.processed_closes: set[str] = set(ck.get("processed_closes") or [])
+        self.processed_enrichments: set[str] = set(ck.get("processed_enrichments") or [])
         self.baseline_match_count = int(ck.get("baseline_match_count") or 0)
         self.baseline_divergence_count = int(ck.get("baseline_divergence_count") or 0)
         self.lookahead_violation_count = int(ck.get("lookahead_violation_count") or 0)
@@ -129,6 +142,7 @@ class ShadowEconomicCorrelationEngine:
         self.research_valid = bool(ck.get("research_valid", True))
         self.last_candidate_timestamp = ck.get("last_candidate_timestamp")
         self.last_trade_close_timestamp = ck.get("last_trade_close_timestamp")
+        self.last_enrichment_timestamp = ck.get("last_enrichment_timestamp")
         self.errors: list[str] = []
 
         sleeves = self.store.read_json("policy_sleeves.json")
@@ -137,10 +151,11 @@ class ShadowEconomicCorrelationEngine:
             self.store.write_json("policy_sleeves.json", sleeves)
         self.sleeves = sleeves
 
-        manifest = {
+        self.manifest = {
             "mode": "OBSERVE_ONLY",
             "enforcement_enabled": False,
             "quality_scoring_enabled": False,
+            "feature_enrichment_enabled": True,
             "policy_ids": list(POLICY_IDS),
             "source_epoch_id": self.epoch_id,
             "source_contract_fingerprint": self.source_fp,
@@ -148,7 +163,16 @@ class ShadowEconomicCorrelationEngine:
             "expected_active_fingerprint": EXPECTED_ACTIVE_FP,
             "expected_parent_fingerprint": EXPECTED_PARENT_FP,
         }
-        self.store.write_json("policy_manifest.json", manifest)
+        self.manifest_fp = policy_manifest_fingerprint(self.manifest)
+        self.manifest["shadow_policy_manifest_fingerprint"] = self.manifest_fp
+        self.store.write_json("policy_manifest.json", self.manifest)
+        # Persist source audit snapshot (shadow-only write).
+        try:
+            audit = audit_cognition_sources(repo=self.repo)
+            self.store.write_json("cognition_source_audit.json", {"generated_at": utc_now(), "sources": audit})
+        except Exception as exc:  # noqa: BLE001
+            self.errors.append(f"source_audit:{exc}")
+        self.enricher = CausalFeatureEnricher(repo=self.repo)
         self._rebuild_open_index()
 
     def _rebuild_open_index(self) -> None:
@@ -169,6 +193,7 @@ class ShadowEconomicCorrelationEngine:
             {
                 "processed_candidates": sorted(self.processed_candidates),
                 "processed_closes": sorted(self.processed_closes),
+                "processed_enrichments": sorted(self.processed_enrichments),
                 "baseline_match_count": self.baseline_match_count,
                 "baseline_divergence_count": self.baseline_divergence_count,
                 "lookahead_violation_count": self.lookahead_violation_count,
@@ -176,6 +201,7 @@ class ShadowEconomicCorrelationEngine:
                 "research_valid": self.research_valid,
                 "last_candidate_timestamp": self.last_candidate_timestamp,
                 "last_trade_close_timestamp": self.last_trade_close_timestamp,
+                "last_enrichment_timestamp": self.last_enrichment_timestamp,
                 "updated_at": utc_now(),
             },
         )
@@ -402,7 +428,61 @@ class ShadowEconomicCorrelationEngine:
 
         self.processed_candidates.add(str(candidate["candidate_id"]))
         self.last_candidate_timestamp = decision_ts
+        # Enrichment after immutable decision snapshot — failures must not block simulation.
+        try:
+            self._enrich_candidate(candidate, decision_timestamp=decision_ts, historical=False)
+        except Exception as exc:  # noqa: BLE001
+            self.errors.append(f"enrichment:{exc}")
         return {"candidate_id": candidate["candidate_id"], "decisions": len(results), "lookahead": lookahead}
+
+    def _enrich_candidate(
+        self,
+        candidate: dict[str, Any],
+        *,
+        decision_timestamp: str,
+        historical: bool,
+    ) -> dict[str, Any] | None:
+        cid = str(candidate.get("candidate_id") or "")
+        if not cid or cid in self.processed_enrichments:
+            return None
+        # Journal-level idempotency (survives checkpoint gaps).
+        for existing in self.store.read_all("candidate_feature_enrichments"):
+            if str(existing.get("candidate_id") or "") == cid:
+                self.processed_enrichments.add(cid)
+                return None
+        row = self.enricher.enrich_candidate(
+            candidate=candidate,
+            decision_timestamp=decision_timestamp,
+            source_epoch_id=self.epoch_id,
+            source_contract_fingerprint=self.source_fp,
+            shadow_policy_manifest_fingerprint=self.manifest_fp,
+            historical=historical,
+        )
+        if row.get("lookahead_detected"):
+            self.lookahead_violation_count += 1
+        self.store.append("candidate_feature_enrichments", row)
+        self.processed_enrichments.add(cid)
+        self.last_enrichment_timestamp = row.get("enriched_at")
+        return row
+
+    def backfill_enrichments(self) -> list[dict[str, Any]]:
+        """Causally enrich existing candidates without rewriting decisions/snapshots."""
+        actions: list[dict[str, Any]] = []
+        for snap in self.store.read_all("candidate_snapshots"):
+            cid = str(snap.get("candidate_id") or "")
+            if not cid or cid in self.processed_enrichments:
+                continue
+            decision_ts = str(snap.get("candidate_timestamp") or snap.get("entry_timestamp") or "")
+            try:
+                row = self._enrich_candidate(snap, decision_timestamp=decision_ts, historical=True)
+                if row:
+                    actions.append({"candidate_id": cid, "status": "ENRICHED"})
+            except Exception as exc:  # noqa: BLE001
+                self.errors.append(f"backfill_enrichment:{cid}:{exc}")
+                actions.append({"candidate_id": cid, "status": "FAILED", "error": str(exc)})
+        self._save_checkpoint()
+        self.write_health()
+        return actions
 
     def _check_baseline_entry(self, candidate: dict[str, Any], virtual_pos: dict[str, Any]) -> None:
         qty_ok = abs(float(virtual_pos.get("quantity") or 0) - float(candidate.get("quantity") or 0)) < 1e-9
@@ -586,7 +666,8 @@ class ShadowEconomicCorrelationEngine:
     def poll_once(self) -> dict[str, Any]:
         entries = self.process_new_entries()
         closes = self.process_new_closes()
-        return {"entries": len(entries), "closes": len(closes)}
+        enrichments = self.backfill_enrichments()
+        return {"entries": len(entries), "closes": len(closes), "enrichments": len(enrichments)}
 
     def same_direction_clusters(self) -> dict[str, Any]:
         opens = _latest_positions(self.books.read_all("positions"))
@@ -604,6 +685,27 @@ class ShadowEconomicCorrelationEngine:
     def virtual_open_counts(self) -> dict[str, int]:
         return {pid: len(self.open_by_policy.get(pid) or []) for pid in POLICY_IDS}
 
+    def _enrichment_status(self, enrich_summary: dict[str, Any]) -> str:
+        if self.write_boundary_violation_count:
+            return STATUS_ENRICHMENT_WRITE
+        if self.baseline_divergence_count:
+            return STATUS_ENRICHMENT_BASELINE
+        if self.lookahead_violation_count:
+            return STATUS_ENRICHMENT_LOOKAHEAD
+        if int(enrich_summary.get("ambiguous_timestamp_count") or 0) > 0 and int(
+            enrich_summary.get("valid_feature_count") or 0
+        ) == 0:
+            return STATUS_ENRICHMENT_AMBIGUOUS
+        if int(enrich_summary.get("valid_feature_count") or 0) > 0 and int(
+            enrich_summary.get("missing_feature_count") or 0
+        ) > 0:
+            return STATUS_ENRICHMENT_PARTIAL
+        if int(enrich_summary.get("valid_feature_count") or 0) > 0:
+            return STATUS_ENRICHMENT_ACTIVE
+        if int(enrich_summary.get("enriched_candidate_count") or 0) > 0:
+            return STATUS_ENRICHMENT_PARTIAL
+        return STATUS_ACTIVE
+
     def write_health(self) -> dict[str, Any]:
         # lag vs paper health tip
         lag = None
@@ -617,13 +719,43 @@ class ShadowEconomicCorrelationEngine:
                     lag = max(0.0, (tip - last).total_seconds())
             except Exception:
                 lag = None
+        enrich_rows = self.store.read_all("candidate_feature_enrichments")
+        # Deduplicate by candidate_id keeping latest
+        latest_enrich: dict[str, dict[str, Any]] = {}
+        for row in enrich_rows:
+            cid = str(row.get("candidate_id") or "")
+            if cid:
+                latest_enrich[cid] = row
+        enrich_summary = summarize_enrichment_health(list(latest_enrich.values()))
+        enrich_summary["future_row_rejected_count"] = max(
+            int(enrich_summary.get("future_row_rejected_count") or 0),
+            int(getattr(self.enricher, "future_row_rejected_count", 0) or 0),
+        )
+        enrich_summary["wrong_timeframe_rejected_count"] = max(
+            int(enrich_summary.get("wrong_timeframe_rejected_count") or 0),
+            int(getattr(self.enricher, "wrong_timeframe_rejected_count", 0) or 0),
+        )
+        enrich_summary["ambiguous_timestamp_count"] = max(
+            int(enrich_summary.get("ambiguous_timestamp_count") or 0),
+            int(getattr(self.enricher, "ambiguous_timestamp_count", 0) or 0),
+        )
+        if self.last_enrichment_timestamp:
+            enrich_summary["last_enrichment_timestamp"] = self.last_enrichment_timestamp
+
+        status = self._enrichment_status(enrich_summary)
+        if not self.research_valid and self.baseline_divergence_count:
+            status = STATUS_ENRICHMENT_BASELINE
+        elif self.lookahead_violation_count:
+            status = STATUS_ENRICHMENT_LOOKAHEAD
+
         payload = {
             "mode": "OBSERVE_ONLY",
             "read_only": True,
             "enforcement_enabled": False,
             "quality_scoring_enabled": False,
             "command_bus_write_capability": False,
-            "status": STATUS_ACTIVE if self.research_valid and self.lookahead_violation_count == 0 else (
+            "status": status,
+            "eqcorr1_status": STATUS_ACTIVE if self.research_valid and self.lookahead_violation_count == 0 else (
                 LOOKAHEAD_VIOLATION if self.lookahead_violation_count else BASELINE_DIVERGENCE
             ),
             "source_epoch_id": self.epoch_id,
@@ -642,6 +774,8 @@ class ShadowEconomicCorrelationEngine:
             "lookahead_violation_count": self.lookahead_violation_count,
             "write_boundary_violation_count": self.write_boundary_violation_count,
             "research_valid": self.research_valid,
+            **enrich_summary,
+            "cognition_enrichment": "ACTIVE",
             "updated_at": utc_now(),
             "errors": self.errors[-20:],
         }

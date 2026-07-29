@@ -70,10 +70,9 @@ def cmd_status() -> int:
 
 
 def cmd_start() -> int:
-    pid = _read_pid()
-    if _alive(pid):
-        print(json.dumps({"status": "already_running", "pid": pid}))
-        return 0
+    # Always stop orphans first to guarantee single writer.
+    cmd_stop()
+    time.sleep(0.3)
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     PID_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_fh = LOG_PATH.open("a", encoding="utf-8")
@@ -90,28 +89,62 @@ def cmd_start() -> int:
     )
     PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
     time.sleep(1.0)
+    if not _alive(proc.pid):
+        print(json.dumps({"status": "start_failed", "pid": proc.pid, "log": str(LOG_PATH)}))
+        return 1
     print(json.dumps({"status": "started", "pid": proc.pid, "log": str(LOG_PATH)}))
     return 0
 
 
 def cmd_stop() -> int:
     pid = _read_pid()
-    if not _alive(pid):
+    orphans: list[int] = []
+    try:
+        out = subprocess.check_output(["pgrep", "-f", str(RUNNER)], text=True)
+        orphans = [int(x) for x in out.split() if x.strip().isdigit()]
+    except Exception:
+        orphans = []
+    # Fallback scan via ps when pgrep is restricted.
+    if not orphans:
+        try:
+            out = subprocess.check_output(["ps", "-ax", "-o", "pid=,command="], text=True)
+            for line in out.splitlines():
+                if "run_shadow_economic_correlation.py" in line:
+                    parts = line.strip().split(None, 1)
+                    if parts and parts[0].isdigit():
+                        orphans.append(int(parts[0]))
+        except Exception:
+            pass
+    targets: list[int] = []
+    if pid:
+        targets.append(pid)
+    for o in orphans:
+        if o not in targets:
+            targets.append(o)
+    if not targets:
         PID_PATH.unlink(missing_ok=True)
         print(json.dumps({"status": "not_running"}))
         return 0
-    assert pid is not None
-    os.kill(pid, signal.SIGTERM)
-    for _ in range(30):
-        if not _alive(pid):
-            break
-        time.sleep(0.2)
     forced = False
-    if _alive(pid):
-        os.kill(pid, signal.SIGKILL)
-        forced = True
+    for target in targets:
+        if not _alive(target):
+            continue
+        try:
+            os.kill(target, signal.SIGTERM)
+        except OSError:
+            continue
+        for _ in range(30):
+            if not _alive(target):
+                break
+            time.sleep(0.2)
+        if _alive(target):
+            try:
+                os.kill(target, signal.SIGKILL)
+                forced = True
+            except OSError:
+                pass
     PID_PATH.unlink(missing_ok=True)
-    print(json.dumps({"status": "stopped", "pid": pid, "forced_kill": forced}))
+    print(json.dumps({"status": "stopped", "pids": targets, "forced_kill": forced}))
     return 0
 
 

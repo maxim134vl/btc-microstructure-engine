@@ -640,6 +640,15 @@ export function OpsUnifiedDashboard({
                       value={sh?.research_valid == null ? "—" : sh.research_valid ? "VALID" : "INVALID"}
                     />
                     <MetricLine label="Lookahead violations" value={String(sh?.lookahead_violation_count ?? "—")} />
+                    <MetricLine
+                      label="Cognition enrichment"
+                      value={String(sh?.cognition_enrichment || (sh?.feature_enrichment_enabled ? "ACTIVE" : "—"))}
+                    />
+                    <MetricLine label="Candidates enriched" value={String(sh?.enriched_candidate_count ?? "—")} />
+                    <MetricLine label="Valid features" value={String(sh?.valid_feature_count ?? "—")} />
+                    <MetricLine label="Stale features" value={String(sh?.stale_feature_count ?? "—")} />
+                    <MetricLine label="Missing features" value={String(sh?.missing_feature_count ?? "—")} />
+                    <MetricLine label="Future rows rejected" value={String(sh?.future_row_rejected_count ?? "—")} />
                     <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
                       Virtual PnL/risk are research-only and never mixed with live paper books.
                     </p>

@@ -2526,6 +2526,13 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "same_direction_clusters": shadow_eqcorr.get("same_direction_clusters"),
             "research_valid": shadow_eqcorr.get("research_valid"),
             "lookahead_violation_count": shadow_eqcorr.get("lookahead_violation_count"),
+            "cognition_enrichment": shadow_eqcorr.get("cognition_enrichment") or "ACTIVE",
+            "feature_enrichment_enabled": shadow_eqcorr.get("feature_enrichment_enabled"),
+            "enriched_candidate_count": shadow_eqcorr.get("enriched_candidate_count"),
+            "valid_feature_count": shadow_eqcorr.get("valid_feature_count"),
+            "stale_feature_count": shadow_eqcorr.get("stale_feature_count"),
+            "missing_feature_count": shadow_eqcorr.get("missing_feature_count"),
+            "future_row_rejected_count": shadow_eqcorr.get("future_row_rejected_count"),
             "updated_at": shadow_eqcorr.get("updated_at"),
         }
     live1b_block = None
