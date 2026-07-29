@@ -2508,6 +2508,33 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
     live1b_epoch = live1b_active_epoch() if live1b_paper_active() else None
     paper_health = _read_json(ROOT / "data/runtime/intrabar_paper_health.json") or {}
     cognition_health = _read_json(ROOT / "data/runtime/intrabar_cognition_health.json") or {}
+    shadow_stp = _read_json(
+        ROOT / "data/trading/shadow_structural_protection/health.json"
+    ) or {}
+    if shadow_stp:
+        shadow_stp = {
+            "mode": shadow_stp.get("mode") or "OBSERVE_ONLY",
+            "read_only": True,
+            "enforcement_enabled": False,
+            "status": shadow_stp.get("status"),
+            "exact_intrabar_data": shadow_stp.get("exact_intrabar_data"),
+            "source_epoch_id": shadow_stp.get("source_epoch_id"),
+            "candidate_count": shadow_stp.get("candidate_count"),
+            "exact_profile_count": shadow_stp.get("exact_profile_count"),
+            "protective_zone_found_count": shadow_stp.get("protective_zone_found_count"),
+            "target_zone_found_count": shadow_stp.get("target_zone_found_count"),
+            "reaction_proven_count": shadow_stp.get("reaction_proven_count"),
+            "reaction_missing_count": shadow_stp.get("reaction_missing_count"),
+            "virtual_positions_open": shadow_stp.get("virtual_positions_open"),
+            "virtual_trades_closed": shadow_stp.get("virtual_trades_closed"),
+            "economic_execute_count": shadow_stp.get("economic_execute_count"),
+            "economic_skip_count": shadow_stp.get("economic_skip_count"),
+            "baseline_match_count": shadow_stp.get("baseline_match_count"),
+            "baseline_divergence_count": shadow_stp.get("baseline_divergence_count"),
+            "lookahead_violation_count": shadow_stp.get("lookahead_violation_count"),
+            "research_valid": shadow_stp.get("research_valid"),
+            "updated_at": shadow_stp.get("updated_at"),
+        }
     shadow_eqcorr = _read_json(
         ROOT / "data/trading/shadow_economic_correlation/health.json"
     ) or {}
@@ -2615,6 +2642,13 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "read_only": True,
             "enforcement_enabled": False,
             "status": "NOT_STARTED",
+        },
+        "shadow_structural_protection": shadow_stp or {
+            "mode": "OBSERVE_ONLY",
+            "read_only": True,
+            "enforcement_enabled": False,
+            "status": "NOT_STARTED",
+            "exact_intrabar_data": "UNKNOWN",
         },
         "runtime_uptime": runtime_uptime,
         "known_limitations": known_limitations,

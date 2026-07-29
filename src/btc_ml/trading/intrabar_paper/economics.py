@@ -57,15 +57,29 @@ def resolve_risk_sizing(
     entry_price: float,
     equity_usd: float | None = None,
     risk_budget_usd: float | None = None,
+    stop_loss_price: float | None = None,
+    take_profit_price: float | None = None,
 ) -> RiskSizing:
+    """Cost-aware risk sizing.
+
+    Optional stop_loss_price / take_profit_price let research shadows feed
+    structural levels through the same helper without a second sizing formula.
+    LIVE1B default path leaves both None and keeps configured bps geometry.
+    """
     side_u = str(side).upper()
     entry = float(entry_price)
-    stop, take = stop_take_prices(
-        side=side_u,
-        entry=entry,
-        stop_bps=cfg.stop_loss_bps,
-        take_bps=cfg.take_profit_bps,
-    )
+    if stop_loss_price is None or take_profit_price is None:
+        cfg_stop, cfg_take = stop_take_prices(
+            side=side_u,
+            entry=entry,
+            stop_bps=cfg.stop_loss_bps,
+            take_bps=cfg.take_profit_bps,
+        )
+        stop = float(stop_loss_price) if stop_loss_price is not None else cfg_stop
+        take = float(take_profit_price) if take_profit_price is not None else cfg_take
+    else:
+        stop = float(stop_loss_price)
+        take = float(take_profit_price)
     # Risk budget: min(1% equity, configured max) — do NOT divide across TFs.
     # Optional risk_budget_usd lets a derived capital model feed the same path
     # without reimplementing cost-aware sizing.

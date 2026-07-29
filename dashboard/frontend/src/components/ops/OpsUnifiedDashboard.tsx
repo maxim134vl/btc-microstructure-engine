@@ -611,6 +611,51 @@ export function OpsUnifiedDashboard({
           </SectionCard>
         </section>
 
+        {/* 3b2. Structural Stop/Take Shadow (read-only research) */}
+        <section className="space-y-2.5" data-section="shadow-structural-protection">
+          <SectionLabel>Structural Stop/Take Shadow</SectionLabel>
+          <SectionCard>
+            <Panel title="Observe-only structural research">
+              {(() => {
+                const sh = (snapshot as { shadow_structural_protection?: Record<string, unknown> })
+                  .shadow_structural_protection;
+                return (
+                  <>
+                    <MetricLine label="Mode" value={String(sh?.mode || "OBSERVE_ONLY")} />
+                    <MetricLine label="Exact intrabar data" value={String(sh?.exact_intrabar_data ?? "—")} />
+                    <MetricLine label="Candidates" value={String(sh?.candidate_count ?? "—")} />
+                    <MetricLine label="Exact profiles" value={String(sh?.exact_profile_count ?? "—")} />
+                    <MetricLine label="Protective zones" value={String(sh?.protective_zone_found_count ?? "—")} />
+                    <MetricLine label="Target zones" value={String(sh?.target_zone_found_count ?? "—")} />
+                    <MetricLine
+                      label="Reaction proof"
+                      value={`${sh?.reaction_proven_count ?? "—"} proven / ${sh?.reaction_missing_count ?? "—"} missing`}
+                    />
+                    <MetricLine label="Virtual positions" value={String(sh?.virtual_positions_open ?? "—")} />
+                    <MetricLine label="Virtual trades" value={String(sh?.virtual_trades_closed ?? "—")} />
+                    <MetricLine
+                      label="Economic execute/skip"
+                      value={`${sh?.economic_execute_count ?? "—"} / ${sh?.economic_skip_count ?? "—"}`}
+                    />
+                    <MetricLine
+                      label="Baseline parity"
+                      value={`${sh?.baseline_match_count ?? "—"} match / ${sh?.baseline_divergence_count ?? "—"} divergence`}
+                    />
+                    <MetricLine label="Lookahead violations" value={String(sh?.lookahead_violation_count ?? "—")} />
+                    <MetricLine
+                      label="Research validity"
+                      value={sh?.research_valid == null ? "—" : sh.research_valid ? "VALID" : "INVALID"}
+                    />
+                    <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
+                      Structural levels are research-only and never sent to LIVE1B or paper books.
+                    </p>
+                  </>
+                );
+              })()}
+            </Panel>
+          </SectionCard>
+        </section>
+
         {/* 3b. Economic Quality & Correlation Shadow (read-only research) */}
         <section className="space-y-2.5" data-section="shadow-economic-correlation">
           <SectionLabel>Economic Quality &amp; Correlation Shadow</SectionLabel>
