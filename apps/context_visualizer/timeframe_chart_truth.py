@@ -494,6 +494,7 @@ def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[s
                 "paper_epoch_id": ev.get("paper_epoch_id"),
                 "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
                 "active": True,
+                "lifecycle_state": "ACTIVE",
             }
         elif et == "CONTEXT_END" and open_zone is not None:
             open_zone["end_timestamp"] = ts
@@ -522,14 +523,25 @@ def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[s
                 "paper_epoch_id": ev.get("paper_epoch_id"),
                 "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
                 "active": True,
+                "lifecycle_state": "ACTIVE",
             }
     if open_zone is not None:
         zones.append(open_zone)
     return zones
 
 
-def _map_live1a_visual_context(market_context: str | None, lifecycle: str | None) -> tuple[str, str]:
-    """Return (directional_state, direction) from LIVE1A provisional row."""
+def _map_live1a_visual_context(
+    market_context: str | None,
+    lifecycle: str | None,
+    *,
+    active_market_context: str | None = None,
+) -> tuple[str, str]:
+    """Return (directional_state, direction) preferring unfinished active context."""
+    active = (active_market_context or "").strip().upper()
+    if active in {"LONG", "LONG_CONTEXT"} or active.startswith("LONG"):
+        return "LONG_CONTEXT", "LONG"
+    if active in {"SHORT", "SHORT_CONTEXT"} or active.startswith("SHORT"):
+        return "SHORT_CONTEXT", "SHORT"
     mc = (market_context or "OBSERVE").strip().upper()
     life = (lifecycle or "").strip().upper()
     if life == "NO_ACTIVE_CONTEXT" or mc in {"", "OBSERVE", "STAND_ASIDE", "NONE", "NO_ACTIVE_CONTEXT"}:
@@ -554,23 +566,86 @@ def load_live1a_visual_overlay(timeframe: str) -> dict[str, Any] | None:
         return None
     bars = cog.get("partial_bars") if isinstance(cog.get("partial_bars"), dict) else {}
     bar = bars.get(timeframe) if isinstance(bars.get(timeframe), dict) else {}
+    active = row.get("active_market_context") if "active_market_context" in row else row.get("active")
     directional, direction = _map_live1a_visual_context(
-        row.get("market_context") or row.get("active"),
-        row.get("lifecycle"),
+        row.get("provisional_market_context") or row.get("market_context"),
+        row.get("lifecycle_state") or row.get("lifecycle"),
+        active_market_context=active,
     )
-    last_event = cog.get("last_context_event") if isinstance(cog.get("last_context_event"), dict) else {}
+    last_by_tf = cog.get("last_context_event") if isinstance(cog.get("last_context_event"), dict) else {}
+    last_event = last_by_tf.get(timeframe) if isinstance(last_by_tf.get(timeframe), dict) else {}
+    if not last_event and str(last_by_tf.get("timeframe") or "").upper() == timeframe.upper():
+        last_event = last_by_tf
+    # Recover unfinished START from journal when tip was reset after LIVE1A restart.
+    if directional == "OBSERVE":
+        open_ev = None
+        try:
+            journal = INTRABAR_CONTEXT_JOURNAL
+            if journal.exists():
+                for line in journal.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        raw = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(raw, dict):
+                        continue
+                    if str(raw.get("timeframe") or "").upper() != timeframe.upper():
+                        continue
+                    et = str(raw.get("event_type") or "").upper()
+                    if et in {"CONTEXT_START", "CONTEXT_FLIP"}:
+                        open_ev = raw
+                    elif et == "CONTEXT_END":
+                        open_ev = None
+        except OSError:
+            open_ev = None
+        if isinstance(open_ev, dict):
+            new_ctx = str(open_ev.get("new_context") or "").upper()
+            if new_ctx in {"LONG", "LONG_CONTEXT"} or new_ctx.startswith("LONG"):
+                directional, direction = "LONG_CONTEXT", "LONG"
+                last_event = open_ev
+            elif new_ctx in {"SHORT", "SHORT_CONTEXT"} or new_ctx.startswith("SHORT"):
+                directional, direction = "SHORT_CONTEXT", "SHORT"
+                last_event = open_ev
+    lifecycle_state = _txt(row.get("lifecycle_state") or row.get("lifecycle")) or (
+        "NO_ACTIVE_CONTEXT" if directional == "OBSERVE" else "ACTIVE"
+    )
+    if directional != "OBSERVE" and str(lifecycle_state).upper() in {
+        "",
+        "NO_ACTIVE_CONTEXT",
+        "OBSERVE",
+        "NONE",
+    }:
+        lifecycle_state = "ACTIVE"
+    episode = _txt(row.get("lifecycle_episode_id") or row.get("episode_id") or last_event.get("lifecycle_episode_id"))
+    event_id = _txt(
+        row.get("context_event_id")
+        or row.get("event_id")
+        or last_event.get("context_event_id")
+        or last_event.get("event_id")
+    )
+    started = _txt(
+        row.get("context_started_at")
+        or row.get("active_context_started_at")
+        or last_event.get("event_timestamp")
+    )
+    if directional == "OBSERVE":
+        episode = None
+        event_id = None
+        started = None
+        lifecycle_state = "NO_ACTIVE_CONTEXT"
     return {
         "directional_state": directional,
         "timeframe_direction": direction,
-        "lifecycle_state": _txt(row.get("lifecycle")) or "NO_ACTIVE_CONTEXT",
-        "lifecycle_episode_id": _txt(row.get("lifecycle_episode_id") or row.get("episode_id")),
-        "context_event_id": _txt(
-            row.get("context_event_id")
-            or row.get("event_id")
-            or last_event.get("event_id")
-            or last_event.get("context_event_id")
-        ),
-        "context_started_at": _txt(row.get("context_started_at") or row.get("active_context_started_at")),
+        "provisional_market_context": _txt(row.get("provisional_market_context") or row.get("market_context"))
+        or "OBSERVE",
+        "active_market_context": directional if directional in {"LONG_CONTEXT", "SHORT_CONTEXT"} else None,
+        "lifecycle_state": lifecycle_state,
+        "lifecycle_episode_id": episode,
+        "context_event_id": event_id,
+        "context_started_at": started,
+        "context_price": _f(row.get("context_price") or last_event.get("context_event_price")),
         "causal_cutoff_timestamp": _txt(bar.get("causal_cutoff_timestamp")),
         "evaluation_timestamp": _txt(cog.get("updated_at") or bar.get("causal_cutoff_timestamp")),
         "source": "LIVE1A_INTRABAR_CONTEXT",
@@ -621,9 +696,13 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
         state["evaluation_timestamp"] = live1a["evaluation_timestamp"]
         state["context_source"] = live1a["source"]
         state["source_timestamp"] = live1a["source_timestamp"]
+        state["provisional_market_context"] = live1a.get("provisional_market_context")
+        state["active_market_context"] = live1a.get("active_market_context")
+        state["context_price"] = live1a.get("context_price")
         if live1a["directional_state"] == "OBSERVE":
             state["manager_instruction"] = "NO_ACTION"
-            state["manager_lifecycle_episode_id"] = None
+        elif live1a.get("lifecycle_state") == "CHALLENGED":
+            state["manager_instruction"] = "HOLD"
     return state
 
 
@@ -1333,6 +1412,20 @@ def build_timeframe_chart_truth(
             window_end=window_end,
         )
         context_zones = build_context_zones_from_events(context_events)
+        # Tip lifecycle (e.g. CHALLENGED) annotates open journal zones; provisional OBSERVE
+        # must not close them — only CONTEXT_END/FLIP does.
+        tip_life = str(state.get("lifecycle_phase") or "").upper()
+        tip_active = str(state.get("active_market_context") or state.get("directional_state") or "").upper()
+        for zone in context_zones:
+            if not zone.get("active"):
+                continue
+            zone_dir = str(zone.get("directional_state") or "").upper()
+            if tip_life == "CHALLENGED" and (
+                tip_active in zone_dir or zone_dir.startswith(tip_active.replace("_CONTEXT", ""))
+            ):
+                zone["lifecycle_state"] = "CHALLENGED"
+            elif tip_active in {"LONG_CONTEXT", "SHORT_CONTEXT"} and tip_active in zone_dir:
+                zone["lifecycle_state"] = tip_life or "ACTIVE"
 
         if live1b:
             # LIVE1A journal is the only active context truth; do not paint legacy
@@ -1356,6 +1449,7 @@ def build_timeframe_chart_truth(
                     "active": z.get("active"),
                     "start_event_id": z.get("start_event_id"),
                     "end_event_id": z.get("end_event_id"),
+                    "lifecycle_state": z.get("lifecycle_state"),
                 }
                 for z in context_zones
                 if z.get("direction") in {"LONG", "SHORT"}

@@ -521,6 +521,7 @@ function contextBandSegments(tfBlock) {
       active: z.active,
       source: z.source,
       lifecycle_episode_id: z.lifecycle_episode_id,
+      lifecycle_state: z.lifecycle_state,
       start_event_id: z.start_event_id,
     }));
   }
@@ -575,6 +576,13 @@ function drawContextBands(chart, tfBlock, g) {
     ctx.globalAlpha = 0.55;
     ctx.fillRect(x1, g.pad.top, width, 3);
     ctx.globalAlpha = 1;
+    const life = String(seg.lifecycle_state || "").toUpperCase();
+    if (life === "CHALLENGED" && (seg.active || !seg.end_timestamp)) {
+      ctx.fillStyle = colors.warning;
+      ctx.font = `9px ${colors.mono}`;
+      ctx.textAlign = "left";
+      ctx.fillText("CHALLENGED", x1 + 4, g.pad.top + 14);
+    }
   });
 }
 

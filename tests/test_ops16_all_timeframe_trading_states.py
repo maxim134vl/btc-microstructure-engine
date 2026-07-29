@@ -12,6 +12,12 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.services import research_pipeline_service as svc  # noqa: E402
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_production_journal(monkeypatch):
+    monkeypatch.setattr(svc, "_open_context_lineage_from_journal", lambda tf: None)
 
 
 def _cog(

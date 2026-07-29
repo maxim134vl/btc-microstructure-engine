@@ -561,6 +561,8 @@ export interface PipelineSyncStatus {
 
 export interface TimeframeTradingState {
   timeframe: string;
+  provisional_market_context?: string | null;
+  active_market_context?: string | null;
   trading_state?: string | null;
   market_state?: string | null;
   directional_bias?: string | null;
@@ -568,6 +570,9 @@ export interface TimeframeTradingState {
   lifecycle_episode_id?: string | null;
   context_event_id?: string | null;
   context_started_at?: string | null;
+  context_price?: number | null;
+  open_position_id?: string | null;
+  open_position_side?: string | null;
   entry_eligible?: boolean | null;
   intent?: string | null;
   decision_reason?: string | null;
@@ -582,6 +587,8 @@ export interface TimeframeTradingState {
 export interface TradingStatesPanel {
   source?: string | null;
   directional_timeframes?: number | null;
+  active_directional_contexts?: number | null;
+  current_directional_evaluations?: number | null;
   total_timeframes?: number | null;
   timeframes?: Record<string, TimeframeTradingState>;
 }

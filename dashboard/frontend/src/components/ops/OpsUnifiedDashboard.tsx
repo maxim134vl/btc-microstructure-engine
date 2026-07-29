@@ -33,7 +33,11 @@ import {
   mapRuntimeSafetySeverity,
 } from "./assuranceCardSeverity";
 import { mapTradingStateTimeframeSeverity } from "./tradingStateCardSeverity";
-import { displayLifecycleState } from "./tradingStateLifecycleDisplay";
+import {
+  displayActiveContext,
+  displayLifecycleState,
+  displayProvisionalContext,
+} from "./tradingStateLifecycleDisplay";
 import type { TimeframeTradingState } from "../../types/ops";
 
 const TRADING_STATE_TIMEFRAMES = ["M15", "M30", "H1", "H4"] as const;
@@ -631,14 +635,12 @@ export function OpsUnifiedDashboard({
                 <h3 className="text-[14px] font-semibold text-ds-text-primary">Trading State</h3>
                 <p className="text-[11px] text-ds-text-secondary">
                   {liveConnected
-                    ? `Directional timeframes: ${
+                    ? `Active directional contexts: ${
+                        decision?.trading_states?.active_directional_contexts ??
                         decision?.trading_states?.directional_timeframes ??
-                        Object.values(decision?.trading_states?.timeframes || decision?.by_timeframe || {}).filter(
-                          (row) => {
-                            const state = String((row as TimeframeTradingState)?.trading_state || "").toUpperCase();
-                            return state === "LONG_CONTEXT" || state === "SHORT_CONTEXT";
-                          },
-                        ).length
+                        0
+                      } / 4 · Current directional evaluations: ${
+                        decision?.trading_states?.current_directional_evaluations ?? 0
                       } / 4`
                     : unavailableCaption(generatedAt)}
                 </p>
@@ -660,20 +662,24 @@ export function OpsUnifiedDashboard({
                     >
                       {liveConnected && row ? (
                         <>
-                          <MetricLine label="Trading state" value={row.trading_state || "—"} />
-                          <MetricLine label="Lifecycle" value={displayLifecycleState(row)} />
-                          <MetricLine label="Market state" value={row.market_state || "—"} />
-                          <MetricLine label="Directional bias" value={row.directional_bias || "—"} />
+                          <MetricLine label="Текущая оценка" value={displayProvisionalContext(row)} />
+                          <MetricLine label="Активный контекст" value={displayActiveContext(row)} />
+                          <MetricLine label="Жизненный цикл" value={displayLifecycleState(row)} />
+                          <MetricLine label="Направление" value={row.directional_bias || "—"} />
                           <MetricLine
-                            label="Entry eligible"
+                            label="Новый вход"
                             value={row.entry_eligible == null ? "—" : row.entry_eligible ? "YES" : "NO"}
                             hint={row.decision_reason || undefined}
                           />
-                          <MetricLine label="Intent" value={row.intent || "—"} />
-                          <MetricLine label="Episode" value={row.lifecycle_episode_id || "—"} />
-                          <MetricLine label="Context event" value={row.context_event_id || "—"} />
+                          <MetricLine label="Эпизод" value={row.lifecycle_episode_id || "—"} />
+                          <MetricLine label="Событие контекста" value={row.context_event_id || "—"} />
                           <MetricLine
-                            label="Last evaluated"
+                            label="Открытая позиция"
+                            value={row.open_position_side || "—"}
+                            hint={row.open_position_id || undefined}
+                          />
+                          <MetricLine
+                            label="Последняя оценка"
                             value={
                               row.last_evaluated_at ? formatSourceTimestamp(row.last_evaluated_at) : "—"
                             }

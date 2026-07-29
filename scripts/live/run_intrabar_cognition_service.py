@@ -95,6 +95,99 @@ class IntrabarCognitionService:
         if self.pid_file.exists():
             self.pid_file.unlink(missing_ok=True)
 
+    def _open_journal_event(self, timeframe: str) -> dict[str, Any] | None:
+        """Last unfinished CONTEXT_START/FLIP for TF from durable journal."""
+        path = Path(self.context_root) / "events.jsonl"
+        if not path.exists():
+            return None
+        open_ev: dict[str, Any] | None = None
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+                if str(raw.get("timeframe") or "").upper() != timeframe.upper():
+                    continue
+                et = str(raw.get("event_type") or "").upper()
+                if et in {"CONTEXT_START", "CONTEXT_FLIP"}:
+                    open_ev = raw
+                elif et == "CONTEXT_END":
+                    open_ev = None
+        except OSError:
+            return None
+        return open_ev
+
+    def _provisional_tip_row(self, timeframe: str, eval_row: dict[str, Any]) -> dict[str, Any]:
+        """Export provisional vs active context without collapsing lineage."""
+        synth = eval_row.get("synthesis") if isinstance(eval_row.get("synthesis"), dict) else {}
+        life = eval_row.get("lifecycle") if isinstance(eval_row.get("lifecycle"), dict) else {}
+        provisional = synth.get("market_context")
+        active = life.get("active_market_context")
+        lifecycle_state = life.get("lifecycle_state")
+        tip: dict[str, Any] = {
+            # Backward-compat aliases used by OPS/visual consumers.
+            "market_context": provisional,
+            "lifecycle": lifecycle_state,
+            "active": active,
+            # Explicit OPS1.8 fields.
+            "provisional_market_context": provisional,
+            "active_market_context": active,
+            "lifecycle_state": lifecycle_state,
+            "lifecycle_episode_id": None,
+            "context_event_id": None,
+            "context_started_at": None,
+            "context_price": None,
+        }
+        active_u = str(active or "").strip().upper()
+        last_ev = self.engine.last_context_event.get(timeframe)
+        if not isinstance(last_ev, dict):
+            last_ev = {}
+        # Recover unfinished START/FLIP after process restart (in-memory lifecycle empty).
+        if active_u not in {"LONG", "LONG_CONTEXT", "SHORT", "SHORT_CONTEXT"}:
+            if not last_ev:
+                last_ev = self._open_journal_event(timeframe) or {}
+            et = str(last_ev.get("event_type") or "").upper()
+            new_ctx = str(last_ev.get("new_context") or "").upper()
+            if et in {"CONTEXT_START", "CONTEXT_FLIP"} and new_ctx in {
+                "LONG",
+                "LONG_CONTEXT",
+                "SHORT",
+                "SHORT_CONTEXT",
+            }:
+                active = last_ev.get("new_context")
+                active_u = str(active or "").strip().upper()
+                tip["active"] = active
+                tip["active_market_context"] = active
+                if str(lifecycle_state or "").upper() in {"", "NO_ACTIVE_CONTEXT", "OBSERVE", "NONE"}:
+                    tip["lifecycle"] = "ACTIVE"
+                    tip["lifecycle_state"] = "ACTIVE"
+                    lifecycle_state = "ACTIVE"
+                # Rehydrate engine mirrors so subsequent tips stay consistent.
+                if timeframe not in self.engine.last_context_event and last_ev:
+                    self.engine.last_context_event[timeframe] = last_ev
+                ep = last_ev.get("lifecycle_episode_id")
+                if ep and timeframe not in self.engine._active_episode:
+                    self.engine._active_episode[timeframe] = str(ep)
+        if active_u not in {"LONG", "LONG_CONTEXT", "SHORT", "SHORT_CONTEXT"}:
+            return tip
+        et = str(last_ev.get("event_type") or "").upper()
+        tip["lifecycle_episode_id"] = (
+            self.engine._active_episode.get(timeframe)
+            or last_ev.get("lifecycle_episode_id")
+        )
+        if et in {"CONTEXT_START", "CONTEXT_FLIP"}:
+            tip["context_event_id"] = last_ev.get("context_event_id")
+            tip["context_started_at"] = last_ev.get("event_timestamp") or last_ev.get(
+                "context_started_at"
+            )
+            tip["context_price"] = last_ev.get("context_event_price")
+        return tip
+
     def write_health(self) -> None:
         payload = {
             "service": "intrabar_cognition",
@@ -109,11 +202,7 @@ class IntrabarCognitionService:
             },
             "partial_bars": self.engine.bars.snapshot(),
             "last_provisional_eval": {
-                tf: {
-                    "market_context": (v.get("synthesis") or {}).get("market_context"),
-                    "lifecycle": (v.get("lifecycle") or {}).get("lifecycle_state"),
-                    "active": (v.get("lifecycle") or {}).get("active_market_context"),
-                }
+                tf: self._provisional_tip_row(tf, v)
                 for tf, v in self.engine.last_eval.items()
             },
             "last_context_event": self.engine.last_context_event,

@@ -146,9 +146,11 @@ LIVE1A_MAX_AGE_SECONDS = 120.0
 LIVE1A_SOURCE_NAME = "LIVE1A_INTRABAR_CONTEXT"
 LIVE1A_HEALTH_REL = Path("data") / "runtime" / "intrabar_cognition_health.json"
 LIVE1B_HEALTH_REL = Path("data") / "runtime" / "intrabar_paper_health.json"
+LIVE1A_CONTEXT_JOURNAL_REL = Path("data") / "cognition" / "intrabar_context_events" / "events.jsonl"
 LIVE1A_TIMEFRAME_ORDER = ("M15", "M30", "H1", "H4")
 DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
 DIRECTIONAL_PAPER_ACTIONS = frozenset({"INTENT_OPEN_LONG", "INTENT_OPEN_SHORT"})
+_OBSERVE_LIKE = frozenset({"", "OBSERVE", "STAND_ASIDE", "NONE", "NO_ACTIVE_CONTEXT", "NULL"})
 
 
 def _clean_token(value: Any) -> str | None:
@@ -273,10 +275,13 @@ def _map_live1a_context_fields(
     market_context: str | None,
     lifecycle_state: str | None,
 ) -> tuple[str, str, str]:
-    """Return (trading_state, market_state, directional_bias)."""
+    """Legacy helper: map a single context token to trading/market/bias.
+
+    Prefer :func:`_build_live1a_timeframe_trading_state` dual-context path.
+    """
     mc = (market_context or "OBSERVE").strip().upper()
     life = (lifecycle_state or "").strip().upper()
-    if life == "NO_ACTIVE_CONTEXT" or mc in {"", "OBSERVE", "STAND_ASIDE", "NONE", "NO_ACTIVE_CONTEXT"}:
+    if life == "NO_ACTIVE_CONTEXT" or mc in _OBSERVE_LIKE:
         return "OBSERVE", "OBSERVE", "NONE"
     if mc in {"LONG", "LONG_CONTEXT"} or mc.startswith("LONG"):
         return "LONG_CONTEXT", "LONG_CONTEXT", "LONG"
@@ -285,39 +290,162 @@ def _map_live1a_context_fields(
     return "OBSERVE", "OBSERVE", "NONE"
 
 
-def _normalize_live1a_lifecycle_for_ops(
+def _normalize_context_token(value: Any) -> str | None:
+    token = _clean_token(value)
+    if token is None:
+        return None
+    upper = token.upper()
+    if upper in _OBSERVE_LIKE:
+        return None
+    if upper in {"LONG", "LONG_CONTEXT"} or upper.startswith("LONG"):
+        return "LONG_CONTEXT"
+    if upper in {"SHORT", "SHORT_CONTEXT"} or upper.startswith("SHORT"):
+        return "SHORT_CONTEXT"
+    if upper in {"OBSERVE", "STAND_ASIDE"}:
+        return None
+    return upper
+
+
+def _provisional_context_token(value: Any) -> str:
+    token = _clean_token(value)
+    if token is None:
+        return "OBSERVE"
+    upper = token.upper()
+    if upper in {"LONG", "LONG_CONTEXT"} or upper.startswith("LONG"):
+        return "LONG_CONTEXT"
+    if upper in {"SHORT", "SHORT_CONTEXT"} or upper.startswith("SHORT"):
+        return "SHORT_CONTEXT"
+    if upper in {"STAND_ASIDE"}:
+        return "STAND_ASIDE"
+    return "OBSERVE"
+
+
+def _bias_from_active(active: str | None) -> str:
+    if active == "LONG_CONTEXT":
+        return "LONG"
+    if active == "SHORT_CONTEXT":
+        return "SHORT"
+    return "NONE"
+
+
+def _open_context_lineage_from_journal(timeframe: str) -> dict[str, Any] | None:
+    """Last unfinished CONTEXT_START/FLIP for TF from durable LIVE1A journal."""
+    path = Path(REPO_ROOT) / LIVE1A_CONTEXT_JOURNAL_REL
+    if not path.exists():
+        return None
+    open_ev: dict[str, Any] | None = None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(raw, dict):
+                continue
+            if str(raw.get("timeframe") or "").upper() != timeframe.upper():
+                continue
+            et = str(raw.get("event_type") or "").upper()
+            if et in {"CONTEXT_START", "CONTEXT_FLIP"}:
+                open_ev = raw
+            elif et == "CONTEXT_END":
+                open_ev = None
+    except OSError:
+        return None
+    return open_ev
+
+
+def _active_from_open_event(event: dict[str, Any] | None) -> str | None:
+    if not isinstance(event, dict):
+        return None
+    return _normalize_context_token(
+        event.get("new_context") or event.get("to_side") or event.get("direction")
+    )
+
+
+def _lineage_from_last_context_event(
+    last_by_tf: dict[str, Any] | None,
+    timeframe: str,
+) -> dict[str, Any] | None:
+    if not isinstance(last_by_tf, dict):
+        return None
+    row = last_by_tf.get(timeframe) or last_by_tf.get(timeframe.upper())
+    if not isinstance(row, dict):
+        # Flat legacy shape (single event).
+        if str(last_by_tf.get("timeframe") or "").upper() == timeframe.upper():
+            row = last_by_tf
+        else:
+            return None
+    et = str(row.get("event_type") or "").upper()
+    if et not in {"CONTEXT_START", "CONTEXT_FLIP"}:
+        return None
+    return row
+
+
+def _resolve_active_context_lineage(
     *,
-    trading_state: str,
-    lifecycle_state: str | None,
-    lifecycle_episode_id: str | None,
-    context_event_id: str | None,
-) -> tuple[str, bool]:
-    """Keep lifecycle causally consistent with trading_state/episode/event.
+    timeframe: str,
+    tip_row: dict[str, Any],
+    active: str | None,
+    last_context_event: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Attach unfinished START/FLIP lineage when active directional context exists."""
+    empty = {
+        "lifecycle_episode_id": None,
+        "context_event_id": None,
+        "context_started_at": None,
+        "context_price": None,
+    }
+    if active not in DIRECTIONAL_CONTEXTS:
+        return empty
 
-    Returns (lifecycle_state, malformed).
-    OBSERVE tips never expose residual directional lifecycle (e.g. CHALLENGED)
-    when episode/event are absent. CHALLENGED is retained only with an active
-    directional context plus episode and context event ids.
-    """
-    life = _clean_token(lifecycle_state) or "NO_ACTIVE_CONTEXT"
-    if trading_state == "OBSERVE":
-        return "NO_ACTIVE_CONTEXT", False
-    if life == "CHALLENGED":
-        if (
-            trading_state not in DIRECTIONAL_CONTEXTS
-            or not lifecycle_episode_id
-            or not context_event_id
-        ):
-            return "UNAVAILABLE", True
-    return life, False
+    episode = _clean_token(tip_row.get("lifecycle_episode_id") or tip_row.get("episode_id"))
+    event_id = _clean_token(tip_row.get("context_event_id") or tip_row.get("event_id"))
+    started = _format_utc_timestamp(
+        _parse_utc_timestamp(tip_row.get("context_started_at") or tip_row.get("active_context_started_at"))
+    )
+    price = None
+    raw_price = tip_row.get("context_price") or tip_row.get("context_event_price")
+    try:
+        if raw_price is not None and str(raw_price).strip() != "":
+            price = float(raw_price)
+    except (TypeError, ValueError):
+        price = None
+
+    if not event_id or not episode or not started:
+        last_ev = _lineage_from_last_context_event(last_context_event, timeframe)
+        if last_ev is None:
+            last_ev = _open_context_lineage_from_journal(timeframe)
+        if isinstance(last_ev, dict):
+            episode = episode or _clean_token(last_ev.get("lifecycle_episode_id"))
+            event_id = event_id or _clean_token(last_ev.get("context_event_id"))
+            started = started or _format_utc_timestamp(
+                _parse_utc_timestamp(last_ev.get("event_timestamp") or last_ev.get("context_started_at"))
+            )
+            if price is None:
+                try:
+                    price = float(last_ev.get("context_event_price"))
+                except (TypeError, ValueError):
+                    price = None
+
+    return {
+        "lifecycle_episode_id": episode,
+        "context_event_id": event_id,
+        "context_started_at": started,
+        "context_price": price,
+    }
 
 
-def _live1a_market_context_token(row: dict[str, Any]) -> str | None:
-    """Prefer explicit market_context; never let stale active override OBSERVE."""
-    explicit = _clean_token(row.get("market_context"))
-    if explicit:
-        return explicit
-    return _clean_token(row.get("active"))
+def _open_position_for_tf(paper: dict[str, Any] | None, timeframe: str) -> tuple[str | None, str | None]:
+    if not isinstance(paper, dict):
+        return None, None
+    by_tf = paper.get("active_positions_by_timeframe")
+    if isinstance(by_tf, dict):
+        row = by_tf.get(timeframe) or by_tf.get(timeframe.upper())
+        if isinstance(row, dict):
+            return _clean_token(row.get("position_id")), _clean_token(row.get("side"))
+    return None, None
 
 
 def _live1b_candidate_for_timeframe(
@@ -409,11 +537,14 @@ def _build_live1a_timeframe_trading_state(
     updated_at: pd.Timestamp | None,
     stale: bool,
     age_s: float | None,
+    last_context_event: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row = evals.get(timeframe)
     if not isinstance(row, dict):
         return {
             "timeframe": timeframe,
+            "provisional_market_context": "UNAVAILABLE",
+            "active_market_context": None,
             "trading_state": "UNAVAILABLE",
             "market_state": "UNAVAILABLE",
             "directional_bias": "NONE",
@@ -421,6 +552,9 @@ def _build_live1a_timeframe_trading_state(
             "lifecycle_episode_id": None,
             "context_event_id": None,
             "context_started_at": None,
+            "context_price": None,
+            "open_position_id": None,
+            "open_position_side": None,
             "entry_eligible": False,
             "intent": "NONE",
             "decision_reason": "MISSING_LIVE1A_TIMEFRAME",
@@ -432,26 +566,56 @@ def _build_live1a_timeframe_trading_state(
         }
 
     bar = bars.get(timeframe) if isinstance(bars.get(timeframe), dict) else {}
-    trading_state, market_state, bias = _map_live1a_context_fields(
-        _live1a_market_context_token(row),
-        row.get("lifecycle"),
+    provisional = _provisional_context_token(
+        row.get("provisional_market_context") or row.get("market_context")
     )
-    lifecycle_episode_id = _clean_token(row.get("lifecycle_episode_id") or row.get("episode_id"))
-    context_event_id = _clean_token(row.get("context_event_id") or row.get("event_id"))
-    lifecycle_state, lifecycle_malformed = _normalize_live1a_lifecycle_for_ops(
-        trading_state=trading_state,
-        lifecycle_state=_clean_token(row.get("lifecycle")),
-        lifecycle_episode_id=lifecycle_episode_id,
-        context_event_id=context_event_id,
+    active = _normalize_context_token(
+        row.get("active_market_context") if "active_market_context" in row else row.get("active")
     )
-    if trading_state == "OBSERVE":
-        lifecycle_episode_id = None
-        context_event_id = None
-    context_started_at = _format_utc_timestamp(
-        _parse_utc_timestamp(row.get("context_started_at") or row.get("active_context_started_at"))
+    # Tip may still stamp OBSERVE into `active`; treat that as no active context.
+    if active not in DIRECTIONAL_CONTEXTS:
+        active = None
+
+    # Recover unfinished directional context from tip last_event / durable journal.
+    # LIVE1A process restart can reset in-memory lifecycle while journal START remains open.
+    open_ev = None
+    if active not in DIRECTIONAL_CONTEXTS:
+        open_ev = _lineage_from_last_context_event(last_context_event, timeframe)
+        if open_ev is None:
+            open_ev = _open_context_lineage_from_journal(timeframe)
+        recovered = _active_from_open_event(open_ev)
+        if recovered in DIRECTIONAL_CONTEXTS:
+            active = recovered
+
+    raw_life = _clean_token(row.get("lifecycle_state") or row.get("lifecycle"))
+    if active in DIRECTIONAL_CONTEXTS:
+        lifecycle_state = raw_life or "ACTIVE"
+        if lifecycle_state.upper() in _OBSERVE_LIKE:
+            # Tip lost lifecycle after restart; unfinished START ⇒ still active.
+            lifecycle_state = "ACTIVE"
+    else:
+        lifecycle_state = "NO_ACTIVE_CONTEXT"
+
+    # CHALLENGED requires an active directional context.
+    if str(lifecycle_state).upper() == "CHALLENGED" and active not in DIRECTIONAL_CONTEXTS:
+        lifecycle_state = "NO_ACTIVE_CONTEXT"
+
+    lineage = _resolve_active_context_lineage(
+        timeframe=timeframe,
+        tip_row=row,
+        active=active,
+        last_context_event=last_context_event,
     )
-    if trading_state == "OBSERVE":
-        context_started_at = None
+    lifecycle_episode_id = lineage["lifecycle_episode_id"]
+    context_event_id = lineage["context_event_id"]
+    context_started_at = lineage["context_started_at"]
+    context_price = lineage["context_price"]
+
+    bias = _bias_from_active(active)
+    # Compat trading_state: active directional context wins over provisional OBSERVE.
+    trading_state = active if active in DIRECTIONAL_CONTEXTS else provisional
+    market_state = provisional
+
     causal_cutoff = _format_utc_timestamp(
         _parse_utc_timestamp(bar.get("causal_cutoff_timestamp") or row.get("causal_cutoff_timestamp"))
     ) or _format_utc_timestamp(updated_at)
@@ -459,26 +623,31 @@ def _build_live1a_timeframe_trading_state(
         _parse_utc_timestamp(row.get("last_evaluated_at") or row.get("evaluation_timestamp"))
     ) or _format_utc_timestamp(updated_at)
 
+    open_position_id, open_position_side = _open_position_for_tf(paper, timeframe)
+
     entry_eligible, intent, decision_reason = _live1b_decision_fields(
         paper,
         timeframe=timeframe,
         lifecycle_episode_id=lifecycle_episode_id,
         context_event_id=context_event_id,
     )
-    if trading_state == "OBSERVE":
+    # New entries require a directional provisional evaluation; CHALLENGED blocks new entry.
+    if provisional not in DIRECTIONAL_CONTEXTS or str(lifecycle_state).upper() == "CHALLENGED":
         entry_eligible = False
-        intent = "NONE"
+        if provisional not in DIRECTIONAL_CONTEXTS:
+            intent = "NONE"
 
-    row_stale = bool(stale or lifecycle_malformed)
-    if row_stale:
+    if stale:
         level = "YELLOW"
-    elif trading_state in DIRECTIONAL_CONTEXTS:
+    elif active in DIRECTIONAL_CONTEXTS:
         level = "GREEN"
     else:
         level = "GREY"
 
     return {
         "timeframe": timeframe,
+        "provisional_market_context": provisional,
+        "active_market_context": active,
         "trading_state": trading_state,
         "market_state": market_state,
         "directional_bias": bias,
@@ -486,13 +655,16 @@ def _build_live1a_timeframe_trading_state(
         "lifecycle_episode_id": lifecycle_episode_id,
         "context_event_id": context_event_id,
         "context_started_at": context_started_at,
+        "context_price": context_price,
+        "open_position_id": open_position_id,
+        "open_position_side": open_position_side,
         "entry_eligible": entry_eligible,
         "intent": intent,
         "decision_reason": decision_reason,
         "causal_cutoff_timestamp": causal_cutoff,
         "last_evaluated_at": last_evaluated_at,
         "source": LIVE1A_SOURCE_NAME,
-        "stale": row_stale,
+        "stale": stale,
         "source_lag_seconds": age_s,
         "level": level,
     }
@@ -521,6 +693,7 @@ def build_live1a_decision_layer_payload(
     stale = updated_at is None or (age_s is not None and age_s > LIVE1A_MAX_AGE_SECONDS)
 
     bars = cog.get("partial_bars") if isinstance(cog.get("partial_bars"), dict) else {}
+    last_context_event = cog.get("last_context_event") if isinstance(cog.get("last_context_event"), dict) else {}
     timeframes: dict[str, Any] = {}
     for tf in LIVE1A_TIMEFRAME_ORDER:
         timeframes[tf] = _build_live1a_timeframe_trading_state(
@@ -531,14 +704,26 @@ def build_live1a_decision_layer_payload(
             updated_at=updated_at,
             stale=stale,
             age_s=age_s,
+            last_context_event=last_context_event,
         )
 
-    directional_count = sum(
-        1 for row in timeframes.values() if row.get("trading_state") in DIRECTIONAL_CONTEXTS
+    active_directional_count = sum(
+        1 for row in timeframes.values() if row.get("active_market_context") in DIRECTIONAL_CONTEXTS
     )
-    # Ribbon/summary still needs one status_label — prefer first directional TF, else M15.
+    current_directional_eval_count = sum(
+        1
+        for row in timeframes.values()
+        if row.get("provisional_market_context") in DIRECTIONAL_CONTEXTS
+    )
+    # Compat: directional_timeframes tracks active contexts (not provisional OBSERVE).
+    directional_count = active_directional_count
+    # Ribbon/summary still needs one status_label — prefer first active directional TF, else M15.
     primary_tf = next(
-        (tf for tf in LIVE1A_TIMEFRAME_ORDER if timeframes[tf].get("trading_state") in DIRECTIONAL_CONTEXTS),
+        (
+            tf
+            for tf in LIVE1A_TIMEFRAME_ORDER
+            if timeframes[tf].get("active_market_context") in DIRECTIONAL_CONTEXTS
+        ),
         "M15",
     )
     primary = timeframes.get(primary_tf) or timeframes["M15"]
@@ -556,6 +741,8 @@ def build_live1a_decision_layer_payload(
     trading_states = {
         "source": LIVE1A_SOURCE_NAME,
         "directional_timeframes": directional_count,
+        "active_directional_contexts": active_directional_count,
+        "current_directional_evaluations": current_directional_eval_count,
         "total_timeframes": len(LIVE1A_TIMEFRAME_ORDER),
         "timeframes": timeframes,
     }
