@@ -56,6 +56,7 @@ def resolve_risk_sizing(
     side: str,
     entry_price: float,
     equity_usd: float | None = None,
+    risk_budget_usd: float | None = None,
 ) -> RiskSizing:
     side_u = str(side).upper()
     entry = float(entry_price)
@@ -65,10 +66,15 @@ def resolve_risk_sizing(
         stop_bps=cfg.stop_loss_bps,
         take_bps=cfg.take_profit_bps,
     )
-    # Risk budget: min(1% equity, configured max) — do NOT divide across TFs
-    eq = float(equity_usd if equity_usd is not None else cfg.initial_equity_usd)
-    risk_pct = eq * (cfg.max_risk_per_trade_pct / 100.0)
-    risk_amount = min(risk_pct, float(cfg.max_risk_per_trade_usd))
+    # Risk budget: min(1% equity, configured max) — do NOT divide across TFs.
+    # Optional risk_budget_usd lets a derived capital model feed the same path
+    # without reimplementing cost-aware sizing.
+    if risk_budget_usd is not None:
+        risk_amount = float(risk_budget_usd)
+    else:
+        eq = float(equity_usd if equity_usd is not None else cfg.initial_equity_usd)
+        risk_pct = eq * (cfg.max_risk_per_trade_pct / 100.0)
+        risk_amount = min(risk_pct, float(cfg.max_risk_per_trade_usd))
     if entry <= 0 or stop <= 0:
         return RiskSizing(
             False,
