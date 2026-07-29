@@ -33,6 +33,7 @@ import {
   mapRuntimeSafetySeverity,
 } from "./assuranceCardSeverity";
 import { mapTradingStateTimeframeSeverity } from "./tradingStateCardSeverity";
+import { displayLifecycleState } from "./tradingStateLifecycleDisplay";
 import type { TimeframeTradingState } from "../../types/ops";
 
 const TRADING_STATE_TIMEFRAMES = ["M15", "M30", "H1", "H4"] as const;
@@ -660,7 +661,7 @@ export function OpsUnifiedDashboard({
                       {liveConnected && row ? (
                         <>
                           <MetricLine label="Trading state" value={row.trading_state || "—"} />
-                          <MetricLine label="Lifecycle" value={row.lifecycle_state || "—"} />
+                          <MetricLine label="Lifecycle" value={displayLifecycleState(row)} />
                           <MetricLine label="Market state" value={row.market_state || "—"} />
                           <MetricLine label="Directional bias" value={row.directional_bias || "—"} />
                           <MetricLine

@@ -285,6 +285,41 @@ def _map_live1a_context_fields(
     return "OBSERVE", "OBSERVE", "NONE"
 
 
+def _normalize_live1a_lifecycle_for_ops(
+    *,
+    trading_state: str,
+    lifecycle_state: str | None,
+    lifecycle_episode_id: str | None,
+    context_event_id: str | None,
+) -> tuple[str, bool]:
+    """Keep lifecycle causally consistent with trading_state/episode/event.
+
+    Returns (lifecycle_state, malformed).
+    OBSERVE tips never expose residual directional lifecycle (e.g. CHALLENGED)
+    when episode/event are absent. CHALLENGED is retained only with an active
+    directional context plus episode and context event ids.
+    """
+    life = _clean_token(lifecycle_state) or "NO_ACTIVE_CONTEXT"
+    if trading_state == "OBSERVE":
+        return "NO_ACTIVE_CONTEXT", False
+    if life == "CHALLENGED":
+        if (
+            trading_state not in DIRECTIONAL_CONTEXTS
+            or not lifecycle_episode_id
+            or not context_event_id
+        ):
+            return "UNAVAILABLE", True
+    return life, False
+
+
+def _live1a_market_context_token(row: dict[str, Any]) -> str | None:
+    """Prefer explicit market_context; never let stale active override OBSERVE."""
+    explicit = _clean_token(row.get("market_context"))
+    if explicit:
+        return explicit
+    return _clean_token(row.get("active"))
+
+
 def _live1b_candidate_for_timeframe(
     paper: dict[str, Any] | None,
     timeframe: str,
@@ -398,15 +433,25 @@ def _build_live1a_timeframe_trading_state(
 
     bar = bars.get(timeframe) if isinstance(bars.get(timeframe), dict) else {}
     trading_state, market_state, bias = _map_live1a_context_fields(
-        row.get("market_context") or row.get("active"),
+        _live1a_market_context_token(row),
         row.get("lifecycle"),
     )
-    lifecycle_state = _clean_token(row.get("lifecycle")) or "NO_ACTIVE_CONTEXT"
     lifecycle_episode_id = _clean_token(row.get("lifecycle_episode_id") or row.get("episode_id"))
     context_event_id = _clean_token(row.get("context_event_id") or row.get("event_id"))
+    lifecycle_state, lifecycle_malformed = _normalize_live1a_lifecycle_for_ops(
+        trading_state=trading_state,
+        lifecycle_state=_clean_token(row.get("lifecycle")),
+        lifecycle_episode_id=lifecycle_episode_id,
+        context_event_id=context_event_id,
+    )
+    if trading_state == "OBSERVE":
+        lifecycle_episode_id = None
+        context_event_id = None
     context_started_at = _format_utc_timestamp(
         _parse_utc_timestamp(row.get("context_started_at") or row.get("active_context_started_at"))
     )
+    if trading_state == "OBSERVE":
+        context_started_at = None
     causal_cutoff = _format_utc_timestamp(
         _parse_utc_timestamp(bar.get("causal_cutoff_timestamp") or row.get("causal_cutoff_timestamp"))
     ) or _format_utc_timestamp(updated_at)
@@ -424,7 +469,8 @@ def _build_live1a_timeframe_trading_state(
         entry_eligible = False
         intent = "NONE"
 
-    if stale:
+    row_stale = bool(stale or lifecycle_malformed)
+    if row_stale:
         level = "YELLOW"
     elif trading_state in DIRECTIONAL_CONTEXTS:
         level = "GREEN"
@@ -446,7 +492,7 @@ def _build_live1a_timeframe_trading_state(
         "causal_cutoff_timestamp": causal_cutoff,
         "last_evaluated_at": last_evaluated_at,
         "source": LIVE1A_SOURCE_NAME,
-        "stale": stale,
+        "stale": row_stale,
         "source_lag_seconds": age_s,
         "level": level,
     }
