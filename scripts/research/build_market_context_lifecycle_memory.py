@@ -471,8 +471,13 @@ def step_lifecycle(
             if active == "OBSERVE":
                 lifecycle = "CANDIDATE"
                 new_candidate = raw
-                new_candidate_started = timestamp
-                new_candidate_reason = reason
+                # Keep candidate identity/clock across tips of the same direction.
+                if candidate == raw and candidate_started is not None:
+                    new_candidate_started = candidate_started
+                    new_candidate_reason = candidate_reason or reason
+                else:
+                    new_candidate_started = timestamp
+                    new_candidate_reason = reason
                 active_started = None
                 active_age = 0
                 new_transition = "developing directional context is candidate only"
@@ -527,8 +532,12 @@ def step_lifecycle(
             if active == "OBSERVE":
                 lifecycle = "CANDIDATE"
                 new_candidate = raw
-                new_candidate_started = timestamp
-                new_candidate_reason = reason
+                if candidate == raw and candidate_started is not None:
+                    new_candidate_started = candidate_started
+                    new_candidate_reason = candidate_reason or reason
+                else:
+                    new_candidate_started = timestamp
+                    new_candidate_reason = reason
                 active_started = None
                 active_age = 0
                 new_transition = "non-active directional status stays candidate"
