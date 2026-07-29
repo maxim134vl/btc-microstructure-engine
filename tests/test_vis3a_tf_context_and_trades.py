@@ -70,20 +70,35 @@ def test_stable_ordinals_tf_n(truth):
 
 
 def test_context_history_per_tf_isolated(truth):
+    from active_epoch_trade_filter import live1b_paper_active  # noqa: E402
+
+    live1b = bool(live1b_paper_active())
     for tf in TIMEFRAMES:
         block = truth["timeframes"][tf]
         segs = block.get("context_segments") or []
         assert segs == (block.get("context_history") or [])
-        assert block.get("context_source") == "timeframe_command_memory"
-        assert len(segs) >= 1
-        for seg in segs:
-            assert seg["timeframe"] == tf
-            assert seg.get("start_timestamp")
-            assert seg.get("end_timestamp")
-            assert seg.get("directional_state")
-            assert seg.get("source") == "timeframe_command_memory"
-        if tf in ("M15", "M30", "H1"):
-            assert len(segs) > 1
+        if live1b:
+            assert block.get("context_source") == "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+            events = block.get("context_events") or []
+            for ev in events:
+                assert ev["timeframe"] == tf
+                assert ev.get("source") == "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+                assert ev.get("event_timestamp")
+                assert ev.get("bar_anchor_time")
+            for seg in segs:
+                assert seg["timeframe"] == tf
+                assert seg.get("source") == "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+        else:
+            assert block.get("context_source") == "timeframe_command_memory"
+            assert len(segs) >= 1
+            for seg in segs:
+                assert seg["timeframe"] == tf
+                assert seg.get("start_timestamp")
+                assert seg.get("end_timestamp")
+                assert seg.get("directional_state")
+                assert seg.get("source") == "timeframe_command_memory"
+            if tf in ("M15", "M30", "H1"):
+                assert len(segs) > 1
 
 
 def test_trade_isolation_zero_foreign(truth):

@@ -21,6 +21,7 @@ const state = {
   range: "latest500",
   charts: {},
   selectedTradeKey: null,
+  selectedContextKey: null,
   pollTimer: null,
   activePaperEpochId: null,
 };
@@ -445,17 +446,38 @@ function collectVisiblePriceExtras(chart, tfBlock) {
   const entities = (tfBlock.open_positions || []).concat(tfBlock.closed_trades || []);
   entities.forEach((e) => {
     if ((e.timeframe || chart.tf) !== chart.tf) return;
-    extras.push(e.entry_price, e.exit_price, e.stop_price, e.take_profit_price);
+    extras.push(
+      e.entry_fill_price ?? e.entry_price,
+      e.exit_price,
+      e.stop_loss_price ?? e.stop_price,
+      e.take_profit_price,
+    );
+  });
+  (tfBlock.context_events || []).forEach((ev) => {
+    if ((ev.timeframe || chart.tf) !== chart.tf) return;
+    extras.push(ev.context_price);
+  });
+  (tfBlock.context_zones || []).forEach((z) => {
+    if ((z.timeframe || chart.tf) !== chart.tf) return;
+    extras.push(z.context_price);
   });
   return extras;
 }
 
+function barOpenTs(row) {
+  return parseTs(row && (row.bar_open || row.timestamp));
+}
+
 function timeIndex(rows, ts) {
   if (ts == null || !rows.length) return null;
+  // Prefer exact containing-bar open match so events do not snap to the prior candle.
+  for (let i = 0; i < rows.length; i += 1) {
+    if (barOpenTs(rows[i]) === ts) return i;
+  }
   let best = null;
   let bestDist = Infinity;
   rows.forEach((c, i) => {
-    const t = parseTs(c.timestamp);
+    const t = barOpenTs(c);
     if (t == null) return;
     const dist = Math.abs(t - ts);
     if (dist < bestDist) {
@@ -466,30 +488,77 @@ function timeIndex(rows, ts) {
   return best;
 }
 
+function containingBarIndex(rows, eventTs, anchorTs) {
+  if (!rows.length) return null;
+  const preferred = parseTs(anchorTs);
+  if (preferred != null) {
+    const exact = timeIndex(rows, preferred);
+    if (exact != null && barOpenTs(rows[exact]) === preferred) return exact;
+  }
+  const ts = parseTs(eventTs);
+  if (ts == null) return preferred != null ? timeIndex(rows, preferred) : null;
+  // Containing bar: latest bar_open <= event time.
+  let best = null;
+  rows.forEach((c, i) => {
+    const open = barOpenTs(c);
+    if (open == null || open > ts) return;
+    if (best == null || open >= barOpenTs(rows[best])) best = i;
+  });
+  if (best != null) return best;
+  return timeIndex(rows, preferred != null ? preferred : ts);
+}
+
+function contextBandSegments(tfBlock) {
+  if (Array.isArray(tfBlock.context_zones) && tfBlock.context_zones.length) {
+    return tfBlock.context_zones.map((z) => ({
+      timeframe: z.timeframe,
+      start_timestamp: z.start_timestamp,
+      end_timestamp: z.end_timestamp,
+      directional_state: z.directional_state || (z.direction ? `${z.direction}_CONTEXT` : null),
+      direction: z.direction,
+      context_price: z.context_price,
+      bar_anchor_time: z.bar_anchor_time,
+      active: z.active,
+      source: z.source,
+      lifecycle_episode_id: z.lifecycle_episode_id,
+      start_event_id: z.start_event_id,
+    }));
+  }
+  if (Array.isArray(tfBlock.context_segments) && tfBlock.context_segments.length) {
+    return tfBlock.context_segments;
+  }
+  if (Array.isArray(tfBlock.context_history) && tfBlock.context_history.length) {
+    return tfBlock.context_history;
+  }
+  return [];
+}
+
 function drawContextBands(chart, tfBlock, g) {
   const ctx = chart.ctx;
   const colors = chartColors();
-  const segments = Array.isArray(tfBlock.context_segments)
-    ? tfBlock.context_segments
-    : Array.isArray(tfBlock.context_history)
-      ? tfBlock.context_history
-      : [];
+  const segments = contextBandSegments(tfBlock);
   if (!segments.length || !chart.visible.length) return;
-  const firstTs = parseTs(chart.visible[0].timestamp);
-  const lastTs = parseTs(chart.visible[chart.visible.length - 1].timestamp);
-  if (firstTs == null || lastTs == null || lastTs <= firstTs) return;
+  const firstTs = barOpenTs(chart.visible[0]);
+  const lastTs = barOpenTs(chart.visible[chart.visible.length - 1]);
+  if (firstTs == null || lastTs == null) return;
   segments.forEach((seg) => {
     if ((seg.timeframe || chart.tf) !== chart.tf) return;
+    const name = String(seg.directional_state || seg.direction || "").toUpperCase();
+    if (name.includes("OBSERVE") || name === "NONE" || name === "") return;
+    if (!name.includes("LONG") && !name.includes("SHORT")) return;
     const s = parseTs(seg.start_timestamp);
-    const e = parseTs(seg.end_timestamp) || lastTs;
-    if (s == null || e < firstTs || s > lastTs) return;
-    const i0 = timeIndex(chart.visible, Math.max(s, firstTs));
-    const i1 = timeIndex(chart.visible, Math.min(e, lastTs));
+    const e = parseTs(seg.end_timestamp);
+    if (s == null) return;
+    const i0 = containingBarIndex(chart.visible, seg.start_timestamp, seg.bar_anchor_time);
+    const i1 = e != null
+      ? containingBarIndex(chart.visible, seg.end_timestamp, null)
+      : chart.visible.length - 1;
     if (i0 == null || i1 == null) return;
+    if (e != null && e < firstTs) return;
+    if (s > lastTs + 7 * 24 * 3600) return;
     const x1 = g.xAt(Math.min(i0, i1)) - (g.plotW / chart.visible.length) * 0.5;
     const x2 = g.xAt(Math.max(i0, i1)) + (g.plotW / chart.visible.length) * 0.5;
     const width = Math.max(2, x2 - x1);
-    const name = String(seg.directional_state || "").toUpperCase();
     let fill = colors.observeZone;
     let accent = colors.info;
     if (name.includes("LONG")) {
@@ -506,6 +575,94 @@ function drawContextBands(chart, tfBlock, g) {
     ctx.globalAlpha = 0.55;
     ctx.fillRect(x1, g.pad.top, width, 3);
     ctx.globalAlpha = 1;
+  });
+}
+
+function drawContextOverlays(chart, tfBlock, g) {
+  const ctx = chart.ctx;
+  const colors = chartColors();
+  if (!ctx || !chart.visible.length || !g) return;
+  const events = (tfBlock.context_events || []).filter((ev) => (ev.timeframe || chart.tf) === chart.tf);
+  const zones = contextBandSegments(tfBlock).filter((z) => (z.timeframe || chart.tf) === chart.tf);
+  const selected = state.selectedContextKey;
+
+  zones.forEach((zone) => {
+    const price = finitePrice(zone.context_price);
+    if (price == null) return;
+    const name = String(zone.directional_state || zone.direction || "").toUpperCase();
+    if (!name.includes("LONG") && !name.includes("SHORT")) return;
+    const i0 = containingBarIndex(chart.visible, zone.start_timestamp, zone.bar_anchor_time);
+    if (i0 == null) return;
+    const i1 = zone.end_timestamp
+      ? containingBarIndex(chart.visible, zone.end_timestamp, null)
+      : chart.visible.length - 1;
+    if (i1 == null) return;
+    const x1 = g.xAt(Math.min(i0, i1));
+    const x2 = g.xAt(Math.max(i0, i1));
+    const y = g.yAt(price);
+    ctx.save();
+    ctx.strokeStyle = name.includes("SHORT") ? colors.negative : colors.positive;
+    ctx.lineWidth = 1.25;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x1, y);
+    ctx.lineTo(x2, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = name.includes("SHORT") ? colors.negative : colors.positive;
+    ctx.font = `9px ${colors.mono}`;
+    ctx.textAlign = "left";
+    ctx.fillText("Цена контекста", x2 + 3, y + 3);
+    ctx.restore();
+  });
+
+  events.forEach((ev) => {
+    const et = String(ev.event_type || "").toUpperCase();
+    if (!["CONTEXT_START", "CONTEXT_END", "CONTEXT_FLIP"].includes(et)) return;
+    const direction = String(ev.direction || "").toUpperCase();
+    if (et !== "CONTEXT_END" && direction !== "LONG" && direction !== "SHORT") return;
+    const i = containingBarIndex(chart.visible, ev.event_timestamp, ev.bar_anchor_time);
+    if (i == null) return;
+    const candle = chart.visible[i];
+    const x = g.xAt(i);
+    const key = `ctx:${ev.context_event_id || ev.event_timestamp}:${et}`;
+    const isSel = selected && selected === key;
+    const label = et === "CONTEXT_END"
+      ? "Конец контекста"
+      : et === "CONTEXT_FLIP"
+        ? `FLIP ${direction}`
+        : `Контекст ${direction}`;
+    const yBase = direction === "SHORT"
+      ? g.yAt(candle.high) - 22
+      : g.yAt(candle.low) + 22;
+    ctx.save();
+    ctx.globalAlpha = selected && !isSel ? 0.25 : 1;
+    ctx.fillStyle = direction === "SHORT" ? colors.negative : colors.positive;
+    if (et === "CONTEXT_END") ctx.fillStyle = colors.info;
+    // Distinct square marker (not trade triangle).
+    const half = isSel ? 6 : 4;
+    ctx.fillRect(x - half, yBase - half, half * 2, half * 2);
+    ctx.strokeStyle = colors.markerStroke;
+    ctx.strokeRect(x - half, yBase - half, half * 2, half * 2);
+    ctx.font = `${isSel ? "bold 10" : "9"}px ${colors.mono}`;
+    ctx.textAlign = "center";
+    const metrics = ctx.measureText(label);
+    const boxW = metrics.width + 8;
+    const boxY = direction === "SHORT" ? yBase - 16 : yBase + 14;
+    ctx.fillStyle = isSel ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.3)";
+    ctx.fillRect(x - boxW / 2, boxY - 10, boxW, 12);
+    ctx.fillStyle = direction === "SHORT" ? colors.negative : (et === "CONTEXT_END" ? colors.info : colors.positive);
+    ctx.fillText(label, x, boxY);
+    ctx.textAlign = "left";
+    chart.hitRegions.push({
+      key,
+      x,
+      y: yBase,
+      entity: ev,
+      kind: "context",
+      role: "context",
+    });
+    ctx.restore();
   });
 }
 
@@ -618,11 +775,11 @@ function drawOverlays(chart, tfBlock, g) {
     ctx.fillText("TF_SOURCE_CONTAMINATION", g.pad.left + 8, g.pad.top + 18);
     return;
   }
+  drawContextOverlays(chart, tfBlock, g);
   const opens = filterActiveEpochTrades(tfBlock.open_positions || [], state.truth && state.truth.active_paper_epoch_id)
     .filter((p) => (p.timeframe || chart.tf) === chart.tf);
   const closed = filterActiveEpochTrades(tfBlock.closed_trades || [], state.truth && state.truth.active_paper_epoch_id)
     .filter((t) => (t.timeframe || chart.tf) === chart.tf);
-  // Empty arrays clear previous hitRegions (already reset above).
   if (!opens.length && !closed.length) {
     return;
   }
@@ -681,15 +838,18 @@ function drawOverlays(chart, tfBlock, g) {
     const take = finitePrice(entity.take_profit_price);
     const exitPx = finitePrice(entity.exit_price);
     const side = String(entity.side || "LONG").toUpperCase();
-    const anchorTs = parseTs(entity.bar_anchor_time || entity.entry_fill_timestamp || entity.entry_timestamp);
-    const iEntry = timeIndex(chart.visible, anchorTs);
+    const iEntry = containingBarIndex(
+      chart.visible,
+      entity.entry_fill_timestamp || entity.entry_timestamp || entity.event_timestamp,
+      entity.bar_anchor_time,
+    );
     if (iEntry == null || entry == null) {
       ctx.restore();
       return;
     }
     let iEnd = chart.visible.length - 1;
     if (kind === "closed") {
-      const ix = timeIndex(chart.visible, parseTs(entity.exit_timestamp));
+      const ix = containingBarIndex(chart.visible, entity.exit_timestamp, null);
       if (ix != null) iEnd = ix;
     }
     const x1 = g.xAt(Math.min(iEntry, iEnd));
@@ -802,7 +962,7 @@ function renderHeader(tf, tfBlock) {
   const pstatus = st.position_status || "FLAT";
   const bar = contract.latest_confirmed_close || "—";
   const barShort = String(bar).replace(/:\d{2}Z$/, "Z");
-  const segCount = (tfBlock.context_segments || tfBlock.context_history || []).length;
+  const segCount = (tfBlock.context_events || tfBlock.context_zones || tfBlock.context_segments || []).length;
   chart.header.innerHTML = `
     <span class="tf-name">${tf}</span>
     <span class="tf-context">${fmt(st.directional_state)} · ${fmt(st.manager_instruction)}</span>
@@ -881,7 +1041,7 @@ function updateStatus() {
     const st = block.state || {};
     const closed = (block.closed_trades || []).length;
     const opens = (block.open_positions || []).length;
-    const segs = (block.context_segments || []).length;
+    const segs = (block.context_events || block.context_zones || block.context_segments || []).length;
     statusChips.innerHTML = [
       `<span class="lifecycle-chip">${tf}:${st.directional_state || "—"}</span>`,
       `<span class="lifecycle-chip">${segs} ctx</span>`,
@@ -901,31 +1061,54 @@ function updateStatus() {
 function formatTradeDetail(entity, tf) {
   if (!entity) return "";
   const episode =
-    entity.episode_status === "PROVEN"
-      ? `episode ${entity.episode_id}`
-      : "episode UNPROVEN";
+    entity.lifecycle_episode_id
+      || (entity.episode_status === "PROVEN" ? `episode ${entity.episode_id}` : "episode UNPROVEN");
   return [
     `<strong>${publicNumber(entity, tf) || "—"}</strong>`,
     `${entity.status || "—"} ${entity.side || ""}`,
     `TF ${entity.timeframe || tf}`,
+    `position_id ${entity.position_id || "—"}`,
+    `context_event_id ${entity.context_event_id || entity.entry_context_event_id || "—"}`,
+    `lifecycle_episode_id ${episode}`,
+    `context_started_at ${entity.context_started_at || "—"}`,
+    `context_price ${fmtPrice(entity.context_price)}`,
     `вход ${entity.event_timestamp || entity.entry_fill_timestamp || entity.entry_timestamp || "—"} @ ${fmtPrice(entity.entry_fill_price ?? entity.entry_price)}`,
     `якорь свечи ${entity.bar_anchor_time || "—"}`,
     `qty ${fmt(entity.quantity)} BTC · notional ${fmt(entity.position_notional ?? entity.notional)}`,
     `риск ${fmt(entity.risk_amount_usd)}`,
-    `контекст ${entity.context_started_at || "—"} @ ${fmtPrice(entity.context_price)}`,
+    `Стоп ${fmtPrice(entity.stop_loss_price ?? entity.stop_price)} Цель ${fmtPrice(entity.take_profit_price)}`,
     `mark ${fmtPrice(entity.mark_price)} (${entity.mark_side || "—"})`,
     `uPnL ${fmtPnl(entity.unrealized_pnl_usd ?? entity.unrealized_pnl)}`,
     `exit ${entity.exit_timestamp || "—"} @ ${fmtPrice(entity.exit_price)}`,
     `PnL ${fmtPnl(entity.net_realised_pnl_usd)}`,
-    `Стоп ${fmtPrice(entity.stop_loss_price ?? entity.stop_price)} Цель ${fmtPrice(entity.take_profit_price)}`,
     `trade_id ${entity.trade_id || "—"}`,
-    `position_id ${entity.position_id || "—"}`,
-    episode,
+  ].join(" · ");
+}
+
+function formatContextDetail(entity, tf) {
+  if (!entity) return "";
+  return [
+    `<strong>${entity.event_type || "CONTEXT"}</strong>`,
+    `TF ${entity.timeframe || tf}`,
+    `направление ${entity.direction || "—"}`,
+    `event_id ${entity.context_event_id || "—"}`,
+    `episode ${entity.lifecycle_episode_id || "—"}`,
+    `время события ${entity.event_timestamp || "—"}`,
+    `цена контекста ${fmtPrice(entity.context_price)}`,
+    `время цены ${entity.context_price_timestamp || "—"}`,
+    `якорь свечи ${entity.bar_anchor_time || entity.context_bar_open_timestamp || "—"}`,
+    `начало свечи ${entity.context_bar_open_timestamp || "—"}`,
+    `план. закрытие ${entity.context_bar_scheduled_close_timestamp || "—"}`,
+    `partial close @ ctx ${fmtPrice(entity.context_bar_partial_close_at_context)}`,
+    `final close ${fmtPrice(entity.context_bar_final_close)} (${entity.context_bar_status || "—"})`,
+    `причинный срез ${entity.causal_cutoff_timestamp || "—"}`,
+    `source ${entity.source || "—"}`,
   ].join(" · ");
 }
 
 function selectTrade(entity, tf) {
-  state.selectedTradeKey = tradeKey(entity);
+  state.selectedTradeKey = entity ? tradeKey(entity) : null;
+  state.selectedContextKey = null;
   if (tradeDetailPanel) {
     if (!entity) {
       tradeDetailPanel.classList.add("hidden");
@@ -936,6 +1119,36 @@ function selectTrade(entity, tf) {
     }
   }
   renderAll();
+}
+
+function selectContext(entity, tf) {
+  state.selectedContextKey = entity
+    ? `ctx:${entity.context_event_id || entity.event_timestamp}:${entity.event_type || ""}`
+    : null;
+  state.selectedTradeKey = null;
+  if (tradeDetailPanel) {
+    if (!entity) {
+      tradeDetailPanel.classList.add("hidden");
+      tradeDetailPanel.innerHTML = "";
+    } else {
+      tradeDetailPanel.classList.remove("hidden");
+      tradeDetailPanel.innerHTML = formatContextDetail(entity, tf);
+    }
+  }
+  renderAll();
+}
+
+function selectHit(hit, tf) {
+  if (!hit) {
+    if (state.selectedTradeKey) selectTrade(null, tf);
+    else if (state.selectedContextKey) selectContext(null, tf);
+    return;
+  }
+  if (hit.kind === "context" || hit.role === "context") {
+    selectContext(hit.entity, tf);
+    return;
+  }
+  selectTrade(hit.entity, tf);
 }
 
 function hitTest(chart, x, y) {
@@ -999,7 +1212,10 @@ function bindChartInteractions(tf) {
     if (hoverReadout) {
       if (hit) {
         hoverReadout.classList.remove("hidden");
-        hoverReadout.textContent = formatTradeDetail(hit.entity, tf).replace(/<[^>]+>/g, "");
+        const html = (hit.kind === "context" || hit.role === "context")
+          ? formatContextDetail(hit.entity, tf)
+          : formatTradeDetail(hit.entity, tf);
+        hoverReadout.textContent = html.replace(/<[^>]+>/g, "");
       } else if (candle) {
         hoverReadout.classList.remove("hidden");
         hoverReadout.textContent = `${tf} ${candle.timestamp} O:${fmt(candle.open)} H:${fmt(candle.high)} L:${fmt(candle.low)} C:${fmt(candle.close)}`;
@@ -1012,8 +1228,8 @@ function bindChartInteractions(tf) {
     if (wasDrag) return;
     const rect = canvas.getBoundingClientRect();
     const hit = hitTest(chart, event.clientX - rect.left, event.clientY - rect.top);
-    if (hit) selectTrade(hit.entity, tf);
-    else if (state.selectedTradeKey) selectTrade(null, tf);
+    if (hit) selectHit(hit, tf);
+    else if (state.selectedTradeKey || state.selectedContextKey) selectHit(null, tf);
   });
   canvas.addEventListener("pointerleave", () => {
     chart.dragging = false;

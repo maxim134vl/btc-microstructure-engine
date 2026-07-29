@@ -28,7 +28,7 @@ def test_long_short_zone_and_open_closed_span_in_js():
     assert "Entry  ${fmtPrice" not in js
     assert "Exit  ${fmtPrice" not in js
     assert "placeCompact" in js
-    assert re.search(r"finitePrice\(entity\.stop_price\)", js)
+    assert re.search(r"finitePrice\(entity\.stop_loss_price \?\? entity\.stop_price\)", js)
     assert re.search(r"finitePrice\(entity\.take_profit_price\)", js)
     # Single TF_N label path uses publicNumber directly
     assert "placeCompact(\n      xMid" in js or "placeCompact(\n      xMid," in js or "placeCompact(" in js

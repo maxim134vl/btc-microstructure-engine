@@ -339,6 +339,193 @@ def _map_availability_status(raw: str | None) -> str:
 
 
 LIVE1A_HEALTH = ROOT / "data" / "runtime" / "intrabar_cognition_health.json"
+INTRABAR_CONTEXT_JOURNAL = ROOT / "data" / "cognition" / "intrabar_context_events" / "events.jsonl"
+
+
+def _direction_from_context(value: Any) -> str | None:
+    text = str(value or "").strip().upper()
+    if text in {"LONG", "LONG_CONTEXT"} or text.startswith("LONG"):
+        return "LONG"
+    if text in {"SHORT", "SHORT_CONTEXT"} or text.startswith("SHORT"):
+        return "SHORT"
+    return None
+
+
+def _candle_lookup(candles: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in candles or []:
+        key = str(row.get("bar_open") or row.get("timestamp") or "")
+        if key:
+            out[key] = row
+    return out
+
+
+def load_intrabar_context_events_for_tf(
+    timeframe: str,
+    *,
+    candles: list[dict[str, Any]] | None = None,
+    paper_epoch_id: str | None = None,
+    window_start: pd.Timestamp | None = None,
+    window_end: pd.Timestamp | None = None,
+) -> list[dict[str, Any]]:
+    """Export CONTEXT_* journal rows for one TF with bar-anchor enrichment."""
+    if not INTRABAR_CONTEXT_JOURNAL.exists():
+        return []
+    try:
+        from btc_ml.live.intrabar.partial_bar_state import TF_SECONDS, bar_open_for
+    except Exception:
+        return []
+
+    candle_by_open = _candle_lookup(candles)
+    rows: list[dict[str, Any]] = []
+    for line in INTRABAR_CONTEXT_JOURNAL.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("timeframe") or "").upper() != timeframe.upper():
+            continue
+        event_type = str(raw.get("event_type") or "").upper()
+        if event_type not in {"CONTEXT_START", "CONTEXT_END", "CONTEXT_FLIP"}:
+            continue
+        stamped_epoch = _txt(raw.get("paper_epoch_id"))
+        if paper_epoch_id and stamped_epoch and stamped_epoch != paper_epoch_id:
+            continue
+        event_ts = _iso(raw.get("event_timestamp") or raw.get("causal_cutoff_timestamp"))
+        if not event_ts:
+            continue
+        stamp = _to_utc(event_ts)
+        if stamp is None:
+            continue
+        if window_start is not None and stamp < window_start - pd.Timedelta(days=1):
+            continue
+        if window_end is not None and stamp > window_end + pd.Timedelta(hours=12):
+            continue
+        try:
+            bar_open_ts = bar_open_for(event_ts, timeframe)
+            bar_open = bar_open_ts.isoformat().replace("+00:00", "Z")
+            scheduled = bar_open_ts + pd.Timedelta(seconds=int(TF_SECONDS[timeframe]))
+            scheduled_close = scheduled.isoformat().replace("+00:00", "Z")
+        except Exception:
+            bar_open = None
+            scheduled_close = None
+        candle = candle_by_open.get(bar_open or "")
+        confirmed = bool(candle.get("confirmed")) if candle else None
+        is_partial = bool(candle.get("is_partial")) if candle else None
+        if candle is None:
+            bar_status = "UNKNOWN"
+            final_close = None
+            final_close_ts = None
+        elif is_partial or confirmed is False:
+            bar_status = "OPEN"
+            final_close = None
+            final_close_ts = None
+        else:
+            bar_status = "CONFIRMED"
+            final_close = _f(candle.get("close"))
+            final_close_ts = _iso(candle.get("bar_close") or scheduled_close)
+
+        direction = _direction_from_context(raw.get("new_context")) or _direction_from_context(
+            raw.get("previous_context") if event_type == "CONTEXT_END" else None
+        )
+        if event_type == "CONTEXT_FLIP":
+            direction = _direction_from_context(raw.get("new_context"))
+        epoch = _txt(raw.get("paper_epoch_id")) or paper_epoch_id
+        rows.append(
+            {
+                "context_event_id": _txt(raw.get("context_event_id")),
+                "event_type": event_type,
+                "paper_epoch_id": epoch,
+                "timeframe": timeframe.upper(),
+                "direction": direction,
+                "previous_context": _txt(raw.get("previous_context")),
+                "new_context": _txt(raw.get("new_context")),
+                "lifecycle_episode_id": _txt(raw.get("lifecycle_episode_id")),
+                "event_timestamp": event_ts,
+                "context_started_at": event_ts if event_type in {"CONTEXT_START", "CONTEXT_FLIP"} else None,
+                "context_ended_at": event_ts if event_type in {"CONTEXT_END", "CONTEXT_FLIP"} else None,
+                "context_price": _f(raw.get("context_event_price")),
+                "context_price_timestamp": _iso(raw.get("last_trade_timestamp")),
+                "context_bar_open_timestamp": bar_open,
+                "context_bar_scheduled_close_timestamp": scheduled_close,
+                "context_bar_status": bar_status,
+                "context_bar_partial_close_at_context": None,  # not persisted on CONTEXT_* event
+                "context_bar_partial_close_timestamp": None,
+                "context_bar_final_close": final_close,
+                "context_bar_final_close_timestamp": final_close_ts,
+                "bar_anchor_time": bar_open,
+                "causal_cutoff_timestamp": _iso(raw.get("causal_cutoff_timestamp")),
+                "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
+                "model_version": _txt(raw.get("model_version")),
+            }
+        )
+    rows.sort(key=lambda r: (r.get("event_timestamp") or "", r.get("context_event_id") or ""))
+    return rows
+
+
+def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Map START/END/FLIP into active directional zones for chart bands."""
+    zones: list[dict[str, Any]] = []
+    open_zone: dict[str, Any] | None = None
+    for ev in events:
+        et = str(ev.get("event_type") or "").upper()
+        direction = ev.get("direction")
+        ts = ev.get("event_timestamp")
+        if et == "CONTEXT_START" and direction in {"LONG", "SHORT"}:
+            if open_zone is not None:
+                open_zone["end_timestamp"] = ts
+                open_zone["end_event_id"] = ev.get("context_event_id")
+                open_zone["end_reason"] = "SUPERSEDED_BY_START"
+                zones.append(open_zone)
+            open_zone = {
+                "timeframe": ev.get("timeframe"),
+                "direction": direction,
+                "directional_state": f"{direction}_CONTEXT",
+                "start_timestamp": ts,
+                "end_timestamp": None,
+                "start_event_id": ev.get("context_event_id"),
+                "lifecycle_episode_id": ev.get("lifecycle_episode_id"),
+                "context_price": ev.get("context_price"),
+                "bar_anchor_time": ev.get("bar_anchor_time"),
+                "paper_epoch_id": ev.get("paper_epoch_id"),
+                "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
+                "active": True,
+            }
+        elif et == "CONTEXT_END" and open_zone is not None:
+            open_zone["end_timestamp"] = ts
+            open_zone["end_event_id"] = ev.get("context_event_id")
+            open_zone["end_reason"] = "CONTEXT_END"
+            open_zone["active"] = False
+            zones.append(open_zone)
+            open_zone = None
+        elif et == "CONTEXT_FLIP" and direction in {"LONG", "SHORT"}:
+            if open_zone is not None:
+                open_zone["end_timestamp"] = ts
+                open_zone["end_event_id"] = ev.get("context_event_id")
+                open_zone["end_reason"] = "CONTEXT_FLIP"
+                open_zone["active"] = False
+                zones.append(open_zone)
+            open_zone = {
+                "timeframe": ev.get("timeframe"),
+                "direction": direction,
+                "directional_state": f"{direction}_CONTEXT",
+                "start_timestamp": ts,
+                "end_timestamp": None,
+                "start_event_id": ev.get("context_event_id"),
+                "lifecycle_episode_id": ev.get("lifecycle_episode_id"),
+                "context_price": ev.get("context_price"),
+                "bar_anchor_time": ev.get("bar_anchor_time"),
+                "paper_epoch_id": ev.get("paper_epoch_id"),
+                "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
+                "active": True,
+            }
+    if open_zone is not None:
+        zones.append(open_zone)
+    return zones
 
 
 def _map_live1a_visual_context(market_context: str | None, lifecycle: str | None) -> tuple[str, str]:
@@ -1116,6 +1303,11 @@ def build_timeframe_chart_truth(
 
     perf = load_performance_by_tf()
     timeframes: dict[str, Any] = {}
+    from active_epoch_trade_filter import active_paper_epoch_id, live1b_paper_active  # type: ignore
+
+    live1b = bool(live1b_paper_active())
+    active_epoch = active_paper_epoch_id()
+
     for tf in TIMEFRAMES:
         candle_block = build_tf_candles(
             m15,
@@ -1132,25 +1324,66 @@ def build_timeframe_chart_truth(
         if contaminants:
             panel_status = "TF_SOURCE_CONTAMINATION"
             data_quality["orphan_entities"].extend(contaminants)
-        context_segments = build_tf_context_segments(
+
+        context_events = load_intrabar_context_events_for_tf(
             tf,
+            candles=candle_block.get("candles") or [],
+            paper_epoch_id=active_epoch,
             window_start=window_start,
             window_end=window_end,
         )
-        # When LIVE1A is OBSERVE, drop open-ended directional segments that would paint a false active zone.
-        if state.get("context_source") == "LIVE1A_INTRABAR_CONTEXT" and state.get("directional_state") == "OBSERVE":
-            pruned: list[dict[str, Any]] = []
-            for seg in context_segments:
-                ds = str(seg.get("directional_state") or "").upper()
-                if ds in {"LONG_CONTEXT", "SHORT_CONTEXT", "LONG", "SHORT"}:
-                    # Keep historical closed segments only (end before causal cutoff / now).
-                    end_ts = seg.get("end_timestamp")
-                    if end_ts and state.get("causal_cutoff_timestamp") and str(end_ts) >= str(state.get("causal_cutoff_timestamp")):
-                        continue
-                    if not end_ts:
-                        continue
-                pruned.append(seg)
-            context_segments = pruned
+        context_zones = build_context_zones_from_events(context_events)
+
+        if live1b:
+            # LIVE1A journal is the only active context truth; do not paint legacy
+            # closed-bar command-memory bands as current directional context.
+            context_segments = [
+                {
+                    "timeframe": z.get("timeframe"),
+                    "start_timestamp": z.get("start_timestamp"),
+                    "end_timestamp": z.get("end_timestamp"),
+                    "directional_state": z.get("directional_state"),
+                    "availability_status": "FRESH",
+                    "availability_raw": "LIVE1A_INTRABAR",
+                    "manager_instruction": "HOLD" if z.get("active") else "NO_ACTION",
+                    "entry_eligibility": False,
+                    "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
+                    "command_count": 1,
+                    "lifecycle_episode_id": z.get("lifecycle_episode_id"),
+                    "context_price": z.get("context_price"),
+                    "bar_anchor_time": z.get("bar_anchor_time"),
+                    "paper_epoch_id": z.get("paper_epoch_id"),
+                    "active": z.get("active"),
+                    "start_event_id": z.get("start_event_id"),
+                    "end_event_id": z.get("end_event_id"),
+                }
+                for z in context_zones
+                if z.get("direction") in {"LONG", "SHORT"}
+            ]
+            context_source = "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+        else:
+            context_segments = build_tf_context_segments(
+                tf,
+                window_start=window_start,
+                window_end=window_end,
+            )
+            context_source = "timeframe_command_memory"
+            # When LIVE1A is OBSERVE, drop open-ended directional segments that would paint a false active zone.
+            if state.get("context_source") == "LIVE1A_INTRABAR_CONTEXT" and state.get("directional_state") == "OBSERVE":
+                pruned: list[dict[str, Any]] = []
+                for seg in context_segments:
+                    ds = str(seg.get("directional_state") or "").upper()
+                    if ds in {"LONG_CONTEXT", "SHORT_CONTEXT", "LONG", "SHORT"}:
+                        end_ts = seg.get("end_timestamp")
+                        if end_ts and state.get("causal_cutoff_timestamp") and str(end_ts) >= str(
+                            state.get("causal_cutoff_timestamp")
+                        ):
+                            continue
+                        if not end_ts:
+                            continue
+                    pruned.append(seg)
+                context_segments = pruned
+
         for entity in closed + opens:
             if entity.get("episode_status") == "UNPROVEN":
                 data_quality["unproven_episode_links"].append(
@@ -1165,7 +1398,7 @@ def build_timeframe_chart_truth(
 
         # Position fields on state
         primary_open = opens[0] if opens else None
-        state["position_side"] = None if primary_open is None else primary_open.get("position_side")
+        state["position_side"] = None if primary_open is None else primary_open.get("position_side") or primary_open.get("side")
         state["position_status"] = "FLAT" if primary_open is None else "OPEN"
         state["open_position_count"] = len(opens)
 
@@ -1193,9 +1426,11 @@ def build_timeframe_chart_truth(
             },
             "candles": candle_block.get("candles") or [],
             "state": state,
-            "context_segments": context_segments,
-            "context_history": context_segments,
-            "context_source": "timeframe_command_memory",
+            "context_events": context_events if panel_status == "OK" else [],
+            "context_zones": context_zones if panel_status == "OK" else [],
+            "context_segments": context_segments if panel_status == "OK" else [],
+            "context_history": context_segments if panel_status == "OK" else [],
+            "context_source": context_source,
             "open_positions": opens if panel_status == "OK" else [],
             "closed_trades": closed if panel_status == "OK" else [],
             "trade_numbering": number_map,
@@ -1223,6 +1458,7 @@ def build_timeframe_chart_truth(
             "standalone_tf_urls": True,
             "trade_public_numbers": True,
             "timezone": "UTC",
+            "context_source_priority": "LIVE1A_INTRABAR_CONTEXT_JOURNAL" if live1b else "timeframe_command_memory",
         },
         "timeframes": timeframes,
         "data_quality": data_quality,
@@ -1241,23 +1477,30 @@ def _trade_overlay_meta(timeframes: dict[str, Any]) -> dict[str, Any]:
     closed_n = 0
     open_n = 0
     marker_n = 0
+    context_n = 0
     for panel in timeframes.values():
         closed = panel.get("closed_trades") or []
         opens = panel.get("open_positions") or []
+        events = panel.get("context_events") or []
         closed_n += len(closed)
         open_n += len(opens)
-        # entry+exit markers for closed; entry marker for open
-        marker_n += len(closed) * 2 + len(opens)
+        context_n += len(events)
+        # entry+exit markers for closed; entry marker for open; context markers
+        marker_n += len(closed) * 2 + len(opens) + len(events)
     eid = active_paper_epoch_id()
     return {
         "active_paper_epoch_id": eid,
         "trade_overlay_source": (
             "LIVE1B_INTRABAR_PAPER_EPOCH" if live1b_paper_active() else "TIMEFRAME_TRADER_BOOKS"
         ),
+        "context_overlay_source": (
+            "LIVE1A_INTRABAR_CONTEXT_JOURNAL" if live1b_paper_active() else "timeframe_command_memory"
+        ),
         "legacy_excluded": bool(live1b_paper_active()),
         "trade_marker_count": marker_n,
         "open_position_overlay_count": open_n,
         "closed_trade_overlay_count": closed_n,
+        "context_event_overlay_count": context_n,
         "cache_key": f"chart_trades:{eid or 'none'}:{SCHEMA_VERSION}",
     }
 
