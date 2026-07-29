@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from typing import Any
 
 from btc_ml.trading.intrabar_paper.config import IntrabarPaperConfig
@@ -50,6 +51,29 @@ def sleeve_next_risk(sleeves: dict[str, Any], policy_id: str, timeframe: str) ->
     return float(s["current_equity_usd"]) * float(s["risk_pct_per_trade"]) / 100.0
 
 
+def structural_levels_to_bps(
+    *,
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    take_price: float,
+) -> tuple[float, float]:
+    """Map frozen structural levels onto cfg stop/take bps for canonical sizing."""
+    side_u = str(side).upper()
+    entry = float(entry_price)
+    stop = float(stop_price)
+    take = float(take_price)
+    if entry <= 0:
+        raise ValueError("entry_price must be positive")
+    if side_u == "LONG":
+        stop_bps = max(0.0, (entry - stop) / entry * 10_000.0)
+        take_bps = max(0.0, (take - entry) / entry * 10_000.0)
+    else:
+        stop_bps = max(0.0, (stop - entry) / entry * 10_000.0)
+        take_bps = max(0.0, (entry - take) / entry * 10_000.0)
+    return stop_bps, take_bps
+
+
 def size_with_stop(
     *,
     cfg: IntrabarPaperConfig,
@@ -60,14 +84,24 @@ def size_with_stop(
     equity_usd: float,
     risk_budget_usd: float,
 ) -> dict[str, Any]:
+    """Size via canonical resolve_risk_sizing without shadow kwargs on economics.py.
+
+    Structural stop/take are encoded as temporary cfg bps so LIVE1B's default
+    signature/path stays untouched and cannot activate a structural branch.
+    """
+    stop_bps, take_bps = structural_levels_to_bps(
+        side=side,
+        entry_price=entry_price,
+        stop_price=stop_price,
+        take_price=take_price,
+    )
+    cfg_shadow = replace(cfg, stop_loss_bps=float(stop_bps), take_profit_bps=float(take_bps))
     sizing = resolve_risk_sizing(
-        cfg=cfg,
+        cfg=cfg_shadow,
         side=side,
         entry_price=entry_price,
         equity_usd=equity_usd,
         risk_budget_usd=risk_budget_usd,
-        stop_loss_price=stop_price,
-        take_profit_price=take_price,
     )
     return {
         "ok": sizing.ok,
@@ -76,10 +110,13 @@ def size_with_stop(
         "notional_usd": sizing.entry_notional,
         "risk_amount_usd": sizing.risk_amount_usd,
         "stop_distance": sizing.stop_distance,
-        "stop_loss_price": sizing.stop_loss_price,
-        "take_profit_price": sizing.take_profit_price,
+        "stop_loss_price": float(stop_price),
+        "take_profit_price": float(take_price),
+        "sizing_stop_price": sizing.stop_loss_price,
+        "sizing_take_price": sizing.take_profit_price,
         "per_btc_cost": sizing.per_btc_cost,
         "estimated_loss": sizing.estimated_loss,
+        "sizing_path": "resolve_risk_sizing+cfg_bps_adapter",
     }
 
 

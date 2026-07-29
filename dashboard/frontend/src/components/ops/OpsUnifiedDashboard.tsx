@@ -625,13 +625,23 @@ export function OpsUnifiedDashboard({
                     <MetricLine label="Exact intrabar data" value={String(sh?.exact_intrabar_data ?? "—")} />
                     <MetricLine label="Candidates" value={String(sh?.candidate_count ?? "—")} />
                     <MetricLine label="Exact profiles" value={String(sh?.exact_profile_count ?? "—")} />
-                    <MetricLine label="Protective zones" value={String(sh?.protective_zone_found_count ?? "—")} />
-                    <MetricLine label="Target zones" value={String(sh?.target_zone_found_count ?? "—")} />
+                    <MetricLine
+                      label="Protective zones"
+                      value={`${sh?.protective_zone_detected_count ?? "—"} detected / ${sh?.protective_zone_usable_count ?? sh?.protective_zone_found_count ?? "—"} usable`}
+                    />
+                    <MetricLine
+                      label="Target zones"
+                      value={`${sh?.target_zone_detected_count ?? "—"} detected / ${sh?.target_zone_usable_count ?? sh?.target_zone_found_count ?? "—"} usable`}
+                    />
                     <MetricLine
                       label="Reaction proof"
                       value={`${sh?.reaction_proven_count ?? "—"} proven / ${sh?.reaction_missing_count ?? "—"} missing`}
                     />
                     <MetricLine label="Virtual positions" value={String(sh?.virtual_positions_open ?? "—")} />
+                    <MetricLine
+                      label="Invalidated virtual"
+                      value={String(sh?.virtual_positions_invalidated ?? "—")}
+                    />
                     <MetricLine label="Virtual trades" value={String(sh?.virtual_trades_closed ?? "—")} />
                     <MetricLine
                       label="Economic execute/skip"

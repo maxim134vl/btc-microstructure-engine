@@ -128,7 +128,9 @@ def cmd_start() -> int:
             "from btc_ml.trading.shadow_structural_protection.engine import StructuralProtectionEngine;"
             "e=StructuralProtectionEngine(strict_epoch=True); h=e.write_health();"
             "import json; print(json.dumps({'exact': e.exact_ok, 'status': h.get('status'), "
-            "'baseline_div': h.get('baseline_divergence_count'), 'lookahead': h.get('lookahead_violation_count')}))",
+            "'baseline_div': h.get('baseline_divergence_count'), 'lookahead': h.get('lookahead_violation_count'), "
+            "'evidence_fail': h.get('evidence_gate_failure_count'), "
+            "'isolated': h.get('canonical_economics_isolated')}))",
         ],
         cwd=str(REPO),
         env=env,
@@ -147,11 +149,17 @@ def cmd_start() -> int:
         print(json.dumps({"status": "SHADOW_STP1_BLOCKED_NO_EXACT_INTRABAR_VOLUME", "preflight": info}))
         return 2
     if info.get("baseline_div"):
-        print(json.dumps({"status": "SHADOW_STP1_BASELINE_DIVERGENCE", "preflight": info}))
+        print(json.dumps({"status": "SHADOW_STP1_1_BASELINE_DIVERGENCE", "preflight": info}))
         return 3
     if info.get("lookahead"):
-        print(json.dumps({"status": "SHADOW_STP1_LOOKAHEAD_VIOLATION", "preflight": info}))
+        print(json.dumps({"status": "SHADOW_STP1_1_LOOKAHEAD_VIOLATION", "preflight": info}))
         return 4
+    if info.get("evidence_fail"):
+        print(json.dumps({"status": "SHADOW_STP1_1_POLICY_EVIDENCE_GATE_FAILURE", "preflight": info}))
+        return 5
+    if info.get("isolated") is False:
+        print(json.dumps({"status": "SHADOW_STP1_1_CANONICAL_ISOLATION_FAILURE", "preflight": info}))
+        return 6
 
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_fh = LOG_PATH.open("a", encoding="utf-8")

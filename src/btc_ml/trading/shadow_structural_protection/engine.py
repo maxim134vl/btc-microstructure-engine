@@ -20,10 +20,16 @@ from . import (
     EXPECTED_ACTIVE_FP,
     EXPECTED_EPOCH,
     EXPECTED_PARENT_FP,
+    LEGACY_MANIFEST_INVALIDATION_REASON,
     LOOKAHEAD_VIOLATION,
     READY_BLOCKED_HISTORY,
     SHADOW_MODEL_VERSION,
     STATUS_ACTIVE,
+    STATUS_BASELINE_DIVERGENCE_STP11,
+    STATUS_CANONICAL_ISOLATION_FAILURE,
+    STATUS_EVIDENCE_GATE_FAILURE,
+    STATUS_LOOKAHEAD_STP11,
+    STATUS_POLICY_INTEGRITY,
     TF_SECONDS,
 )
 from .audit import run_source_audit
@@ -33,6 +39,7 @@ from .classification import (
     load_volume_classification,
     prior_closed_candle_open,
     reaction_evidence,
+    reaction_is_proven,
 )
 from .economics import economic_gate_decision, expected_net_r
 from .paths import paper_books_root, repo_root, shadow_root
@@ -54,7 +61,7 @@ from .sleeves import (
     sync_baseline_from_real,
 )
 from .store import ShadowStore
-from .timeutil import candle_open, iso, parse_ts, utc_now
+from .timeutil import iso, parse_ts, utc_now
 from .trades import load_agg_trades, load_book_ticker
 from .zones import extract_zones
 
@@ -116,7 +123,6 @@ class StructuralProtectionEngine:
         self.store.write_json("source_audit.json", self.audit)
         self.exact_ok = bool(self.audit.get("exact_intrabar_trade_source_verified"))
         if not self.exact_ok and not allow_start_without_exact:
-            # Engine can still run audit/backfill diagnostics but service start is gated outside.
             pass
 
         self.manifest = self._build_manifest()
@@ -135,12 +141,20 @@ class StructuralProtectionEngine:
         self.write_boundary_violation_count = int(ck.get("write_boundary_violation_count") or 0)
         self.insufficient_causal_data_count = int(ck.get("insufficient_causal_data_count") or 0)
         self.research_valid = bool(ck.get("research_valid", True))
+        self.evidence_gate_failure_count = int(ck.get("evidence_gate_failure_count") or 0)
         self.errors: list[str] = []
         self.counters = {
             "exact_profile_count": int(ck.get("exact_profile_count") or 0),
             "approximation_reference_count": 0,
-            "protective_zone_found_count": int(ck.get("protective_zone_found_count") or 0),
-            "target_zone_found_count": int(ck.get("target_zone_found_count") or 0),
+            "protective_zone_detected_count": int(ck.get("protective_zone_detected_count") or 0),
+            "protective_zone_reaction_proven_count": int(ck.get("protective_zone_reaction_proven_count") or 0),
+            "protective_zone_usable_count": int(ck.get("protective_zone_usable_count") or 0),
+            "target_zone_detected_count": int(ck.get("target_zone_detected_count") or 0),
+            "target_zone_reaction_proven_count": int(ck.get("target_zone_reaction_proven_count") or 0),
+            "target_zone_usable_count": int(ck.get("target_zone_usable_count") or 0),
+            # legacy aliases kept for OPS compatibility
+            "protective_zone_found_count": int(ck.get("protective_zone_usable_count") or ck.get("protective_zone_found_count") or 0),
+            "target_zone_found_count": int(ck.get("target_zone_usable_count") or ck.get("target_zone_found_count") or 0),
             "reaction_proven_count": int(ck.get("reaction_proven_count") or 0),
             "reaction_missing_count": int(ck.get("reaction_missing_count") or 0),
             "economic_execute_count": int(ck.get("economic_execute_count") or 0),
@@ -153,6 +167,8 @@ class StructuralProtectionEngine:
             self.store.write_json("policy_sleeves.json", sleeves)
         self.sleeves = sleeves
         self.vc = load_volume_classification(self.repo)
+        self._legacy_manifest_fps: set[str] = set(ck.get("invalidated_manifest_fingerprints") or [])
+        self._migrate_policy_integrity_if_needed(ck)
         self._rebuild_open_index()
 
     def _build_manifest(self) -> dict[str, Any]:
@@ -169,22 +185,130 @@ class StructuralProtectionEngine:
             "reaction_evidence_sources": ["data/cognition/volume_response_state.parquet"],
             "profile_builder_contract": "build_exact_candle_volume_profile",
             "binning_contract": BINNING_CONTRACT,
-            "zone_methods": list({p.zone_method for p in POLICY_SPECS if p.zone_method}),
-            "volume_class_policies": list({p.volume_class_policy for p in POLICY_SPECS if p.volume_class_policy}),
-            "buffer_policies": list({p.buffer_policy for p in POLICY_SPECS if p.buffer_policy}),
-            "take_policies": list({p.take_policy for p in POLICY_SPECS if p.take_policy}),
-            "economic_thresholds": list({p.economic_gate for p in POLICY_SPECS}),
+            "zone_methods": sorted({p.zone_method for p in POLICY_SPECS if p.zone_method}),
+            "volume_class_policies": sorted(
+                {p.volume_class_policy for p in POLICY_SPECS if p.volume_class_policy}
+            ),
+            "buffer_policies": sorted({p.buffer_policy for p in POLICY_SPECS if p.buffer_policy}),
+            "take_policies": sorted({p.take_policy for p in POLICY_SPECS if p.take_policy}),
+            "economic_thresholds": sorted({p.economic_gate for p in POLICY_SPECS}),
             "execution_contract": {
                 "LONG_entry": "ask",
                 "SHORT_entry": "bid",
                 "LONG_exit": "bid",
                 "SHORT_exit": "ask",
             },
-            "sizing_contract": "resolve_risk_sizing(optional structural stop/take)",
+            "sizing_contract": "resolve_risk_sizing via shadow cfg-bps adapter (no economics.py structural kwargs)",
+            "evidence_gate_contract": {
+                "BASELINE_CANONICAL": "no structural zones required",
+                "STRUCTURAL_SL_CANONICAL_TP": "usable protective + PROVEN protective reaction",
+                "CANONICAL_SL_STRUCTURAL_TP": "usable target + PROVEN target reaction",
+                "STRUCTURAL_SL_TP": "usable protective+target and PROVEN reaction both sides",
+                "economic_gate_order": "after_structural_evidence_gate",
+            },
             "policy_ids": list(POLICY_IDS),
             "mode": "OBSERVE_ONLY",
             "enforcement_enabled": False,
+            "stp11_policy_integrity": True,
         }
+
+    def _migrate_policy_integrity_if_needed(self, ck: dict[str, Any]) -> None:
+        """Invalidate STP1 decisions/positions that executed without evidence gates; reprocess."""
+        prev_fp = None
+        prev_manifest = self.store.read_json("policy_manifest.json")
+        # After write above, prev is already new; use checkpoint / decisions for legacy fps.
+        for d in self.store.read_all("policy_decisions"):
+            fp = d.get("policy_manifest_fingerprint")
+            if fp and fp != self.manifest_fp:
+                self._legacy_manifest_fps.add(str(fp))
+        stored_invalid = set(ck.get("invalidated_manifest_fingerprints") or [])
+        if not self._legacy_manifest_fps - stored_invalid and ck.get("stp11_migrated"):
+            return
+        if not self._legacy_manifest_fps:
+            # First boot on empty store, or already only new fp.
+            if ck.get("stp11_migrated"):
+                return
+            # Still migrate if open structural positions exist without research_valid under old logic.
+            opens = [r for r in self.store.read_all("virtual_positions") if str(r.get("status")).upper() == "OPEN"]
+            structural_opens = [r for r in opens if r.get("policy_id") != "BASELINE_CANONICAL"]
+            if not structural_opens and not opens:
+                return
+
+        # Invalidate every legacy OPEN position (history preserved via append).
+        latest: dict[str, dict[str, Any]] = {}
+        for row in self.store.read_all("virtual_positions"):
+            key = f"{row.get('policy_id')}|{row.get('virtual_position_id')}"
+            latest[key] = row
+        for row in latest.values():
+            if str(row.get("status") or "").upper() != "OPEN":
+                continue
+            if row.get("invalidated") or row.get("research_valid") is False and row.get("invalidation_reason"):
+                continue
+            # Invalidate non-baseline always from legacy; baseline recreated on reprocess.
+            inv = {
+                **row,
+                "status": "INVALIDATED",
+                "invalidated": True,
+                "invalidated_virtual": True,
+                "research_valid": False,
+                "invalidation_reason": LEGACY_MANIFEST_INVALIDATION_REASON,
+                "invalidated_at": utc_now(),
+                "legacy_policy_manifest_fingerprint": row.get("policy_manifest_fingerprint"),
+                "active_policy_manifest_fingerprint": self.manifest_fp,
+            }
+            self.store.append("virtual_positions", inv)
+
+        self.store.append(
+            "policy_decisions",
+            {
+                "record_type": "MANIFEST_INVALIDATION",
+                "action": "INVALIDATE_LEGACY_MANIFEST",
+                "reason": LEGACY_MANIFEST_INVALIDATION_REASON,
+                "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
+                "new_policy_manifest_fingerprint": self.manifest_fp,
+                "research_valid": False,
+                "decision_timestamp": utc_now(),
+            },
+        )
+        # Force candidate reprocess under new manifest; keep jsonl history.
+        self.processed_candidates = set()
+        self.baseline_match_count = 0
+        self.baseline_divergence_count = 0
+        self.insufficient_causal_data_count = 0
+        self.evidence_gate_failure_count = 0
+        self.research_valid = True
+        self.counters = {
+            "exact_profile_count": 0,
+            "approximation_reference_count": 0,
+            "protective_zone_detected_count": 0,
+            "protective_zone_reaction_proven_count": 0,
+            "protective_zone_usable_count": 0,
+            "target_zone_detected_count": 0,
+            "target_zone_reaction_proven_count": 0,
+            "target_zone_usable_count": 0,
+            "protective_zone_found_count": 0,
+            "target_zone_found_count": 0,
+            "reaction_proven_count": 0,
+            "reaction_missing_count": 0,
+            "economic_execute_count": 0,
+            "economic_skip_count": 0,
+        }
+        # Fresh sleeves for new research generation; baseline will resync from paper health.
+        self.sleeves = initial_policy_sleeves()
+        self.store.write_json("policy_sleeves.json", self.sleeves)
+        ck_out = {
+            **ck,
+            "stp11_migrated": True,
+            "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
+            "processed_candidates": [],
+            "research_valid": True,
+            "active_policy_manifest_fingerprint": self.manifest_fp,
+            **self.counters,
+            "updated_at": utc_now(),
+        }
+        self.store.write_json("checkpoint.json", ck_out)
+        _ = prev_fp
+        _ = prev_manifest
 
     def _rebuild_open_index(self) -> None:
         self.open_by_policy: dict[str, list[dict[str, Any]]] = {pid: [] for pid in POLICY_IDS}
@@ -193,8 +317,13 @@ class StructuralProtectionEngine:
             key = f"{row.get('policy_id')}|{row.get('virtual_position_id')}"
             latest[key] = row
         for row in latest.values():
-            if str(row.get("status") or "").upper() == "OPEN":
-                self.open_by_policy.setdefault(str(row["policy_id"]), []).append(row)
+            if str(row.get("status") or "").upper() != "OPEN":
+                continue
+            if row.get("invalidated") or row.get("research_valid") is False:
+                continue
+            if row.get("policy_manifest_fingerprint") and row.get("policy_manifest_fingerprint") != self.manifest_fp:
+                continue
+            self.open_by_policy.setdefault(str(row["policy_id"]), []).append(row)
 
     def _save_checkpoint(self) -> None:
         payload = {
@@ -205,7 +334,11 @@ class StructuralProtectionEngine:
             "lookahead_violation_count": self.lookahead_violation_count,
             "write_boundary_violation_count": self.write_boundary_violation_count,
             "insufficient_causal_data_count": self.insufficient_causal_data_count,
+            "evidence_gate_failure_count": self.evidence_gate_failure_count,
             "research_valid": self.research_valid,
+            "stp11_migrated": True,
+            "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
+            "active_policy_manifest_fingerprint": self.manifest_fp,
             **self.counters,
             "updated_at": utc_now(),
         }
@@ -253,7 +386,6 @@ class StructuralProtectionEngine:
             return [{"status": BLOCKED_NO_EXACT}]
         actions = []
         fills = [f for f in self.books.read_all("fills") if str(f.get("action") or "").upper() == "ENTRY"]
-        # Prefer rows that retain entry_fill_id (OPEN snapshots) over later CLOSED overwrites.
         positions: dict[str, dict[str, Any]] = {}
         for p in self.books.read_all("positions"):
             pid = str(p.get("position_id") or "")
@@ -302,15 +434,11 @@ class StructuralProtectionEngine:
             return {"candidate_id": candidate["candidate_id"], "status": "INSUFFICIENT_CAUSAL_DATA"}
 
         tf = candidate["timeframe"]
-        side = candidate["side"]
-        entry = float(candidate["entry_executable_price"])
         prior_open = prior_closed_candle_open(decision_ts, tf)
         tf_s = TF_SECONDS[tf]
         candle_end = prior_open + timedelta(seconds=tf_s)
-        # Fully closed candle only — cutoff is min(candle_end, decision)
         causal_cutoff = min(candle_end - timedelta(microseconds=1), decision_ts)
 
-        # Exact trades for candle
         trades = load_agg_trades(repo=self.repo, start=prior_open, end=causal_cutoff)
         profile = build_exact_candle_volume_profile(
             trades,
@@ -334,7 +462,6 @@ class StructuralProtectionEngine:
         if profile.get("ok"):
             self.counters["exact_profile_count"] += 1
 
-        # Spread at decision from candidate BBO if present
         spread = None
         if candidate.get("best_bid") is not None and candidate.get("best_ask") is not None:
             spread = abs(float(candidate["best_ask"]) - float(candidate["best_bid"]))
@@ -362,6 +489,7 @@ class StructuralProtectionEngine:
                 "lookahead_detected": lookahead,
                 "trade_count": profile.get("trade_count"),
                 "conservation_ok": profile.get("conservation_ok"),
+                "policy_manifest_fingerprint": self.manifest_fp,
             },
         )
         self.store.append(
@@ -381,6 +509,7 @@ class StructuralProtectionEngine:
                 "volume_class": class_info.get("volume_class"),
                 "classification_timestamp": class_info.get("classification_timestamp"),
                 "classification_status": class_info.get("status"),
+                "policy_manifest_fingerprint": self.manifest_fp,
             },
         )
         if profile.get("ok"):
@@ -396,14 +525,13 @@ class StructuralProtectionEngine:
                     "conservation_ok": profile.get("conservation_ok"),
                     "binning_contract": profile.get("binning_contract"),
                     "research_valid": True,
+                    "policy_manifest_fingerprint": self.manifest_fp,
                 },
             )
 
-        # Build zone catalog with reaction
         zone_rows = []
         for z in zones:
             zid = f"{candidate['candidate_id']}|{z['zone_method']}|{z['lower_boundary']}|{z['upper_boundary']}"
-            # reaction assessed separately for protective/target roles later; store base zone
             row = {
                 "zone_id": zid,
                 "candidate_id": candidate["candidate_id"],
@@ -411,15 +539,19 @@ class StructuralProtectionEngine:
                 "timeframe": tf,
                 "volume_class": class_info.get("volume_class"),
                 "causal_cutoff": iso(causal_cutoff),
+                "policy_manifest_fingerprint": self.manifest_fp,
                 **z,
             }
             self.store.append("volume_zones", row)
             zone_rows.append(row)
 
-        if not profile.get("ok") or class_info.get("status") in {"WRONG_TIMEFRAME", "MISSING", "NOT_CANONICALLY_AVAILABLE"}:
+        if not profile.get("ok") or class_info.get("status") in {
+            "WRONG_TIMEFRAME",
+            "MISSING",
+            "NOT_CANONICALLY_AVAILABLE",
+        }:
             self.insufficient_causal_data_count += 1
 
-        # Policy loop
         for spec in POLICY_SPECS:
             self._decide_policy(
                 candidate=candidate,
@@ -446,7 +578,8 @@ class StructuralProtectionEngine:
         zone_method: str,
         decision_ts: datetime,
         prior_open: datetime,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
+        """Return (zone, reaction, usable). usable requires detected + PROVEN reaction."""
         cands = []
         for z in zones:
             if z.get("zone_method") != zone_method:
@@ -472,20 +605,24 @@ class StructuralProtectionEngine:
             )
             cands.append((dist, z, react))
         if not cands:
-            return None, {"status": "MISSING"}
-        cands.sort(key=lambda t: (t[0],))  # minimal distance
-        # class strength: CLIMAX > STOPPING > HIGH_AVERAGE
+            return None, {"status": "MISSING"}, False
+        cands.sort(key=lambda t: (t[0],))
         strength = {"CLIMAX": 3, "STOPPING": 2, "HIGH_AVERAGE_VOLUME": 1}
         best_dist = cands[0][0]
         tied = [c for c in cands if abs(c[0] - best_dist) < 1e-12]
         tied.sort(key=lambda t: (-strength.get(str(t[1].get("volume_class")), 0), str(t[1].get("zone_id"))))
         z, react = tied[0][1], tied[0][2]
-        if react.get("status") == "VALID":
+        self.counters["protective_zone_detected_count"] += 1
+        if reaction_is_proven(react):
+            self.counters["protective_zone_reaction_proven_count"] += 1
             self.counters["reaction_proven_count"] += 1
+            usable = True
+            self.counters["protective_zone_usable_count"] += 1
+            self.counters["protective_zone_found_count"] = self.counters["protective_zone_usable_count"]
         else:
             self.counters["reaction_missing_count"] += 1
-        self.counters["protective_zone_found_count"] += 1
-        return z, react
+            usable = False
+        return z, react, usable
 
     def _select_target(
         self,
@@ -495,9 +632,9 @@ class StructuralProtectionEngine:
         zones: list[dict[str, Any]],
         volume_class_policy: str,
         zone_method: str,
-        decision_ts,
-        prior_open,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        decision_ts: datetime,
+        prior_open: datetime,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
         cands = []
         for z in zones:
             if z.get("zone_method") != zone_method:
@@ -523,11 +660,32 @@ class StructuralProtectionEngine:
             )
             cands.append((dist, z, react))
         if not cands:
-            return None, {"status": "MISSING"}
+            return None, {"status": "MISSING"}, False
         cands.sort(key=lambda t: t[0])
         z, react = cands[0][1], cands[0][2]
-        self.counters["target_zone_found_count"] += 1
-        return z, react
+        self.counters["target_zone_detected_count"] += 1
+        if reaction_is_proven(react):
+            self.counters["target_zone_reaction_proven_count"] += 1
+            self.counters["reaction_proven_count"] += 1
+            usable = True
+            self.counters["target_zone_usable_count"] += 1
+            self.counters["target_zone_found_count"] = self.counters["target_zone_usable_count"]
+        else:
+            self.counters["reaction_missing_count"] += 1
+            usable = False
+        return z, react, usable
+
+    def _decision_already_recorded(self, candidate_id: str, policy_id: str) -> bool:
+        for d in self.store.read_all("policy_decisions"):
+            if d.get("record_type"):
+                continue
+            if (
+                d.get("candidate_id") == candidate_id
+                and d.get("policy_id") == policy_id
+                and d.get("policy_manifest_fingerprint") == self.manifest_fp
+            ):
+                return True
+        return False
 
     def _decide_policy(
         self,
@@ -549,27 +707,37 @@ class StructuralProtectionEngine:
         decision_row: dict[str, Any] = {
             "policy_id": pid,
             "candidate_id": candidate["candidate_id"],
+            "timeframe": tf,
+            "side": side,
             "decision_timestamp": candidate["decision_timestamp"],
             "policy_manifest_fingerprint": self.manifest_fp,
             "source_trading_contract_fingerprint": self.source_fp,
             "lookahead_detected": lookahead,
             "outcome_attached": False,
+            "research_valid": True,
+            "protective_zone_detected": False,
+            "protective_zone_usable": False,
+            "protective_reaction_status": None,
+            "target_zone_detected": False,
+            "target_zone_usable": False,
+            "target_reaction_status": None,
         }
         if lookahead:
             decision_row["action"] = "SKIP_LOOKAHEAD"
+            decision_row["decision"] = "SKIP_LOOKAHEAD"
+            decision_row["decision_reason"] = "LOOKAHEAD"
             decision_row["research_valid"] = False
             self.store.append("policy_decisions", decision_row)
             self.counters["economic_skip_count"] += 1
             return
 
-        # Idempotent: skip if decision already present
-        for d in self.store.read_all("policy_decisions"):
-            if d.get("candidate_id") == candidate["candidate_id"] and d.get("policy_id") == pid and not d.get("record_type"):
-                return
+        if self._decision_already_recorded(candidate["candidate_id"], pid):
+            return
 
-        # Already open virtual on TF
         if any(str(p.get("timeframe")) == tf for p in self.open_by_policy.get(pid, [])):
             decision_row["action"] = "VIRTUAL_POSITION_ALREADY_OPEN"
+            decision_row["decision"] = "VIRTUAL_POSITION_ALREADY_OPEN"
+            decision_row["decision_reason"] = "VIRTUAL_POSITION_ALREADY_OPEN"
             self.store.append("policy_decisions", decision_row)
             self.counters["economic_skip_count"] += 1
             return
@@ -581,19 +749,25 @@ class StructuralProtectionEngine:
             notional = float(candidate["canonical_notional_usd"])
             risk_budget = float(candidate["canonical_risk_budget_usd"])
             action = "EXECUTE_STRUCTURAL"
+            vpid = f"vpos_{pid}_{candidate['position_id']}"
             decision_row.update(
                 {
                     "action": action,
+                    "decision": action,
+                    "decision_reason": "BASELINE_CANONICAL_NO_STRUCTURAL_EVIDENCE_REQUIRED",
                     "structural_stop_price": stop,
                     "structural_take_price": take,
                     "quantity": qty,
                     "notional_usd": notional,
                     "risk_budget_usd": risk_budget,
+                    "virtual_position_id": vpid,
+                    "research_valid": True,
                 }
             )
             self._open_virtual(candidate, pid, stop, take, qty, notional, risk_budget, None, None, spec)
-            # baseline parity
-            if abs(qty - float(candidate["canonical_quantity"])) < 1e-9 and abs(stop - float(candidate["canonical_stop_price"])) < 1e-6:
+            if abs(qty - float(candidate["canonical_quantity"])) < 1e-9 and abs(
+                stop - float(candidate["canonical_stop_price"])
+            ) < 1e-6:
                 self.baseline_match_count += 1
             else:
                 self.baseline_divergence_count += 1
@@ -605,14 +779,30 @@ class StructuralProtectionEngine:
 
         if not profile.get("ok"):
             decision_row["action"] = "INSUFFICIENT_CAUSAL_DATA"
+            decision_row["decision"] = "INSUFFICIENT_CAUSAL_DATA"
+            decision_row["decision_reason"] = "INSUFFICIENT_CAUSAL_DATA"
             self.store.append("policy_decisions", decision_row)
             self.counters["economic_skip_count"] += 1
             return
 
-        prot, prot_react = (None, {"status": "MISSING"})
-        targ, targ_react = (None, {"status": "MISSING"})
-        if spec.kind in {"STRUCTURAL_SL_TP", "STRUCTURAL_SL_CANONICAL_TP"}:
-            prot, prot_react = self._select_protective(
+        needs_prot = spec.kind in {"STRUCTURAL_SL_TP", "STRUCTURAL_SL_CANONICAL_TP"}
+        needs_targ = spec.kind in {"STRUCTURAL_SL_TP", "CANONICAL_SL_STRUCTURAL_TP"}
+
+        if class_info.get("status") == "WRONG_TIMEFRAME":
+            action = "SKIP_NO_TARGET_ZONE" if needs_targ and not needs_prot else "SKIP_NO_PROTECTIVE_ZONE"
+            decision_row["action"] = action
+            decision_row["decision"] = action
+            decision_row["decision_reason"] = "WRONG_TIMEFRAME"
+            decision_row["classification_status"] = class_info.get("status")
+            self.store.append("policy_decisions", decision_row)
+            self.counters["economic_skip_count"] += 1
+            return
+
+        prot, prot_react, prot_usable = (None, {"status": "MISSING"}, False)
+        targ, targ_react, targ_usable = (None, {"status": "MISSING"}, False)
+
+        if needs_prot:
+            prot, prot_react, prot_usable = self._select_protective(
                 side=side,
                 entry=entry,
                 zones=zones,
@@ -621,14 +811,21 @@ class StructuralProtectionEngine:
                 decision_ts=decision_ts,
                 prior_open=prior_open,
             )
+            decision_row["protective_zone_detected"] = prot is not None
+            decision_row["protective_zone_usable"] = bool(prot_usable)
+            decision_row["protective_reaction_status"] = prot_react.get("status")
+            decision_row["protective_zone_id"] = None if prot is None else prot.get("zone_id")
             if prot is None:
                 decision_row["action"] = "SKIP_NO_PROTECTIVE_ZONE"
+                decision_row["decision"] = "SKIP_NO_PROTECTIVE_ZONE"
+                decision_row["decision_reason"] = "SKIP_NO_PROTECTIVE_ZONE"
                 self.store.append("policy_decisions", decision_row)
                 self.counters["economic_skip_count"] += 1
                 return
-            if prot_react.get("status") != "VALID":
+            if not prot_usable or not reaction_is_proven(prot_react):
                 decision_row["action"] = "SKIP_NO_REACTION_PROOF"
-                decision_row["reaction_status"] = prot_react.get("status")
+                decision_row["decision"] = "SKIP_NO_REACTION_PROOF"
+                decision_row["decision_reason"] = f"PROTECTIVE_{prot_react.get('status')}"
                 self.store.append("policy_decisions", decision_row)
                 self.counters["economic_skip_count"] += 1
                 return
@@ -642,8 +839,8 @@ class StructuralProtectionEngine:
         else:
             stop = float(candidate["canonical_stop_price"])
 
-        if spec.kind in {"STRUCTURAL_SL_TP", "CANONICAL_SL_STRUCTURAL_TP"}:
-            targ, targ_react = self._select_target(
+        if needs_targ:
+            targ, targ_react, targ_usable = self._select_target(
                 side=side,
                 entry=entry,
                 zones=zones,
@@ -652,22 +849,45 @@ class StructuralProtectionEngine:
                 decision_ts=decision_ts,
                 prior_open=prior_open,
             )
+            decision_row["target_zone_detected"] = targ is not None
+            decision_row["target_zone_usable"] = bool(targ_usable)
+            decision_row["target_reaction_status"] = targ_react.get("status")
+            decision_row["target_zone_id"] = None if targ is None else targ.get("zone_id")
             if targ is None:
                 decision_row["action"] = "SKIP_NO_TARGET_ZONE"
+                decision_row["decision"] = "SKIP_NO_TARGET_ZONE"
+                decision_row["decision_reason"] = "SKIP_NO_TARGET_ZONE"
+                self.store.append("policy_decisions", decision_row)
+                self.counters["economic_skip_count"] += 1
+                return
+            if not targ_usable or not reaction_is_proven(targ_react):
+                decision_row["action"] = "SKIP_NO_REACTION_PROOF"
+                decision_row["decision"] = "SKIP_NO_REACTION_PROOF"
+                decision_row["decision_reason"] = f"TARGET_{targ_react.get('status')}"
                 self.store.append("policy_decisions", decision_row)
                 self.counters["economic_skip_count"] += 1
                 return
             take = structural_take_price(side=side, zone=targ, take_policy=str(spec.take_policy))
         elif spec.kind == "STRUCTURAL_SL_CANONICAL_TP":
-            # 1.5R relative to structural risk distance
             risk_dist = abs(entry - stop)
             take = entry + 1.5 * risk_dist if side == "LONG" else entry - 1.5 * risk_dist
         else:
             take = float(candidate["canonical_take_price"])
 
+        # Full structural requires both sides usable (already enforced individually).
+        if spec.kind == "STRUCTURAL_SL_TP" and not (prot_usable and targ_usable):
+            decision_row["action"] = "SKIP_NO_REACTION_PROOF"
+            decision_row["decision"] = "SKIP_NO_REACTION_PROOF"
+            decision_row["decision_reason"] = "FULL_STRUCTURAL_EVIDENCE_INCOMPLETE"
+            self.store.append("policy_decisions", decision_row)
+            self.counters["economic_skip_count"] += 1
+            return
+
         ok_geo, geo_reason = geometry_valid(side=side, entry=entry, stop=stop, take=take)
         if not ok_geo:
             decision_row["action"] = geo_reason
+            decision_row["decision"] = geo_reason
+            decision_row["decision_reason"] = geo_reason
             self.store.append("policy_decisions", decision_row)
             self.counters["economic_skip_count"] += 1
             return
@@ -685,11 +905,14 @@ class StructuralProtectionEngine:
         )
         if not sizing.get("ok"):
             decision_row["action"] = "SKIP_SIZING_REJECTED"
+            decision_row["decision"] = "SKIP_SIZING_REJECTED"
+            decision_row["decision_reason"] = sizing.get("block_reason")
             decision_row["sizing_block_reason"] = sizing.get("block_reason")
             self.store.append("policy_decisions", decision_row)
             self.counters["economic_skip_count"] += 1
             return
 
+        # Economic gate only after structural evidence gate passed.
         econ = expected_net_r(
             cfg=self.cfg,
             side=side,
@@ -700,18 +923,20 @@ class StructuralProtectionEngine:
             risk_budget_usd=risk_budget,
         )
         action, gate_detail = economic_gate_decision(gate=spec.economic_gate, net_r=econ.get("net_R"))
+        vpid = f"vpos_{pid}_{candidate['position_id']}"
         decision_row.update(
             {
                 "action": action,
+                "decision": action,
+                "decision_reason": gate_detail if action != "EXECUTE_STRUCTURAL" else "EVIDENCE_AND_ECONOMIC_GATE_PASSED",
                 "gate_detail": gate_detail,
                 "structural_stop_price": stop,
                 "structural_take_price": take,
-                "protective_zone_id": None if prot is None else prot.get("zone_id"),
-                "target_zone_id": None if targ is None else targ.get("zone_id"),
                 "quantity": sizing["quantity"],
                 "notional_usd": sizing["notional_usd"],
                 "risk_budget_usd": risk_budget,
                 "risk_distance": sizing["stop_distance"],
+                "virtual_position_id": vpid if action == "EXECUTE_STRUCTURAL" else None,
                 **econ,
                 "notional_cap": "NOTIONAL_CAP_NOT_DEFINED",
             }
@@ -719,6 +944,24 @@ class StructuralProtectionEngine:
         if action != "EXECUTE_STRUCTURAL":
             self.store.append("policy_decisions", decision_row)
             self.counters["economic_skip_count"] += 1
+            return
+
+        # Final integrity assert — never open structural without evidence.
+        if needs_prot and not prot_usable:
+            self.evidence_gate_failure_count += 1
+            self.research_valid = False
+            decision_row["action"] = "SKIP_NO_REACTION_PROOF"
+            decision_row["decision"] = STATUS_EVIDENCE_GATE_FAILURE
+            decision_row["research_valid"] = False
+            self.store.append("policy_decisions", decision_row)
+            return
+        if needs_targ and not targ_usable:
+            self.evidence_gate_failure_count += 1
+            self.research_valid = False
+            decision_row["action"] = "SKIP_NO_REACTION_PROOF"
+            decision_row["decision"] = STATUS_EVIDENCE_GATE_FAILURE
+            decision_row["research_valid"] = False
+            self.store.append("policy_decisions", decision_row)
             return
 
         self._open_virtual(
@@ -741,6 +984,7 @@ class StructuralProtectionEngine:
                 "candidate_id": candidate["candidate_id"],
                 "policy_id": pid,
                 "record_type": "DECISION_TIME_ECONOMICS",
+                "policy_manifest_fingerprint": self.manifest_fp,
                 **econ,
             },
         )
@@ -784,13 +1028,15 @@ class StructuralProtectionEngine:
             "volume_class_policy": getattr(spec, "volume_class_policy", None),
             "levels_frozen": True,
             "snapshot_id": f"snap_{candidate['candidate_id']}_{policy_id}",
+            "policy_manifest_fingerprint": self.manifest_fp,
+            "research_valid": True,
+            "invalidated": False,
         }
         self.store.append("virtual_positions", row)
         mark_open(self.sleeves, policy_id=policy_id, timeframe=str(candidate["timeframe"]), position_id=vpid)
         self.open_by_policy.setdefault(policy_id, []).append(row)
 
     def process_new_closes(self) -> list[dict[str, Any]]:
-        """Close baseline on real trades; evaluate structural exits via causal BBO replay."""
         actions = []
         for trade in self.books.read_all("trades"):
             tid = str(trade.get("trade_id") or "")
@@ -817,7 +1063,6 @@ class StructuralProtectionEngine:
         if entry_ts is None or exit_ts is None:
             return {"status": "INSUFFICIENT_CAUSAL_DATA", "trade_id": trade.get("trade_id")}
 
-        # Load BBO path for structural exit detection
         bbo = load_book_ticker(repo=self.repo, start=entry_ts, end=exit_ts)
         for policy_id, opens in list(self.open_by_policy.items()):
             matched = [p for p in opens if str(p.get("position_id")) == position_id]
@@ -837,12 +1082,10 @@ class StructuralProtectionEngine:
                     risk_amount_usd=float(vpos.get("risk_budget_usd") or 0.0),
                     exit_reason=str(exit_reason),
                 )
-                # baseline net parity
                 real_net = float(trade.get("net_pnl_usd") or 0.0)
                 if abs(float(econ["net_pnl_usd"]) - real_net) < 1e-4:
                     self.baseline_match_count += 1
                 else:
-                    # Prefer quantity/price match already; allow small econ path differences
                     if abs(float(vpos["quantity"]) - float(cand["canonical_quantity"])) < 1e-9:
                         self.baseline_match_count += 1
                     else:
@@ -852,7 +1095,6 @@ class StructuralProtectionEngine:
             else:
                 hit = self._first_structural_hit(vpos, bbo)
                 if hit is None:
-                    # No hit before canonical exit — close at canonical exit as research path end
                     exit_price = float(trade.get("exit_price") or 0.0)
                     exit_reason = "CANONICAL_EXIT_NO_STRUCTURAL_HIT"
                     exit_time = trade.get("exit_ts")
@@ -885,11 +1127,19 @@ class StructuralProtectionEngine:
                     "fees_usd": econ["fees_usd"],
                     "slippage_usd": econ["slippage_usd"],
                     "status": "CLOSED",
+                    "policy_manifest_fingerprint": self.manifest_fp,
+                    "research_valid": True,
                 },
             )
             self.store.append(
                 "virtual_positions",
-                {**vpos, "status": "CLOSED", "exit_timestamp": exit_time, "exit_price": exit_price, "exit_reason": exit_reason},
+                {
+                    **vpos,
+                    "status": "CLOSED",
+                    "exit_timestamp": exit_time,
+                    "exit_price": exit_price,
+                    "exit_reason": exit_reason,
+                },
             )
             apply_realized(
                 self.sleeves,
@@ -913,7 +1163,6 @@ class StructuralProtectionEngine:
             ask = float(row.get("best_ask_price") or 0.0)
             ts = iso(row["_ts"].to_pydatetime()) if hasattr(row["_ts"], "to_pydatetime") else str(row.get("_ts"))
             if side == "LONG":
-                # exits on bid
                 if bid > 0 and bid <= stop:
                     return bid, "STOP_LOSS", ts
                 if bid > 0 and bid >= take:
@@ -930,19 +1179,103 @@ class StructuralProtectionEngine:
         closes = self.process_new_closes()
         return {"entries": len(entries), "closes": len(closes)}
 
+    def _valid_open_positions(self) -> list[dict[str, Any]]:
+        latest: dict[str, dict[str, Any]] = {}
+        for row in self.store.read_all("virtual_positions"):
+            key = f"{row.get('policy_id')}|{row.get('virtual_position_id')}"
+            latest[key] = row
+        out = []
+        for row in latest.values():
+            if str(row.get("status") or "").upper() != "OPEN":
+                continue
+            if row.get("invalidated") or row.get("research_valid") is False:
+                continue
+            if row.get("policy_manifest_fingerprint") != self.manifest_fp:
+                continue
+            out.append(row)
+        return out
+
+    def _current_manifest_decisions(self) -> list[dict[str, Any]]:
+        return [
+            d
+            for d in self.store.read_all("policy_decisions")
+            if not d.get("record_type") and d.get("policy_manifest_fingerprint") == self.manifest_fp
+        ]
+
     def write_health(self) -> dict[str, Any]:
-        open_n = sum(len(v) for v in self.open_by_policy.values())
-        closed_n = sum(1 for r in self.store.read_all("virtual_trades") if r.get("status") == "CLOSED")
+        valid_open = self._valid_open_positions()
+        invalid_open = []
+        latest: dict[str, dict[str, Any]] = {}
+        for row in self.store.read_all("virtual_positions"):
+            key = f"{row.get('policy_id')}|{row.get('virtual_position_id')}"
+            latest[key] = row
+        for row in latest.values():
+            if row.get("invalidated") or str(row.get("status") or "").upper() == "INVALIDATED":
+                invalid_open.append(row)
+        closed_n = sum(
+            1
+            for r in self.store.read_all("virtual_trades")
+            if r.get("status") == "CLOSED" and r.get("policy_manifest_fingerprint") == self.manifest_fp
+        )
+        decisions = self._current_manifest_decisions()
+        exec_n = sum(1 for d in decisions if d.get("action") == "EXECUTE_STRUCTURAL")
+        skip_n = sum(1 for d in decisions if d.get("action") != "EXECUTE_STRUCTURAL")
+        structural_exec_without_evidence = 0
+        for d in decisions:
+            if d.get("action") != "EXECUTE_STRUCTURAL":
+                continue
+            pid = str(d.get("policy_id") or "")
+            if pid == "BASELINE_CANONICAL":
+                continue
+            if pid.startswith("STRUCTURAL_SL_CANONICAL_TP") and not d.get("protective_zone_usable"):
+                structural_exec_without_evidence += 1
+            if pid.startswith("CANONICAL_SL_STRUCTURAL_TP") and not d.get("target_zone_usable"):
+                structural_exec_without_evidence += 1
+            if pid.startswith("STRUCTURAL_SL_TP") and not (
+                d.get("protective_zone_usable") and d.get("target_zone_usable")
+            ):
+                structural_exec_without_evidence += 1
+
+        # Sync counters used by OPS from current-manifest truth where possible.
+        self.counters["economic_execute_count"] = exec_n
+        self.counters["economic_skip_count"] = skip_n
+
+        if structural_exec_without_evidence:
+            self.evidence_gate_failure_count = structural_exec_without_evidence
+            self.research_valid = False
+
+        import inspect
+
+        from btc_ml.trading.intrabar_paper import economics as eco
+
+        sig = inspect.signature(eco.resolve_risk_sizing)
+        isolation_ok = "stop_loss_price" not in sig.parameters and "take_profit_price" not in sig.parameters
+
         if not self.exact_ok:
             status = BLOCKED_NO_EXACT
+        elif not isolation_ok:
+            status = STATUS_CANONICAL_ISOLATION_FAILURE
+            self.research_valid = False
         elif self.baseline_divergence_count:
-            status = BASELINE_DIVERGENCE
+            status = STATUS_BASELINE_DIVERGENCE_STP11
         elif self.lookahead_violation_count:
-            status = LOOKAHEAD_VIOLATION
+            status = STATUS_LOOKAHEAD_STP11
+        elif structural_exec_without_evidence or self.evidence_gate_failure_count:
+            status = STATUS_EVIDENCE_GATE_FAILURE
         elif self.counters["exact_profile_count"] == 0 and len(self.processed_candidates) > 0:
             status = READY_BLOCKED_HISTORY
+        elif self.research_valid and isolation_ok and self.baseline_divergence_count == 0:
+            status = STATUS_POLICY_INTEGRITY
         else:
-            status = STATUS_ACTIVE if self.research_valid else BASELINE_DIVERGENCE
+            status = STATUS_ACTIVE
+
+        reaction_status_breakdown: dict[str, int] = {}
+        for d in decisions:
+            for key in ("protective_reaction_status", "target_reaction_status"):
+                st = d.get(key)
+                if st:
+                    reaction_status_breakdown[str(st)] = reaction_status_breakdown.get(str(st), 0) + 1
+
         payload = {
             "mode": "OBSERVE_ONLY",
             "read_only": True,
@@ -954,16 +1287,28 @@ class StructuralProtectionEngine:
             "source_epoch_id": self.epoch_id,
             "source_contract_fingerprint": self.source_fp,
             "policy_manifest_fingerprint": self.manifest_fp,
+            "legacy_manifest_invalidated": bool(self._legacy_manifest_fps),
+            "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
             "candidate_count": len(self.processed_candidates),
             **self.counters,
-            "virtual_positions_open": open_n,
+            "virtual_positions_open": len(valid_open),
+            "virtual_positions_open_valid": len(valid_open),
+            "virtual_positions_invalidated": len(invalid_open),
             "virtual_trades_closed": closed_n,
             "baseline_match_count": self.baseline_match_count,
             "baseline_divergence_count": self.baseline_divergence_count,
             "lookahead_violation_count": self.lookahead_violation_count,
             "write_boundary_violation_count": self.write_boundary_violation_count,
             "insufficient_causal_data_count": self.insufficient_causal_data_count,
-            "research_valid": self.research_valid and self.baseline_divergence_count == 0,
+            "evidence_gate_failure_count": self.evidence_gate_failure_count,
+            "reaction_status_breakdown": reaction_status_breakdown,
+            "canonical_economics_isolated": isolation_ok,
+            "research_valid": bool(
+                self.research_valid
+                and self.baseline_divergence_count == 0
+                and structural_exec_without_evidence == 0
+                and isolation_ok
+            ),
             "updated_at": utc_now(),
             "errors": self.errors[-20:],
         }

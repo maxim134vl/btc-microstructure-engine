@@ -271,6 +271,8 @@ def test_zone_methods_and_geometry():
 
 
 def test_wider_stop_reduces_quantity(stp_repo: Path):
+    import inspect
+
     cfg = load_intrabar_paper_config(repo_root=stp_repo)
     tight = size_with_stop(
         cfg=cfg, side="LONG", entry_price=100.0, stop_price=99.0, take_price=102.0, equity_usd=100000, risk_budget_usd=1000
@@ -280,9 +282,15 @@ def test_wider_stop_reduces_quantity(stp_repo: Path):
     )
     assert tight["ok"] and wide["ok"]
     assert wide["quantity"] < tight["quantity"]
-    # canonical helper path
-    r = resolve_risk_sizing(cfg=cfg, side="LONG", entry_price=100.0, risk_budget_usd=1000, stop_loss_price=99.0, take_profit_price=102.0)
-    assert r.ok and r.stop_loss_price == 99.0
+    # canonical helper has no structural kwargs — LIVE1B cannot activate structural path
+    sig = inspect.signature(resolve_risk_sizing)
+    assert "stop_loss_price" not in sig.parameters
+    assert "take_profit_price" not in sig.parameters
+    r = resolve_risk_sizing(cfg=cfg, side="LONG", entry_price=100.0, risk_budget_usd=1000)
+    assert r.ok
+    # adapter encodes structural stop as temporary cfg bps
+    assert tight["stop_loss_price"] == 99.0
+    assert tight["sizing_path"] == "resolve_risk_sizing+cfg_bps_adapter"
 
 
 def test_sleeve_isolation():
@@ -326,3 +334,155 @@ def test_manifest_fingerprint_stable(stp_repo: Path):
     eng1 = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
     eng2 = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
     assert eng1.manifest_fp == eng2.manifest_fp
+
+
+def _decisions(eng: StructuralProtectionEngine) -> list[dict]:
+    return [
+        d
+        for d in eng.store.read_all("policy_decisions")
+        if not d.get("record_type") and d.get("policy_manifest_fingerprint") == eng.manifest_fp
+    ]
+
+
+def test_stp11_baseline_executes_without_structural_evidence(stp_repo: Path):
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    eng.poll_once()
+    base = [d for d in _decisions(eng) if d.get("policy_id") == "BASELINE_CANONICAL"]
+    assert len(base) == 1
+    assert base[0]["action"] == "EXECUTE_STRUCTURAL"
+    assert base[0].get("protective_zone_usable") in (False, None)
+    assert base[0].get("research_valid") is True
+
+
+def test_stp11_structural_gates_require_usable_proven_zones(stp_repo: Path):
+    """Fixture has protective reaction PROVEN (ABSORPTION) but target AMBIGUOUS/MISSING direction."""
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    eng.poll_once()
+    decs = _decisions(eng)
+
+    for d in decs:
+        if str(d.get("policy_id", "")).startswith("CANONICAL_SL_STRUCTURAL_TP"):
+            assert d["action"] != "EXECUTE_STRUCTURAL"
+            assert d["action"] in {"SKIP_NO_TARGET_ZONE", "SKIP_NO_REACTION_PROOF"}
+            if d.get("target_zone_detected"):
+                assert d.get("target_reaction_status") in {
+                    "PROVEN",
+                    "MISSING",
+                    "NOT_CANONICALLY_AVAILABLE",
+                    "WRONG_TIMEFRAME",
+                    "FUTURE_EVIDENCE_REJECTED",
+                    "AMBIGUOUS",
+                }
+                assert d.get("target_reaction_status") != "PROVEN" or d["action"] != "EXECUTE_STRUCTURAL"
+
+    for d in decs:
+        if str(d.get("policy_id", "")).startswith("STRUCTURAL_SL_TP"):
+            assert d["action"] != "EXECUTE_STRUCTURAL"
+
+    # Economic gate never runs before evidence: SKIP_NON_ECONOMIC only after evidence
+    for d in decs:
+        if d.get("action") == "SKIP_NON_ECONOMIC_AFTER_COSTS":
+            assert d.get("protective_zone_usable") or d.get("policy_id") == "BASELINE_CANONICAL"
+
+
+def test_stp11_structural_sl_requires_protective_proven(stp_repo: Path):
+    # Clear reaction so protective is not proven
+    pd.DataFrame(
+        [
+            {
+                "timestamp": "2026-07-29T18:30:10Z",
+                "source_timeframe": "M15",
+                "source_candle_timestamp": "2026-07-29T18:15:00Z",
+                "effort_result_state": "BALANCED_RESPONSE",
+                "localized_behavior": "body_participation",
+                "volume_event": "HIGH_AVERAGE_VOLUME",
+                "unfinished_auction": False,
+            }
+        ]
+    ).to_parquet(stp_repo / "data/cognition/volume_response_state.parquet", index=False)
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    eng.poll_once()
+    for d in _decisions(eng):
+        pid = str(d.get("policy_id") or "")
+        if pid.startswith("STRUCTURAL_SL_CANONICAL_TP") or pid.startswith("STRUCTURAL_SL_TP"):
+            assert d["action"] != "EXECUTE_STRUCTURAL"
+            if d.get("protective_zone_detected"):
+                assert d.get("protective_reaction_status") != "PROVEN"
+                assert d["action"] == "SKIP_NO_REACTION_PROOF"
+
+
+def test_stp11_wrong_timeframe_skip(stp_repo: Path):
+    _seed_entry(stp_repo, tf="M30")
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    eng.poll_once()
+    structural = [d for d in _decisions(eng) if d.get("policy_id") != "BASELINE_CANONICAL"]
+    assert structural
+    assert all(d["action"] != "EXECUTE_STRUCTURAL" for d in structural)
+    assert any(d.get("decision_reason") == "WRONG_TIMEFRAME" for d in structural)
+
+
+def test_stp11_detected_usable_counters_and_reaction_status(stp_repo: Path):
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    eng.poll_once()
+    h = eng.write_health()
+    # With ABSORPTION protective can be detected+usable; target detected but not usable
+    assert h["protective_zone_detected_count"] >= h["protective_zone_usable_count"]
+    assert h["target_zone_detected_count"] >= h["target_zone_usable_count"]
+    # Forbidden: zones detected with both reaction counters stuck at 0
+    if h["protective_zone_detected_count"] or h["target_zone_detected_count"]:
+        assert (h["reaction_proven_count"] + h["reaction_missing_count"]) > 0
+    for d in _decisions(eng):
+        if d.get("protective_zone_detected"):
+            assert d.get("protective_reaction_status") is not None
+        if d.get("target_zone_detected"):
+            assert d.get("target_reaction_status") is not None
+
+
+def test_stp11_canonical_economics_isolation(stp_repo: Path):
+    import inspect
+    import re
+
+    from btc_ml.trading.intrabar_paper import economics as eco
+
+    sig = inspect.signature(eco.resolve_risk_sizing)
+    assert "stop_loss_price" not in sig.parameters
+    assert "take_profit_price" not in sig.parameters
+    live1b_path = Path(eco.__file__).resolve().parent / "engine.py"
+    text = live1b_path.read_text(encoding="utf-8")
+    for call in re.findall(r"resolve_risk_sizing\((.*?)\)", text, flags=re.S):
+        assert "stop_loss_price" not in call
+        assert "take_profit_price" not in call
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    h = eng.write_health()
+    assert h["canonical_economics_isolated"] is True
+
+
+def test_stp11_invalidated_manifest_excluded_from_valid_metrics(stp_repo: Path):
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    eng.poll_once()
+    # Inject legacy invalid open structural position
+    eng.store.append(
+        "virtual_positions",
+        {
+            "virtual_position_id": "vpos_legacy_bad",
+            "policy_id": "CANONICAL_SL_STRUCTURAL_TP__ALL_CANONICAL_SIGNIFICANT__POC_BIN__TP_POC",
+            "candidate_id": "legacy|cand",
+            "position_id": "pos_legacy",
+            "timeframe": "M15",
+            "side": "LONG",
+            "status": "OPEN",
+            "research_valid": False,
+            "invalidated": True,
+            "invalidated_virtual": True,
+            "policy_manifest_fingerprint": "deadbeef",
+        },
+    )
+    h = eng.write_health()
+    assert h["virtual_positions_open"] == len(eng._valid_open_positions())
+    assert all(p.get("policy_manifest_fingerprint") == eng.manifest_fp for p in eng._valid_open_positions())
+    assert all(p.get("policy_id") == "BASELINE_CANONICAL" or p.get("research_valid") for p in eng._valid_open_positions())

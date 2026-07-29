@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from . import CANONICAL_VOLUME_CLASSES, SIGNIFICANT_CLASSES, TF_SECONDS
-from .timeutil import candle_open, iso, parse_ts
+from .timeutil import candle_open, iso
+
+REACTION_STATUSES = (
+    "PROVEN",
+    "MISSING",
+    "NOT_CANONICALLY_AVAILABLE",
+    "WRONG_TIMEFRAME",
+    "FUTURE_EVIDENCE_REJECTED",
+    "AMBIGUOUS",
+)
 
 
 def load_volume_classification(repo: Path) -> pd.DataFrame:
@@ -51,10 +60,8 @@ def classify_source_candle(
         base["detail"] = "volume_classification_memory is M15-only (900s bars, no TF column)"
         return base
 
-    # Classification row timestamp equals candle open in this memory.
     rows = vc[vc["_ts"] == pd.Timestamp(candle_open_ts)]
     if rows.empty:
-        # Allow closed prior candle classification with ts == open
         rows = vc[(vc["_ts"] <= pd.Timestamp(decision_ts)) & (vc["_ts"] == pd.Timestamp(candle_open_ts))]
     if rows.empty:
         base["status"] = "MISSING"
@@ -62,7 +69,7 @@ def classify_source_candle(
     row = rows.iloc[-1]
     class_ts = row["_ts"].to_pydatetime()
     if class_ts > decision_ts:
-        base["status"] = "FUTURE_ROW_REJECTED"
+        base["status"] = "FUTURE_EVIDENCE_REJECTED"
         return base
     raw = str(row.get("volume_class") or "").lower()
     mapped = CANONICAL_VOLUME_CLASSES.get(raw)
@@ -102,7 +109,7 @@ def reaction_evidence(
     """Use volume_response effort_result_state / localized_behavior if causal + same TF."""
     path = repo / "data" / "cognition" / "volume_response_state.parquet"
     out = {
-        "status": "REACTION_NOT_CANONICALLY_AVAILABLE",
+        "status": "NOT_CANONICALLY_AVAILABLE",
         "reaction_direction": None,
         "reaction_source": None,
         "reaction_timestamp": None,
@@ -117,6 +124,14 @@ def reaction_evidence(
     df["_candle"] = pd.to_datetime(df["source_candle_timestamp"], utc=True, errors="coerce")
     df["_ts"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     tf = str(timeframe).upper()
+
+    # Future evidence rejected if any matching candle row is after decision.
+    future = df[
+        (df["source_timeframe"].astype(str).str.upper() == tf)
+        & (df["_candle"] == pd.Timestamp(candle_open_ts))
+        & (df["_ts"].notna())
+        & (df["_ts"] > pd.Timestamp(decision_ts))
+    ]
     rows = df[
         (df["source_timeframe"].astype(str).str.upper() == tf)
         & (df["_candle"] == pd.Timestamp(candle_open_ts))
@@ -124,15 +139,31 @@ def reaction_evidence(
         & (df["_ts"] <= pd.Timestamp(decision_ts))
     ]
     if rows.empty:
-        # No same-TF causal reaction row
+        # Wrong TF present for same candle but not this TF?
+        other = df[
+            (df["_candle"] == pd.Timestamp(candle_open_ts))
+            & (df["_ts"].notna())
+            & (df["_ts"] <= pd.Timestamp(decision_ts))
+            & (df["source_timeframe"].astype(str).str.upper() != tf)
+        ]
+        if not other.empty:
+            out["status"] = "WRONG_TIMEFRAME"
+            out["detail"] = "reaction row exists only on different timeframe"
+            return out
+        if not future.empty:
+            out["status"] = "FUTURE_EVIDENCE_REJECTED"
+            return out
+        out["status"] = "MISSING"
         return out
+
     row = rows.sort_values("_ts").iloc[-1]
     effort = str(row.get("effort_result_state") or "")
     loc = str(row.get("localized_behavior") or "")
     direction = _infer_reaction_direction(effort=effort, localized=loc, side=side, zone_role=zone_role)
+    status = "PROVEN" if direction else "AMBIGUOUS"
     out.update(
         {
-            "status": "VALID" if direction else "ZONE_DETECTED_NO_REACTION_PROOF",
+            "status": status,
             "reaction_direction": direction,
             "reaction_source": "volume_response_state.effort_result_state+localized_behavior",
             "reaction_timestamp": iso(row["_ts"].to_pydatetime()),
@@ -143,11 +174,14 @@ def reaction_evidence(
     return out
 
 
+def reaction_is_proven(react: dict[str, Any] | None) -> bool:
+    return bool(react) and str(react.get("status") or "") == "PROVEN"
+
+
 def _infer_reaction_direction(*, effort: str, localized: str, side: str, zone_role: str) -> str | None:
     """Map existing canonical response labels to UP/DOWN without inventing new classes."""
     e = effort.upper()
     loc = localized.lower()
-    # Protective LONG needs prior UP reaction; protective SHORT needs DOWN.
     want_up = (str(side).upper() == "LONG" and zone_role == "PROTECTIVE") or (
         str(side).upper() == "SHORT" and zone_role == "TARGET"
     )
@@ -156,13 +190,17 @@ def _infer_reaction_direction(*, effort: str, localized: str, side: str, zone_ro
     up_hints = ("ABSORPTION_RESPONSE", "BUYER", "SUPPORT", "LOWER_ABSORPTION")
     down_hints = ("DISTRIBUTION", "SELLER", "REJECTION", "UPPER", "SUPPLY")
     hay = f"{e} {loc}".upper()
-    if any(h in hay for h in up_hints) and want_up:
+    up_hit = any(h in hay for h in up_hints)
+    down_hit = any(h in hay for h in down_hints)
+    if up_hit and down_hit:
+        return None
+    if up_hit and want_up:
         return "UP"
-    if any(h in hay for h in down_hints) and want_down:
+    if down_hit and want_down:
         return "DOWN"
-    # localized_absorption historically used as absorb both sides — not directional alone
-    if "ABSORPTION_RESPONSE" in e:
-        return "UP" if want_up else "DOWN"
+    # Explicit absorption response is directional only when role wants that side.
+    if "ABSORPTION_RESPONSE" in e and not down_hit:
+        return "UP" if want_up else None
     return None
 
 
@@ -170,9 +208,6 @@ def prior_closed_candle_open(decision_ts: datetime, timeframe: str) -> datetime:
     """Last fully closed candle open strictly before decision."""
     tf_s = TF_SECONDS[str(timeframe).upper()]
     open_now = candle_open(decision_ts, tf_s)
-    # If decision is inside open_now candle, prior closed is open_now - tf
-    from datetime import timedelta
-
     if decision_ts > open_now:
         return open_now - timedelta(seconds=tf_s)
     return open_now - timedelta(seconds=tf_s)
