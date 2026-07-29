@@ -676,12 +676,13 @@ function drawOverlays(chart, tfBlock, g) {
     ctx.save();
     ctx.globalAlpha = dim ? 0.2 : 1;
 
-    const entry = finitePrice(entity.entry_price);
-    const stop = finitePrice(entity.stop_price);
+    const entry = finitePrice(entity.entry_fill_price ?? entity.entry_price);
+    const stop = finitePrice(entity.stop_loss_price ?? entity.stop_price);
     const take = finitePrice(entity.take_profit_price);
     const exitPx = finitePrice(entity.exit_price);
     const side = String(entity.side || "LONG").toUpperCase();
-    const iEntry = timeIndex(chart.visible, parseTs(entity.entry_timestamp));
+    const anchorTs = parseTs(entity.bar_anchor_time || entity.entry_fill_timestamp || entity.entry_timestamp);
+    const iEntry = timeIndex(chart.visible, anchorTs);
     if (iEntry == null || entry == null) {
       ctx.restore();
       return;
@@ -711,7 +712,7 @@ function drawOverlays(chart, tfBlock, g) {
         ctx.fillStyle = colors.tradeTake;
         ctx.font = `9px ${colors.mono}`;
         ctx.textAlign = "left";
-        ctx.fillText("TP", x2 + 3, g.yAt(take) + 3);
+        ctx.fillText("Цель", x2 + 3, g.yAt(take) + 3);
       }
     }
     if (stop != null) {
@@ -728,7 +729,7 @@ function drawOverlays(chart, tfBlock, g) {
         ctx.fillStyle = colors.tradeStop;
         ctx.font = `9px ${colors.mono}`;
         ctx.textAlign = "left";
-        ctx.fillText("SL", x2 + 3, g.yAt(stop) + 3);
+        ctx.fillText("Стоп", x2 + 3, g.yAt(stop) + 3);
       }
     }
 
@@ -739,6 +740,12 @@ function drawOverlays(chart, tfBlock, g) {
     ctx.lineTo(x2, yEntry);
     ctx.stroke();
     ctx.lineWidth = 1;
+    if (isSel || !selected) {
+      ctx.fillStyle = colors.tradeEntry;
+      ctx.font = `9px ${colors.mono}`;
+      ctx.textAlign = "left";
+      ctx.fillText("Вход", x2 + 3, yEntry + 3);
+    }
 
     // Compact entry marker only (no text on marker)
     if (side === "SHORT") {
@@ -901,11 +908,16 @@ function formatTradeDetail(entity, tf) {
     `<strong>${publicNumber(entity, tf) || "—"}</strong>`,
     `${entity.status || "—"} ${entity.side || ""}`,
     `TF ${entity.timeframe || tf}`,
-    `entry ${entity.entry_timestamp || "—"} @ ${fmtPrice(entity.entry_price)}`,
+    `вход ${entity.event_timestamp || entity.entry_fill_timestamp || entity.entry_timestamp || "—"} @ ${fmtPrice(entity.entry_fill_price ?? entity.entry_price)}`,
+    `якорь свечи ${entity.bar_anchor_time || "—"}`,
+    `qty ${fmt(entity.quantity)} BTC · notional ${fmt(entity.position_notional ?? entity.notional)}`,
+    `риск ${fmt(entity.risk_amount_usd)}`,
+    `контекст ${entity.context_started_at || "—"} @ ${fmtPrice(entity.context_price)}`,
+    `mark ${fmtPrice(entity.mark_price)} (${entity.mark_side || "—"})`,
+    `uPnL ${fmtPnl(entity.unrealized_pnl_usd ?? entity.unrealized_pnl)}`,
     `exit ${entity.exit_timestamp || "—"} @ ${fmtPrice(entity.exit_price)}`,
     `PnL ${fmtPnl(entity.net_realised_pnl_usd)}`,
-    `fees ${fmt(entity.fees_usd)} slippage ${fmt(entity.slippage_usd)}`,
-    `SL ${fmtPrice(entity.stop_price)} TP ${fmtPrice(entity.take_profit_price)}`,
+    `Стоп ${fmtPrice(entity.stop_loss_price ?? entity.stop_price)} Цель ${fmtPrice(entity.take_profit_price)}`,
     `trade_id ${entity.trade_id || "—"}`,
     `position_id ${entity.position_id || "—"}`,
     episode,

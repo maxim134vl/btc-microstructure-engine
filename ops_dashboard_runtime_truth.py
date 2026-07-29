@@ -213,6 +213,135 @@ def apply_performance_aliases_to_timeframe_traders(
     port["performance_source"] = PERFORMANCE_ADAPTER_PATH
 
 
+def _restore_live1b_open_position_presentation(plane: dict[str, Any]) -> None:
+    """Re-apply LIVE1B open-position risk/MTM after performance alias overlay."""
+    if not isinstance(plane, dict):
+        return
+    if plane.get("activation_mode") != "LIVE1B_INTRABAR_RULES_V1" and not live1b_paper_active():
+        return
+    from btc_ml.trading.intrabar_paper.mark import (
+        mark_price_for_side,
+        mark_side_label,
+        position_notional_usd,
+        risk_reward_ratio,
+        unrealized_pnl_usd,
+    )
+
+    eid = str(plane.get("paper_epoch_id") or "")
+    books_root = ROOT / "data/trading/intrabar_paper" / eid / "books"
+    open_rows = _load_live1b_open_positions(books_root=books_root, paper_epoch_id=eid) if eid else []
+    open_by_tf = {
+        str(r.get("timeframe") or "").upper(): r
+        for r in open_rows
+        if str(r.get("timeframe") or "").upper() in S4_TIMEFRAMES
+    }
+    bbo = _latest_book_ticker_bbo()
+    mark_ts = None if bbo is None else bbo.get("mark_timestamp")
+    mark_source = None if bbo is None else bbo.get("mark_source")
+    max_risk = float((plane.get("portfolio") or {}).get("max_risk_usd") or 1000.0)
+    gross_open_risk = 0.0
+    gross_long = 0.0
+    gross_short = 0.0
+    gross_unrealized = 0.0
+    portfolio_mark = None
+    portfolio_mark_side = None
+    open_count = 0
+
+    for entry in plane.get("traders") or []:
+        tf = str(entry.get("timeframe") or "")
+        pos = open_by_tf.get(tf)
+        if pos is None:
+            entry["open_risk_usd"] = 0.0
+            entry["reserved_risk_usd"] = 0.0
+            if entry.get("direction") in (None, "FLAT"):
+                entry["unrealized_pnl_usd"] = 0.0
+            continue
+        open_count += 1
+        side = str(pos.get("side") or "LONG").upper()
+        entry_px = _sf(pos.get("entry_price"))
+        qty = _sf(pos.get("quantity"))
+        risk = _sf(pos.get("risk_amount_usd"))
+        stop = _sf(pos.get("stop_loss_price"))
+        take = _sf(pos.get("take_profit_price"))
+        notional = (
+            position_notional_usd(quantity=qty, entry_price=entry_px)
+            if entry_px is not None and qty is not None
+            else None
+        )
+        mark_px = None
+        upnl = None
+        mark_side = None
+        if bbo is not None and entry_px is not None and qty is not None:
+            mark_px = mark_price_for_side(
+                side=side, best_bid=float(bbo["best_bid"]), best_ask=float(bbo["best_ask"])
+            )
+            mark_side = mark_side_label(side)
+            upnl = unrealized_pnl_usd(
+                side=side, entry_price=entry_px, quantity=qty, mark_price=mark_px
+            )
+            portfolio_mark = mark_px
+            portfolio_mark_side = mark_side
+            gross_unrealized += float(upnl)
+        if risk is not None:
+            gross_open_risk += float(risk)
+        if notional is not None:
+            if side == "LONG":
+                gross_long += float(notional)
+            else:
+                gross_short += float(notional)
+        entry["open_position_id"] = pos.get("position_id")
+        entry["direction"] = side
+        entry["status"] = "OPEN"
+        entry["entry_price"] = entry_px
+        entry["entry_fill_price"] = entry_px
+        entry["entry_fill_timestamp"] = pos.get("opened_at")
+        entry["quantity"] = qty
+        entry["position_notional"] = notional
+        entry["risk_amount_usd"] = risk
+        entry["stop_loss_price"] = stop
+        entry["take_profit_price"] = take
+        entry["risk_reward_ratio"] = (
+            risk_reward_ratio(
+                side=side, entry_price=entry_px or 0.0, stop_loss_price=stop, take_profit_price=take
+            )
+            if entry_px is not None
+            else None
+        )
+        entry["open_risk_usd"] = risk
+        entry["reserved_risk_usd"] = risk
+        entry["mark_price"] = mark_px
+        entry["mark_timestamp"] = mark_ts
+        entry["mark_side"] = mark_side
+        entry["mark_source"] = mark_source
+        entry["unrealized_pnl_usd"] = upnl
+        entry["open_position_count"] = 1
+        entry["risk_source"] = "LIVE1B_INTRABAR_PAPER_POSITIONS"
+
+    available = max(0.0, max_risk - gross_open_risk)
+    port = plane.setdefault("portfolio", {})
+    port["open_positions"] = open_count
+    port["open_position_count"] = open_count
+    port["gross_open_risk_usd"] = gross_open_risk
+    port["reserved_open_risk_usd"] = gross_open_risk
+    port["available_risk_usd"] = available
+    port["portfolio_max_risk_usd"] = max_risk
+    port["max_risk_usd"] = max_risk
+    port["gross_long_notional"] = gross_long
+    port["gross_short_notional"] = gross_short
+    port["gross_open_notional_usd"] = gross_long + gross_short
+    port["risk_source"] = "LIVE1B_INTRABAR_PAPER_POSITIONS"
+    if bbo is not None:
+        port["unrealized_pnl"] = gross_unrealized
+        port["unrealised_gross_pnl_usd"] = gross_unrealized
+        port["mark_price"] = portfolio_mark
+        port["mark_timestamp"] = mark_ts
+        port["mark_side"] = portfolio_mark_side
+        port["mark_source"] = mark_source
+        port["mark_status"] = "AVAILABLE"
+        closed_eq = _sf(port.get("closed_equity_usd")) or _sf(port.get("initial_equity_usd")) or 0.0
+        port["mark_to_market_equity_usd"] = float(closed_eq) + float(gross_unrealized)
+
+
 def clear_performance_aliases_on_timeframe_traders(plane: dict[str, Any]) -> None:
     """On performance failure: null PnL aliases (never coerce to 0)."""
     for entry in plane.get("traders") or []:
@@ -1215,12 +1344,113 @@ def _resolve_aggregate_portfolio_risk(
     }
 
 
+def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+    except OSError:
+        return []
+    return rows
+
+
+def _load_live1b_open_positions(*, books_root: Path, paper_epoch_id: str) -> list[dict[str, Any]]:
+    """Latest OPEN rows from active-epoch positions.jsonl (legacy/void excluded)."""
+    latest: dict[str, dict[str, Any]] = {}
+    for row in _read_jsonl_rows(books_root / "positions.jsonl"):
+        pid = str(row.get("position_id") or "")
+        if not pid:
+            continue
+        latest[pid] = row
+    out: list[dict[str, Any]] = []
+    for row in latest.values():
+        if str(row.get("status") or "").upper() != "OPEN":
+            continue
+        if str(row.get("paper_epoch_id") or "") != str(paper_epoch_id):
+            continue
+        out.append(row)
+    return out
+
+
+def _load_context_event_by_id(context_event_id: str | None) -> dict[str, Any] | None:
+    if not context_event_id:
+        return None
+    path = ROOT / "data/cognition/intrabar_context_events/events.jsonl"
+    for row in _read_jsonl_rows(path):
+        if str(row.get("context_event_id") or "") == str(context_event_id):
+            return row
+    return None
+
+
+def _latest_book_ticker_bbo() -> dict[str, Any] | None:
+    """Tip BBO from raw book_ticker journal (presentation mark; not mid)."""
+    root = ROOT / "data/raw_market_events_v2/book_ticker"
+    if not root.exists():
+        return None
+    try:
+        import pandas as pd
+    except Exception:
+        return None
+    dates = sorted([p for p in root.iterdir() if p.is_dir() and p.name.startswith("date=")])
+    if not dates:
+        return None
+    hours = sorted([p for p in dates[-1].iterdir() if p.is_dir() and p.name.startswith("hour=")])
+    if not hours:
+        return None
+    files = sorted(hours[-1].glob("*.parquet"))
+    if not files:
+        return None
+    try:
+        frame = pd.read_parquet(files[-1])
+    except Exception:
+        return None
+    if frame is None or not len(frame):
+        return None
+    row = frame.iloc[-1]
+    try:
+        bid = _sf(row["best_bid_price"])
+        ask = _sf(row["best_ask_price"])
+        ts = row["local_receive_timestamp"]
+    except Exception:
+        return None
+    if bid is None or ask is None or ask < bid:
+        return None
+    ts_s = None
+    if ts is not None and str(ts) not in {"nan", "NaT", "None"}:
+        ts_s = str(ts)
+        if ts_s.endswith("+00:00"):
+            ts_s = ts_s.replace("+00:00", "Z")
+    return {
+        "best_bid": float(bid),
+        "best_ask": float(ask),
+        "mark_timestamp": ts_s,
+        "mark_source": "raw_market_events_v2/book_ticker",
+    }
+
+
 def _build_live1b_timeframe_traders(
     *,
     performance_payload: dict[str, Any] | None = None,
     load_performance: bool = True,
 ) -> dict[str, Any]:
     """Active LIVE1B plane: epoch books only; legacy S4 books excluded."""
+    from btc_ml.trading.intrabar_paper.mark import (
+        mark_price_for_side,
+        mark_side_label,
+        position_notional_usd,
+        risk_reward_ratio,
+        unrealized_pnl_usd,
+    )
+
     epoch = live1b_active_epoch() or {}
     paper_health = _read_json(ROOT / "data/runtime/intrabar_paper_health.json") or {}
     cognition_health = _read_json(ROOT / "data/runtime/intrabar_cognition_health.json") or {}
@@ -1229,6 +1459,7 @@ def _build_live1b_timeframe_traders(
     initial = float(epoch.get("initial_equity_usd") or paper_health.get("initial_equity_usd") or 100000.0)
     equity = float(paper_health.get("equity_usd") if paper_health.get("equity_usd") is not None else initial)
     realized = float(paper_health.get("realized_pnl_usd") or 0.0)
+    max_risk = float(paper_health.get("max_risk_per_trade_usd") or 1000.0)
 
     manager_proc = {}
     cognition_proc = {}
@@ -1245,54 +1476,167 @@ def _build_live1b_timeframe_traders(
     lanes = paper_health.get("execution_lanes") or {
         tf: "ACTIVE" if manager_alive else "INACTIVE" for tf in S4_TIMEFRAMES
     }
-    open_by_tf = paper_health.get("active_positions_by_timeframe") or {}
+
+    open_rows = _load_live1b_open_positions(books_root=books_root, paper_epoch_id=eid) if eid else []
+    open_by_tf: dict[str, dict[str, Any]] = {}
+    for row in open_rows:
+        tf = str(row.get("timeframe") or "").upper()
+        if tf in S4_TIMEFRAMES:
+            open_by_tf[tf] = row
+
+    bbo = _latest_book_ticker_bbo()
+    mark_ts = None if bbo is None else bbo.get("mark_timestamp")
+    mark_source = None if bbo is None else bbo.get("mark_source")
 
     traders: list[dict[str, Any]] = []
     open_count = 0
+    gross_open_risk = 0.0
+    gross_long_notional = 0.0
+    gross_short_notional = 0.0
+    gross_unrealized = 0.0
+    portfolio_mark: float | None = None
+    portfolio_mark_side: str | None = None
+
     for tf in S4_TIMEFRAMES:
-        pos = open_by_tf.get(tf) or {}
-        has_pos = bool(pos)
-        if has_pos:
-            open_count += 1
+        pos = open_by_tf.get(tf)
+        has_pos = pos is not None
         lane = str(lanes.get(tf) or ("ACTIVE" if manager_alive else "INACTIVE")).upper()
-        traders.append(
-            {
-                "timeframe": tf,
-                "entity_type": "INTRABAR_PAPER_EXECUTION_LANE",
-                "book_path": f"data/trading/intrabar_paper/{eid}/books",
-                "book_exists": books_root.exists(),
-                "pid": manager_proc.get("pid"),
-                "alive": manager_alive,
-                "process_health": "RUNNING" if manager_alive else "STOPPED",
-                "execution_lane": lane,
-                "execution_lane_status": lane,
-                "open_position_id": None,
-                "direction": str(pos.get("side") or "FLAT").upper() if has_pos else "FLAT",
-                "entry_price": pos.get("entry_price"),
-                "quantity": pos.get("quantity"),
-                "open_risk_usd": 0.0 if not has_pos else None,
-                "reserved_risk_usd": 0.0 if not has_pos else None,
-                "risk_status": "ZERO_CONFIRMED" if not has_pos else "AVAILABLE",
-                "risk_source": "LIVE1B_INTRABAR_PAPER_HEALTH",
-                "risk_source_tip": paper_health.get("updated_at"),
-                "risk_freshness": "FRESH",
-                "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
-                "realized_pnl_usd": 0.0,
-                "unrealized_pnl_usd": 0.0,
-                "open_position_count": 1 if has_pos else 0,
-                "closed_trades": 0,
-                "closed_trade_count": 0,
-                "last_command_id": (paper_health.get("last_command") or {}).get("command_id")
-                if isinstance(paper_health.get("last_command"), dict)
-                else None,
-                "last_command_intent": None,
-                "command_cursor": paper_health.get("last_consumed_context_event_id"),
-                "book_tip": None,
-                "paper_only": True,
-                "execution_enabled": False,
-                "paper_epoch_id": eid,
-            }
-        )
+        entry: dict[str, Any] = {
+            "timeframe": tf,
+            "entity_type": "INTRABAR_PAPER_EXECUTION_LANE",
+            "book_path": f"data/trading/intrabar_paper/{eid}/books",
+            "book_exists": books_root.exists(),
+            "pid": manager_proc.get("pid"),
+            "alive": manager_alive,
+            "process_health": "RUNNING" if manager_alive else "STOPPED",
+            "execution_lane": lane,
+            "execution_lane_status": lane,
+            "open_position_id": None,
+            "direction": "FLAT",
+            "status": "FLAT",
+            "entry_price": None,
+            "entry_fill_price": None,
+            "entry_fill_timestamp": None,
+            "quantity": None,
+            "position_notional": None,
+            "risk_amount_usd": None,
+            "stop_loss_price": None,
+            "take_profit_price": None,
+            "risk_reward_ratio": None,
+            "context_event_id": None,
+            "lifecycle_episode_id": None,
+            "context_started_at": None,
+            "context_price": None,
+            "context_price_timestamp": None,
+            "mark_price": None,
+            "mark_timestamp": None,
+            "mark_side": None,
+            "mark_source": None,
+            "open_risk_usd": 0.0,
+            "reserved_risk_usd": 0.0,
+            "risk_status": "ZERO_CONFIRMED",
+            "risk_source": "LIVE1B_INTRABAR_PAPER_POSITIONS",
+            "risk_source_tip": paper_health.get("updated_at"),
+            "risk_freshness": "FRESH",
+            "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
+            "realized_pnl_usd": 0.0,
+            "unrealized_pnl_usd": 0.0,
+            "open_position_count": 0,
+            "closed_trades": 0,
+            "closed_trade_count": 0,
+            "last_command_id": (paper_health.get("last_command") or {}).get("command_id")
+            if isinstance(paper_health.get("last_command"), dict)
+            else None,
+            "last_command_intent": None,
+            "command_cursor": paper_health.get("last_consumed_context_event_id"),
+            "book_tip": None,
+            "paper_only": True,
+            "execution_enabled": False,
+            "paper_epoch_id": eid,
+        }
+        if has_pos and pos is not None:
+            open_count += 1
+            side = str(pos.get("side") or "LONG").upper()
+            entry_px = _sf(pos.get("entry_price"))
+            qty = _sf(pos.get("quantity"))
+            risk = _sf(pos.get("risk_amount_usd"))
+            stop = _sf(pos.get("stop_loss_price"))
+            take = _sf(pos.get("take_profit_price"))
+            notional = None
+            if entry_px is not None and qty is not None:
+                notional = position_notional_usd(quantity=qty, entry_price=entry_px)
+            ctx_id = pos.get("entry_context_event_id")
+            ctx = _load_context_event_by_id(None if ctx_id is None else str(ctx_id))
+            mark_px = None
+            upnl = None
+            mark_side = None
+            if bbo is not None and entry_px is not None and qty is not None:
+                mark_px = mark_price_for_side(
+                    side=side,
+                    best_bid=float(bbo["best_bid"]),
+                    best_ask=float(bbo["best_ask"]),
+                )
+                mark_side = mark_side_label(side)
+                upnl = unrealized_pnl_usd(
+                    side=side,
+                    entry_price=entry_px,
+                    quantity=qty,
+                    mark_price=mark_px,
+                )
+                portfolio_mark = mark_px
+                portfolio_mark_side = mark_side
+                gross_unrealized += float(upnl)
+            if risk is not None:
+                gross_open_risk += float(risk)
+            if notional is not None:
+                if side == "LONG":
+                    gross_long_notional += float(notional)
+                else:
+                    gross_short_notional += float(notional)
+            entry.update(
+                {
+                    "open_position_id": pos.get("position_id"),
+                    "direction": side,
+                    "status": "OPEN",
+                    "entry_price": entry_px,
+                    "entry_fill_price": entry_px,
+                    "entry_fill_timestamp": pos.get("opened_at"),
+                    "quantity": qty,
+                    "position_notional": notional,
+                    "risk_amount_usd": risk,
+                    "stop_loss_price": stop,
+                    "take_profit_price": take,
+                    "risk_reward_ratio": risk_reward_ratio(
+                        side=side,
+                        entry_price=entry_px or 0.0,
+                        stop_loss_price=stop,
+                        take_profit_price=take,
+                    )
+                    if entry_px is not None
+                    else None,
+                    "context_event_id": ctx_id,
+                    "lifecycle_episode_id": pos.get("lifecycle_episode_id"),
+                    "context_started_at": None if ctx is None else ctx.get("event_timestamp"),
+                    "context_price": None
+                    if ctx is None
+                    else (_sf(ctx.get("context_event_price"))),
+                    "context_price_timestamp": None if ctx is None else ctx.get("last_trade_timestamp"),
+                    "mark_price": mark_px,
+                    "mark_timestamp": mark_ts,
+                    "mark_side": mark_side,
+                    "mark_source": mark_source,
+                    "open_risk_usd": risk,
+                    "reserved_risk_usd": risk,
+                    "risk_status": "AVAILABLE" if risk and abs(float(risk)) > 1e-12 else "ZERO_CONFIRMED",
+                    "unrealized_pnl_usd": upnl,
+                    "open_position_count": 1,
+                }
+            )
+        traders.append(entry)
+
+    available = max(0.0, max_risk - gross_open_risk)
+    util = round(100.0 * gross_open_risk / max_risk, 6) if max_risk > 0 else 0.0
+    mtm_equity = equity + gross_unrealized
 
     plane = {
         "entity_type": "INTRABAR_PAPER_TRADING_PLANE",
@@ -1338,30 +1682,36 @@ def _build_live1b_timeframe_traders(
         "portfolio": {
             "open_positions": open_count,
             "open_position_count": open_count,
-            "gross_long_notional": 0.0,
-            "gross_short_notional": 0.0,
-            "net_notional": 0.0,
+            "gross_long_notional": gross_long_notional,
+            "gross_short_notional": gross_short_notional,
+            "gross_open_notional_usd": gross_long_notional + gross_short_notional,
+            "net_notional": gross_long_notional - gross_short_notional,
             "net_notional_semantics": "REPORTING_ONLY_NEVER_NETTED",
-            "gross_open_risk_usd": 0.0,
-            "reserved_open_risk_usd": 0.0,
-            "portfolio_max_risk_usd": 1000.0,
-            "max_risk_usd": 1000.0,
-            "available_risk_usd": 1000.0,
-            "risk_utilisation_pct": 0.0,
-            "risk_source": "LIVE1B_INTRABAR_PAPER_EPOCH",
+            "gross_open_risk_usd": gross_open_risk,
+            "reserved_open_risk_usd": gross_open_risk,
+            "portfolio_max_risk_usd": max_risk,
+            "max_risk_usd": max_risk,
+            "available_risk_usd": available,
+            "risk_utilisation_pct": util,
+            "risk_source": "LIVE1B_INTRABAR_PAPER_POSITIONS",
             "risk_source_tip": paper_health.get("updated_at"),
             "risk_status": "ZERO_CONFIRMED" if open_count == 0 else "AVAILABLE",
             "risk_freshness": "FRESH",
             "risk_semantics": RISK_SEMANTICS_RESERVED_OPEN,
             "observability_health": "OPERATIONAL",
             "realized_pnl": realized,
-            "unrealized_pnl": float(paper_health.get("unrealized_pnl_usd") or 0.0),
+            "unrealized_pnl": gross_unrealized if bbo is not None else None,
             "closed_trade_count": int(paper_health.get("trades_count") or 0),
             "initial_equity_usd": initial,
             "closed_equity_usd": equity,
-            "mark_to_market_equity_usd": equity,
+            "mark_to_market_equity_usd": mtm_equity if bbo is not None else equity,
             "risk_aggregation": "GROSS_NO_NETTING",
             "paper_epoch_id": eid,
+            "mark_price": portfolio_mark,
+            "mark_timestamp": mark_ts,
+            "mark_side": portfolio_mark_side,
+            "mark_source": mark_source,
+            "mark_status": "AVAILABLE" if bbo is not None else "MARK_UNAVAILABLE",
         },
         "execution_lanes": {tf: str(lanes.get(tf) or "ACTIVE") for tf in S4_TIMEFRAMES},
         "read_only": True,
@@ -1377,9 +1727,11 @@ def _build_live1b_timeframe_traders(
         except Exception as exc:  # noqa: BLE001
             plane["performance_load_error"] = f"{type(exc).__name__}: {exc}"
             clear_performance_aliases_on_timeframe_traders(plane)
+            # Keep LIVE1B risk/MTM already computed above.
             return plane
     if perf is not None:
         apply_performance_aliases_to_timeframe_traders(plane, perf)
+        _restore_live1b_open_position_presentation(plane)
     return plane
 
 
@@ -1912,6 +2264,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         performance_section = project_trading_performance_for_ops(perf_raw)
         if isinstance(timeframe_traders, dict) and timeframe_traders.get("traders") is not None:
             apply_performance_aliases_to_timeframe_traders(timeframe_traders, perf_raw)
+            _restore_live1b_open_position_presentation(timeframe_traders)
         trading_operations = build_trading_operations_block(
             timeframe_traders=timeframe_traders if isinstance(timeframe_traders, dict) else {},
             performance=performance_section,

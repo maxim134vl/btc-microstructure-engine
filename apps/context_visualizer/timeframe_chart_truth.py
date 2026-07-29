@@ -253,7 +253,7 @@ def build_tf_candles(
     latest_close = candles[-1]["bar_close"] if candles else None
     source = "data/live/live_market_feed.parquet"
     aggregation = "native" if timeframe == "M15" else f"build_completed_bars:{timeframe}"
-    return {
+    block = {
         "timeframe": timeframe,
         "source": source,
         "aggregation": aggregation,
@@ -265,7 +265,62 @@ def build_tf_candles(
         "freshness_status": "FRESH" if candles else "SOURCE_UNAVAILABLE",
         "candle_count": len(candles),
         "candles": candles,
+        "includes_live_partial": False,
+        "partial_source": None,
     }
+    return append_live1a_partial_candle(block, timeframe)
+
+
+def append_live1a_partial_candle(candle_block: dict[str, Any], timeframe: str) -> dict[str, Any]:
+    """Append/replace current LIVE1A partial bar so intrabar fills anchor correctly."""
+    cog = _read_json(LIVE1A_HEALTH)
+    if not cog:
+        return candle_block
+    bars = cog.get("partial_bars") if isinstance(cog.get("partial_bars"), dict) else {}
+    bar = bars.get(timeframe) if isinstance(bars.get(timeframe), dict) else None
+    if not bar:
+        return candle_block
+    bar_open = _iso(bar.get("bar_open_timestamp"))
+    if not bar_open:
+        return candle_block
+    open_v = _f(bar.get("open"))
+    high_v = _f(bar.get("high") if bar.get("high") is not None else bar.get("high_so_far"))
+    low_v = _f(bar.get("low") if bar.get("low") is not None else bar.get("low_so_far"))
+    close_v = _f(bar.get("close") if bar.get("close") is not None else bar.get("last"))
+    if None in (open_v, high_v, low_v, close_v):
+        return candle_block
+    open_ts = _to_utc(bar_open)
+    if open_ts is None:
+        return candle_block
+    bar_close = _iso(open_ts + pd.Timedelta(seconds=int(DURATION_S.get(timeframe, 0))))
+    partial = {
+        "timestamp": bar_open,
+        "bar_open": bar_open,
+        "bar_close": bar_close,
+        "open": open_v,
+        "high": high_v,
+        "low": low_v,
+        "close": close_v,
+        "volume": _f(bar.get("volume") if bar.get("volume") is not None else bar.get("volume_so_far")) or 0.0,
+        "confirmed": False,
+        "is_partial": True,
+        "causal_cutoff_timestamp": _iso(bar.get("causal_cutoff_timestamp")),
+        "partial_source": "LIVE1A_INTRABAR_COGNITION_HEALTH",
+    }
+    candles = list(candle_block.get("candles") or [])
+    if candles and str(candles[-1].get("bar_open") or "") == bar_open:
+        candles[-1] = partial
+    else:
+        candles.append(partial)
+    candle_block = dict(candle_block)
+    candle_block["candles"] = candles
+    candle_block["candle_count"] = len(candles)
+    candle_block["confirmed_only"] = False
+    candle_block["includes_live_partial"] = True
+    candle_block["partial_source"] = "LIVE1A_INTRABAR_COGNITION_HEALTH"
+    candle_block["latest_partial_open"] = bar_open
+    candle_block["freshness_status"] = "FRESH"
+    return candle_block
 
 
 def _map_availability_status(raw: str | None) -> str:
@@ -1128,9 +1183,12 @@ def build_timeframe_chart_truth(
                 "aggregation": candle_block.get("aggregation"),
                 "timestamp_semantics": candle_block.get("timestamp_semantics"),
                 "timezone": "UTC",
-                "confirmed_only": True,
+                "confirmed_only": bool(candle_block.get("confirmed_only", True)),
+                "includes_live_partial": bool(candle_block.get("includes_live_partial")),
+                "partial_source": candle_block.get("partial_source"),
                 "latest_confirmed_open": candle_block.get("latest_confirmed_open"),
                 "latest_confirmed_close": candle_block.get("latest_confirmed_close"),
+                "latest_partial_open": candle_block.get("latest_partial_open"),
                 "freshness_status": freshness_status,
             },
             "candles": candle_block.get("candles") or [],

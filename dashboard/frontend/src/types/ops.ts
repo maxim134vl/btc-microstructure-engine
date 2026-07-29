@@ -122,11 +122,30 @@ export interface RuntimeTruthTrader {
   timeframe: string;
   book_exists?: boolean;
   direction?: string;
+  status?: string | null;
   open_position_id?: string | null;
   entry_price?: number | null;
+  entry_fill_price?: number | null;
+  entry_fill_timestamp?: string | null;
+  quantity?: number | null;
+  position_notional?: number | null;
+  risk_amount_usd?: number | null;
+  stop_loss_price?: number | null;
+  take_profit_price?: number | null;
+  risk_reward_ratio?: number | null;
+  context_event_id?: string | null;
+  lifecycle_episode_id?: string | null;
+  context_started_at?: string | null;
+  context_price?: number | null;
+  context_price_timestamp?: string | null;
+  mark_price?: number | null;
+  mark_timestamp?: string | null;
+  mark_side?: string | null;
+  mark_source?: string | null;
   open_risk_usd?: number | null;
   realized_pnl_usd?: number | null;
   unrealized_pnl_usd?: number | null;
+  open_position_count?: number | null;
   closed_trades?: number | null;
   trade_count?: number | null;
   last_command_intent?: string | null;
@@ -149,12 +168,19 @@ export interface RuntimeTruthCommandBus {
 
 export interface RuntimeTruthPortfolio {
   open_positions?: number | null;
+  open_position_count?: number | null;
   gross_open_risk_usd?: number | null;
   available_risk_usd?: number | null;
   portfolio_max_risk_usd?: number | null;
+  gross_open_notional_usd?: number | null;
   net_notional?: number | null;
   realized_pnl?: number | null;
   unrealized_pnl?: number | null;
+  mark_price?: number | null;
+  mark_timestamp?: string | null;
+  mark_side?: string | null;
+  mark_source?: string | null;
+  mark_status?: string | null;
 }
 
 export interface RuntimeTruthTimeframeTraders {

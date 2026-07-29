@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,51 @@ def _load_live1b_open_positions(*, timeframe: str | None = None) -> list[dict[st
         pid = str(row.get("position_id") or "")
         if pid:
             latest[pid] = row
+
+    # Context events for lineage fields
+    ctx_by_id: dict[str, dict[str, Any]] = {}
+    ctx_path = ROOT / "data" / "cognition" / "intrabar_context_events" / "events.jsonl"
+    for crow in _read_jsonl(ctx_path):
+        cid = str(crow.get("context_event_id") or "")
+        if cid:
+            ctx_by_id[cid] = crow
+
+    # Shared causal mark (LONG→bid, SHORT→ask)
+    mark_bid = mark_ask = None
+    mark_ts = None
+    mark_source = None
+    try:
+        from btc_ml.trading.intrabar_paper.mark import (  # type: ignore
+            mark_price_for_side,
+            mark_side_label,
+            position_notional_usd,
+            risk_reward_ratio,
+            unrealized_pnl_usd,
+        )
+    except Exception:
+        mark_price_for_side = None  # type: ignore
+        mark_side_label = None  # type: ignore
+        position_notional_usd = None  # type: ignore
+        risk_reward_ratio = None  # type: ignore
+        unrealized_pnl_usd = None  # type: ignore
+    try:
+        sys.path.insert(0, str(ROOT))
+        import ops_dashboard_runtime_truth as ops_truth  # type: ignore
+
+        bbo = ops_truth._latest_book_ticker_bbo()
+        if bbo:
+            mark_bid = bbo.get("best_bid")
+            mark_ask = bbo.get("best_ask")
+            mark_ts = bbo.get("mark_timestamp")
+            mark_source = bbo.get("mark_source")
+    except Exception:
+        bbo = None
+
+    try:
+        from btc_ml.live.intrabar.partial_bar_state import bar_open_for  # type: ignore
+    except Exception:
+        bar_open_for = None  # type: ignore
+
     out: list[dict[str, Any]] = []
     for row in latest.values():
         tf = str(row.get("timeframe") or "").upper()
@@ -91,20 +137,83 @@ def _load_live1b_open_positions(*, timeframe: str | None = None) -> list[dict[st
             continue
         if str(row.get("status") or "").upper() != "OPEN":
             continue
+        side = (_txt(row.get("side")) or "LONG").upper()
+        entry_ts = _iso(row.get("opened_at"))
+        entry_px = _f(row.get("entry_price"))
+        qty = _f(row.get("quantity"))
+        stop = _f(row.get("stop_loss_price"))
+        take = _f(row.get("take_profit_price"))
+        risk = _f(row.get("risk_amount_usd"))
+        ctx_id = _txt(row.get("entry_context_event_id"))
+        ctx = ctx_by_id.get(ctx_id or "")
+        notional = None
+        if entry_px is not None and qty is not None and position_notional_usd is not None:
+            notional = position_notional_usd(quantity=qty, entry_price=entry_px)
+        elif entry_px is not None and qty is not None:
+            notional = abs(entry_px * qty)
+        rr = None
+        if risk_reward_ratio is not None and entry_px is not None:
+            rr = risk_reward_ratio(
+                side=side,
+                entry_price=entry_px,
+                stop_loss_price=stop,
+                take_profit_price=take,
+            )
+        mark_px = None
+        upnl = 0.0
+        mark_side = None
+        if (
+            mark_price_for_side is not None
+            and mark_bid is not None
+            and mark_ask is not None
+            and entry_px is not None
+            and qty is not None
+        ):
+            mark_px = mark_price_for_side(side=side, best_bid=float(mark_bid), best_ask=float(mark_ask))
+            mark_side = mark_side_label(side) if mark_side_label else None
+            if unrealized_pnl_usd is not None:
+                upnl = unrealized_pnl_usd(
+                    side=side, entry_price=entry_px, quantity=qty, mark_price=mark_px
+                )
+        bar_anchor = None
+        if bar_open_for is not None and entry_ts:
+            try:
+                bar_anchor = bar_open_for(entry_ts, tf).isoformat().replace("+00:00", "Z")
+            except Exception:
+                bar_anchor = None
         out.append(
             {
                 "position_id": _txt(row.get("position_id")),
+                "paper_epoch_id": _txt(row.get("paper_epoch_id")),
                 "timeframe": tf,
                 "status": "OPEN",
-                "side": (_txt(row.get("side")) or "LONG").upper(),
-                "entry_timestamp": _iso(row.get("opened_at")),
-                "entry_price": _f(row.get("entry_price")),
-                "quantity": _f(row.get("quantity")),
-                "notional": None,
-                "stop_price": _f(row.get("stop_loss_price")),
-                "take_profit_price": _f(row.get("take_profit_price")),
-                "unrealized_pnl": 0.0,
+                "side": side,
+                "entry_timestamp": entry_ts,
+                "event_timestamp": entry_ts,
+                "entry_fill_timestamp": entry_ts,
+                "bar_anchor_time": bar_anchor,
+                "entry_price": entry_px,
+                "entry_fill_price": entry_px,
+                "quantity": qty,
+                "position_notional": notional,
+                "notional": notional,
+                "risk_amount_usd": risk,
+                "stop_price": stop,
+                "stop_loss_price": stop,
+                "take_profit_price": take,
+                "risk_reward_ratio": rr,
+                "unrealized_pnl": upnl,
+                "unrealized_pnl_usd": upnl,
+                "mark_price": mark_px,
+                "mark_timestamp": mark_ts,
+                "mark_side": mark_side,
+                "mark_source": mark_source,
+                "context_event_id": ctx_id,
+                "lifecycle_episode_id": _txt(row.get("lifecycle_episode_id")),
                 "episode_key": _txt(row.get("lifecycle_episode_id")),
+                "context_started_at": None if ctx is None else _iso(ctx.get("event_timestamp")),
+                "context_price": None if ctx is None else _f(ctx.get("context_event_price")),
+                "context_price_timestamp": None if ctx is None else _iso(ctx.get("last_trade_timestamp")),
                 "exit_timestamp": None,
                 "exit_price": None,
                 "realized_pnl": None,
@@ -112,7 +221,6 @@ def _load_live1b_open_positions(*, timeframe: str | None = None) -> list[dict[st
                 "command_id": _txt(row.get("entry_command_id")),
                 "source_book": f"INTRABAR_PAPER_{tf}",
                 "visual_kind": "OPEN_POSITION",
-                "paper_epoch_id": _txt(row.get("paper_epoch_id")),
             }
         )
     out.sort(key=lambda r: (r.get("timeframe") or "", r.get("entry_timestamp") or ""))

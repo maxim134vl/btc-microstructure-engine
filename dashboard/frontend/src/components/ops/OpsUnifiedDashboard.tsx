@@ -149,6 +149,16 @@ function usd(value?: number | null): string {
   return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "—";
 }
 
+function formatBtcQty(value?: number | null): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return value.toFixed(8).replace(/\.?0+$/, "");
+}
+
+function formatPrice(value?: number | null): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return `$${value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
+}
+
 function formatUptime(seconds?: number | null): string {
   if (seconds == null || !Number.isFinite(seconds)) return "—";
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
@@ -511,7 +521,7 @@ export function OpsUnifiedDashboard({
                   value={liveConnected ? `${usd(portfolio?.gross_open_risk_usd)} / ${usd(portfolio?.portfolio_max_risk_usd)}` : "—"}
                   hint={
                     liveConnected
-                      ? `available ${usd(portfolio?.available_risk_usd)} · open ${portfolio?.open_positions ?? "—"}`
+                      ? `available ${usd(portfolio?.available_risk_usd)} · open ${portfolio?.open_positions ?? "—"} · notional ${usd(portfolio?.gross_open_notional_usd)}`
                       : unavailableCaption(generatedAt)
                   }
                 />
@@ -545,12 +555,30 @@ export function OpsUnifiedDashboard({
                             size="sm"
                           />
                         </div>
-                        <p className="mt-1 text-[11px] text-ds-text-secondary">
-                          risk {usd(row.open_risk_usd)} · realized {usd(row.realized_pnl_usd)} · unrealized{" "}
-                          {usd(row.unrealized_pnl_usd)}
-                          {row.last_command_intent ? ` · cmd ${row.last_command_intent}` : ""}
-                          {row.last_command_timestamp ? ` · ${row.last_command_timestamp}` : ""}
-                        </p>
+                        {row.direction && row.direction !== "FLAT" ? (
+                          <div className="mt-1 space-y-0.5 text-[11px] text-ds-text-secondary">
+                            <p>
+                              risk {usd(row.open_risk_usd ?? row.risk_amount_usd)} · realized {usd(row.realized_pnl_usd)} · unrealized{" "}
+                              {usd(row.unrealized_pnl_usd)}
+                            </p>
+                            {row.open_position_id ? <p>Position {row.open_position_id}</p> : null}
+                            <p>
+                              Entry {usd(row.entry_fill_price ?? row.entry_price)}
+                              {row.quantity != null ? ` · Qty ${formatBtcQty(row.quantity)} BTC` : ""}
+                            </p>
+                            {row.position_notional != null ? <p>Notional {usd(row.position_notional)}</p> : null}
+                            <p>
+                              Stop {formatPrice(row.stop_loss_price)} · Take {formatPrice(row.take_profit_price)}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="mt-1 text-[11px] text-ds-text-secondary">
+                            risk {usd(row.open_risk_usd)} · realized {usd(row.realized_pnl_usd)} · unrealized{" "}
+                            {usd(row.unrealized_pnl_usd)}
+                            {row.last_command_intent ? ` · cmd ${row.last_command_intent}` : ""}
+                            {row.last_command_timestamp ? ` · ${row.last_command_timestamp}` : ""}
+                          </p>
+                        )}
                       </MiniCard>
                     ))}
                   </div>

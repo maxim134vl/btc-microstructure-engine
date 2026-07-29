@@ -154,17 +154,33 @@ def test_stale_aggregate_nulls_values():
 
 
 def test_live_build_parity_with_manager_portfolio_summary():
-    manager = truth._read_json(truth.MANAGER_PORTFOLIO_SUMMARY_PATH) or {}
     plane = truth.build_timeframe_traders()
     port = plane["portfolio"]
-    assert manager, "manager portfolio_summary must exist for live parity"
     assert port["risk_status"] in {"AVAILABLE", "ZERO_CONFIRMED"}
+    assert abs(float(port["available_risk_usd"]) - (float(port["max_risk_usd"]) - float(port["reserved_open_risk_usd"]))) < 1e-6
+    assert port["reserved_open_risk_usd"] == port["gross_open_risk_usd"]
+
+    if truth.live1b_paper_active():
+        # LIVE1B plane aggregates risk from active-epoch positions.jsonl, not legacy manager summary.
+        assert port["risk_source"] == "LIVE1B_INTRABAR_PAPER_POSITIONS"
+        open_rows = truth._load_live1b_open_positions(
+            books_root=ROOT
+            / "data/trading/intrabar_paper"
+            / str(port.get("paper_epoch_id") or "")
+            / "books",
+            paper_epoch_id=str(port.get("paper_epoch_id") or ""),
+        )
+        expected_risk = sum(float(r.get("risk_amount_usd") or 0.0) for r in open_rows)
+        assert port["gross_open_risk_usd"] == pytest.approx(expected_risk)
+        assert port["open_positions"] == len(open_rows)
+        return
+
+    manager = truth._read_json(truth.MANAGER_PORTFOLIO_SUMMARY_PATH) or {}
+    assert manager, "manager portfolio_summary must exist for live parity"
     assert port["gross_open_risk_usd"] == pytest.approx(float(manager["gross_open_risk_usd"]))
     assert port["available_risk_usd"] == pytest.approx(float(manager["available_risk_usd"]))
     assert port["portfolio_max_risk_usd"] == pytest.approx(float(manager["portfolio_max_risk_usd"]))
     assert port["open_positions"] == int(manager["open_positions"])
-    assert port["reserved_open_risk_usd"] == port["gross_open_risk_usd"]
-    assert abs(float(port["available_risk_usd"]) - (float(port["max_risk_usd"]) - float(port["reserved_open_risk_usd"]))) < 1e-6
 
     by_tf = {t["timeframe"]: t for t in plane["traders"]}
     for tf, view in (manager.get("traders") or {}).items():
