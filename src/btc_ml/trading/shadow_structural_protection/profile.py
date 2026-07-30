@@ -73,13 +73,20 @@ def build_exact_candle_volume_profile(
     src_quote = float(df["quote_quantity"].sum()) if "quote_quantity" in df.columns else float((df["price"] * df["quantity"]).sum())
 
     bins: dict[float, dict[str, float]] = {}
-    for _, row in df.iterrows():
-        px = float(row["price"])
-        qty = float(row["quantity"])
-        qq = float(row["quote_quantity"]) if "quote_quantity" in row.index else px * qty
-        # Floor to bin
+    prices = df["price"].astype(float).to_numpy()
+    qtys = df["quantity"].astype(float).to_numpy()
+    if "quote_quantity" in df.columns:
+        qqs = df["quote_quantity"].astype(float).to_numpy()
+    else:
+        qqs = prices * qtys
+    if "buyer_is_market_maker" in df.columns:
+        mm = df["buyer_is_market_maker"].astype(bool).to_numpy()
+    else:
+        mm = None
+    for i, px in enumerate(prices):
+        qty = float(qtys[i])
+        qq = float(qqs[i])
         bin_px = (int(px / bin_size)) * bin_size
-        # Stabilize float key
         bin_px = round(bin_px / tick) * tick
         slot = bins.setdefault(
             bin_px,
@@ -87,9 +94,8 @@ def build_exact_candle_volume_profile(
         )
         slot["base_volume"] += qty
         slot["quote_volume"] += qq
-        # buyer_is_market_maker True => seller aggressor; False => buyer aggressor
-        if "buyer_is_market_maker" in row.index:
-            if bool(row["buyer_is_market_maker"]):
+        if mm is not None:
+            if bool(mm[i]):
                 slot["sell_aggressor_volume"] += qty
             else:
                 slot["buy_aggressor_volume"] += qty

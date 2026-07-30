@@ -622,9 +622,49 @@ export function OpsUnifiedDashboard({
                 return (
                   <>
                     <MetricLine label="Mode" value={String(sh?.mode || "OBSERVE_ONLY")} />
+                    <MetricLine label="STP generation" value={String(sh?.stp_generation || "—")} />
+                    <MetricLine
+                      label="Classification"
+                      value={`${String(sh?.classification_model || "—")} / ${String(sh?.classification_mode || "—")}`}
+                    />
                     <MetricLine label="Exact intrabar data" value={String(sh?.exact_intrabar_data ?? "—")} />
                     <MetricLine label="Candidates" value={String(sh?.candidate_count ?? "—")} />
+                    <MetricLine
+                      label="Bars by TF"
+                      value={(() => {
+                        const b = (sh?.bars_built_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="Significant candles"
+                      value={(() => {
+                        const b = (sh?.significant_candles_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="Exact profiles by TF"
+                      value={(() => {
+                        const b = (sh?.exact_profiles_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
                     <MetricLine label="Exact profiles" value={String(sh?.exact_profile_count ?? "—")} />
+                    <MetricLine
+                      label="Detected zones"
+                      value={(() => {
+                        const b = (sh?.zones_detected_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="Reaction-proven zones"
+                      value={(() => {
+                        const b = (sh?.zones_reaction_proven_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
                     <MetricLine
                       label="Protective zones"
                       value={`${sh?.protective_zone_detected_count ?? "—"} detected / ${sh?.protective_zone_usable_count ?? sh?.protective_zone_found_count ?? "—"} usable`}
@@ -634,8 +674,29 @@ export function OpsUnifiedDashboard({
                       value={`${sh?.target_zone_detected_count ?? "—"} detected / ${sh?.target_zone_usable_count ?? sh?.target_zone_found_count ?? "—"} usable`}
                     />
                     <MetricLine
+                      label="Usable protective by TF"
+                      value={(() => {
+                        const b = (sh?.protective_usable_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="Usable target by TF"
+                      value={(() => {
+                        const b = (sh?.target_usable_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
                       label="Reaction proof"
                       value={`${sh?.reaction_proven_count ?? "—"} proven / ${sh?.reaction_missing_count ?? "—"} missing`}
+                    />
+                    <MetricLine
+                      label="Structural EXECUTE by TF"
+                      value={(() => {
+                        const b = (sh?.structural_execute_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
                     />
                     <MetricLine label="Virtual positions" value={String(sh?.virtual_positions_open ?? "—")} />
                     <MetricLine
@@ -657,7 +718,7 @@ export function OpsUnifiedDashboard({
                       value={sh?.research_valid == null ? "—" : sh.research_valid ? "VALID" : "INVALID"}
                     />
                     <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
-                      Structural levels are research-only and never sent to LIVE1B or paper books.
+                      Structural levels are VIRTUAL / NOT ACTIVE research-only and never sent to LIVE1B or paper books.
                     </p>
                   </>
                 );
