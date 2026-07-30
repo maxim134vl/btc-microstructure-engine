@@ -184,3 +184,135 @@ def test_stp_stale_close_repair_reclaims_processed(tmp_path: Path):
     eng.processed_closes.add("trd_test_1")
     eng._repair_stale_processed_closes()
     assert "trd_test_1" not in eng.processed_closes
+
+
+def test_stp_missing_baseline_outcome_catchup(tmp_path: Path):
+    """Shadow catch-up: reclaim processed close when BASELINE outcome missing; attach it."""
+    from btc_ml.trading.shadow_structural_protection import (
+        EXPECTED_ACTIVE_FP,
+        EXPECTED_EPOCH,
+        EXPECTED_PARENT_FP,
+    )
+    from btc_ml.trading.shadow_structural_protection.engine import StructuralProtectionEngine
+
+    repo = tmp_path / "stp_repo_missing_baseline"
+    (repo / "config").mkdir(parents=True)
+    import shutil
+
+    shutil.copy(REPO / "config/intrabar_paper_execution.json", repo / "config/intrabar_paper_execution.json")
+    books = repo / "data/trading/intrabar_paper" / EXPECTED_EPOCH / "books"
+    books.mkdir(parents=True)
+    for name in ("signals", "commands", "orders", "fills", "positions"):
+        (books / f"{name}.jsonl").write_text("", encoding="utf-8")
+    (books / "trades.jsonl").write_text(
+        json.dumps(
+            {
+                "trade_id": "trd_test_missing_baseline",
+                "position_id": "pos_test_mb",
+                "timeframe": "H1",
+                "side": "LONG",
+                "exit_ts": "2026-07-30T06:00:00Z",
+                "exit_price": 64000.0,
+                "exit_reason": "CONTEXT_END",
+                "entry_price": 64100.0,
+                "quantity": 1.0,
+                "net_pnl_usd": -10.0,
+                "gross_pnl_usd": -5.0,
+                "fees_usd": 3.0,
+                "slippage_usd": 2.0,
+                "risk_amount_usd": 1000.0,
+                "paper_epoch_id": EXPECTED_EPOCH,
+            }
+        )
+        + "\n"
+    )
+    epochs = repo / "data/trading/paper_epochs"
+    epochs.mkdir(parents=True)
+    (epochs / "active.json").write_text(
+        json.dumps(
+            {
+                "paper_epoch_id": EXPECTED_EPOCH,
+                "trading_contract_fingerprint": EXPECTED_ACTIVE_FP,
+                "parent_trading_contract_fingerprint": EXPECTED_PARENT_FP,
+            }
+        )
+        + "\n"
+    )
+    (repo / "data/raw_market_events_v2/agg_trade").mkdir(parents=True)
+    shadow = repo / "data/trading/shadow_structural_protection"
+    shadow.mkdir(parents=True)
+    (shadow / "virtual_positions.jsonl").write_text("", encoding="utf-8")
+    (shadow / "virtual_trades.jsonl").write_text("", encoding="utf-8")
+    (shadow / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "processed_candidates": [],
+                "processed_closes": ["trd_test_missing_baseline"],
+                "stp11_migrated": True,
+                "research_valid": True,
+                "baseline_match_count": 0,
+                "baseline_divergence_count": 0,
+                "lookahead_violation_count": 0,
+                "write_boundary_violation_count": 0,
+                "insufficient_causal_data_count": 0,
+            }
+        )
+        + "\n"
+    )
+    for name in (
+        "policy_decisions",
+        "economic_outcomes",
+        "volume_zones",
+        "volume_profiles",
+        "source_candles",
+        "causal_market_snapshots",
+    ):
+        (shadow / f"{name}.jsonl").write_text("", encoding="utf-8")
+
+    eng = StructuralProtectionEngine(
+        repo=repo,
+        shadow_dir=shadow,
+        strict_epoch=True,
+        allow_start_without_exact=True,
+    )
+    # Candidate under active manifest; no OPEN virtuals; no baseline virtual trade.
+    (shadow / "candidate_snapshots.jsonl").write_text(
+        json.dumps(
+            {
+                "candidate_id": f"{EXPECTED_EPOCH}|pos_test_mb|fill_x",
+                "position_id": "pos_test_mb",
+                "timeframe": "H1",
+                "side": "LONG",
+                "entry_timestamp": "2026-07-30T05:00:00Z",
+                "decision_timestamp": "2026-07-30T05:00:00Z",
+                "entry_executable_price": 64100.0,
+                "canonical_stop_price": 63500.0,
+                "canonical_take_price": 65000.0,
+                "canonical_quantity": 1.0,
+                "canonical_notional_usd": 64100.0,
+                "canonical_risk_budget_usd": 1000.0,
+                "policy_manifest_fingerprint": eng.manifest_fp,
+            }
+        )
+        + "\n"
+    )
+    eng.processed_closes.add("trd_test_missing_baseline")
+    eng.open_by_policy = {pid: [] for pid in eng.open_by_policy}
+    eng._repair_stale_processed_closes()
+    assert "trd_test_missing_baseline" not in eng.processed_closes
+
+    actions = eng.process_new_closes()
+    assert actions and actions[0].get("status") == "CLOSED"
+    assert "trd_test_missing_baseline" in eng.processed_closes
+    assert eng._baseline_outcome_attached(
+        trade_id="trd_test_missing_baseline", position_id="pos_test_mb"
+    )
+    trades = [
+        json.loads(ln)
+        for ln in (shadow / "virtual_trades.jsonl").read_text().splitlines()
+        if ln.strip()
+    ]
+    baseline = [t for t in trades if t.get("policy_id") == "BASELINE_CANONICAL"]
+    assert len(baseline) == 1
+    assert baseline[0]["trade_id"] == "trd_test_missing_baseline"
+    assert baseline[0]["policy_manifest_fingerprint"] == eng.manifest_fp

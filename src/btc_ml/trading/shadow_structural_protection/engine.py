@@ -278,11 +278,29 @@ class StructuralProtectionEngine:
         self._rebuild_open_index()
         self._repair_stale_processed_closes()
 
-    def _repair_stale_processed_closes(self) -> None:
-        """Re-open close processing when current-manifest virtual positions remain OPEN.
+    def _baseline_outcome_attached(self, *, trade_id: str, position_id: str) -> bool:
+        """True when active-manifest BASELINE_CANONICAL virtual trade exists for this close."""
+        tid = str(trade_id or "")
+        pid = str(position_id or "")
+        for row in self.store.read_all("virtual_trades"):
+            if row.get("policy_id") != "BASELINE_CANONICAL":
+                continue
+            if row.get("policy_manifest_fingerprint") != self.manifest_fp:
+                continue
+            if tid and str(row.get("trade_id") or "") == tid:
+                return True
+            vpid = str(row.get("virtual_position_id") or "")
+            if pid and (vpid.endswith(f"_{pid}") or pid in str(row.get("candidate_id") or "")):
+                return True
+        return False
 
-        STP1.1 migration can recreate baseline opens after trades were already
-        marked processed; those closes must be replayable without rewriting history.
+    def _repair_stale_processed_closes(self) -> None:
+        """Re-open close processing for catch-up / migration edge cases.
+
+        1) Current-manifest virtual positions remain OPEN after trade was marked processed
+           (STP1.1 migration can recreate baseline opens).
+        2) Active-manifest BASELINE_CANONICAL outcome is missing for a closed paper trade
+           (structural sleeves closed while baseline never materialized / already-open skip).
         """
         open_position_ids = {
             str(p.get("position_id") or "")
@@ -290,18 +308,63 @@ class StructuralProtectionEngine:
             for p in opens
             if p.get("position_id")
         }
-        if not open_position_ids:
-            return
         reclaim: set[str] = set()
         for trade in self.books.read_all("trades"):
             tid = str(trade.get("trade_id") or "")
             pid = str(trade.get("position_id") or "")
-            if tid and pid in open_position_ids and tid in self.processed_closes:
+            if not tid or tid not in self.processed_closes:
+                continue
+            if pid and pid in open_position_ids:
+                reclaim.add(tid)
+                continue
+            if not self._baseline_outcome_attached(trade_id=tid, position_id=pid):
                 reclaim.add(tid)
         if reclaim:
             self.processed_closes -= reclaim
             self.errors.append(f"reclaimed_stale_processed_closes:{sorted(reclaim)}")
             self._save_checkpoint()
+
+    def _materialize_baseline_for_close(self, cand: dict[str, Any], position_id: str) -> dict[str, Any]:
+        """Build an ephemeral baseline virtual position for shadow catch-up close attachment."""
+        vpid = f"vpos_BASELINE_CANONICAL_{position_id}"
+        row = {
+            "virtual_position_id": vpid,
+            "policy_id": "BASELINE_CANONICAL",
+            "candidate_id": cand.get("candidate_id"),
+            "position_id": position_id,
+            "timeframe": cand.get("timeframe"),
+            "side": cand.get("side"),
+            "status": "OPEN",
+            "entry_timestamp": cand.get("entry_timestamp"),
+            "entry_executable_price": cand.get("entry_executable_price"),
+            "structural_stop_price": cand.get("canonical_stop_price"),
+            "structural_take_price": cand.get("canonical_take_price"),
+            "quantity": cand.get("canonical_quantity"),
+            "notional_usd": cand.get("canonical_notional_usd"),
+            "risk_budget_usd": cand.get("canonical_risk_budget_usd"),
+            "protective_zone_id": None,
+            "target_zone_id": None,
+            "levels_frozen": True,
+            "snapshot_id": f"snap_{cand.get('candidate_id')}_BASELINE_CANONICAL",
+            "policy_manifest_fingerprint": self.manifest_fp,
+            "research_valid": True,
+            "invalidated": False,
+            "catchup_baseline_materialized": True,
+        }
+        self.store.append("virtual_positions", row)
+        tf = str(cand.get("timeframe") or "")
+        baseline_open_same_tf = any(
+            str(p.get("timeframe")) == tf for p in self.open_by_policy.get("BASELINE_CANONICAL", [])
+        )
+        if not baseline_open_same_tf and tf:
+            mark_open(
+                self.sleeves,
+                policy_id="BASELINE_CANONICAL",
+                timeframe=tf,
+                position_id=vpid,
+            )
+            self.open_by_policy.setdefault("BASELINE_CANONICAL", []).append(row)
+        return row
 
     def _build_manifest(self) -> dict[str, Any]:
         return {
@@ -1369,6 +1432,7 @@ class StructuralProtectionEngine:
         self.open_by_policy.setdefault(policy_id, []).append(row)
 
     def process_new_closes(self) -> list[dict[str, Any]]:
+        self._repair_stale_processed_closes()
         actions = []
         for trade in self.books.read_all("trades"):
             tid = str(trade.get("trade_id") or "")
@@ -1382,11 +1446,19 @@ class StructuralProtectionEngine:
 
     def _close_against_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
         position_id = str(trade.get("position_id") or "")
+        trade_id = str(trade.get("trade_id") or "")
         cand = None
+        fallback = None
         for row in reversed(self.store.read_all("candidate_snapshots")):
-            if str(row.get("position_id")) == position_id:
+            if str(row.get("position_id")) != position_id:
+                continue
+            if row.get("policy_manifest_fingerprint") == self.manifest_fp:
                 cand = row
                 break
+            if fallback is None:
+                fallback = row
+        if cand is None:
+            cand = fallback
         if cand is None:
             return {"status": "NO_CANDIDATE", "trade_id": trade.get("trade_id")}
 
@@ -1401,6 +1473,12 @@ class StructuralProtectionEngine:
             for matched in [[p for p in opens if str(p.get("position_id")) == position_id]]
             if matched
         ]
+        has_baseline_open = any(pid == "BASELINE_CANONICAL" for pid, _ in matched_policies)
+        if not has_baseline_open and not self._baseline_outcome_attached(
+            trade_id=trade_id, position_id=position_id
+        ):
+            baseline_vpos = self._materialize_baseline_for_close(cand, position_id)
+            matched_policies = [("BASELINE_CANONICAL", baseline_vpos), *matched_policies]
         if not matched_policies:
             return {"status": "NO_OPEN_VIRTUAL", "trade_id": trade.get("trade_id")}
 
