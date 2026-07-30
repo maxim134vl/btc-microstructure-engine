@@ -1132,9 +1132,67 @@ export function OpsUnifiedDashboard({
                 <MetricLine label="Context" value={liveConnected ? String(driftSummary.context_drift_status || "—") : "—"} />
                 <MetricLine label="Performance" value={liveConnected ? String(driftSummary.performance_drift_status || "—") : "—"} />
               </Panel>
-              <Panel title="Candidate / Shadow">
-                <MetricLine label="Candidate" value={liveConnected ? String(shadowSummary.candidate_status || "NONE_REGISTERED") : "—"} />
-                <MetricLine label="Shadow" value={liveConnected ? String(shadowSummary.shadow_status || "—") : "—"} />
+              <Panel title="Shadow Model">
+                <MetricLine
+                  label="Operational"
+                  value={
+                    liveConnected
+                      ? String(
+                          shadowSummary.unified_operational_status ||
+                            (assurance?.unified_shadow_model as Record<string, unknown> | null | undefined)
+                              ?.operational_status ||
+                            shadowSummary.shadow_status ||
+                            "—",
+                        )
+                      : "—"
+                  }
+                />
+                <MetricLine
+                  label="Evidence"
+                  value={
+                    liveConnected
+                      ? String(
+                          shadowSummary.unified_evidence_status ||
+                            (assurance?.unified_shadow_model as Record<string, unknown> | null | undefined)
+                              ?.evidence_status ||
+                            "—",
+                        )
+                      : "—"
+                  }
+                />
+                <MetricLine
+                  label="Runtime impact"
+                  value={liveConnected ? String(shadowSummary.runtime_impact || "NONE") : "—"}
+                />
+                <MetricLine
+                  label="Promotion"
+                  value={
+                    liveConnected
+                      ? shadowSummary.promotion_eligible === true
+                        ? "ELIGIBLE"
+                        : `NOT ELIGIBLE — ${String(shadowSummary.promotion_ineligibility_reason || "NO_PROMOTABLE_CANDIDATE_MODEL")}`
+                      : "—"
+                  }
+                />
+                <MetricLine
+                  label="EQCORR / STP"
+                  value={
+                    liveConnected
+                      ? `${String(shadowSummary.eqcorr_process_status || "—")} / ${String(shadowSummary.stp_process_status || "—")}`
+                      : "—"
+                  }
+                />
+                <MetricLine
+                  label="Cross-layer coverage"
+                  value={
+                    liveConnected
+                      ? shadowSummary.cross_layer_total != null
+                        ? `${String(shadowSummary.cross_layer_covered ?? 0)}/${String(shadowSummary.cross_layer_total)}`
+                        : "—"
+                      : "—"
+                  }
+                />
+                <MetricLine label="Candidate (MODEL-7)" value={liveConnected ? String(shadowSummary.candidate_status || "NONE_REGISTERED") : "—"} />
               </Panel>
               <Panel title="Governance">
                 <MetricLine label="Eligibility" value={liveConnected ? String(govSummary.eligibility_status || "—") : "—"} />

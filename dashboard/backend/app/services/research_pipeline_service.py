@@ -1899,6 +1899,24 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
     return str(value)
 
 
+def load_unified_shadow_model_payload() -> dict[str, Any] | None:
+    """Read-only SHADOW-MODEL1 latest view — never writes or starts processes."""
+    path = Path(REPO_ROOT) / "data" / "model_assurance" / "shadow" / "latest" / "current.json"
+    try:
+        if not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        safe = _json_safe(payload)
+        if not isinstance(safe, dict):
+            return None
+        json.dumps(safe, allow_nan=False)
+        return safe
+    except Exception:
+        return None
+
+
 def load_model_assurance_payload() -> dict[str, Any]:
     """Read canonical MODEL-9 summary only — never raise into the OPS endpoint."""
     path = Path(REPO_ROOT) / "data" / "model_assurance" / "summary" / "latest_summary.json"
@@ -1913,6 +1931,35 @@ def load_model_assurance_payload() -> dict[str, Any]:
             return _model_assurance_missing(reason="latest_summary.json failed JSON sanitization")
         # Prove serializability before attaching to OPS response.
         json.dumps(safe, allow_nan=False)
+        unified = load_unified_shadow_model_payload()
+        if unified is not None:
+            safe["unified_shadow_model"] = unified
+            # Enrich MODEL-7 candidate_shadow summary with current overlay statuses for the existing panel.
+            cand = safe.get("candidate_shadow")
+            if isinstance(cand, dict):
+                summary = dict(cand.get("summary") or {})
+                summary["unified_operational_status"] = unified.get("operational_status")
+                summary["unified_evidence_status"] = unified.get("evidence_status")
+                summary["unified_status"] = unified.get("status")
+                summary["promotion_eligible"] = bool(unified.get("promotion_eligible", False))
+                summary["promotion_ineligibility_reason"] = unified.get("promotion_ineligibility_reason")
+                summary["runtime_impact"] = (unified.get("runtime_safety") or {}).get("runtime_impact") or "NONE"
+                cov = unified.get("coverage") or {}
+                summary["cross_layer_covered"] = cov.get("cross_layer_fully_covered_closed_trades")
+                summary["cross_layer_total"] = cov.get("cross_layer_total_closed_trades")
+                comps = unified.get("shadow_components") or {}
+                eq = comps.get("EQCORR") or {}
+                stp = comps.get("STP2.1") or {}
+                summary["eqcorr_process_status"] = eq.get("process_status")
+                summary["eqcorr_baseline_pending"] = eq.get("baseline_outcomes_pending")
+                summary["eqcorr_baseline_divergence"] = eq.get("baseline_divergence_count")
+                summary["stp_process_status"] = stp.get("process_status")
+                summary["stp_baseline_pending"] = stp.get("baseline_outcomes_pending")
+                summary["stp_baseline_divergence"] = stp.get("baseline_divergence_count")
+                summary["stp_manifest_fingerprint"] = stp.get("manifest_fingerprint")
+                summary["eqcorr_manifest_fingerprint"] = eq.get("manifest_fingerprint")
+                cand = {**cand, "summary": summary}
+                safe["candidate_shadow"] = cand
         return safe
     except Exception as exc:
         return {

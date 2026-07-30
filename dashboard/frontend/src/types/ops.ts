@@ -555,6 +555,8 @@ export interface ModelAssuranceSnapshot {
   drift_monitoring?: ModelAssuranceModuleSection;
   candidate_shadow?: ModelAssuranceModuleSection;
   governance_promotion?: ModelAssuranceModuleSection;
+  /** SHADOW-MODEL1: ACTIVE + EQCORR + STP2.1 unified read-only contract */
+  unified_shadow_model?: Record<string, unknown> | null;
   service_health?: Record<string, string>;
   promotion_blockers?: string[];
   environment_blockers?: string[];
