@@ -170,6 +170,32 @@ class StructuralProtectionEngine:
         self._legacy_manifest_fps: set[str] = set(ck.get("invalidated_manifest_fingerprints") or [])
         self._migrate_policy_integrity_if_needed(ck)
         self._rebuild_open_index()
+        self._repair_stale_processed_closes()
+
+    def _repair_stale_processed_closes(self) -> None:
+        """Re-open close processing when current-manifest virtual positions remain OPEN.
+
+        STP1.1 migration can recreate baseline opens after trades were already
+        marked processed; those closes must be replayable without rewriting history.
+        """
+        open_position_ids = {
+            str(p.get("position_id") or "")
+            for opens in self.open_by_policy.values()
+            for p in opens
+            if p.get("position_id")
+        }
+        if not open_position_ids:
+            return
+        reclaim: set[str] = set()
+        for trade in self.books.read_all("trades"):
+            tid = str(trade.get("trade_id") or "")
+            pid = str(trade.get("position_id") or "")
+            if tid and pid in open_position_ids and tid in self.processed_closes:
+                reclaim.add(tid)
+        if reclaim:
+            self.processed_closes -= reclaim
+            self.errors.append(f"reclaimed_stale_processed_closes:{sorted(reclaim)}")
+            self._save_checkpoint()
 
     def _build_manifest(self) -> dict[str, Any]:
         return {
@@ -272,6 +298,7 @@ class StructuralProtectionEngine:
         )
         # Force candidate reprocess under new manifest; keep jsonl history.
         self.processed_candidates = set()
+        self.processed_closes = set()
         self.baseline_match_count = 0
         self.baseline_divergence_count = 0
         self.insufficient_causal_data_count = 0
@@ -301,6 +328,7 @@ class StructuralProtectionEngine:
             "stp11_migrated": True,
             "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
             "processed_candidates": [],
+            "processed_closes": [],
             "research_valid": True,
             "active_policy_manifest_fingerprint": self.manifest_fp,
             **self.counters,
@@ -1063,12 +1091,21 @@ class StructuralProtectionEngine:
         if entry_ts is None or exit_ts is None:
             return {"status": "INSUFFICIENT_CAUSAL_DATA", "trade_id": trade.get("trade_id")}
 
-        bbo = load_book_ticker(repo=self.repo, start=entry_ts, end=exit_ts)
-        for policy_id, opens in list(self.open_by_policy.items()):
-            matched = [p for p in opens if str(p.get("position_id")) == position_id]
-            if not matched:
-                continue
-            vpos = matched[0]
+        matched_policies = [
+            (policy_id, matched[0])
+            for policy_id, opens in list(self.open_by_policy.items())
+            for matched in [[p for p in opens if str(p.get("position_id")) == position_id]]
+            if matched
+        ]
+        if not matched_policies:
+            return {"status": "NO_OPEN_VIRTUAL", "trade_id": trade.get("trade_id")}
+
+        needs_bbo = any(pid != "BASELINE_CANONICAL" for pid, _ in matched_policies)
+        bbo = None
+        if needs_bbo:
+            bbo = load_book_ticker(repo=self.repo, start=entry_ts, end=exit_ts)
+
+        for policy_id, vpos in matched_policies:
             if policy_id == "BASELINE_CANONICAL":
                 exit_price = float(trade.get("exit_price") or 0.0)
                 exit_reason = trade.get("exit_reason")

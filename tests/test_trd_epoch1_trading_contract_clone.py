@@ -1,11 +1,20 @@
-"""TRD-EPOCH1: full trading-contract clone + zero-diff / risk-delta proofs."""
+"""TRD-EPOCH1: full trading-contract clone + zero-diff / risk-delta proofs.
+
+Epoch registry / active pointer / books used by these tests live only under
+temporary directories. Runtime active.json and paper books are never read or written.
+"""
 
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
 
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.economics import resolve_risk_sizing
@@ -29,8 +38,14 @@ from btc_ml.trading.intrabar_paper.trading_contract import (
     trading_contract_fingerprint,
     validate_risk_only_diff,
 )
+from epoch_isolation_helpers import (
+    WORKSPACE,
+    assert_no_runtime_touch,
+    make_isolated_contract_repo,
+    runtime_file_hashes,
+)
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = WORKSPACE
 
 
 def _ctx(
@@ -136,7 +151,6 @@ def _run_scenario(eng: IntrabarPaperEngine) -> None:
             bid=64710.0,
             ask=64712.0,
         ),
-        # Same episode after flat → episode dedup
         _ctx(
             eid="CTX_start_m15_dup",
             etype="CONTEXT_START",
@@ -211,8 +225,13 @@ def _books(eng: IntrabarPaperEngine) -> dict:
     }
 
 
-def test_01_full_manifest_no_unknown_critical():
-    manifest = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+@pytest.fixture
+def isolated_source_repo(tmp_path: Path) -> Path:
+    return make_isolated_contract_repo(tmp_path, stamp="SRC", activate_source=True)
+
+
+def test_01_full_manifest_no_unknown_critical(isolated_source_repo: Path):
+    manifest = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     assert manifest["completeness"]["status"] == "COMPLETE"
     assert manifest["completeness"]["critical_unknown"] == []
     assert manifest["capital"]["capital_model"] == "SHARED_MASTER_REALIZED_EQUITY"
@@ -220,32 +239,32 @@ def test_01_full_manifest_no_unknown_critical():
     assert "execution_config_snapshot" in manifest["legacy_epoch_gaps"]["not_in_epoch_json_before_clone"]
 
 
-def test_02_03_zero_diff_clone_manifest_and_fingerprint(tmp_path: Path):
-    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+def test_02_03_zero_diff_clone_manifest_and_fingerprint(tmp_path: Path, isolated_source_repo: Path):
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     clone = clone_trading_epoch_contract(
         CANONICAL_SOURCE_EPOCH,
         "TEST_ZERO_DIFF_CLONE",
         {},
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
     assert clone.diff == {}
     assert clone.fingerprint == clone.source_fingerprint
     assert clone.fingerprint == trading_contract_fingerprint(source)
-    active = load_active_epoch(load_intrabar_paper_config(repo_root=REPO).epochs_root)
+    active = load_active_epoch(load_intrabar_paper_config(repo_root=isolated_source_repo).epochs_root)
     assert active is not None
     assert active.paper_epoch_id == CANONICAL_SOURCE_EPOCH
     assert clone.new_epoch_id != active.paper_epoch_id
 
 
-def test_04_zero_diff_replay(tmp_path: Path):
-    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+def test_04_zero_diff_replay(tmp_path: Path, isolated_source_repo: Path):
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     clone = clone_trading_epoch_contract(
         CANONICAL_SOURCE_EPOCH,
         "TEST_ZERO_DIFF_CLONE",
         {},
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
@@ -259,14 +278,14 @@ def test_04_zero_diff_replay(tmp_path: Path):
     assert result["status"] == ZERO_DIFF_MATCH, result
 
 
-def test_05_risk_only_clone_allowlisted_diff(tmp_path: Path):
-    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+def test_05_risk_only_clone_allowlisted_diff(tmp_path: Path, isolated_source_repo: Path):
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     overrides = risk_delta_overrides_per_tf_equity()
     clone = clone_trading_epoch_contract(
         CANONICAL_SOURCE_EPOCH,
         "TEST_RISK_DELTA_CLONE",
         overrides,
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
@@ -278,26 +297,26 @@ def test_05_risk_only_clone_allowlisted_diff(tmp_path: Path):
             CANONICAL_SOURCE_EPOCH,
             "TEST_BAD",
             {"exit_rules.context_end": "CHANGED"},
-            repo_root=REPO,
+            repo_root=isolated_source_repo,
             output_root=tmp_path / "clones",
             source_manifest=source,
         )
 
 
-def test_06_07_risk_budget_and_quantity_match_at_100k(tmp_path: Path):
-    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+def test_06_07_risk_budget_and_quantity_match_at_100k(tmp_path: Path, isolated_source_repo: Path):
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     risk = clone_trading_epoch_contract(
         CANONICAL_SOURCE_EPOCH,
         "TEST_RISK_DELTA_CLONE",
         risk_delta_overrides_per_tf_equity(),
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
     budget = compute_risk_budget_usd(risk.manifest, timeframe="H4", current_equity_usd=100_000.0)
     assert budget == pytest.approx(1000.0)
 
-    cfg = load_intrabar_paper_config(repo_root=REPO)
+    cfg = load_intrabar_paper_config(repo_root=isolated_source_repo)
     entry = 64687.82
     cur = resolve_risk_sizing(cfg=cfg, side="LONG", entry_price=entry, equity_usd=100_000.0)
     der = size_with_contract(
@@ -321,17 +340,17 @@ def test_06_07_risk_budget_and_quantity_match_at_100k(tmp_path: Path):
     assert tc.resolve_risk_sizing is eco.resolve_risk_sizing
 
 
-def test_08_09_10_different_equity_only_quantity_fields_change(tmp_path: Path):
-    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+def test_08_09_10_different_equity_only_quantity_fields_change(tmp_path: Path, isolated_source_repo: Path):
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     risk = clone_trading_epoch_contract(
         CANONICAL_SOURCE_EPOCH,
         "TEST_RISK_DELTA_CLONE_EQ",
         risk_delta_overrides_per_tf_equity(),
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
-    cfg = load_intrabar_paper_config(repo_root=REPO)
+    cfg = load_intrabar_paper_config(repo_root=isolated_source_repo)
     entry = 64687.82
     a = size_with_contract(
         cfg=cfg,
@@ -368,13 +387,13 @@ def test_11_13_14_context_dedup_end_flip_tpsl_unchanged_in_zero_diff(tmp_path: P
     assert len(ba["trades"]) >= 1
 
 
-def test_12_context_end_flip_rules_in_manifest_stable(tmp_path: Path):
-    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+def test_12_context_end_flip_rules_in_manifest_stable(tmp_path: Path, isolated_source_repo: Path):
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     zero = clone_trading_epoch_contract(
         CANONICAL_SOURCE_EPOCH,
         "TEST_ZERO_DIFF_CLONE2",
         {},
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
@@ -384,7 +403,7 @@ def test_12_context_end_flip_rules_in_manifest_stable(tmp_path: Path):
         CANONICAL_SOURCE_EPOCH,
         "TEST_RISK_DELTA_CLONE2",
         risk_delta_overrides_per_tf_equity(),
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
@@ -398,21 +417,25 @@ def test_12_context_end_flip_rules_in_manifest_stable(tmp_path: Path):
     assert risk.manifest["market_execution"] == source["market_execution"]
 
 
-def test_15_current_positions_and_epoch_unchanged():
-    info = active_epoch_unchanged(repo_root=REPO)
+def test_15_temp_active_epoch_and_source_books_isolated(isolated_source_repo: Path):
+    info = active_epoch_unchanged(repo_root=isolated_source_repo)
     assert info["unchanged"] is True
     assert info["active_paper_epoch_id"] == CANONICAL_SOURCE_EPOCH
-    books = REPO / "data" / "trading" / "intrabar_paper" / CANONICAL_SOURCE_EPOCH / "books"
+    books = isolated_source_repo / "data" / "trading" / "intrabar_paper" / CANONICAL_SOURCE_EPOCH / "books"
     assert books.exists()
+    runtime_active = json.loads((REPO / "data/trading/paper_epochs/active.json").read_text(encoding="utf-8"))
+    # Fixture active is always the canonical source; runtime may be a later epoch.
+    assert info["active_paper_epoch_id"] == CANONICAL_SOURCE_EPOCH
+    assert isinstance(runtime_active.get("paper_epoch_id"), str)
 
 
-def test_16_activation_blocked_with_open_positions(tmp_path: Path):
-    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=REPO)
+def test_16_activation_blocked_with_open_positions(tmp_path: Path, isolated_source_repo: Path):
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=isolated_source_repo)
     risk = clone_trading_epoch_contract(
         CANONICAL_SOURCE_EPOCH,
         "TEST_RISK_DELTA_CLONE_ACT",
         risk_delta_overrides_per_tf_equity(),
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
         output_root=tmp_path / "clones",
         source_manifest=source,
     )
@@ -461,13 +484,38 @@ def test_16_activation_blocked_with_open_positions(tmp_path: Path):
     assert gate.status == NEW_EPOCH_ACTIVATION_BLOCKED
     assert gate.open_positions == 3
 
+    src_books = (
+        isolated_source_repo
+        / "data"
+        / "trading"
+        / "intrabar_paper"
+        / CANONICAL_SOURCE_EPOCH
+        / "books"
+    )
+    (src_books / "positions.jsonl").write_text(
+        json.dumps(
+            {
+                "position_id": "pos_iso_open",
+                "timeframe": "M15",
+                "side": "LONG",
+                "status": "OPEN",
+                "quantity": 1.0,
+                "entry_price": 64000.0,
+                "stop_loss_price": 63000.0,
+                "take_profit_price": 66000.0,
+                "paper_epoch_id": CANONICAL_SOURCE_EPOCH,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     live_gate = check_new_epoch_activation_gate(
         source_epoch_id=CANONICAL_SOURCE_EPOCH,
         source_fingerprint=risk.source_fingerprint,
         expected_source_fingerprint=risk.source_fingerprint,
         risk_only_diff=risk.diff,
-        live1b_running=None,
-        repo_root=REPO,
+        live1b_running=True,
+        repo_root=isolated_source_repo,
     )
     assert live_gate.status == NEW_EPOCH_ACTIVATION_BLOCKED
 
@@ -475,7 +523,7 @@ def test_16_activation_blocked_with_open_positions(tmp_path: Path):
         source_epoch_id=CANONICAL_SOURCE_EPOCH,
         new_epoch_id=risk.new_epoch_id,
         clone=risk,
-        repo_root=REPO,
+        repo_root=isolated_source_repo,
     )
     assert plan["allowed"] is False
     assert plan["status"] == NEW_EPOCH_ACTIVATION_BLOCKED
@@ -487,3 +535,23 @@ def test_realized_equity_semantics_no_double_fee():
         cumulative_realized_net_pnl_usd=-50.0,
     )
     assert eq == pytest.approx(99_950.0)
+
+
+def test_epoch_tests_do_not_mutate_runtime_active_or_books(tmp_path: Path):
+    before = runtime_file_hashes()
+    iso = make_isolated_contract_repo(tmp_path, stamp="HASH", activate_source=True)
+    source = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH, repo_root=iso)
+    clone_trading_epoch_contract(
+        CANONICAL_SOURCE_EPOCH,
+        "TEST_HASH_ISOLATION_CLONE",
+        {},
+        repo_root=iso,
+        output_root=tmp_path / "clones",
+        source_manifest=source,
+    )
+    active_epoch_unchanged(repo_root=iso)
+    after = runtime_file_hashes()
+    assert_no_runtime_touch(before, after)
+    assert (iso / "data/trading/paper_epochs/active.json").exists()
+    iso_active = json.loads((iso / "data/trading/paper_epochs/active.json").read_text())
+    assert iso_active["paper_epoch_id"] == CANONICAL_SOURCE_EPOCH

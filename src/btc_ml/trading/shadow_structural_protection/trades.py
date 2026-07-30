@@ -85,13 +85,19 @@ def load_book_ticker(
     if "symbol" in df.columns:
         df = df[df["symbol"].astype(str).str.upper() == symbol.upper()]
     # Prefer exchange ts; fall back to local receive (documented in audit).
-    if "exchange_event_timestamp" in df.columns:
-        df["_ts"] = pd.to_datetime(df["exchange_event_timestamp"], utc=True, errors="coerce")
-    else:
-        df["_ts"] = pd.NaT
-    missing = df["_ts"].isna()
-    if missing.any() and "local_receive_timestamp" in df.columns:
-        df.loc[missing, "_ts"] = pd.to_datetime(df.loc[missing, "local_receive_timestamp"], utc=True, errors="coerce")
+    # Normalize to a single datetime64[ns, UTC] series to avoid unit upcast errors
+    # when mixing exchange (s) and local receive (us) columns.
+    exch = (
+        pd.to_datetime(df["exchange_event_timestamp"], utc=True, errors="coerce")
+        if "exchange_event_timestamp" in df.columns
+        else pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns, UTC]")
+    )
+    local = (
+        pd.to_datetime(df["local_receive_timestamp"], utc=True, errors="coerce")
+        if "local_receive_timestamp" in df.columns
+        else pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns, UTC]")
+    )
+    df["_ts"] = exch.fillna(local)
     df = df[df["_ts"].notna()]
     df = df[(df["_ts"] >= pd.Timestamp(start)) & (df["_ts"] <= pd.Timestamp(end))]
     if "update_id" in df.columns:
