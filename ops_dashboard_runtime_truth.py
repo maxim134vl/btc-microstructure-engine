@@ -2564,7 +2564,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "same_direction_clusters": shadow_eqcorr.get("same_direction_clusters"),
             "research_valid": shadow_eqcorr.get("research_valid"),
             "lookahead_violation_count": shadow_eqcorr.get("lookahead_violation_count"),
-            "cognition_enrichment": shadow_eqcorr.get("cognition_enrichment") or "ACTIVE",
+            "cognition_enrichment": shadow_eqcorr.get("cognition_enrichment"),
             "feature_enrichment_enabled": shadow_eqcorr.get("feature_enrichment_enabled"),
             "enriched_candidate_count": shadow_eqcorr.get("enriched_candidate_count"),
             "valid_feature_count": shadow_eqcorr.get("valid_feature_count"),
@@ -2572,6 +2572,38 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "missing_feature_count": shadow_eqcorr.get("missing_feature_count"),
             "future_row_rejected_count": shadow_eqcorr.get("future_row_rejected_count"),
             "updated_at": shadow_eqcorr.get("updated_at"),
+        }
+
+    # Read-only cross-layer outcome reconciliation diagnostics (TRD-OUTCOME2)
+    cross_layer = _read_json(ROOT / "output/audits/trd_outcome2/latest.json") or {}
+    cross_layer_block = None
+    if cross_layer:
+        summary = cross_layer.get("summary") or {}
+        counts = cross_layer.get("counts") or {}
+        stp_m = cross_layer.get("stp_manifest") or {}
+        cross_layer_block = {
+            "read_only": True,
+            "status": cross_layer.get("status"),
+            "audit_timestamp": cross_layer.get("generated_at") or cross_layer.get("audit_timestamp_utc"),
+            "active_paper_epoch": cross_layer.get("active_epoch"),
+            "active_trading_fingerprint": cross_layer.get("active_trading_contract_fingerprint"),
+            "active_stp_manifest": stp_m.get("active_stp_manifest_fingerprint"),
+            "active_stp_manifest_version": stp_m.get("active_stp_manifest_version"),
+            "closed_paper_trades": counts.get("closed_trades"),
+            "fully_reconciled_trades": summary.get("fully_reconciled_trades"),
+            "pending_eqcorr_outcomes": summary.get("pending_eqcorr_outcomes"),
+            "pending_stp_outcomes": summary.get("pending_stp_outcomes"),
+            "paper_lifecycle_ok": summary.get("paper_lifecycle_ok"),
+            "paper_pnl_ok": summary.get("paper_pnl_ok"),
+            "sleeve_ok": summary.get("sleeve_ok"),
+            "master_ok": summary.get("master_ok"),
+            "eqcorr_baseline_divergences": summary.get("eqcorr_baseline_divergences"),
+            "stp_baseline_divergences": summary.get("stp_baseline_divergences"),
+            "immutability_ok": summary.get("immutability_ok"),
+            "lookahead_ok": summary.get("lookahead_ok"),
+            "last_reconciled_trade": summary.get("last_reconciled_trade"),
+            "last_reconciled_exit_timestamp": summary.get("last_reconciled_exit_timestamp"),
+            "blockers": cross_layer.get("blockers") or [],
         }
     live1b_block = None
     if live1b_epoch is not None:
@@ -2660,6 +2692,10 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "enforcement_enabled": False,
             "status": "NOT_STARTED",
             "exact_intrabar_data": "UNKNOWN",
+        },
+        "cross_layer_outcome_reconciliation": cross_layer_block or {
+            "read_only": True,
+            "status": "NO_AUDIT_YET",
         },
         "runtime_uptime": runtime_uptime,
         "known_limitations": known_limitations,

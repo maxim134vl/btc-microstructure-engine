@@ -811,6 +811,60 @@ export function OpsUnifiedDashboard({
           </SectionCard>
         </section>
 
+        {/* 3b3. Cross-Layer Outcome Reconciliation (read-only audit) */}
+        <section className="space-y-2.5" data-section="cross-layer-outcome-reconciliation">
+          <SectionLabel>Cross-Layer Outcome Reconciliation</SectionLabel>
+          <SectionCard>
+            <Panel title="Read-only paper ↔ sleeve ↔ EQCORR ↔ STP audit">
+              {(() => {
+                const sh = (snapshot as { cross_layer_outcome_reconciliation?: Record<string, unknown> })
+                  .cross_layer_outcome_reconciliation;
+                return (
+                  <>
+                    <MetricLine label="Last audit status" value={String(sh?.status || "NO_AUDIT_YET")} />
+                    <MetricLine label="Last audit timestamp" value={String(sh?.audit_timestamp || "—")} />
+                    <MetricLine label="Active paper epoch" value={String(sh?.active_paper_epoch || "—")} />
+                    <MetricLine
+                      label="Active trading fingerprint"
+                      value={String(sh?.active_trading_fingerprint || "—").slice(0, 16) + (String(sh?.active_trading_fingerprint || "").length > 16 ? "…" : "")}
+                    />
+                    <MetricLine
+                      label="Active STP manifest"
+                      value={`${String(sh?.active_stp_manifest_version || "—")} / ${String(sh?.active_stp_manifest || "—").slice(0, 12)}…`}
+                    />
+                    <MetricLine label="Closed paper trades" value={String(sh?.closed_paper_trades ?? "—")} />
+                    <MetricLine label="Fully reconciled" value={String(sh?.fully_reconciled_trades ?? "—")} />
+                    <MetricLine
+                      label="Pending EQCORR / STP"
+                      value={`${sh?.pending_eqcorr_outcomes ?? "—"} / ${sh?.pending_stp_outcomes ?? "—"}`}
+                    />
+                    <MetricLine
+                      label="Paper lifecycle / PnL / sleeves / master"
+                      value={`${sh?.paper_lifecycle_ok ?? "—"} / ${sh?.paper_pnl_ok ?? "—"} / ${sh?.sleeve_ok ?? "—"} / ${sh?.master_ok ?? "—"}`}
+                    />
+                    <MetricLine
+                      label="EQCORR / STP baseline divergences"
+                      value={`${sh?.eqcorr_baseline_divergences ?? "—"} / ${sh?.stp_baseline_divergences ?? "—"}`}
+                    />
+                    <MetricLine
+                      label="Immutability / lookahead"
+                      value={`${sh?.immutability_ok ?? "—"} / ${sh?.lookahead_ok ?? "—"}`}
+                    />
+                    <MetricLine label="Last reconciled trade" value={String(sh?.last_reconciled_trade || "—")} />
+                    <MetricLine
+                      label="Last reconciled exit"
+                      value={String(sh?.last_reconciled_exit_timestamp || "—")}
+                    />
+                    <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
+                      Diagnostic only — does not rewrite paper books, shadow decisions, or recommend policies.
+                    </p>
+                  </>
+                );
+              })()}
+            </Panel>
+          </SectionCard>
+        </section>
+
         {/* 4. Market Context */}
         <section className="space-y-2.5" data-section="market-context">
           <SectionLabel>Market Context</SectionLabel>

@@ -230,6 +230,7 @@ export interface RuntimeTruthSnapshot {
   timeframe_traders?: RuntimeTruthTimeframeTraders;
   shadow_economic_correlation?: Record<string, unknown> | null;
   shadow_structural_protection?: Record<string, unknown> | null;
+  cross_layer_outcome_reconciliation?: Record<string, unknown> | null;
 }
 
 
