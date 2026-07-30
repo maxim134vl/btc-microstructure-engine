@@ -630,10 +630,31 @@ export function OpsUnifiedDashboard({
                     <MetricLine label="Exact intrabar data" value={String(sh?.exact_intrabar_data ?? "—")} />
                     <MetricLine label="Candidates" value={String(sh?.candidate_count ?? "—")} />
                     <MetricLine
-                      label="Bars by TF"
+                      label="Bars by TF (window sum)"
                       value={(() => {
-                        const b = (sh?.bars_built_by_timeframe || {}) as Record<string, unknown>;
+                        const b = (sh?.candidate_window_bars_sum_by_timeframe ||
+                          sh?.bars_built_by_timeframe || {}) as Record<string, unknown>;
                         return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="Unique closed bars by TF"
+                      value={(() => {
+                        const cov = (sh?.bar_coverage || {}) as Record<string, unknown>;
+                        const b = (cov.unique_closed_bars_by_timeframe ||
+                          sh?.unique_closed_bars_by_timeframe || {}) as Record<string, unknown>;
+                        return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="Unique zones detected/proven/usable"
+                      value={(() => {
+                        const d = (sh?.unique_detected_zones_by_timeframe || {}) as Record<string, unknown>;
+                        const p = (sh?.unique_reaction_proven_zones_by_timeframe || {}) as Record<string, unknown>;
+                        const u = (sh?.unique_usable_zones_by_timeframe || {}) as Record<string, unknown>;
+                        const sum = (x: Record<string, unknown>) =>
+                          Number(x.M15 || 0) + Number(x.M30 || 0) + Number(x.H1 || 0) + Number(x.H4 || 0);
+                        return `${sum(d)} / ${sum(p)} / ${sum(u)} (policy-expanded prot ${sh?.policy_expanded_protective_evidence_instances ?? "—"})`;
                       })()}
                     />
                     <MetricLine
@@ -696,6 +717,21 @@ export function OpsUnifiedDashboard({
                       value={(() => {
                         const b = (sh?.structural_execute_by_timeframe || {}) as Record<string, unknown>;
                         return `M15 ${b.M15 ?? "—"} · M30 ${b.M30 ?? "—"} · H1 ${b.H1 ?? "—"} · H4 ${b.H4 ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="EXECUTE by family"
+                      value={(() => {
+                        const fam = ((sh?.execute_breakdown as { by_policy_family?: Record<string, unknown> } | undefined)
+                          ?.by_policy_family || {}) as Record<string, unknown>;
+                        return `base ${fam.BASELINE ?? "—"} · SL ${fam.STRUCTURAL_SL_ONLY ?? "—"} · TP ${fam.STRUCTURAL_TP_ONLY ?? "—"} · full ${fam.FULL_STRUCTURAL ?? "—"}`;
+                      })()}
+                    />
+                    <MetricLine
+                      label="M15 parity"
+                      value={(() => {
+                        const p = (sh?.m15_parity || {}) as Record<string, unknown>;
+                        return `${String(p.status || "—")} (compared ${p.compared ?? "—"})`;
                       })()}
                     />
                     <MetricLine label="Virtual positions" value={String(sh?.virtual_positions_open ?? "—")} />

@@ -193,6 +193,13 @@ def m15_parity_report(
         if n >= 10 and int(c.get("agree") or 0) / n < 0.2:
             blocked = True
 
+    if blocked:
+        status = "SHADOW_STP2_BLOCKED_CLASSIFICATION_PARITY_FAILURE"
+    elif compared == 0:
+        status = "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
+    else:
+        status = "SHADOW_RESEARCH_PARITY_OK"
+
     return {
         "classification_mode": CLASSIFICATION_MODE,
         "classification_model": CLASSIFICATION_MODEL,
@@ -203,7 +210,7 @@ def m15_parity_report(
         "confusion": confusion,
         "per_class": class_hits,
         "parity_blocked": blocked,
-        "status": "SHADOW_STP2_BLOCKED_CLASSIFICATION_PARITY_FAILURE" if blocked else "SHADOW_RESEARCH_PARITY_OK",
+        "status": status,
     }
 
 

@@ -16,22 +16,27 @@ from btc_ml.trading.intrabar_paper.economics import closed_trade_economics
 from . import (
     BASELINE_DIVERGENCE,
     BLOCKED_NO_EXACT,
+    CAUSAL_LOOKBACK_HOURS_BY_TF,
+    COVERAGE_INTEGRITY_CONTRACT,
     DEFAULT_TICK_SIZE,
     EXPECTED_ACTIVE_FP,
     EXPECTED_EPOCH,
     EXPECTED_PARENT_FP,
     HISTORICAL_STP11_MANIFEST,
     LEGACY_MANIFEST_INVALIDATION_REASON,
+    LOOKBACK_BARS_BY_TF,
     READY_BLOCKED_HISTORY,
     SHADOW_MODEL_VERSION,
     STATUS_ACTIVE,
     STATUS_BASELINE_DIVERGENCE_STP11,
     STATUS_CANONICAL_ISOLATION_FAILURE,
     STATUS_CLASS_PARITY_BLOCKED,
+    STATUS_COVERAGE_INTEGRITY_FAILURE,
     STATUS_EVIDENCE_GATE_FAILURE,
     STATUS_INSUFFICIENT_REACTION,
     STATUS_LOOKAHEAD_STP11,
     STATUS_MARKET_RECON_FAILURE,
+    STATUS_STP21_COVERAGE,
     STATUS_WRITE_BOUNDARY,
     TIMEFRAMES,
     TF_SECONDS,
@@ -40,6 +45,15 @@ from .audit import run_source_audit
 from .bars import assert_trade_membership_unique
 from .catalog import build_candidate_catalog, select_usable_zone
 from .classification import load_volume_classification
+from .coverage import (
+    aggregate_target_absence,
+    coverage_integrity_ok,
+    empty_tf_counts,
+    policy_family,
+    prove_baseline_only_when_no_same_tf_structural,
+    recompute_absolute_bar_coverage,
+    summarize_execute_breakdown,
+)
 from .economics import economic_gate_decision, expected_net_r
 from .paths import paper_books_root, repo_root, shadow_root
 from .policies import (
@@ -190,10 +204,68 @@ class StructuralProtectionEngine:
                 ck.get("structural_execute_by_timeframe") or {tf: 0 for tf in TIMEFRAMES}
             ),
             "structural_skip_by_reason": dict(ck.get("structural_skip_by_reason") or {}),
+            # STP2.1: unique vs policy-expanded
+            "unique_detected_zones_by_timeframe": dict(
+                ck.get("unique_detected_zones_by_timeframe") or empty_tf_counts()
+            ),
+            "unique_reaction_proven_zones_by_timeframe": dict(
+                ck.get("unique_reaction_proven_zones_by_timeframe") or empty_tf_counts()
+            ),
+            "unique_usable_zones_by_timeframe": dict(
+                ck.get("unique_usable_zones_by_timeframe") or empty_tf_counts()
+            ),
+            "unique_usable_protective_by_timeframe": dict(
+                ck.get("unique_usable_protective_by_timeframe") or empty_tf_counts()
+            ),
+            "unique_usable_target_by_timeframe": dict(
+                ck.get("unique_usable_target_by_timeframe") or empty_tf_counts()
+            ),
+            "unique_closed_bars_by_timeframe": dict(
+                ck.get("unique_closed_bars_by_timeframe") or empty_tf_counts()
+            ),
+            "candidate_window_bars_sum_by_timeframe": dict(
+                ck.get("candidate_window_bars_sum_by_timeframe")
+                or ck.get("bars_built_by_timeframe")
+                or empty_tf_counts()
+            ),
+            "policy_expanded_protective_evidence_instances": int(
+                ck.get("policy_expanded_protective_evidence_instances")
+                or ck.get("protective_zone_usable_count")
+                or 0
+            ),
+            "policy_expanded_target_evidence_instances": int(
+                ck.get("policy_expanded_target_evidence_instances")
+                or ck.get("target_zone_usable_count")
+                or 0
+            ),
         }
         self.m15_parity: dict[str, Any] = dict(ck.get("m15_parity") or {})
         self.classification_parity_blocked = bool(ck.get("classification_parity_blocked") or False)
         self.market_recon_ok = bool(ck.get("market_recon_ok", True))
+        self._unique_zone_ids: dict[str, set[str]] = {
+            tf: set((ck.get("unique_zone_ids") or {}).get(tf) or []) for tf in TIMEFRAMES
+        }
+        self._unique_proven_zone_ids: dict[str, set[str]] = {
+            tf: set((ck.get("unique_proven_zone_ids") or {}).get(tf) or []) for tf in TIMEFRAMES
+        }
+        self._unique_usable_zone_ids: dict[str, set[str]] = {
+            tf: set((ck.get("unique_usable_zone_ids") or {}).get(tf) or []) for tf in TIMEFRAMES
+        }
+        self._unique_usable_protective_ids: dict[str, set[str]] = {
+            tf: set((ck.get("unique_usable_protective_ids") or {}).get(tf) or []) for tf in TIMEFRAMES
+        }
+        self._unique_usable_target_ids: dict[str, set[str]] = {
+            tf: set((ck.get("unique_usable_target_ids") or {}).get(tf) or []) for tf in TIMEFRAMES
+        }
+        self._unique_closed_candle_ids: dict[str, set[str]] = {
+            tf: set((ck.get("unique_closed_candle_ids") or {}).get(tf) or []) for tf in TIMEFRAMES
+        }
+        self.lookback_coverage_by_timeframe: dict[str, Any] = dict(
+            ck.get("lookback_coverage_by_timeframe") or {}
+        )
+        self.target_absence_audits: list[dict[str, Any]] = list(ck.get("target_absence_audits") or [])
+        self.bar_coverage: dict[str, Any] = dict(ck.get("bar_coverage") or {})
+        self._bar_coverage_dirty = True
 
         sleeves = self.store.read_json("policy_sleeves.json")
         if not sleeves or "BASELINE_CANONICAL" not in sleeves:
@@ -234,8 +306,8 @@ class StructuralProtectionEngine:
     def _build_manifest(self) -> dict[str, Any]:
         return {
             "shadow_model_version": SHADOW_MODEL_VERSION,
-            "generation": "SHADOW_STP2",
-            "source_commit": "69af1bcd310412a1f93eaeef2bcf6b329a161b69",
+            "generation": "SHADOW_STP2_1",
+            "source_commit": "cadc86e2caf195a597d638d96da8876f32882f61",
             "source_epoch_id": self.epoch_id,
             "source_trading_contract_fingerprint": self.source_fp,
             "parent_trading_contract_fingerprint": self.parent_fp,
@@ -291,6 +363,14 @@ class StructuralProtectionEngine:
             "mode": "OBSERVE_ONLY",
             "enforcement_enabled": False,
             "stp2_per_timeframe_research": True,
+            "stp21_coverage_integrity": True,
+            "coverage_integrity_contract": COVERAGE_INTEGRITY_CONTRACT,
+            "causal_lookback_hours_by_timeframe": dict(CAUSAL_LOOKBACK_HOURS_BY_TF),
+            "causal_lookback_bars_equiv_by_timeframe": dict(LOOKBACK_BARS_BY_TF),
+            "causal_lookback_note": (
+                "Lookback expands exact agg_trade history for reconstruction only; "
+                "reaction/economic/zone-age policy thresholds are unchanged."
+            ),
         }
 
     def _migrate_policy_integrity_if_needed(self, ck: dict[str, Any]) -> None:
@@ -303,9 +383,14 @@ class StructuralProtectionEngine:
         # Keep historical STP1.1 fingerprint recorded for exclusion, not as an error.
         self._legacy_manifest_fps.add(HISTORICAL_STP11_MANIFEST)
         stored_invalid = set(ck.get("invalidated_manifest_fingerprints") or [])
-        if not self._legacy_manifest_fps - stored_invalid and ck.get("stp2_migrated"):
-            return
-        if ck.get("stp2_migrated") and self.manifest_fp == ck.get("active_policy_manifest_fingerprint"):
+        # Full reset only when the active manifest fingerprint changes (STP2 → STP2.1 bump).
+        if self.manifest_fp == ck.get("active_policy_manifest_fingerprint") and ck.get("stp21_migrated"):
+            if self._legacy_manifest_fps - stored_invalid:
+                merged = sorted(stored_invalid | self._legacy_manifest_fps)
+                self.store.write_json(
+                    "checkpoint.json",
+                    {**ck, "invalidated_manifest_fingerprints": merged, "updated_at": utc_now()},
+                )
             return
 
         latest: dict[str, dict[str, Any]] = {}
@@ -377,12 +462,35 @@ class StructuralProtectionEngine:
             "target_usable_by_timeframe": {tf: 0 for tf in TIMEFRAMES},
             "structural_execute_by_timeframe": {tf: 0 for tf in TIMEFRAMES},
             "structural_skip_by_reason": {},
+            "unique_detected_zones_by_timeframe": empty_tf_counts(),
+            "unique_reaction_proven_zones_by_timeframe": empty_tf_counts(),
+            "unique_usable_zones_by_timeframe": empty_tf_counts(),
+            "unique_usable_protective_by_timeframe": empty_tf_counts(),
+            "unique_usable_target_by_timeframe": empty_tf_counts(),
+            "unique_closed_bars_by_timeframe": empty_tf_counts(),
+            "candidate_window_bars_sum_by_timeframe": empty_tf_counts(),
+            "policy_expanded_protective_evidence_instances": 0,
+            "policy_expanded_target_evidence_instances": 0,
         }
+        self._unique_zone_ids = {tf: set() for tf in TIMEFRAMES}
+        self._unique_proven_zone_ids = {tf: set() for tf in TIMEFRAMES}
+        self._unique_usable_zone_ids = {tf: set() for tf in TIMEFRAMES}
+        self._unique_usable_protective_ids = {tf: set() for tf in TIMEFRAMES}
+        self._unique_usable_target_ids = {tf: set() for tf in TIMEFRAMES}
+        self._unique_closed_candle_ids = {tf: set() for tf in TIMEFRAMES}
+        self.lookback_coverage_by_timeframe = {}
+        self.target_absence_audits = []
+        self.bar_coverage = {}
+        self._bar_coverage_dirty = True
+        self.m15_parity = {}
+        self.classification_parity_blocked = False
+        self.market_recon_ok = True
         self.sleeves = initial_policy_sleeves()
         self.store.write_json("policy_sleeves.json", self.sleeves)
         ck_out = {
             **ck,
             "stp2_migrated": True,
+            "stp21_migrated": True,
             "stp11_migrated": True,
             "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
             "processed_candidates": [],
@@ -390,6 +498,18 @@ class StructuralProtectionEngine:
             "research_valid": True,
             "active_policy_manifest_fingerprint": self.manifest_fp,
             **self.counters,
+            "unique_zone_ids": {tf: [] for tf in TIMEFRAMES},
+            "unique_proven_zone_ids": {tf: [] for tf in TIMEFRAMES},
+            "unique_usable_zone_ids": {tf: [] for tf in TIMEFRAMES},
+            "unique_usable_protective_ids": {tf: [] for tf in TIMEFRAMES},
+            "unique_usable_target_ids": {tf: [] for tf in TIMEFRAMES},
+            "unique_closed_candle_ids": {tf: [] for tf in TIMEFRAMES},
+            "lookback_coverage_by_timeframe": {},
+            "target_absence_audits": [],
+            "bar_coverage": {},
+            "m15_parity": {},
+            "classification_parity_blocked": False,
+            "market_recon_ok": True,
             "updated_at": utc_now(),
         }
         self.store.write_json("checkpoint.json", ck_out)
@@ -410,7 +530,34 @@ class StructuralProtectionEngine:
                 continue
             self.open_by_policy.setdefault(str(row["policy_id"]), []).append(row)
 
+    def _sync_unique_counter_views(self) -> None:
+        self.counters["unique_detected_zones_by_timeframe"] = {
+            tf: len(self._unique_zone_ids[tf]) for tf in TIMEFRAMES
+        }
+        self.counters["unique_reaction_proven_zones_by_timeframe"] = {
+            tf: len(self._unique_proven_zone_ids[tf]) for tf in TIMEFRAMES
+        }
+        self.counters["unique_usable_zones_by_timeframe"] = {
+            tf: len(self._unique_usable_zone_ids[tf]) for tf in TIMEFRAMES
+        }
+        self.counters["unique_usable_protective_by_timeframe"] = {
+            tf: len(self._unique_usable_protective_ids[tf]) for tf in TIMEFRAMES
+        }
+        self.counters["unique_usable_target_by_timeframe"] = {
+            tf: len(self._unique_usable_target_ids[tf]) for tf in TIMEFRAMES
+        }
+        self.counters["unique_closed_bars_by_timeframe"] = {
+            tf: len(self._unique_closed_candle_ids[tf]) for tf in TIMEFRAMES
+        }
+        self.counters["policy_expanded_protective_evidence_instances"] = int(
+            self.counters.get("protective_zone_usable_count") or 0
+        )
+        self.counters["policy_expanded_target_evidence_instances"] = int(
+            self.counters.get("target_zone_usable_count") or 0
+        )
+
     def _save_checkpoint(self) -> None:
+        self._sync_unique_counter_views()
         payload = {
             "processed_candidates": sorted(self.processed_candidates),
             "processed_closes": sorted(self.processed_closes),
@@ -423,11 +570,27 @@ class StructuralProtectionEngine:
             "research_valid": self.research_valid,
             "stp11_migrated": True,
             "stp2_migrated": True,
+            "stp21_migrated": True,
             "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
             "active_policy_manifest_fingerprint": self.manifest_fp,
             "m15_parity": self.m15_parity,
             "classification_parity_blocked": self.classification_parity_blocked,
             "market_recon_ok": self.market_recon_ok,
+            "unique_zone_ids": {tf: sorted(self._unique_zone_ids[tf]) for tf in TIMEFRAMES},
+            "unique_proven_zone_ids": {tf: sorted(self._unique_proven_zone_ids[tf]) for tf in TIMEFRAMES},
+            "unique_usable_zone_ids": {tf: sorted(self._unique_usable_zone_ids[tf]) for tf in TIMEFRAMES},
+            "unique_usable_protective_ids": {
+                tf: sorted(self._unique_usable_protective_ids[tf]) for tf in TIMEFRAMES
+            },
+            "unique_usable_target_ids": {
+                tf: sorted(self._unique_usable_target_ids[tf]) for tf in TIMEFRAMES
+            },
+            "unique_closed_candle_ids": {
+                tf: sorted(self._unique_closed_candle_ids[tf]) for tf in TIMEFRAMES
+            },
+            "lookback_coverage_by_timeframe": self.lookback_coverage_by_timeframe,
+            "target_absence_audits": self.target_absence_audits[-32:],
+            "bar_coverage": self.bar_coverage,
             **self.counters,
             "updated_at": utc_now(),
         }
@@ -523,6 +686,26 @@ class StructuralProtectionEngine:
             if processed_this_cycle >= max_per_cycle:
                 break
         self._trade_cache = {}
+        if self._bar_coverage_dirty:
+            try:
+                snaps = [
+                    s
+                    for s in self.store.read_all("candidate_snapshots")
+                    if s.get("policy_manifest_fingerprint") == self.manifest_fp
+                ]
+                self.bar_coverage = recompute_absolute_bar_coverage(
+                    repo=self.repo,
+                    candidate_snapshots=snaps,
+                )
+                self.bar_coverage["unique_closed_bars_seen_in_candidate_windows_by_timeframe"] = {
+                    tf: len(self._unique_closed_candle_ids[tf]) for tf in TIMEFRAMES
+                }
+                self.bar_coverage["candidate_window_bars_sum_by_timeframe"] = dict(
+                    self.counters.get("candidate_window_bars_sum_by_timeframe") or empty_tf_counts()
+                )
+                self._bar_coverage_dirty = False
+            except Exception as exc:  # noqa: BLE001
+                self.errors.append(f"bar_coverage:{exc}")
         self._save_checkpoint()
         self.write_health()
         return actions
@@ -550,21 +733,53 @@ class StructuralProtectionEngine:
         )
         bars = catalog.get("bars") or []
         zones = catalog.get("zones") or []
+        closed = [b for b in bars if not b.get("incomplete")]
+        closed_ids = [str(b.get("candle_id")) for b in closed if b.get("candle_id")]
         profile_ok = int(catalog.get("exact_profiles") or 0) > 0
         if profile_ok:
             self.counters["exact_profile_count"] += int(catalog.get("exact_profiles") or 0)
             self.counters["exact_profiles_by_timeframe"][tf] = int(
                 self.counters["exact_profiles_by_timeframe"].get(tf, 0)
             ) + int(catalog.get("exact_profiles") or 0)
+        # Candidate-window sum (legacy bars_built_by_timeframe) vs unique closed bars
         self.counters["bars_built_by_timeframe"][tf] = int(
             self.counters["bars_built_by_timeframe"].get(tf, 0)
         ) + len(bars)
+        self.counters["candidate_window_bars_sum_by_timeframe"][tf] = int(
+            self.counters["candidate_window_bars_sum_by_timeframe"].get(tf, 0)
+        ) + len(bars)
+        for cid in closed_ids:
+            self._unique_closed_candle_ids[tf].add(cid)
         self.counters["significant_candles_by_timeframe"][tf] = int(
             self.counters["significant_candles_by_timeframe"].get(tf, 0)
         ) + int(catalog.get("significant_count") or 0)
         self.counters["zones_detected_by_timeframe"][tf] = int(
             self.counters["zones_detected_by_timeframe"].get(tf, 0)
         ) + len(zones)
+
+        lookback = catalog.get("lookback_coverage") or {}
+        if lookback:
+            self.lookback_coverage_by_timeframe[tf] = lookback
+        target_audit = catalog.get("target_absence_audit") or {}
+        if target_audit:
+            self.target_absence_audits.append(
+                {
+                    "candidate_id": candidate["candidate_id"],
+                    "timeframe": tf,
+                    "side": candidate.get("side"),
+                    **target_audit,
+                }
+            )
+        self._bar_coverage_dirty = True
+
+        for z in zones:
+            zid = str(z.get("zone_id") or "")
+            if zid:
+                self._unique_zone_ids[tf].add(zid)
+            reactions = z.get("reactions") or {}
+            if any(str(r.get("status") or "") == "PROVEN" for r in reactions.values()):
+                if zid:
+                    self._unique_proven_zone_ids[tf].add(zid)
 
         # Market reconstruction check on this candidate window
         membership = assert_trade_membership_unique(
@@ -598,7 +813,6 @@ class StructuralProtectionEngine:
             "classification_mode": CLASSIFICATION_MODE,
             "classification_model": CLASSIFICATION_MODEL,
         }
-        closed = [b for b in bars if not b.get("incomplete")]
         if closed:
             last = closed[-1]
             class_info["volume_class"] = last.get("shadow_volume_class")
@@ -623,8 +837,12 @@ class StructuralProtectionEngine:
             "policy_manifest_fingerprint": self.manifest_fp,
             "source_trading_contract_fingerprint": self.source_fp,
             "bars_built": len(bars),
+            "closed_bars": len(closed),
+            "closed_candle_ids": closed_ids,
             "zones_detected": len(zones),
             "significant_candles": catalog.get("significant_count"),
+            "lookback_coverage": lookback,
+            "target_absence_audit": target_audit,
         }
         self.store.append("candidate_snapshots", snap)
         self.store.append(
@@ -768,6 +986,10 @@ class StructuralProtectionEngine:
             self.counters["zones_usable_by_timeframe"][timeframe] = int(
                 self.counters["zones_usable_by_timeframe"].get(timeframe, 0)
             ) + 1
+            zid = str((z or {}).get("zone_id") or "")
+            if zid:
+                self._unique_usable_zone_ids[timeframe].add(zid)
+                self._unique_usable_protective_ids[timeframe].add(zid)
         return z, react, usable
 
     def _select_target(
@@ -811,6 +1033,10 @@ class StructuralProtectionEngine:
             self.counters["zones_usable_by_timeframe"][timeframe] = int(
                 self.counters["zones_usable_by_timeframe"].get(timeframe, 0)
             ) + 1
+            zid = str((z or {}).get("zone_id") or "")
+            if zid:
+                self._unique_usable_zone_ids[timeframe].add(zid)
+                self._unique_usable_target_ids[timeframe].add(zid)
         return z, react, usable
 
     def _decision_already_recorded(self, candidate_id: str, policy_id: str) -> bool:
@@ -862,6 +1088,8 @@ class StructuralProtectionEngine:
             "zone_age_policy": getattr(spec, "zone_age_policy", None),
             "classification_mode": CLASSIFICATION_MODE,
             "shadow_volume_class": class_info.get("volume_class"),
+            "policy_family": policy_family(pid),
+            "policy_kind": spec.kind,
         }
         def _skip(action: str, reason: str | None = None) -> None:
             decision_row["action"] = action
@@ -1351,6 +1579,34 @@ class StructuralProtectionEngine:
         # Sync counters used by OPS from current-manifest truth where possible.
         self.counters["economic_execute_count"] = exec_n
         self.counters["economic_skip_count"] = skip_n
+        self._sync_unique_counter_views()
+
+        execute_breakdown = summarize_execute_breakdown(decisions)
+        execute_baseline_proof = prove_baseline_only_when_no_same_tf_structural(
+            decisions=decisions,
+            unique_usable_protective_by_tf=self.counters["unique_usable_protective_by_timeframe"],
+            unique_usable_target_by_tf=self.counters["unique_usable_target_by_timeframe"],
+        )
+        target_absence = aggregate_target_absence(self.target_absence_audits)
+
+        # Absolute bar coverage is refreshed after ingest (see process_new_entries),
+        # not on every health poll — loading multi-day agg_trade is expensive.
+        if not self.bar_coverage:
+            self.bar_coverage = {
+                "explanation": (
+                    "Absolute unique bars pending first post-ingest refresh. "
+                    "candidate_window_bars_sum_by_timeframe is the legacy per-candidate sum."
+                ),
+                "candidate_window_bars_sum_by_timeframe": dict(
+                    self.counters.get("candidate_window_bars_sum_by_timeframe") or empty_tf_counts()
+                ),
+                "unique_closed_bars_seen_in_candidate_windows_by_timeframe": {
+                    tf: len(self._unique_closed_candle_ids[tf]) for tf in TIMEFRAMES
+                },
+                "candidate_mix_by_timeframe": empty_tf_counts(),
+                "total_reconstructed_bars_by_timeframe": empty_tf_counts(),
+                "unique_closed_bars_by_timeframe": empty_tf_counts(),
+            }
 
         if structural_exec_without_evidence:
             self.evidence_gate_failure_count = structural_exec_without_evidence
@@ -1375,6 +1631,23 @@ class StructuralProtectionEngine:
             self.counters.get("target_zone_usable_count") or 0
         )
 
+        # Never leave compared=0 as PARITY_OK (STP2.1 integrity).
+        if self.m15_parity and int(self.m15_parity.get("compared") or 0) == 0:
+            if not self.m15_parity.get("parity_blocked"):
+                self.m15_parity = {
+                    **self.m15_parity,
+                    "status": "NOT_EVALUABLE_INSUFFICIENT_OVERLAP",
+                }
+
+        integrity_ok, integrity_blockers = coverage_integrity_ok(
+            m15_parity=self.m15_parity
+            or {"compared": 0, "status": "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"},
+            execute_proof=execute_baseline_proof,
+            target_audit=target_absence,
+            bar_coverage=self.bar_coverage,
+            lookback_by_tf=self.lookback_coverage_by_timeframe,
+        )
+
         if self.write_boundary_violation_count:
             status = STATUS_WRITE_BOUNDARY
         elif not self.exact_ok:
@@ -1392,6 +1665,16 @@ class StructuralProtectionEngine:
             status = STATUS_LOOKAHEAD_STP11
         elif structural_exec_without_evidence or self.evidence_gate_failure_count:
             status = STATUS_EVIDENCE_GATE_FAILURE
+        elif not integrity_ok and len(self.processed_candidates) > 0:
+            status = STATUS_COVERAGE_INTEGRITY_FAILURE
+        elif (
+            self.research_valid
+            and isolation_ok
+            and self.baseline_divergence_count == 0
+            and integrity_ok
+            and len(self.processed_candidates) > 0
+        ):
+            status = STATUS_STP21_COVERAGE
         elif self.counters["exact_profile_count"] == 0 and len(self.processed_candidates) > 0:
             status = READY_BLOCKED_HISTORY
         elif len(self.processed_candidates) > 0 and usable_any == 0 and not proven_any:
@@ -1408,7 +1691,7 @@ class StructuralProtectionEngine:
             "command_bus_write_capability": False,
             "real_position_write_capability": False,
             "status": status,
-            "stp_generation": "SHADOW_STP2",
+            "stp_generation": "SHADOW_STP2_1",
             "classification_model": CLASSIFICATION_MODEL,
             "classification_mode": CLASSIFICATION_MODE,
             "classification_manifest_fingerprint": self.manifest_fp,
@@ -1424,6 +1707,14 @@ class StructuralProtectionEngine:
             "m15_parity": self.m15_parity,
             "classification_parity_blocked": self.classification_parity_blocked,
             "market_recon_ok": self.market_recon_ok,
+            "bar_coverage": self.bar_coverage,
+            "lookback_coverage_by_timeframe": self.lookback_coverage_by_timeframe,
+            "causal_lookback_hours_by_timeframe": dict(CAUSAL_LOOKBACK_HOURS_BY_TF),
+            "execute_breakdown": execute_breakdown,
+            "execute_baseline_only_proof": execute_baseline_proof,
+            "target_usable_absence_audit": target_absence,
+            "coverage_integrity_ok": integrity_ok,
+            "coverage_integrity_blockers": integrity_blockers,
             "virtual_positions_open": len(valid_open),
             "virtual_positions_open_valid": len(valid_open),
             "virtual_positions_invalidated": len(invalid_open),
@@ -1443,6 +1734,7 @@ class StructuralProtectionEngine:
                 and isolation_ok
                 and not self.classification_parity_blocked
                 and self.market_recon_ok
+                and integrity_ok
             ),
             "updated_at": utc_now(),
             "errors": self.errors[-20:],

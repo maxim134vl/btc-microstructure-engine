@@ -14,12 +14,19 @@ from btc_ml.trading.shadow_structural_protection import (
     EXPECTED_EPOCH,
     EXPECTED_PARENT_FP,
     STATUS_ACTIVE,
+    STATUS_COVERAGE_INTEGRITY_FAILURE,
     STATUS_INSUFFICIENT_REACTION,
+    STATUS_STP21_COVERAGE,
 )
 from btc_ml.trading.shadow_structural_protection.bars import (
     assert_trade_membership_unique,
     build_all_timeframe_bars,
     build_bars_from_trades,
+)
+from btc_ml.trading.shadow_structural_protection.coverage import (
+    policy_family,
+    prove_baseline_only_when_no_same_tf_structural,
+    summarize_execute_breakdown,
 )
 from btc_ml.trading.shadow_structural_protection.engine import StructuralProtectionEngine
 from btc_ml.trading.shadow_structural_protection.policies import (
@@ -128,6 +135,63 @@ def test_m15_parity_report_deterministic(tmp_path: Path):
     assert r1["status"] != "SHADOW_STP2_BLOCKED_CLASSIFICATION_PARITY_FAILURE" or r1["compared"] < 10
 
 
+def test_m15_parity_compared_zero_is_not_evaluable(tmp_path: Path):
+    repo = tmp_path / "repo"
+    (repo / "data/cognition").mkdir(parents=True)
+    pd.DataFrame(
+        [{"timestamp": "2026-01-01T00:00:00Z", "volume_class": "climax"}]
+    ).to_parquet(repo / "data/cognition/volume_classification_memory.parquet", index=False)
+    trades = _trades_df()
+    bars = classify_bars_shadow(
+        build_bars_from_trades(trades, timeframe="M15", causal_cutoff=datetime(2026, 7, 29, 18, 40, tzinfo=timezone.utc))
+    )
+    r = m15_parity_report(repo=repo, shadow_bars=bars)
+    assert r["compared"] == 0
+    assert r["status"] == "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
+    assert r["status"] != "SHADOW_RESEARCH_PARITY_OK"
+
+
+def test_execute_breakdown_and_baseline_only_proof():
+    decisions = [
+        {"action": "EXECUTE_STRUCTURAL", "timeframe": "M15", "policy_id": "BASELINE_CANONICAL"},
+        {"action": "EXECUTE_STRUCTURAL", "timeframe": "H1", "policy_id": "BASELINE_CANONICAL"},
+        {
+            "action": "EXECUTE_STRUCTURAL",
+            "timeframe": "M30",
+            "policy_id": "STRUCTURAL_SL_CANONICAL_TP__ALL_CANONICAL_SIGNIFICANT__POC_VALUE_AREA_70__MAX_ONE_TICK_OR_SPREAD__REACTION_100_ZONE_WIDTH__ZONE_AGE_4_BARS",
+        },
+        {"action": "SKIP_NO_PROTECTIVE_ZONE", "timeframe": "M15", "policy_id": "STRUCTURAL_SL_STRUCTURAL_TP_NO_GATE__x"},
+    ]
+    br = summarize_execute_breakdown(decisions)
+    assert br["by_timeframe"]["M15"] == 1
+    assert br["by_timeframe"]["H1"] == 1
+    assert br["by_timeframe"]["M30"] == 1
+    assert br["by_policy_family"]["BASELINE"] == 2
+    assert br["by_policy_family"]["STRUCTURAL_SL_ONLY"] == 1
+    assert policy_family("BASELINE_CANONICAL") == "BASELINE"
+    proof = prove_baseline_only_when_no_same_tf_structural(
+        decisions=decisions,
+        unique_usable_protective_by_tf={"M15": 0, "M30": 2, "H1": 0, "H4": 0},
+        unique_usable_target_by_tf={"M15": 0, "M30": 0, "H1": 0, "H4": 0},
+    )
+    assert proof["by_timeframe"]["M15"]["baseline_only"] is True
+    assert proof["by_timeframe"]["M15"]["proof_ok"] is True
+    assert proof["by_timeframe"]["H1"]["baseline_only"] is True
+    assert proof["by_timeframe"]["M30"]["proof_ok"] is True
+    bad = prove_baseline_only_when_no_same_tf_structural(
+        decisions=[
+            {
+                "action": "EXECUTE_STRUCTURAL",
+                "timeframe": "M15",
+                "policy_id": "STRUCTURAL_SL_CANONICAL_TP__x",
+            }
+        ],
+        unique_usable_protective_by_tf={"M15": 0, "M30": 0, "H1": 0, "H4": 0},
+        unique_usable_target_by_tf={"M15": 0, "M30": 0, "H1": 0, "H4": 0},
+    )
+    assert bad["proof_ok"] is False
+
+
 def test_reaction_causality_and_statuses():
     zone = {"lower_boundary": 100.0, "upper_boundary": 101.0}
     created = datetime(2026, 7, 29, 18, 30, tzinfo=timezone.utc)
@@ -233,13 +297,24 @@ def test_engine_stp2_health_and_isolation(stp_repo: Path):
     eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
     eng.poll_once()
     h = eng.write_health()
-    assert h["stp_generation"] == "SHADOW_STP2"
+    assert h["stp_generation"] == "SHADOW_STP2_1"
     assert h["classification_model"] == "SHADOW_VOLUME_SIGNIFICANCE_V1"
     assert h["mode"] == "OBSERVE_ONLY"
     assert h["lookahead_violation_count"] == 0
     assert h["write_boundary_violation_count"] == 0
     assert h["baseline_divergence_count"] == 0
-    assert h["status"] in {STATUS_ACTIVE, STATUS_INSUFFICIENT_REACTION, "SHADOW_STP1_READY_BLOCKED_INSUFFICIENT_CAUSAL_HISTORY"}
+    assert "candidate_window_bars_sum_by_timeframe" in h
+    assert "unique_detected_zones_by_timeframe" in h
+    assert "execute_breakdown" in h
+    assert "execute_baseline_only_proof" in h
+    assert "target_usable_absence_audit" in h
+    assert h["status"] in {
+        STATUS_ACTIVE,
+        STATUS_STP21_COVERAGE,
+        STATUS_INSUFFICIENT_REACTION,
+        STATUS_COVERAGE_INTEGRITY_FAILURE,
+        "SHADOW_STP1_READY_BLOCKED_INSUFFICIENT_CAUSAL_HISTORY",
+    }
     assert before_books == {p.name: p.read_bytes() for p in books.glob("*.jsonl")}
     assert (stp_repo / "data/trading/shadow_economic_correlation/health.json").read_bytes() == eq_before
     assert (stp_repo / "data/trading/paper_epochs/active.json").read_bytes() == active_before
@@ -263,3 +338,24 @@ def test_every_persisted_zone_has_reaction_status(stp_repo: Path):
     for z in zones:
         assert z.get("reaction_status") is not None
         assert z.get("classification_mode") == CLASSIFICATION_MODE or z.get("volume_class") is not None
+
+def test_engine_stp21_separates_unique_vs_policy_expanded(stp_repo: Path):
+    from tests.test_shadow_structural_protection import _seed_entry
+
+    _seed_entry(stp_repo, tf="M30")
+    eng = StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+    eng.poll_once()
+    h = eng.write_health()
+    assert int(h.get("policy_expanded_protective_evidence_instances") or 0) == int(
+        h.get("protective_zone_usable_count") or 0
+    )
+    uniq = sum(int(v or 0) for v in (h.get("unique_usable_protective_by_timeframe") or {}).values())
+    expanded = int(h.get("policy_expanded_protective_evidence_instances") or 0)
+    assert uniq <= expanded
+    m15 = h.get("m15_parity") or {}
+    if int(m15.get("compared") or 0) == 0 and m15:
+        assert m15.get("status") == "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
+    proof = h.get("execute_baseline_only_proof") or {}
+    assert "by_timeframe" in proof
+    assert proof.get("proof_ok") in {True, False}
+

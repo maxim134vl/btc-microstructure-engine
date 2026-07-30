@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from . import DEFAULT_TICK_SIZE, LOOKBACK_BARS_BY_TF, TF_SECONDS
+from . import CAUSAL_LOOKBACK_HOURS_BY_TF, DEFAULT_TICK_SIZE, LOOKBACK_BARS_BY_TF, TF_SECONDS
 from .bars import build_bars_from_trades, closed_bars_before
 from .profile import build_exact_candle_volume_profile
 from .reaction import (
@@ -25,11 +25,49 @@ from .zones import extract_zones
 STRENGTH = {"CLIMAX": 3, "STOPPING": 2, "HIGH_AVERAGE_VOLUME": 1, "NORMAL": 0, "LOW_SMALL": -1}
 
 
+def audit_target_absence(*, zones: list[dict[str, Any]], side: str) -> dict[str, Any]:
+    """Distinguish legitimate no-target from catalog/search defects (no gate weakening)."""
+    side_u = str(side).upper()
+    target_side = "bearish" if side_u == "LONG" else "bullish"
+    location_key = "bearish_location_ok" if target_side == "bearish" else "bullish_location_ok"
+    opposite_location = [z for z in zones if bool(z.get(location_key))]
+    opposite_proven: list[dict[str, Any]] = []
+    for z in opposite_location:
+        reactions = z.get("reactions") or {}
+        want = "BEARISH" if target_side == "bearish" else "BULLISH"
+        for key, react in reactions.items():
+            if not str(key).startswith(f"{want}::"):
+                continue
+            if str(react.get("status") or "") == "PROVEN":
+                opposite_proven.append(z)
+                break
+    if not zones:
+        verdict = "SEARCH_OR_CATALOG_DEFECT_NO_ZONES_DETECTED"
+    elif not opposite_location:
+        verdict = "LEGITIMATE_ABSENCE_NO_OPPOSITE_LOCATION_ZONES"
+    elif not opposite_proven:
+        verdict = "LEGITIMATE_ABSENCE_OPPOSITE_ZONES_NOT_REACTION_PROVEN"
+    else:
+        verdict = "LEGITIMATE_ABSENCE_OPPOSITE_PROVEN_BUT_NOT_USABLE_UNDER_GATES"
+    return {
+        "target_side": target_side,
+        "detected_zones": len(zones),
+        "opposite_location_zones": len(opposite_location),
+        "opposite_reaction_proven_zones": len({z.get("zone_id") for z in opposite_proven}),
+        "verdict": verdict,
+    }
+
+
+def causal_lookback_start(decision_ts: datetime, timeframe: str) -> datetime:
+    """Start of exact agg_trade window for reconstruction (hours, same-TF)."""
+    tf = str(timeframe).upper()
+    hours = float(CAUSAL_LOOKBACK_HOURS_BY_TF.get(tf, 24))
+    return decision_ts - timedelta(hours=hours)
+
+
 def load_causal_trades(*, repo, decision_ts: datetime, timeframe: str, cache: dict | None = None) -> pd.DataFrame:
     tf = str(timeframe).upper()
-    tf_s = TF_SECONDS[tf]
-    lookback = int(LOOKBACK_BARS_BY_TF.get(tf, 24))
-    start = decision_ts - timedelta(seconds=tf_s * (lookback + 2))
+    start = causal_lookback_start(decision_ts, tf)
     key = (tf, start.isoformat(), decision_ts.isoformat())
     if cache is not None and key in cache:
         return cache[key]
@@ -37,6 +75,28 @@ def load_causal_trades(*, repo, decision_ts: datetime, timeframe: str, cache: di
     if cache is not None:
         cache[key] = trades
     return trades
+
+
+def lookback_coverage(*, timeframe: str, decision_ts: datetime, bars: list[dict[str, Any]], trades) -> dict[str, Any]:
+    tf = str(timeframe).upper()
+    start = causal_lookback_start(decision_ts, tf)
+    closed = [b for b in bars if not b.get("incomplete")]
+    first_open = closed[0]["open_timestamp"] if closed else None
+    last_open = closed[-1]["open_timestamp"] if closed else None
+    trade_n = 0 if trades is None or getattr(trades, "empty", True) else int(len(trades))
+    return {
+        "timeframe": tf,
+        "lookback_hours": CAUSAL_LOOKBACK_HOURS_BY_TF.get(tf),
+        "lookback_bars_equiv": LOOKBACK_BARS_BY_TF.get(tf),
+        "lookback_start": iso(start),
+        "decision_timestamp": iso(decision_ts),
+        "trade_events_loaded": trade_n,
+        "bars_reconstructed": len(bars),
+        "closed_bars": len(closed),
+        "first_closed_bar_open": first_open,
+        "last_closed_bar_open": last_open,
+        "coverage_ok": trade_n > 0 and len(closed) > 0,
+    }
 
 
 def build_candidate_catalog(
@@ -187,6 +247,14 @@ def build_candidate_catalog(
                 }
             )
 
+    coverage = lookback_coverage(
+        timeframe=tf,
+        decision_ts=decision_ts,
+        bars=classified,
+        trades=trades,
+    )
+    target_absence_audit = audit_target_absence(zones=zone_rows, side=side)
+
     return {
         "trades": trades,
         "bars": classified,
@@ -196,6 +264,10 @@ def build_candidate_catalog(
         "significant_count": significant_count,
         "exact_profiles": exact_profiles,
         "events_for_reaction": "agg_trade",
+        "lookback_coverage": coverage,
+        "target_absence_audit": target_absence_audit,
+        "lookback_start": coverage.get("lookback_start"),
+        "lookback_hours": coverage.get("lookback_hours"),
     }
 
 
