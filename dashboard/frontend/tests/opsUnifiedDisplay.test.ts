@@ -108,13 +108,27 @@ test("18 toxic quiet suppressed when disconnected", () => {
     true,
   );
   const src = readFileSync(join(root, "src/components/ops/OpsUnifiedDashboard.tsx"), "utf8");
-  assert.match(src, /Current monitoring unavailable/);
+  assert.match(src, /LIVE DATA UNAVAILABLE/);
   assert.doesNotMatch(src, /Trend: flat/);
 });
 
 test("19 display helpers do not recompute trading totals", () => {
   // formatLiveMetric only formats provided values
   assert.equal(formatLiveMetric(1000, { liveConnected: true, format: (v) => `$${v}` }).text, "$1000");
+});
+
+test("20 trading metrics block mounted once under Trading Operations", () => {
+  const src = readFileSync(join(root, "src/components/ops/OpsUnifiedDashboard.tsx"), "utf8");
+  assert.equal(countSectionMarkers(src, "<TradingMetricsPanel"), 1);
+  assert.equal(countSectionMarkers(src, 'data-panel="trading-metrics"'), 0); // panel marker lives in TradingMetricsPanel
+  const tradingIdx = src.indexOf('data-section="trading-operations"');
+  const metricsIdx = src.indexOf("<TradingMetricsPanel");
+  const marketIdx = src.indexOf('data-section="market-context"');
+  assert.ok(tradingIdx >= 0 && metricsIdx > tradingIdx && marketIdx > metricsIdx);
+
+  const panel = readFileSync(join(root, "src/components/ops/TradingMetricsPanel.tsx"), "utf8");
+  assert.match(panel, /data-panel="trading-metrics"/);
+  assert.doesNotMatch(panel, /Initial capital|Current equity|Realized PnL|Unrealized PnL|Total return/);
 });
 
 test("pickStatusLabel hides raw i18n misses", () => {

@@ -376,9 +376,9 @@ export function HealthPanel({ health }: { health: HealthSummary }) {
           ))}
         </ul>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono text-ds-text-tertiary">
-          <span>CPU {health.cpu_percent.toFixed(0)}%</span>
-          <span>MEM {health.memory_percent.toFixed(0)}%</span>
-          <span>DISK {health.disk_percent.toFixed(0)}%</span>
+          <span>CPU {health.cpu_percent != null ? `${health.cpu_percent.toFixed(0)}%` : "—"}</span>
+          <span>MEM {health.memory_percent != null ? `${health.memory_percent.toFixed(0)}%` : "—"}</span>
+          <span>DISK {health.disk_percent != null ? `${health.disk_percent.toFixed(0)}%` : "—"}</span>
           {health.deferred_engine_count != null ? <span>Deferred {health.deferred_engine_count}</span> : null}
           {health.optional_offline_count != null ? <span>Optional offline {health.optional_offline_count}</span> : null}
         </div>

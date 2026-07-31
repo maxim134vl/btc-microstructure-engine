@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { useTranslation } from "../../i18n";
+import { pickStatusLabel } from "../ops/unifiedDisplay";
 import { StatusDot } from "./StatusDot";
 import { useSimulatedStatus } from "./StatusSimulatorContext";
 import type { ResolvedStatus, StatusTone } from "./types";
@@ -36,8 +37,13 @@ export function StatusBadge({
   const { t } = useTranslation();
   const simulated = useSimulatedStatus(status ?? FALLBACK_STATUS);
   const resolvedTone = status ? simulated.tone : tone ?? "operational";
+  const i18nKey = `status.${simulated.domain}.${simulated.key}`;
   const resolvedLabel = status
-    ? t(`status.${simulated.domain}.${simulated.key}`)
+    ? pickStatusLabel({
+        resolvedLabel: simulated.label || label,
+        i18nValue: t(i18nKey),
+        i18nKey,
+      })
     : label ?? "";
   const text = size === "md" ? "text-[14px] font-medium" : "text-[13px] font-medium";
   const iconBox = size === "md" ? "h-5 w-5" : "h-4 w-4";
