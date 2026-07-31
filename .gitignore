@@ -69,3 +69,13 @@ run/
 *.tsbuildinfo
 *.parquet.meta.json
 changed_since_last_commit*
+
+# Worktree hygiene (generated/runtime)
+dashboard/frontend/node_modules/
+dashboard/frontend/tsconfig.tsbuildinfo
+data/candidate/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+tmp/
+dashboard/frontend/node_modules/.vite/
