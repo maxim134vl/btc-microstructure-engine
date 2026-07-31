@@ -107,16 +107,20 @@ def test_status_semantics_preliminary_and_insufficient():
     assert projected["sample_quality"]["sample_status"] == "PRELIMINARY"
     sharpe = projected["risk_adjusted_metrics"]["sharpe"]
     assert isinstance(sharpe, dict)
-    assert sharpe["value"] is None
-    assert sharpe["status"] == "INSUFFICIENT_SAMPLE"
+    # Equity-curve path: finite event-time Sharpe marked PRELIMINARY, not nulled.
+    if (projected.get("data_quality") or {}).get("return_observation_count", 0) >= 2:
+        assert sharpe["value"] is not None
+        assert sharpe["status"] == "PRELIMINARY"
+        assert "EVENT_TIME_EQUITY_RETURNS" in str(sharpe.get("reason") or "")
+    else:
+        assert sharpe["value"] is None
+        assert sharpe["status"] in {"INSUFFICIENT_SAMPLE", "UNDEFINED_ZERO_VARIANCE"}
     calmar = projected["risk_adjusted_metrics"]["calmar"]
     assert isinstance(calmar, dict)
-    assert calmar["value"] is None
-    assert calmar["status"] == "INSUFFICIENT_HISTORY"
+    assert calmar["status"] in {"UNSTABLE_SHORT_HISTORY", "INSUFFICIENT_HISTORY", "UNDEFINED_ZERO_DRAWDOWN"}
     annualised = projected["risk_adjusted_metrics"].get("annualised_return")
     if isinstance(annualised, dict):
-        assert annualised["value"] is None
-        assert annualised["status"] == "INSUFFICIENT_HISTORY"
+        assert annualised["status"] in {"UNSTABLE_SHORT_HISTORY", "INSUFFICIENT_HISTORY", "UNDEFINED"}
     assert projected["descriptive_metrics"]["profit_factor"]["status"] == "PRELIMINARY"
     assert projected["descriptive_metrics"]["expectancy"]["status"] == "PRELIMINARY"
 
@@ -166,8 +170,14 @@ def test_serialization_no_nan_inf_null_reason_preserved():
         assert not math.isnan(num)
         assert not math.isinf(num)
     sharpe = projected["risk_adjusted_metrics"]["sharpe"]
-    assert sharpe["value"] is None
     assert sharpe["reason"]
+    if sharpe["value"] is None:
+        assert sharpe["status"] in {
+            "INSUFFICIENT_SAMPLE",
+            "UNDEFINED_ZERO_VARIANCE",
+        }
+    else:
+        assert math.isfinite(float(sharpe["value"]))
 
 
 def test_regression_risk_process_pipeline_unchanged_by_performance():

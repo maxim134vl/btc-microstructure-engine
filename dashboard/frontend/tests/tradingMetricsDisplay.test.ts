@@ -96,3 +96,23 @@ test("canonical performance payload shows closed trades and win rate; Sharpe sta
   assert.ok(!JSON.stringify(performance).includes("shadow_structural_protection"));
   assert.ok(String(performance.source.adapter).endsWith("trading_performance_truth.py"));
 });
+
+test("preliminary equity-curve values render; drawdown duration uses hours", () => {
+  const raw = resolveTradingMetricRawValues({
+    status: "AVAILABLE",
+    portfolio: { closed_trade_count: 8, open_position_count: 1 },
+    descriptive_metrics: { wins: 2, losses: 6, win_rate: 25 },
+    risk_adjusted_metrics: {
+      sharpe: { value: -1.2345, status: "PRELIMINARY" },
+      sortino: { value: -1.5, status: "PRELIMINARY" },
+      calmar: { value: -12.3, status: "UNSTABLE_SHORT_HISTORY" },
+      max_drawdown: { value: 0.0125, status: "PRELIMINARY" },
+      drawdown_duration: { value: 31.5, status: "PRELIMINARY" },
+    },
+  });
+  assert.equal(raw.Sharpe, -1.2345);
+  assert.equal(formatTradingMetricValue(raw.Sharpe, "ratio"), "-1.2345");
+  assert.equal(formatTradingMetricValue(raw["Maximum drawdown"], "percent"), "1.25%");
+  assert.equal(formatTradingMetricValue(raw["Drawdown duration"], "duration"), "1d 7.50h");
+  assert.equal(formatTradingMetricValue(12.5, "duration"), "12.50h");
+});

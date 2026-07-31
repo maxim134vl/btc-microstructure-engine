@@ -575,38 +575,453 @@ def _descriptive_metrics(closed: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _risk_adjusted_metrics(closed_count: int) -> dict[str, Any]:
+def _iso_ts(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            rows.append(obj)
+    return rows
+
+
+def _resolve_epoch_manifest_timestamp(
+    *,
+    paper_epoch_id: str | None,
+    epoch_manifest: dict[str, Any] | None = None,
+    repo_root: Path | None = None,
+) -> tuple[datetime | None, bool]:
+    """Return (timestamp, inferred). inferred=True only when falling back later."""
+    manifest = epoch_manifest
+    if manifest is None and paper_epoch_id:
+        root = repo_root or Path(__file__).resolve().parents[3]
+        path = root / "data" / "trading" / "paper_epochs" / f"{paper_epoch_id}.json"
+        manifest = _read_json(path) if path.exists() else {}
+    if not manifest:
+        return None, True
+    for key in ("activated_at", "started_at", "created_at", "generated_at"):
+        stamp = _parse_ts_local(manifest.get(key))
+        if stamp is not None:
+            return stamp, False
+    return None, True
+
+
+def _parse_ts_local(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        stamp = value
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone(timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        stamp = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.astimezone(timezone.utc)
+
+
+def load_canonical_equity_snapshots(
+    *,
+    books_dir: Path,
+    paper_epoch_id: str,
+) -> list[dict[str, Any]]:
+    """Load/filter/sort canonical trade-close equity snapshots for one epoch."""
+    rows = _read_jsonl_dicts(books_dir / "equity_snapshots.jsonl")
+    cleaned: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if str(row.get("paper_epoch_id") or "") != str(paper_epoch_id):
+            continue
+        equity = _sf(row.get("equity_usd"))
+        ts = _parse_ts_local(row.get("ts"))
+        trade_id = str(row.get("trade_id") or "").strip()
+        if equity is None or not math.isfinite(equity) or ts is None or not trade_id:
+            continue
+        # Canonical close snapshot: must carry trade_id (trade-close equity mark).
+        key = (trade_id, _iso_ts(ts) or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(
+            {
+                "trade_id": trade_id,
+                "ts": _iso_ts(ts),
+                "_ts": ts,
+                "equity_usd": float(equity),
+                "timeframe": row.get("timeframe"),
+                "paper_epoch_id": paper_epoch_id,
+            }
+        )
+    cleaned.sort(key=lambda r: (r["_ts"], r["trade_id"]))
+    return cleaned
+
+
+def build_equity_curve_risk_metrics(
+    *,
+    initial_equity_usd: float,
+    initial_timestamp: datetime | None,
+    equity_snapshots: list[dict[str, Any]],
+    initial_timestamp_inferred: bool = False,
+) -> dict[str, Any]:
+    """Compute event-time Sharpe/Sortino/drawdown/Calmar from master equity curve.
+
+    Pure function — no I/O. Does not invent annualisation for Sharpe/Sortino.
+    """
+    if not math.isfinite(float(initial_equity_usd)) or float(initial_equity_usd) <= 0:
+        return _risk_adjusted_metrics_unavailable(reason="invalid_initial_equity")
+
+    points: list[tuple[datetime, float]] = []
+    first_snap_ts = None
+    for row in equity_snapshots:
+        ts = row.get("_ts") or _parse_ts_local(row.get("ts"))
+        eq = _sf(row.get("equity_usd"))
+        if ts is None or eq is None or not math.isfinite(eq):
+            continue
+        if first_snap_ts is None:
+            first_snap_ts = ts
+        points.append((ts, float(eq)))
+    points.sort(key=lambda x: x[0])
+
+    inferred = bool(initial_timestamp_inferred)
+    start_ts = initial_timestamp
+    if start_ts is None:
+        start_ts = first_snap_ts
+        inferred = True
+
+    curve: list[tuple[datetime, float]] = []
+    if start_ts is not None:
+        curve.append((start_ts, float(initial_equity_usd)))
+    for ts, eq in points:
+        # Avoid duplicating initial point if first snapshot equals initial at same ts.
+        if curve and ts == curve[-1][0] and abs(eq - curve[-1][1]) < 1e-12:
+            continue
+        curve.append((ts, eq))
+
+    equity_point_count = len(curve)
+    returns: list[float] = []
+    for i in range(1, len(curve)):
+        prev = curve[i - 1][1]
+        cur = curve[i][1]
+        if prev <= 0 or not math.isfinite(prev) or not math.isfinite(cur):
+            continue
+        returns.append(cur / prev - 1.0)
+    return_n = len(returns)
+
+    series_start = _iso_ts(curve[0][0]) if curve else None
+    series_end = _iso_ts(curve[-1][0]) if curve else None
+    span_hours = None
+    elapsed_seconds = None
+    if len(curve) >= 2:
+        elapsed_seconds = max(0.0, (curve[-1][0] - curve[0][0]).total_seconds())
+        span_hours = elapsed_seconds / 3600.0
+
+    # --- Maximum drawdown + longest drawdown duration ---
+    max_dd = None
+    dd_duration_hours = None
+    dd_open = False
+    dd_start = None
+    dd_end = None
+    if equity_point_count >= 1:
+        peak = curve[0][1]
+        peak_ts = curve[0][0]
+        max_dd = 0.0
+        longest = 0.0
+        open_start: datetime | None = None
+        for ts, eq in curve:
+            if eq >= peak:
+                # recovery to / new high-water mark
+                if open_start is not None and eq >= peak:
+                    dur = (ts - open_start).total_seconds() / 3600.0
+                    if dur >= longest:
+                        longest = dur
+                        dd_start = _iso_ts(open_start)
+                        dd_end = _iso_ts(ts)
+                        dd_open = False
+                    open_start = None
+                if eq > peak:
+                    peak = eq
+                    peak_ts = ts
+            elif eq < peak:
+                dd = (peak - eq) / peak if peak > 0 else 0.0
+                if dd > (max_dd or 0.0):
+                    max_dd = dd
+                if open_start is None:
+                    open_start = peak_ts
+        if open_start is not None and curve:
+            dur = (curve[-1][0] - open_start).total_seconds() / 3600.0
+            if dur >= longest:
+                longest = dur
+                dd_start = _iso_ts(open_start)
+                dd_end = _iso_ts(curve[-1][0])
+                dd_open = True
+            else:
+                # still mark open if underwater at end
+                dd_open = curve[-1][1] < peak
+        dd_duration_hours = longest if equity_point_count >= 2 else 0.0
+
+    # --- Sharpe (event-time, non-annualised, sample stdev) ---
+    sharpe_value = None
+    sharpe_status = "INSUFFICIENT_SAMPLE"
+    sharpe_reason = "return_observation_count=%d" % return_n
+    if return_n < 2:
+        sharpe_status = "INSUFFICIENT_SAMPLE"
+        sharpe_reason = "return_observation_count=%d; need>=2" % return_n
+    else:
+        mean_r = sum(returns) / return_n
+        var = sum((r - mean_r) ** 2 for r in returns) / (return_n - 1)
+        std = math.sqrt(var) if var >= 0 else float("nan")
+        if not math.isfinite(std) or std == 0.0:
+            sharpe_value = None
+            sharpe_status = "UNDEFINED_ZERO_VARIANCE"
+            sharpe_reason = (
+                "EVENT_TIME_EQUITY_RETURNS; NON_ANNUALISED; return_observation_count=%d; zero variance"
+                % return_n
+            )
+        else:
+            sharpe_value = mean_r / std
+            sharpe_status = "PRELIMINARY"
+            sharpe_reason = (
+                "EVENT_TIME_EQUITY_RETURNS; NON_ANNUALISED; return_observation_count=%d" % return_n
+            )
+
+    # --- Sortino ---
+    sortino_value = None
+    sortino_status = "INSUFFICIENT_SAMPLE"
+    sortino_reason = "return_observation_count=%d" % return_n
+    if return_n < 1:
+        sortino_status = "INSUFFICIENT_SAMPLE"
+    else:
+        mean_r = sum(returns) / return_n
+        downside = [min(r, 0.0) for r in returns]
+        if all(d == 0.0 for d in downside):
+            sortino_value = None
+            sortino_status = "UNDEFINED_NO_DOWNSIDE"
+            sortino_reason = (
+                "EVENT_TIME_EQUITY_RETURNS; NON_ANNUALISED; return_observation_count=%d; no negative returns"
+                % return_n
+            )
+        else:
+            down_var = sum(d * d for d in downside) / return_n
+            down_dev = math.sqrt(down_var) if down_var >= 0 else float("nan")
+            if not math.isfinite(down_dev) or down_dev == 0.0:
+                sortino_value = None
+                sortino_status = "UNDEFINED_NO_DOWNSIDE"
+                sortino_reason = (
+                    "EVENT_TIME_EQUITY_RETURNS; NON_ANNUALISED; return_observation_count=%d"
+                    % return_n
+                )
+            else:
+                sortino_value = mean_r / down_dev
+                sortino_status = "PRELIMINARY"
+                sortino_reason = (
+                    "EVENT_TIME_EQUITY_RETURNS; NON_ANNUALISED; return_observation_count=%d"
+                    % return_n
+                )
+
+    # --- Annualised return + Calmar ---
+    ann_value = None
+    ann_status = "INSUFFICIENT_HISTORY"
+    ann_reason = "insufficient equity span"
+    calmar_value = None
+    calmar_status = "INSUFFICIENT_HISTORY"
+    calmar_reason = "insufficient equity span"
+    if (
+        equity_point_count >= 2
+        and elapsed_seconds is not None
+        and elapsed_seconds > 0
+        and curve[0][1] > 0
+        and math.isfinite(curve[-1][1])
+    ):
+        elapsed_years = elapsed_seconds / (365.25 * 86400.0)
+        ratio = curve[-1][1] / curve[0][1]
+        if elapsed_years > 0 and ratio > 0 and math.isfinite(ratio):
+            try:
+                ann_value = ratio ** (1.0 / elapsed_years) - 1.0
+            except OverflowError:
+                ann_value = None
+            if ann_value is None or not math.isfinite(ann_value):
+                ann_value = None
+                ann_status = "UNDEFINED"
+                ann_reason = "non-finite annualised return"
+                calmar_value = None
+                calmar_status = "UNDEFINED"
+                calmar_reason = ann_reason
+            else:
+                ann_status = "UNSTABLE_SHORT_HISTORY"
+                ann_reason = (
+                    "ANNUALISATION_UNSTABLE; observation_span_hours=%.6f; return_observation_count=%d"
+                    % (span_hours or 0.0, return_n)
+                )
+                if max_dd is not None and max_dd > 0:
+                    calmar_value = ann_value / max_dd
+                    if not math.isfinite(calmar_value):
+                        calmar_value = None
+                        calmar_status = "UNDEFINED"
+                        calmar_reason = "non-finite Calmar"
+                    else:
+                        calmar_status = "UNSTABLE_SHORT_HISTORY"
+                        calmar_reason = (
+                            "ANNUALISATION_UNSTABLE; observation_span_hours=%.6f; return_observation_count=%d"
+                            % (span_hours or 0.0, return_n)
+                        )
+                else:
+                    calmar_value = None
+                    calmar_status = "UNDEFINED_ZERO_DRAWDOWN" if max_dd == 0 else "INSUFFICIENT_HISTORY"
+                    calmar_reason = "max_drawdown=%s; cannot form Calmar" % max_dd
+        else:
+            ann_status = "UNDEFINED"
+            ann_reason = "elapsed_years<=0 or non-positive equity ratio"
+            calmar_status = "UNDEFINED"
+            calmar_reason = ann_reason
+    elif elapsed_seconds is not None and elapsed_seconds <= 0:
+        ann_status = "UNDEFINED"
+        ann_reason = "elapsed_time<=0"
+        calmar_status = "UNDEFINED"
+        calmar_reason = "elapsed_time<=0"
+
+    dd_status = "INSUFFICIENT_SAMPLE" if equity_point_count < 1 else "PRELIMINARY"
+    dd_reason = "equity_point_count=%d; short history" % equity_point_count
+    dur_status = "INSUFFICIENT_SAMPLE" if equity_point_count < 2 else "PRELIMINARY"
+    dur_reason = "equity_point_count=%d; short history" % equity_point_count
+
+    if equity_point_count == 0:
+        equity_series_status = "MISSING"
+    elif return_n < 2:
+        equity_series_status = "INSUFFICIENT"
+    else:
+        equity_series_status = "AVAILABLE"
+
+    overall = "PRELIMINARY" if return_n >= 2 else "INSUFFICIENT_SAMPLE"
     reasons = [
-        "INSUFFICIENT_SAMPLE" if closed_count < 30 else None,
-        "INSUFFICIENT_HISTORY",
-        "no canonical equity return series for Sharpe/Calmar",
+        "EVENT_TIME_EQUITY_RETURNS",
+        "NON_ANNUALISED_SHARPE_SORTINO",
+        "return_observation_count=%d" % return_n,
+        "equity_point_count=%d" % equity_point_count,
     ]
-    reasons = [r for r in reasons if r]
+    if inferred:
+        reasons.append("initial_timestamp_inferred=true")
+
     return {
         "sharpe": _metric_status_block(
-            value=None,
-            status="INSUFFICIENT_SAMPLE",
-            reason="closed_trade_count=%d; no return-series Sharpe contract" % closed_count,
+            value=_clean_num(sharpe_value), status=sharpe_status, reason=sharpe_reason
+        ),
+        "sortino": _metric_status_block(
+            value=_clean_num(sortino_value), status=sortino_status, reason=sortino_reason
         ),
         "calmar": _metric_status_block(
-            value=None,
-            status="INSUFFICIENT_HISTORY",
-            reason="history too short for annualised Calmar",
+            value=_clean_num(calmar_value), status=calmar_status, reason=calmar_reason
         ),
         "max_drawdown": _metric_status_block(
-            value=None,
-            status="INSUFFICIENT_HISTORY",
-            reason="equity-curve drawdown not decision-grade at current sample",
+            value=_clean_num(max_dd), status=dd_status, reason=dd_reason
+        ),
+        "drawdown_duration": _metric_status_block(
+            value=_clean_num(dd_duration_hours), status=dur_status, reason=dur_reason
         ),
         "annualised_return": _metric_status_block(
-            value=None,
-            status="INSUFFICIENT_HISTORY",
-            reason="do not annualise short observation window",
+            value=_clean_num(ann_value), status=ann_status, reason=ann_reason
         ),
-        "status": "INSUFFICIENT_SAMPLE",
-        "reasons": reasons,
+        "drawdown_open": bool(dd_open),
+        "drawdown_start": dd_start,
+        "drawdown_end": dd_end,
+        "status": overall,
         "decision_grade": False,
+        "reasons": reasons,
+        "equity_point_count": equity_point_count,
+        "return_observation_count": return_n,
+        "equity_series_start": series_start,
+        "equity_series_end": series_end,
+        "observation_span_hours": _clean_num(span_hours),
+        "initial_timestamp_inferred": inferred,
+        "equity_series_status": equity_series_status,
     }
+
+
+def _risk_adjusted_metrics_unavailable(*, reason: str) -> dict[str, Any]:
+    return {
+        "sharpe": _metric_status_block(value=None, status="INSUFFICIENT_SAMPLE", reason=reason),
+        "sortino": _metric_status_block(value=None, status="INSUFFICIENT_SAMPLE", reason=reason),
+        "calmar": _metric_status_block(value=None, status="INSUFFICIENT_HISTORY", reason=reason),
+        "max_drawdown": _metric_status_block(value=None, status="INSUFFICIENT_HISTORY", reason=reason),
+        "drawdown_duration": _metric_status_block(
+            value=None, status="INSUFFICIENT_HISTORY", reason=reason
+        ),
+        "annualised_return": _metric_status_block(
+            value=None, status="INSUFFICIENT_HISTORY", reason=reason
+        ),
+        "drawdown_open": False,
+        "drawdown_start": None,
+        "drawdown_end": None,
+        "status": "INSUFFICIENT_SAMPLE",
+        "decision_grade": False,
+        "reasons": [reason],
+        "equity_point_count": 0,
+        "return_observation_count": 0,
+        "equity_series_start": None,
+        "equity_series_end": None,
+        "observation_span_hours": None,
+        "initial_timestamp_inferred": True,
+        "equity_series_status": "MISSING",
+    }
+
+
+def _risk_adjusted_metrics(closed_count: int) -> dict[str, Any]:
+    """Legacy fallback when no equity snapshots are available."""
+    return _risk_adjusted_metrics_unavailable(
+        reason="closed_trade_count=%d; no canonical equity_snapshots.jsonl series" % closed_count
+    )
+
+
+def _attach_equity_curve_metrics(
+    *,
+    books_dir: Path,
+    paper_epoch_id: str,
+    initial_equity_usd: float,
+    epoch_manifest: dict[str, Any] | None = None,
+    data_quality: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    snaps = load_canonical_equity_snapshots(books_dir=books_dir, paper_epoch_id=paper_epoch_id)
+    init_ts, inferred_flag = _resolve_epoch_manifest_timestamp(
+        paper_epoch_id=paper_epoch_id, epoch_manifest=epoch_manifest
+    )
+    risk = build_equity_curve_risk_metrics(
+        initial_equity_usd=float(initial_equity_usd),
+        initial_timestamp=init_ts,
+        equity_snapshots=snaps,
+        initial_timestamp_inferred=bool(inferred_flag),
+    )
+    dq = dict(data_quality or {})
+    for key in (
+        "equity_point_count",
+        "return_observation_count",
+        "equity_series_start",
+        "equity_series_end",
+        "observation_span_hours",
+        "initial_timestamp_inferred",
+        "equity_series_status",
+    ):
+        dq[key] = risk.get(key)
+    return risk, dq
 
 
 def build_trading_performance_truth(
@@ -675,11 +1090,11 @@ def build_trading_performance_truth(
         closed_lite: list[dict[str, Any]] = []
         total_fees = 0.0
         total_slip = 0.0
+        books_dir = Path(summary["source_books"])
         # Attribute closed trades by timeframe when present; feed canonical metric helpers.
         try:
             from btc_ml.trading.intrabar_paper.ops_adapter import _read_jsonl
 
-            books_dir = Path(summary["source_books"])
             for trade in _read_jsonl(books_dir / "trades.jsonl"):
                 tf = str(trade.get("timeframe") or "")
                 net = float(trade.get("net_pnl_usd") or 0.0)
@@ -716,7 +1131,21 @@ def build_trading_performance_truth(
         except Exception:
             pass
         descriptive = _descriptive_metrics(closed_lite)
-        risk_adj = _risk_adjusted_metrics(len(closed_lite))
+        books_dir = Path(summary["source_books"])
+        risk_adj, dq_equity = _attach_equity_curve_metrics(
+            books_dir=books_dir,
+            paper_epoch_id=str(summary["paper_epoch_id"]),
+            initial_equity_usd=float(initial),
+            epoch_manifest=active_epoch,
+            data_quality={
+                "reconciliation_status": "OK",
+                "legacy_excluded": True,
+                "excluded_research_count": int(excluded_research_count),
+                "excluded_legacy_count": int(excluded_legacy_count),
+                "canonical_closed_trade_count": int(summary["trades_count"]),
+                "excluded_other_count": 0,
+            },
+        )
         nets = [float(r["net_realised_pnl_usd"]) for r in closed_lite]
         best_trade = max(nets) if nets else None
         worst_trade = min(nets) if nets else None
@@ -795,14 +1224,7 @@ def build_trading_performance_truth(
                 "descriptive": descriptive.get("status"),
                 "risk_adjusted": risk_adj.get("status"),
             },
-            "data_quality": {
-                "reconciliation_status": "OK",
-                "legacy_excluded": True,
-                "excluded_research_count": int(excluded_research_count),
-                "excluded_legacy_count": int(excluded_legacy_count),
-                "canonical_closed_trade_count": int(summary["trades_count"]),
-                "excluded_other_count": 0,
-            },
+            "data_quality": dq_equity,
             "source_policy": {
                 "mark_source": "LIVE1B_INTRABAR_PAPER_EPOCH",
                 "included_sources": [summary["source_books"]],

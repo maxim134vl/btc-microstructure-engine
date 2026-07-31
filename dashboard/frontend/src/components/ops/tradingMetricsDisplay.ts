@@ -142,9 +142,13 @@ function formatRatio(value: number): string {
   return value.toFixed(4);
 }
 
+/** Canonical drawdown duration is stored in hours. */
 function formatDuration(value: number): string {
-  if (Number.isInteger(value)) return `${value}`;
-  return value.toFixed(2);
+  if (!Number.isFinite(value)) return "—";
+  if (value < 24) return `${value.toFixed(2)}h`;
+  const days = Math.floor(value / 24);
+  const hours = value - days * 24;
+  return `${days}d ${hours.toFixed(2)}h`;
 }
 
 export function formatTradingMetricValue(
