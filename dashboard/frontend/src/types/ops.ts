@@ -215,6 +215,40 @@ export interface RuntimeTruthLegacy {
   reason?: string;
 }
 
+/** Canonical OPS trading performance (from trading_performance_truth). */
+export interface TradingOperationsPerformance {
+  status?: string | null;
+  error?: string | null;
+  portfolio?: {
+    closed_trade_count?: number | null;
+    open_position_count?: number | null;
+    total_fees_usd?: number | null;
+    total_slippage_usd?: number | null;
+    total_trading_costs_usd?: number | null;
+    best_trade_usd?: number | null;
+    worst_trade_usd?: number | null;
+    realised_net_pnl_usd?: number | null;
+    unrealised_gross_pnl_usd?: number | null;
+  } | null;
+  descriptive_metrics?: Record<string, unknown> | null;
+  risk_adjusted_metrics?: Record<string, unknown> | null;
+  timeframes?: Record<string, unknown> | null;
+  data_quality?: Record<string, unknown> | null;
+  sample_quality?: Record<string, unknown> | null;
+  source?: {
+    adapter?: string | null;
+    schema_version?: string | null;
+    included_sources?: string[] | null;
+    excluded_sources?: string[] | null;
+  } | null;
+}
+
+export interface RuntimeTruthTradingOperations {
+  manager?: Record<string, unknown> | null;
+  risk?: Record<string, unknown> | null;
+  performance?: TradingOperationsPerformance | null;
+}
+
 export interface RuntimeTruthSnapshot {
   generated_at?: string;
   schema_version?: string;
@@ -228,6 +262,7 @@ export interface RuntimeTruthSnapshot {
   known_limitations?: RuntimeTruthLimitation[];
   legacy_components?: RuntimeTruthLegacy[];
   timeframe_traders?: RuntimeTruthTimeframeTraders;
+  trading_operations?: RuntimeTruthTradingOperations | null;
   shadow_economic_correlation?: Record<string, unknown> | null;
   shadow_structural_protection?: Record<string, unknown> | null;
   cross_layer_outcome_reconciliation?: Record<string, unknown> | null;

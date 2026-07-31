@@ -39,6 +39,7 @@ import {
   displayProvisionalContext,
 } from "./tradingStateLifecycleDisplay";
 import type { TimeframeTradingState } from "../../types/ops";
+import { TradingMetricsPanel } from "./TradingMetricsPanel";
 
 const TRADING_STATE_TIMEFRAMES = ["M15", "M30", "H1", "H4"] as const;
 
@@ -215,6 +216,8 @@ export function OpsUnifiedDashboard({
   const traders = snapshot.timeframe_traders;
   const commandBus = traders?.command_bus;
   const portfolio = traders?.portfolio;
+  const tradingPerformance =
+    snapshot.runtime_truth?.trading_operations?.performance ?? null;
   const decision = research?.decision_layer;
 
   const actionableAlerts = useMemo(() => {
@@ -608,6 +611,11 @@ export function OpsUnifiedDashboard({
                 ) : null}
               </Panel>
             </div>
+            <TradingMetricsPanel
+              performance={tradingPerformance}
+              liveConnected={liveConnected}
+              generatedAt={generatedAt}
+            />
           </SectionCard>
         </section>
 

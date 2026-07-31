@@ -556,7 +556,33 @@ def test_metrics_statuses_and_no_nan_infinity(tmp_path: Path):
 
 def test_live_parity_with_books_and_manager():
     payload = build_trading_performance_truth()
-    # closed/open from live books
+    # LIVE1B active epoch uses intrabar jsonl books; legacy parquet plane is excluded.
+    if payload.get("source") == "LIVE1B_INTRABAR_PAPER_EPOCH":
+        books_dir = Path((payload.get("source_policy") or {})["included_sources"][0])
+        trades = []
+        for ln in (books_dir / "trades.jsonl").read_text(encoding="utf-8").splitlines():
+            if ln.strip():
+                trades.append(json.loads(ln))
+        latest: dict[str, dict] = {}
+        pos_path = books_dir / "positions.jsonl"
+        if pos_path.exists():
+            for ln in pos_path.read_text(encoding="utf-8").splitlines():
+                if not ln.strip():
+                    continue
+                row = json.loads(ln)
+                pid = str(row.get("position_id") or "")
+                if pid:
+                    latest[pid] = row
+        opens = sum(1 for p in latest.values() if str(p.get("status") or "").upper() == "OPEN")
+        realised = sum(float(t.get("net_pnl_usd") or 0.0) for t in trades)
+        assert payload["portfolio"]["closed_trade_count"] == len(trades)
+        assert payload["portfolio"]["open_position_count"] == opens
+        assert payload["portfolio"]["realised_net_pnl_usd"] == pytest.approx(realised)
+        assert payload["portfolio"]["mtm_basis"] == MTM_BASIS_GROSS
+        assert "EQCORR" not in str(payload.get("source_policy") or {})
+        assert "shadow_structural" not in str(payload.get("source_policy") or {})
+        return
+
     closed = 0
     opens = 0
     realised = 0.0
@@ -575,13 +601,11 @@ def test_live_parity_with_books_and_manager():
     assert payload["portfolio"]["closed_trade_count"] == closed
     assert payload["portfolio"]["open_position_count"] == opens
     assert payload["portfolio"]["realised_net_pnl_usd"] == pytest.approx(realised)
-    # manager unrealised parity on gross
     mgr = json.loads((ROOT / "data/trading/manager/portfolio_summary.json").read_text())
     assert payload["portfolio"]["unrealised_gross_pnl_usd"] == pytest.approx(float(mgr["unrealized_pnl"]))
     assert payload["portfolio"]["mark_price"] == pytest.approx(float(mgr["mark_price"]))
     assert payload["portfolio"]["mtm_basis"] == MTM_BASIS_GROSS
     assert payload["portfolio"]["initial_equity_usd"] == INITIAL_CAPITAL_USD
-    # episode 743 multi-tf retained if present
     rows = [r for r in payload["closed_trades"] if r.get("episode_id") == 743]
     if rows:
         assert len(rows) >= 2

@@ -638,7 +638,15 @@ def build_trading_performance_truth(
         build_intrabar_epoch_performance_summary = None  # type: ignore
         legacy_void_marker = None  # type: ignore
 
-    if active_epoch and str(active_epoch.get("rule_contract_version") or "").startswith("INTRABAR_RULES"):
+    # Explicit books_root/portfolio overrides (tests/adapters) must not be shadowed
+    # by the live ACTIVE epoch shortcut — that was a connection bug for fixtures.
+    use_live_intrabar_epoch = (
+        books_root is None
+        and portfolio_summary_path is None
+        and active_epoch is not None
+        and str(active_epoch.get("rule_contract_version") or "").startswith("INTRABAR_RULES")
+    )
+    if use_live_intrabar_epoch:
         summary = build_intrabar_epoch_performance_summary(epoch=active_epoch)  # type: ignore[misc]
         void = legacy_void_marker() if legacy_void_marker else None
         initial = float(summary["initial_equity_usd"])
@@ -664,24 +672,54 @@ def build_trading_performance_truth(
         for tf, pos in (summary.get("positions_by_timeframe") or {}).items():
             if tf in per_tf:
                 per_tf[tf]["open_position_count"] = 1
-        # Attribute closed trades by timeframe when present
+        closed_lite: list[dict[str, Any]] = []
+        total_fees = 0.0
+        total_slip = 0.0
+        # Attribute closed trades by timeframe when present; feed canonical metric helpers.
         try:
             from btc_ml.trading.intrabar_paper.ops_adapter import _read_jsonl
 
             books_dir = Path(summary["source_books"])
             for trade in _read_jsonl(books_dir / "trades.jsonl"):
                 tf = str(trade.get("timeframe") or "")
+                net = float(trade.get("net_pnl_usd") or 0.0)
+                fees = float(trade.get("fees_usd") or 0.0)
+                slip = float(trade.get("slippage_usd") or 0.0)
+                total_fees += fees
+                total_slip += slip
+                closed_lite.append(
+                    {
+                        "trade_id": trade.get("trade_id"),
+                        "position_id": trade.get("position_id"),
+                        "timeframe": tf,
+                        "side": trade.get("side"),
+                        "episode_id": trade.get("lifecycle_episode_id"),
+                        "net_realised_pnl_usd": net,
+                        "gross_realised_pnl_usd": _sf(trade.get("gross_pnl_usd")),
+                        "fees_usd": fees,
+                        "slippage_cost_usd": slip,
+                        "holding_minutes": _holding_minutes(trade.get("entry_ts"), trade.get("exit_ts")),
+                        "entry_ts": trade.get("entry_ts"),
+                        "exit_ts": trade.get("exit_ts"),
+                    }
+                )
                 if tf not in per_tf:
                     continue
                 per_tf[tf]["closed_trade_count"] += 1
-                net = float(trade.get("net_pnl_usd") or 0.0)
                 per_tf[tf]["realised_net_pnl_usd"] += net
+                per_tf[tf]["total_fees_usd"] += fees
+                per_tf[tf]["total_slippage_usd"] += slip
                 if net > 0:
                     per_tf[tf]["wins"] += 1
                 elif net < 0:
                     per_tf[tf]["losses"] += 1
         except Exception:
             pass
+        descriptive = _descriptive_metrics(closed_lite)
+        risk_adj = _risk_adjusted_metrics(len(closed_lite))
+        nets = [float(r["net_realised_pnl_usd"]) for r in closed_lite]
+        best_trade = max(nets) if nets else None
+        worst_trade = min(nets) if nets else None
         return {
             "schema_version": SCHEMA_VERSION,
             "generated_at": generated_at or _utc_now(),
@@ -691,7 +729,7 @@ def build_trading_performance_truth(
             "legacy_excluded": True,
             "legacy_void": void,
             "initial_equity_usd": initial,
-            "closed_trades": [],
+            "closed_trades": closed_lite,
             "open_positions": [],
             "portfolio": {
                 "initial_equity_usd": initial,
@@ -703,8 +741,11 @@ def build_trading_performance_truth(
                 "unrealised_net_pnl_usd": 0.0,
                 "total_gross_pnl_usd": realized,
                 "total_net_pnl_usd": realized,
-                "total_fees_usd": 0.0,
-                "total_slippage_usd": 0.0,
+                "total_fees_usd": total_fees,
+                "total_slippage_usd": total_slip,
+                "total_trading_costs_usd": total_fees + total_slip,
+                "best_trade_usd": best_trade,
+                "worst_trade_usd": worst_trade,
                 "closed_trade_count": int(summary["trades_count"]),
                 "open_position_count": int(summary["active_positions"]),
                 "mark_price": None,
@@ -723,8 +764,8 @@ def build_trading_performance_truth(
                 "realised_net_usd": realized,
                 "unrealised_gross_usd": 0.0,
                 "unrealised_net_usd": 0.0,
-                "fees_usd": 0.0,
-                "slippage_usd": 0.0,
+                "fees_usd": total_fees,
+                "slippage_usd": total_slip,
             },
             "positions": {
                 "active_count": summary["active_positions"],
@@ -733,7 +774,7 @@ def build_trading_performance_truth(
             },
             "trades": {
                 "closed_count": summary["trades_count"],
-                "closed": [],
+                "closed": closed_lite,
             },
             "metrics": {
                 "win_rate": summary["win_rate"],
@@ -745,26 +786,22 @@ def build_trading_performance_truth(
                 "calmar": summary["calmar"],
             },
             "descriptive_metrics": {
-                "status": "EMPTY_EPOCH" if int(summary["trades_count"]) == 0 else "AVAILABLE",
-                "win_rate": summary["win_rate"],
-                "profit_factor": summary["profit_factor"],
+                **descriptive,
+                "best_trade": best_trade,
+                "worst_trade": worst_trade,
             },
-            "risk_adjusted_metrics": {
-                "status": "INSUFFICIENT_HISTORY",
-                "sharpe": summary["sharpe"],
-                "calmar": summary["calmar"],
-                "drawdown": summary["drawdown"],
-                "reasons": ["LIVE1B_NEW_EPOCH_NO_CLOSED_TRADES"]
-                if int(summary["trades_count"]) == 0
-                else [],
-            },
+            "risk_adjusted_metrics": risk_adj,
             "sample_status": {
-                "descriptive": "EMPTY_EPOCH" if int(summary["trades_count"]) == 0 else "AVAILABLE",
-                "risk_adjusted": "INSUFFICIENT_HISTORY",
+                "descriptive": descriptive.get("status"),
+                "risk_adjusted": risk_adj.get("status"),
             },
             "data_quality": {
                 "reconciliation_status": "OK",
                 "legacy_excluded": True,
+                "excluded_research_count": int(excluded_research_count),
+                "excluded_legacy_count": int(excluded_legacy_count),
+                "canonical_closed_trade_count": int(summary["trades_count"]),
+                "excluded_other_count": 0,
             },
             "source_policy": {
                 "mark_source": "LIVE1B_INTRABAR_PAPER_EPOCH",
