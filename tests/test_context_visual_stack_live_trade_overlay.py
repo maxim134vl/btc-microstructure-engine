@@ -62,6 +62,7 @@ def test_refresher_lock_and_outputs():
     src = _read(REFRESHER)
     assert "runtime_context_visual_refresher.lock" in src
     assert "paper_trade_overlays.json" in src
+    assert "restated_paper_trades.json" in src or "RESTATED_TRADES_OUT" in src
     assert "open_positions.json" in src
     assert "closed_trades.json" in src
     assert "controller_cycles.json" in src
@@ -224,7 +225,7 @@ def test_refresh_once_builds_overlays_without_ledger_mutation(tmp_path, monkeypa
     closed_with_lines = [c for c in closed.get("closed_trades", []) if c.get("stop_take_lines")]
     assert closed_with_lines, "expected stop/take lines on real closed trade overlay"
 
-    # Real trade price preserved (known closed long @ 65913 / 66240.02 if present)
+    # Real restated trade prices preserved (context-start entries).
     prices = []
     for m in overlays.get("entries", []) + overlays.get("exits", []):
         if m.get("price") is not None:
@@ -251,6 +252,7 @@ def test_refresh_once_builds_overlays_without_ledger_mutation(tmp_path, monkeypa
             assert field in insp
         assert insp.get("paper_only") is True
         assert insp.get("execution_enabled") is False
+    assert any(abs(p - 65751.56) < 0.05 or abs(p - 66333.99) < 0.05 for p in prices)
 
     after = {p: (p.stat().st_mtime_ns, p.stat().st_size) for p in ledger_files}
     assert after == before
