@@ -43,6 +43,9 @@ ZERO_DIFF_DIVERGENCE = "ZERO_DIFF_CLONE_REPLAY_DIVERGENCE"
 NEW_EPOCH_ACTIVATION_BLOCKED = "NEW_EPOCH_ACTIVATION_BLOCKED"
 SLEEVE2_NON_CAPITAL_DIFF = "TRD_SLEEVE2_BLOCKED_NON_CAPITAL_CONTRACT_DIFF"
 SLEEVE2_SOURCE_MISMATCH = "TRD_SLEEVE2_BLOCKED_SOURCE_CONTRACT_MISMATCH"
+SLEEVE2_SOURCE_LINEAGE_MISSING = "TRD_SLEEVE2_BLOCKED_SOURCE_LINEAGE_MISSING"
+SLEEVE2_SOURCE_LINEAGE_MISMATCH = "TRD_SLEEVE2_BLOCKED_SOURCE_LINEAGE_MISMATCH"
+SLEEVE2_CAPITAL_CONTRACT_MISMATCH = "TRD_SLEEVE2_BLOCKED_CAPITAL_CONTRACT_MISMATCH"
 SLEEVE2_AWAITING_FLAT = "TRD_SLEEVE2_READY_AWAITING_FLAT"
 SLEEVE2_ACTIVE = "TRD_SLEEVE2_PER_TIMEFRAME_CAPITAL_ACTIVE"
 SLEEVE2_FREEZE = "TRD_SLEEVE2_ACTIVATION_FREEZE_REQUIRED"
@@ -595,6 +598,20 @@ class CloneResult:
     output_path: Path
 
 
+@dataclass
+class SourceContractResolution:
+    requested_epoch_id: str
+    source_contract_id: str
+    source_contract_hash: str
+    source_manifest: dict[str, Any]
+    source_epoch_id: str
+    previous_epoch_id: str
+    derived_epoch_id: str | None
+    derived_contract_fingerprint: str | None
+    derived_contract_diff: dict[str, Any]
+    capital_contract: dict[str, Any]
+
+
 def clone_trading_epoch_contract(
     source_epoch_id: str,
     new_epoch_id: str,
@@ -797,6 +814,227 @@ def assert_source_fingerprint(manifest: dict[str, Any]) -> str:
             f"{SLEEVE2_SOURCE_MISMATCH}: got={fp} expected={EXPECTED_SOURCE_FINGERPRINT}"
         )
     return fp
+
+
+SLEEVE2_SOURCE_CONTRACT_ID = CANONICAL_SOURCE_EPOCH
+SLEEVE2_SOURCE_CONTRACT_HASH = EXPECTED_SOURCE_FINGERPRINT
+SLEEVE2_TIMEFRAME_INITIAL_EQUITY_USD = {
+    "M15": 100_000.0,
+    "M30": 100_000.0,
+    "H1": 100_000.0,
+    "H4": 100_000.0,
+}
+SLEEVE2_MASTER_INITIAL_EQUITY_USD = 400_000.0
+SLEEVE2_RISK_PCT_PER_TRADE = 1.0
+
+
+def _load_epoch_record(epoch_id: str, *, repo_root: Path | None = None) -> dict[str, Any]:
+    root = repo_root or _repo_root()
+    path = root / "data" / "trading" / "paper_epochs" / f"{epoch_id}.json"
+    if not path.exists():
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISSING}: epoch record missing: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_epoch_contract_payload(
+    epoch_id: str,
+    *,
+    repo_root: Path | None = None,
+    epoch_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    root = repo_root or _repo_root()
+    record = epoch_record if epoch_record is not None else _load_epoch_record(epoch_id, repo_root=root)
+    candidates: list[Path] = []
+    rel = record.get("trading_contract_path")
+    if rel:
+        candidates.append(root / str(rel))
+    candidates.extend(
+        [
+            root / "data" / "trading" / "intrabar_paper" / epoch_id / "trading_contract.json",
+            root / "data" / "trading" / "paper_epochs" / f"{epoch_id}.trading_contract.json",
+        ]
+    )
+    seen: set[Path] = set()
+    for path in candidates:
+        path = path.resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISSING}: trading contract missing for {epoch_id}")
+
+
+def _lineage_value(payload: dict[str, Any], *paths: str) -> Any:
+    for dotted in paths:
+        cur: Any = payload
+        ok = True
+        for part in dotted.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                ok = False
+                break
+            cur = cur[part]
+        if ok and cur not in (None, ""):
+            return cur
+    return None
+
+
+def _canonicalize_manifest_diff(diff: dict[str, Any] | None) -> dict[str, Any]:
+    return json.loads(canonical_json(diff or {}))
+
+
+def _validate_sleeve2_capital_contract(
+    *,
+    epoch_id: str,
+    epoch_record: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    cap = manifest.get("capital") or {}
+    pos = manifest.get("position_sizing") or {}
+    snap = manifest.get("execution_config_snapshot") or {}
+    safety = manifest.get("safety") or {}
+
+    def fail(reason: str) -> None:
+        raise RuntimeError(f"{SLEEVE2_CAPITAL_CONTRACT_MISMATCH}: {epoch_id}: {reason}")
+
+    tf_initial = {str(k).upper(): float(v) for k, v in (cap.get("timeframe_initial_equity_usd") or {}).items()}
+    if tf_initial != SLEEVE2_TIMEFRAME_INITIAL_EQUITY_USD:
+        fail(f"timeframe_initial_equity_usd={tf_initial!r}")
+    if float(cap.get("master_initial_equity_usd") or 0.0) != SLEEVE2_MASTER_INITIAL_EQUITY_USD:
+        fail(f"master_initial_equity_usd={cap.get('master_initial_equity_usd')!r}")
+    if str(cap.get("capital_model") or "") != "PER_TIMEFRAME_REALIZED_EQUITY":
+        fail(f"capital_model={cap.get('capital_model')!r}")
+    risk_pct = {str(k).upper(): float(v) for k, v in (cap.get("risk_pct_per_trade") or {}).items()}
+    if risk_pct != {tf: SLEEVE2_RISK_PCT_PER_TRADE for tf in SLEEVE2_TIMEFRAME_INITIAL_EQUITY_USD}:
+        fail(f"risk_pct_per_trade={risk_pct!r}")
+    if float(pos.get("risk_percentage") or 0.0) != SLEEVE2_RISK_PCT_PER_TRADE:
+        fail(f"position_sizing.risk_percentage={pos.get('risk_percentage')!r}")
+    if float(pos.get("max_risk_per_trade_pct") or 0.0) != SLEEVE2_RISK_PCT_PER_TRADE:
+        fail(f"position_sizing.max_risk_per_trade_pct={pos.get('max_risk_per_trade_pct')!r}")
+    if str(pos.get("equity_basis") or "") != "PER_TIMEFRAME_REALIZED_EQUITY":
+        fail(f"position_sizing.equity_basis={pos.get('equity_basis')!r}")
+    if str(pos.get("risk_cap_semantics") or "") != "PER_TIMEFRAME_CURRENT_EQUITY_PERCENT":
+        fail(f"position_sizing.risk_cap_semantics={pos.get('risk_cap_semantics')!r}")
+    if bool(snap.get("paper_only", True)) is not True or bool(safety.get("paper_only", True)) is not True:
+        fail("paper_only is not true")
+    if bool(snap.get("real_execution_enabled", False)) or bool(safety.get("real_execution_enabled", False)):
+        fail("real_execution_enabled is true")
+    if float(epoch_record.get("initial_equity_usd") or 0.0) != SLEEVE2_MASTER_INITIAL_EQUITY_USD:
+        fail(f"epoch initial_equity_usd={epoch_record.get('initial_equity_usd')!r}")
+    epoch_tf = epoch_record.get("timeframe_initial_equity_usd")
+    if epoch_tf is not None:
+        epoch_tf_norm = {str(k).upper(): float(v) for k, v in dict(epoch_tf).items()}
+        if epoch_tf_norm != SLEEVE2_TIMEFRAME_INITIAL_EQUITY_USD:
+            fail(f"epoch timeframe_initial_equity_usd={epoch_tf_norm!r}")
+    return {
+        "capital_model": "PER_TIMEFRAME_REALIZED_EQUITY",
+        "master_initial_equity_usd": SLEEVE2_MASTER_INITIAL_EQUITY_USD,
+        "timeframe_initial_equity_usd": dict(SLEEVE2_TIMEFRAME_INITIAL_EQUITY_USD),
+        "risk_pct_per_trade": SLEEVE2_RISK_PCT_PER_TRADE,
+    }
+
+
+def resolve_sleeve2_source_contract(
+    source_epoch_id: str,
+    *,
+    repo_root: Path | None = None,
+) -> SourceContractResolution:
+    """Resolve immutable rules contract for a canonical or derived SLEEVE2 source epoch.
+
+    A derived PER_TF epoch carries capital lineage; its whole manifest hash is not
+    the immutable rules-source hash. We validate the parent rules contract first,
+    then validate only the explicit four-sleeve capital transformation.
+    """
+    root = repo_root or _repo_root()
+    requested = str(source_epoch_id)
+    if requested == CANONICAL_SOURCE_EPOCH:
+        manifest = build_trading_contract_manifest(requested, repo_root=root)
+        fp = assert_source_fingerprint(manifest)
+        return SourceContractResolution(
+            requested_epoch_id=requested,
+            source_contract_id=requested,
+            source_contract_hash=fp,
+            source_manifest=manifest,
+            source_epoch_id=requested,
+            previous_epoch_id=requested,
+            derived_epoch_id=None,
+            derived_contract_fingerprint=None,
+            derived_contract_diff={},
+            capital_contract={},
+        )
+    if not requested.startswith(EPOCH_PREFIX_SLEEVE2):
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISMATCH}: unsupported source epoch: {requested}")
+
+    epoch_record = _load_epoch_record(requested, repo_root=root)
+    parent_id = str(epoch_record.get("source_contract_id") or epoch_record.get("parent_epoch_id") or "")
+    parent_hash = str(
+        epoch_record.get("source_contract_hash")
+        or epoch_record.get("parent_trading_contract_fingerprint")
+        or ""
+    )
+    if not parent_id or not parent_hash:
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISSING}: missing parent/source lineage for {requested}")
+    if parent_id != SLEEVE2_SOURCE_CONTRACT_ID:
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISMATCH}: got parent={parent_id} expected={SLEEVE2_SOURCE_CONTRACT_ID}")
+    if parent_hash != SLEEVE2_SOURCE_CONTRACT_HASH:
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISMATCH}: got parent_hash={parent_hash} expected={SLEEVE2_SOURCE_CONTRACT_HASH}")
+
+    parent_manifest = build_trading_contract_manifest(parent_id, repo_root=root)
+    source_fp = assert_source_fingerprint(parent_manifest)
+    if source_fp != parent_hash:
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISMATCH}: parent hash disagreement: {source_fp} != {parent_hash}")
+
+    payload = _load_epoch_contract_payload(requested, repo_root=root, epoch_record=epoch_record)
+    manifest = payload.get("trading_contract_manifest")
+    if not isinstance(manifest, dict):
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISSING}: trading_contract_manifest missing for {requested}")
+    payload_parent_id = str(
+        payload.get("source_contract_id")
+        or payload.get("parent_epoch_id")
+        or _lineage_value(manifest, "clone_meta.source_epoch_id")
+        or ""
+    )
+    payload_parent_hash = str(
+        payload.get("source_contract_hash")
+        or payload.get("parent_trading_contract_fingerprint")
+        or _lineage_value(manifest, "clone_meta.source_fingerprint")
+        or ""
+    )
+    if payload_parent_id != parent_id or payload_parent_hash != parent_hash:
+        raise RuntimeError(
+            f"{SLEEVE2_SOURCE_LINEAGE_MISMATCH}: contract payload parent mismatch "
+            f"id={payload_parent_id} hash={payload_parent_hash}"
+        )
+
+    derived_fp = trading_contract_fingerprint(manifest)
+    recorded_fp = str(payload.get("trading_contract_fingerprint") or "")
+    if recorded_fp and recorded_fp != derived_fp:
+        raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISMATCH}: derived fingerprint {derived_fp} != recorded {recorded_fp}")
+
+    diff = flatten_manifest_diff(parent_manifest, manifest)
+    validate_sleeve2_contract_diff(diff)
+    for observed in (
+        epoch_record.get("allowlisted_contract_diff"),
+        payload.get("allowlisted_contract_diff"),
+        payload.get("manifest_diff"),
+    ):
+        if observed is not None and _canonicalize_manifest_diff(observed) != _canonicalize_manifest_diff(diff):
+            raise RuntimeError(f"{SLEEVE2_SOURCE_LINEAGE_MISMATCH}: persisted manifest diff does not match derived diff")
+    capital_contract = _validate_sleeve2_capital_contract(
+        epoch_id=requested, epoch_record=epoch_record, manifest=manifest
+    )
+    return SourceContractResolution(
+        requested_epoch_id=requested,
+        source_contract_id=parent_id,
+        source_contract_hash=source_fp,
+        source_manifest=parent_manifest,
+        source_epoch_id=requested,
+        previous_epoch_id=requested,
+        derived_epoch_id=requested,
+        derived_contract_fingerprint=derived_fp,
+        derived_contract_diff=diff,
+        capital_contract=capital_contract,
+    )
 
 
 def compute_risk_budget_usd(

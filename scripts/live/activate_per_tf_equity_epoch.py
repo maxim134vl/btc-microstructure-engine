@@ -36,14 +36,17 @@ from btc_ml.trading.intrabar_paper.trading_contract import (  # noqa: E402
     SLEEVE2_AWAITING_FLAT,
     SLEEVE2_FREEZE,
     SLEEVE2_SOURCE_MISMATCH,
-    assert_source_fingerprint,
-    build_trading_contract_manifest,
     clone_trading_epoch_contract,
+    resolve_sleeve2_source_contract,
     sleeve2_capital_overrides,
     validate_sleeve2_contract_diff,
 )
 
-CTL = REPO / "scripts" / "live" / "intrabar_paper_ctl.py"
+DEFAULT_ACTIVATION_REASON = "TRD_SLEEVE2_PER_TF_EQUITY_ACTIVATION"
+
+
+def _ctl_path(repo_root: Path = REPO) -> Path:
+    return Path(repo_root) / "scripts" / "live" / "intrabar_paper_ctl.py"
 
 
 def _utc() -> str:
@@ -54,10 +57,24 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
-def _run_ctl(action: str) -> dict[str, Any]:
+def _git_text(repo_root: Path, *args: str, default: str = "UNKNOWN") -> str:
     proc = subprocess.run(
-        [sys.executable, str(CTL), action],
-        cwd=str(REPO),
+        ["git", *args],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return default
+    return proc.stdout.strip() or default
+
+
+def _run_ctl(action: str, *, repo_root: Path = REPO) -> dict[str, Any]:
+    root = Path(repo_root)
+    proc = subprocess.run(
+        [sys.executable, str(_ctl_path(root)), action],
+        cwd=str(root),
         capture_output=True,
         text=True,
         check=False,
@@ -115,32 +132,64 @@ def evaluate_flat_state(*, paper_epoch_id: str, repo_root: Path = REPO) -> dict[
     }
 
 
-def prepare_or_activate(*, execute: bool, force_await: bool = False) -> dict[str, Any]:
-    cfg = load_intrabar_paper_config(repo_root=REPO)
+def prepare_or_activate(
+    *,
+    execute: bool,
+    force_await: bool = False,
+    source_epoch_id: str | None = None,
+    activation_reason: str = DEFAULT_ACTIVATION_REASON,
+    patch_commit: str | None = None,
+    repo_root: Path = REPO,
+    skip_live_control: bool = False,
+) -> dict[str, Any]:
+    root = Path(repo_root)
+    if skip_live_control and root.resolve() == REPO.resolve():
+        return {
+            "status": "TRD_SLEEVE2_BLOCKED_UNSAFE_LIVE_CONTROL_SKIP",
+            "error": "skip_live_control is allowed only for external dry-run roots",
+        }
+    cfg = load_intrabar_paper_config(repo_root=root)
     active = load_active_epoch(cfg.epochs_root)
     if active is None:
         return {"status": "NO_ACTIVE_EPOCH"}
-    source_id = active.paper_epoch_id
+    source_id = str(source_epoch_id or active.paper_epoch_id)
+    if source_id != active.paper_epoch_id:
+        return {
+            "status": "TRD_SLEEVE2_BLOCKED_SOURCE_EPOCH_NOT_ACTIVE",
+            "source_epoch_id": source_id,
+            "active_paper_epoch": active.paper_epoch_id,
+        }
     if source_id != CANONICAL_SOURCE_EPOCH and not source_id.startswith(EPOCH_PREFIX_SLEEVE2):
-        # Allow only cloning from the proven parent.
-        pass
+        return {"status": "TRD_SLEEVE2_BLOCKED_UNSUPPORTED_SOURCE_EPOCH", "source_epoch_id": source_id}
 
-    source_manifest = build_trading_contract_manifest(source_id, repo_root=REPO)
     try:
-        source_fp = assert_source_fingerprint(source_manifest)
+        source_resolution = resolve_sleeve2_source_contract(source_id, repo_root=root)
     except RuntimeError as exc:
-        return {"status": SLEEVE2_SOURCE_MISMATCH, "error": str(exc)}
+        status = str(exc).split(":", 1)[0]
+        return {"status": status or SLEEVE2_SOURCE_MISMATCH, "error": str(exc)}
+    source_manifest = source_resolution.source_manifest
+    source_fp = source_resolution.source_contract_hash
 
-    flat = evaluate_flat_state(paper_epoch_id=source_id, repo_root=REPO)
-    live1b = _run_ctl("status")
+    flat = evaluate_flat_state(paper_epoch_id=source_id, repo_root=root)
+    live1b = {"alive": False, "skipped": True} if skip_live_control else _run_ctl("status", repo_root=root)
     live1b_alive = bool(live1b.get("alive"))
 
     report: dict[str, Any] = {
         "audit_timestamp_utc": _utc(),
-        "branch": subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=REPO, text=True).strip(),
-        "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
+        "branch": _git_text(root, "rev-parse", "--abbrev-ref", "HEAD"),
+        "head": _git_text(root, "rev-parse", "HEAD"),
         "active_paper_epoch": source_id,
-        "live1b": {"pid": live1b.get("pid"), "alive": live1b_alive},
+        "source_epoch_id": source_resolution.source_epoch_id,
+        "previous_epoch_id": source_resolution.previous_epoch_id,
+        "source_contract_id": source_resolution.source_contract_id,
+        "source_contract_hash": source_resolution.source_contract_hash,
+        "derived_epoch_id": source_resolution.derived_epoch_id,
+        "derived_epoch_trading_contract_fingerprint": source_resolution.derived_contract_fingerprint,
+        "derived_epoch_contract_diff": source_resolution.derived_contract_diff,
+        "capital_contract": source_resolution.capital_contract,
+        "activation_reason": activation_reason,
+        "patch_commit": patch_commit,
+        "live1b": {"pid": live1b.get("pid"), "alive": live1b_alive, "skipped": skip_live_control},
         "paper_only": True,
         "real_execution": False,
         "flat_state": flat,
@@ -154,14 +203,13 @@ def prepare_or_activate(*, execute: bool, force_await: bool = False) -> dict[str
         return report
 
     if not execute:
-        # Dry-run clone proof only.
         new_id = f"{EPOCH_PREFIX_SLEEVE2}DRYRUN_{_stamp()}"
         clone = clone_trading_epoch_contract(
-            source_id,
+            source_resolution.source_contract_id,
             new_id,
             sleeve2_capital_overrides(),
-            repo_root=REPO,
-            output_root=REPO / "tmp" / "trading_contract_clones",
+            repo_root=root,
+            output_root=root / "tmp" / "trading_contract_clones",
             source_manifest=source_manifest,
         )
         validate_sleeve2_contract_diff(clone.diff)
@@ -173,14 +221,20 @@ def prepare_or_activate(*, execute: bool, force_await: bool = False) -> dict[str
         return report
 
     # --- Activation sequence ---
-    stop = _run_ctl("stop")
+    if skip_live_control:
+        stop = {"status": "skipped_external_dry_run", "skipped": True}
+    else:
+        stop = _run_ctl("stop", repo_root=root)
     report["live1b_stop"] = stop
-    time.sleep(0.5)
-    flat2 = evaluate_flat_state(paper_epoch_id=source_id, repo_root=REPO)
+    if not skip_live_control:
+        time.sleep(0.5)
+    flat2 = evaluate_flat_state(paper_epoch_id=source_id, repo_root=root)
     report["flat_state_after_stop"] = flat2
     if not flat2["flat"]:
-        # Restart old LIVE1B; do not switch epoch.
-        start = _run_ctl("start")
+        if skip_live_control:
+            start = {"status": "skipped_external_dry_run", "skipped": True}
+        else:
+            start = _run_ctl("start", repo_root=root)
         report["status"] = SLEEVE2_AWAITING_FLAT
         report["live1b_restart_old"] = start
         report["blocking_objects"] = flat2["blockers"]
@@ -188,17 +242,18 @@ def prepare_or_activate(*, execute: bool, force_await: bool = False) -> dict[str
 
     new_id = f"{EPOCH_PREFIX_SLEEVE2}{_stamp()}"
     clone = clone_trading_epoch_contract(
-        source_id,
+        source_resolution.source_contract_id,
         new_id,
         sleeve2_capital_overrides(),
-        repo_root=REPO,
+        repo_root=root,
         output_root=cfg.epochs_root,
         source_manifest=source_manifest,
     )
     try:
         validate_sleeve2_contract_diff(clone.diff)
     except RuntimeError as exc:
-        _run_ctl("start")
+        if not skip_live_control:
+            _run_ctl("start", repo_root=root)
         return {"status": str(exc).split(":")[0], "error": str(exc), **report}
 
     # Persist epoch record + books + sleeves + contract.
@@ -208,19 +263,60 @@ def prepare_or_activate(*, execute: bool, force_await: bool = False) -> dict[str
     for name in EpochBooks.TABLES:
         (books_dir / f"{name}.jsonl").touch(exist_ok=True)
 
+    capital_contract = {
+        "capital_model": "PER_TIMEFRAME_REALIZED_EQUITY",
+        "master_initial_equity_usd": 400_000.0,
+        "timeframe_initial_equity_usd": {
+            "M15": 100000.0,
+            "M30": 100000.0,
+            "H1": 100000.0,
+            "H4": 100000.0,
+        },
+        "risk_pct_per_trade": 1.0,
+    }
     contract_path = epoch_root / "trading_contract.json"
     contract_payload = {
         "trading_contract_manifest": clone.manifest,
         "trading_contract_fingerprint": clone.fingerprint,
-        "parent_epoch_id": source_id,
-        "parent_trading_contract_fingerprint": clone.source_fingerprint,
+        "parent_epoch_id": source_resolution.source_contract_id,
+        "parent_trading_contract_fingerprint": source_resolution.source_contract_hash,
+        "source_contract_id": source_resolution.source_contract_id,
+        "source_contract_hash": source_resolution.source_contract_hash,
+        "source_epoch_id": source_id,
+        "previous_epoch_id": source_id,
+        "activation_reason": activation_reason,
+        "canonical_commit": report["head"],
+        "patch_commit": patch_commit,
+        "capital_contract": capital_contract,
         "allowlisted_contract_diff": clone.diff,
         "source_commit": report["head"],
         "activated_at": _utc(),
         "paper_only": True,
         "real_execution": False,
+        "real_execution_enabled": False,
     }
     contract_path.write_text(json.dumps(contract_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Keep historical sidecar convention readable.
+    sidecar_path = cfg.epochs_root / f"{new_id}.trading_contract.json"
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "manifest_diff": clone.diff,
+                "paper_epoch_id": new_id,
+                "parent_epoch_id": source_resolution.source_contract_id,
+                "source_contract_id": source_resolution.source_contract_id,
+                "source_contract_hash": source_resolution.source_contract_hash,
+                "source_epoch_id": source_id,
+                "previous_epoch_id": source_id,
+                "trading_contract_fingerprint": clone.fingerprint,
+                "trading_contract_manifest": clone.manifest,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     SleeveLedger.initialize(
         epoch_id=new_id,
@@ -238,77 +334,97 @@ def prepare_or_activate(*, execute: bool, force_await: bool = False) -> dict[str
         initial_equity_usd=400_000.0,
         rule_contract_version="INTRABAR_RULES_V1",
     )
-    # Enrich on-disk record beyond PaperEpoch dataclass.
     epoch_path = cfg.epochs_root / f"{new_id}.json"
     epoch_doc = {
         **epoch.to_dict(),
-        "parent_epoch_id": source_id,
-        "parent_trading_contract_fingerprint": clone.source_fingerprint,
+        "parent_epoch_id": source_resolution.source_contract_id,
+        "parent_trading_contract_fingerprint": source_resolution.source_contract_hash,
+        "source_contract_id": source_resolution.source_contract_id,
+        "source_contract_hash": source_resolution.source_contract_hash,
+        "source_epoch_id": source_id,
+        "previous_epoch_id": source_id,
+        "activation_reason": activation_reason,
+        "patch_commit": patch_commit,
+        "canonical_commit": report["head"],
         "trading_contract_fingerprint": clone.fingerprint,
+        "capital_contract": capital_contract,
         "capital_model": "PER_TIMEFRAME_REALIZED_EQUITY",
         "master_initial_equity_usd": 400_000.0,
-        "timeframe_initial_equity_usd": {
-            "M15": 100000.0,
-            "M30": 100000.0,
-            "H1": 100000.0,
-            "H4": 100000.0,
-        },
+        "timeframe_initial_equity_usd": capital_contract["timeframe_initial_equity_usd"],
         "allowlisted_contract_diff": clone.diff,
         "source_commit": report["head"],
         "paper_only": True,
         "real_execution": False,
-        "trading_contract_path": str(contract_path.relative_to(REPO)),
+        "real_execution_enabled": False,
+        "trading_contract_path": str(contract_path.relative_to(root)),
     }
     epoch_path.write_text(json.dumps(epoch_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    # Close parent identity (history preserved; books untouched).
+    # Close previous active identity (history preserved; books untouched).
     mark_epoch_status(active, epochs_root=cfg.epochs_root, status="CLOSED")
     activate_epoch(epoch, epochs_root=cfg.epochs_root)
-    # Rewrite active.json with enriched fields.
     active_doc = {
         **epoch.to_dict(),
         "epoch_status": "ACTIVE",
         "activated_at": _utc(),
-        "parent_epoch_id": source_id,
-        "parent_trading_contract_fingerprint": clone.source_fingerprint,
+        "parent_epoch_id": source_resolution.source_contract_id,
+        "parent_trading_contract_fingerprint": source_resolution.source_contract_hash,
+        "source_contract_id": source_resolution.source_contract_id,
+        "source_contract_hash": source_resolution.source_contract_hash,
+        "source_epoch_id": source_id,
+        "previous_epoch_id": source_id,
+        "activation_reason": activation_reason,
+        "patch_commit": patch_commit,
+        "canonical_commit": report["head"],
         "trading_contract_fingerprint": clone.fingerprint,
+        "capital_contract": capital_contract,
         "capital_model": "PER_TIMEFRAME_REALIZED_EQUITY",
         "master_initial_equity_usd": 400_000.0,
+        "timeframe_initial_equity_usd": capital_contract["timeframe_initial_equity_usd"],
         "paper_only": True,
         "real_execution": False,
+        "real_execution_enabled": False,
+        "trading_contract_path": str(contract_path.relative_to(root)),
     }
     (cfg.epochs_root / "active.json").write_text(
         json.dumps(active_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     epoch_path.write_text(json.dumps({**epoch_doc, **active_doc}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    start = _run_ctl("start")
+    if skip_live_control:
+        start = {"status": "skipped_external_dry_run", "skipped": True}
+        status = {"alive": False, "skipped": True, "health": {"paper_epoch_id": new_id}}
+        health = status["health"]
+    else:
+        start = _run_ctl("start", repo_root=root)
+        time.sleep(1.5)
+        status = _run_ctl("status", repo_root=root)
+        health = status.get("health") or {}
     report["live1b_start"] = start
-    time.sleep(1.5)
-    status = _run_ctl("status")
-    health = status.get("health") or {}
-    # Freeze if unexpected trading objects already appeared (should be empty).
-    new_flat = evaluate_flat_state(paper_epoch_id=new_id, repo_root=REPO)
+    new_flat = evaluate_flat_state(paper_epoch_id=new_id, repo_root=root)
     if (
         int(health.get("signals_count") or 0) > 0
         or int(health.get("orders_count") or 0) > 0
         or int(health.get("fills_count") or 0) > 0
         or new_flat["open_positions"] > 0
     ):
-        # New epoch already traded — freeze, do not auto-rollback.
-        _run_ctl("stop")
+        if not skip_live_control:
+            _run_ctl("stop", repo_root=root)
         report["status"] = SLEEVE2_FREEZE
         report["new_epoch_id"] = new_id
         report["health"] = health
         return report
 
-    ok = (
-        bool(status.get("alive"))
-        and health.get("paper_only") is True
-        and health.get("real_execution_enabled") is False
-        and str(health.get("paper_epoch_id")) == new_id
-        and float(health.get("master_initial_equity_usd") or 0) == 400000.0
-    )
+    if skip_live_control:
+        ok = new_flat["flat"] and (cfg.epochs_root / "active.json").exists()
+    else:
+        ok = (
+            bool(status.get("alive"))
+            and health.get("paper_only") is True
+            and health.get("real_execution_enabled") is False
+            and str(health.get("paper_epoch_id")) == new_id
+            and float(health.get("master_initial_equity_usd") or 0) == 400000.0
+        )
     report.update(
         {
             "status": SLEEVE2_ACTIVE if ok else "TRD_SLEEVE2_ACTIVATION_VERIFY_FAILED",
@@ -320,7 +436,7 @@ def prepare_or_activate(*, execute: bool, force_await: bool = False) -> dict[str
             "live1b_status": status,
             "sleeves": health.get("sleeves"),
             "master": {
-                "master_initial_equity_usd": health.get("master_initial_equity_usd"),
+                "master_initial_equity_usd": health.get("master_initial_equity_usd", 400000.0 if skip_live_control else None),
                 "master_current_equity_usd": health.get("master_current_equity_usd"),
                 "master_risk_capacity_usd": health.get("master_risk_capacity_usd"),
                 "master_open_risk_usd": health.get("master_open_risk_usd"),
@@ -335,8 +451,25 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--execute", action="store_true", help="Perform LIVE1B stop/switch/start")
     ap.add_argument("--force-await", action="store_true", help="Force AWAITING_FLAT without activating")
+    ap.add_argument("--source-epoch-id", help="Active source epoch to clone from; defaults to current active epoch")
+    ap.add_argument("--activation-reason", default=DEFAULT_ACTIVATION_REASON)
+    ap.add_argument("--patch-commit")
+    ap.add_argument("--repo-root", type=Path, default=REPO, help="External repo root for isolated dry-runs")
+    ap.add_argument(
+        "--skip-live-control-for-external-dry-run",
+        action="store_true",
+        help="Do not stop/start LIVE1B; allowed only when --repo-root is not the production repo",
+    )
     args = ap.parse_args()
-    result = prepare_or_activate(execute=bool(args.execute), force_await=bool(args.force_await))
+    result = prepare_or_activate(
+        execute=bool(args.execute),
+        force_await=bool(args.force_await),
+        source_epoch_id=args.source_epoch_id,
+        activation_reason=str(args.activation_reason),
+        patch_commit=args.patch_commit,
+        repo_root=Path(args.repo_root),
+        skip_live_control=bool(args.skip_live_control_for_external_dry_run),
+    )
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     status = str(result.get("status") or "")
     if status in {SLEEVE2_ACTIVE, "TRD_SLEEVE2_DRY_RUN_READY"}:
