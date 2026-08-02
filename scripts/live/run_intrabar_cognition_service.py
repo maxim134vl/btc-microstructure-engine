@@ -36,6 +36,7 @@ from btc_ml.feeds.raw_event_journal.schemas import OperationalEventType, StreamT
 from btc_ml.feeds.raw_event_journal.session import SessionManager  # noqa: E402
 from btc_ml.feeds.raw_event_journal.timestamps import capture_local_receive, utc_now_iso  # noqa: E402
 from btc_ml.live.intrabar.cognition_pipeline import IntrabarCognitionEngine  # noqa: E402
+from btc_ml.live.intrabar.closed_bar_event_bridge import ClosedBarContextEventBridge  # noqa: E402
 from btc_ml.live.intrabar.context_event_journal import ContextEventJournal  # noqa: E402
 
 try:
@@ -77,6 +78,12 @@ class IntrabarCognitionService:
         self.engine = IntrabarCognitionEngine(
             context_journal=ContextEventJournal(self.context_root),
         )
+        self.closed_bar_bridge = ClosedBarContextEventBridge(
+            repo_root=ROOT,
+            context_journal=self.engine.journal,
+        )
+        self.closed_bar_bridge_last_poll_mono = 0
+        self.closed_bar_bridge_poll_interval_ns = 1_000_000_000
         self._stop = threading.Event()
         self._ws = None
         self._source_seq = 0
@@ -207,6 +214,12 @@ class IntrabarCognitionService:
             },
             "last_context_event": self.engine.last_context_event,
             "context_event_counts": self.engine.event_counts,
+            "closed_bar_event_bridge": {
+                "provider_id": self.closed_bar_bridge.provider_id,
+                "bridge_activated_at": self.closed_bar_bridge.bridge_activated_at,
+                "last_run_at": self.closed_bar_bridge.last_run_at,
+                "last_result": self.closed_bar_bridge.last_result.to_dict(),
+            },
             "queue": self.queue.metrics.to_dict(),
             "writer": self.writer.stats.to_dict(),
             "journal_root": str(self.journal_root),
@@ -227,6 +240,18 @@ class IntrabarCognitionService:
                 self.errors.append("queue:backpressure_reject")
         except Exception as exc:  # noqa: BLE001
             self.errors.append(f"queue:{exc}")
+
+    def _maybe_materialize_closed_bar_context_event(self, receive_mono: int) -> None:
+        if receive_mono - self.closed_bar_bridge_last_poll_mono < self.closed_bar_bridge_poll_interval_ns:
+            return
+        self.closed_bar_bridge_last_poll_mono = receive_mono
+        try:
+            result = self.closed_bar_bridge.maybe_materialize(current_bbo=self.engine.bbo)
+            if result.emitted_count:
+                self.errors.append(f"closed_bar_bridge:emitted:{result.emitted_count}")
+        except Exception as exc:  # noqa: BLE001
+            self.errors.append(f"closed_bar_bridge:{type(exc).__name__}:{exc}")
+            self.errors = self.errors[-50:]
 
     def _on_message(self, _ws: Any, message: str) -> None:
         try:
@@ -255,6 +280,7 @@ class IntrabarCognitionService:
                 self._enqueue(StreamType.AGG_TRADE, event)
                 try:
                     self.engine.on_agg_trade(event)
+                    self._maybe_materialize_closed_bar_context_event(int(mono))
                 except Exception as exc:  # noqa: BLE001
                     self.errors.append(f"cognition_agg:{type(exc).__name__}:{exc}")
             elif "bookTicker" in stream or data.get("e") == "bookTicker" or (
@@ -274,6 +300,7 @@ class IntrabarCognitionService:
                 self._enqueue(StreamType.BOOK_TICKER, event)
                 try:
                     self.engine.on_book_ticker(event)
+                    self._maybe_materialize_closed_bar_context_event(int(mono))
                 except Exception as exc:  # noqa: BLE001
                     self.errors.append(f"cognition_book:{type(exc).__name__}:{exc}")
             if (self.recv_counts["aggTrade"] + self.recv_counts["bookTicker"]) % 50 == 0:

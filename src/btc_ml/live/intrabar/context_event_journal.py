@@ -25,6 +25,30 @@ def make_context_event_id(
     return "CTX_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
 
 
+def make_context_event_id_v2(
+    *,
+    provider_id: str,
+    epoch_id: str,
+    timeframe: str,
+    lifecycle_episode_id: str,
+    event_type: str,
+    source_bar_timestamp: str,
+    direction: str,
+) -> str:
+    raw = "|".join(
+        [
+            str(provider_id),
+            str(epoch_id),
+            str(timeframe),
+            str(lifecycle_episode_id),
+            str(event_type),
+            str(source_bar_timestamp),
+            str(direction),
+        ]
+    )
+    return "CTX_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
 class ContextEventJournal:
     def __init__(self, root: Path | str):
         self.root = Path(root)
@@ -50,6 +74,26 @@ class ContextEventJournal:
 
     @staticmethod
     def _dedupe_key(obj: Mapping[str, Any]) -> Optional[str]:
+        explicit = obj.get("event_identity_key") or obj.get("dedupe_key")
+        if explicit:
+            return str(explicit)
+        if (
+            obj.get("provider_id") is not None
+            and obj.get("epoch_id") is not None
+            and obj.get("source_bar_timestamp") is not None
+            and obj.get("direction") is not None
+        ):
+            return "|".join(
+                [
+                    str(obj.get("provider_id")),
+                    str(obj.get("epoch_id")),
+                    str(obj.get("timeframe")),
+                    str(obj.get("lifecycle_episode_id")),
+                    str(obj.get("event_type")),
+                    str(obj.get("source_bar_timestamp")),
+                    str(obj.get("direction")),
+                ]
+            )
         try:
             return "|".join(
                 [
@@ -100,11 +144,43 @@ class ContextEventJournal:
         model_version: str,
         lifecycle_episode_id: str,
         evidence: Mapping[str, Any] | None = None,
+        provider_id: str | None = None,
+        epoch_id: str | None = None,
+        source_bar_timestamp: Any = None,
+        decision_available_at: Any = None,
+        context_origin_timestamp: Any = None,
+        execution_not_before: Any = None,
+        direction: str | None = None,
+        evaluation_mode: str = "PROVISIONAL_INTRABAR",
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        eid = make_context_event_id(
-            timeframe, lifecycle_episode_id, event_type, int(event_monotonic_ns)
-        )
-        return {
+        identity_key = None
+        if provider_id and epoch_id and source_bar_timestamp is not None and direction:
+            identity_key = "|".join(
+                [
+                    str(provider_id),
+                    str(epoch_id),
+                    str(timeframe),
+                    str(lifecycle_episode_id),
+                    str(event_type),
+                    str(source_bar_timestamp),
+                    str(direction),
+                ]
+            )
+            eid = make_context_event_id_v2(
+                provider_id=str(provider_id),
+                epoch_id=str(epoch_id),
+                timeframe=timeframe,
+                lifecycle_episode_id=lifecycle_episode_id,
+                event_type=event_type,
+                source_bar_timestamp=str(source_bar_timestamp),
+                direction=str(direction),
+            )
+        else:
+            eid = make_context_event_id(
+                timeframe, lifecycle_episode_id, event_type, int(event_monotonic_ns)
+            )
+        event = {
             "context_event_id": eid,
             "timeframe": timeframe,
             "event_type": event_type,
@@ -128,5 +204,22 @@ class ContextEventJournal:
             "lifecycle_episode_id": lifecycle_episode_id,
             "evidence": dict(evidence or {}),
             "ingested_at": _utc_now(),
-            "evaluation_mode": "PROVISIONAL_INTRABAR",
+            "evaluation_mode": evaluation_mode,
         }
+        if identity_key is not None:
+            event["event_identity_key"] = identity_key
+        optional = {
+            "provider_id": provider_id,
+            "epoch_id": epoch_id,
+            "source_bar_timestamp": source_bar_timestamp,
+            "decision_available_at": decision_available_at,
+            "context_origin_timestamp": context_origin_timestamp,
+            "execution_not_before": execution_not_before,
+            "direction": direction,
+        }
+        for key, value in optional.items():
+            if value is not None:
+                event[key] = value
+        if extra_metadata:
+            event.update(dict(extra_metadata))
+        return event
