@@ -56,7 +56,7 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
 
 def _base_inputs(tmp_path: Path, *, held_stopping: bool = False, shortish: bool = False) -> None:
     ts = pd.Timestamp("2026-07-08 12:00:00", tz="UTC")
-    closes = [61_800.0, 61_850.0, 61_900.0, 61_950.0, 62_000.0]
+    closes = [62_000.0, 61_950.0, 61_900.0, 61_850.0, 61_800.0] if shortish else [61_800.0, 61_850.0, 61_900.0, 61_950.0, 62_000.0]
     candle_rows = []
     for i, close in enumerate(closes):
         candle_rows.append(
@@ -204,15 +204,16 @@ def test_missing_inputs_do_not_crash(engine_env) -> None:
     assert frame.iloc[-1]["calibrated_context"] == "OBSERVE"
 
 
-def test_calibrated_v3_never_writes_final_short_context(engine_env) -> None:
+def test_calibrated_v3_can_write_v2_approved_short_context(engine_env) -> None:
     tmp_path, memory_path, engine = engine_env
     _base_inputs(tmp_path, shortish=True)
     assert engine.run() == 0
     frame = pd.read_parquet(memory_path)
-    assert (frame["calibrated_context"] == "SHORT_CONTEXT").sum() == 0
-    # If raw was short-ish, diagnostics may preserve short_candidate / suppress_reason.
     row = frame.iloc[-1]
-    assert row["calibrated_context"] == "OBSERVE" or row["calibrated_context"] == "LONG_CONTEXT"
+    assert row["raw_chosen_context"] == "SHORT_CONTEXT"
+    assert row["calibrated_context"] == "SHORT_CONTEXT"
+    assert bool(row["short_candidate"]) is True
+    assert row["suppress_reason"] != "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
 
 
 def test_held_stopping_volume_reversal_can_write_long_context(engine_env) -> None:

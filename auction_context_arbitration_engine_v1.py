@@ -281,11 +281,6 @@ def _build_evidence_and_score() -> dict[str, Any]:
     calibrated_context = result.chosen_context
     suppress_reason = result.suppress_reason
     short_candidate = bool(result.short_candidate)
-    # Hard safety: calibrated_v3 must never persist final SHORT_CONTEXT.
-    if calibrated_context == "SHORT_CONTEXT":
-        calibrated_context = "OBSERVE"
-        short_candidate = True
-        suppress_reason = "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
 
     return {
         "timestamp": timestamp,
@@ -321,10 +316,6 @@ def run() -> int:
     print()
     try:
         row = _build_evidence_and_score()
-        if row.get("calibrated_context") == "SHORT_CONTEXT":
-            row["calibrated_context"] = "OBSERVE"
-            row["short_candidate"] = True
-            row["suppress_reason"] = "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
 
         payload = pd.DataFrame([row])
         dedup_cols = ["timestamp"]

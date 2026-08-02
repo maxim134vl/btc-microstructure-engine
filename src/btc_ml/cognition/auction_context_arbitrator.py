@@ -569,7 +569,7 @@ def apply_calibrated_v3_filter(
     *,
     long_subtype: str | None = None,
 ) -> AuctionContextArbitrationResult:
-    """Live-safe calibrated_v3: HELD stopping-volume LONG only; SHORT disabled."""
+    """Live-safe calibrated_v3: HELD stopping-volume LONG plus v2-approved SHORT symmetry."""
     v2 = result
     raw_context = _clean_text(v2.raw_chosen_context or v2.chosen_context).upper() or "OBSERVE"
     long_subtype = long_subtype or classify_long_subtype(v2, evidence)
@@ -580,10 +580,14 @@ def apply_calibrated_v3_filter(
     tactical_long = False
     short_candidate = False
 
-    if raw_context == "SHORT_CONTEXT" or v2.chosen_context == "SHORT_CONTEXT":
-        chosen = "OBSERVE"
+    if v2.chosen_context == "SHORT_CONTEXT":
+        chosen = "SHORT_CONTEXT"
         short_candidate = True
-        suppress_reason = "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
+        suppress_reason = ""
+    elif raw_context == "SHORT_CONTEXT":
+        chosen = v2.chosen_context
+        short_candidate = True
+        suppress_reason = suppress_reason or "SHORT_REJECTED_BY_CALIBRATED_V2"
     elif v2.chosen_context == "LONG_CONTEXT":
         if (
             long_subtype == "HELD_STOPPING_VOLUME_REVERSAL"

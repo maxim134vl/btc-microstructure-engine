@@ -369,7 +369,7 @@ def test_calibrated_v3_late_rebound_long_becomes_observe():
     assert v3.suppress_reason == "LATE_REBOUND_LONG_FILTER"
 
 
-def test_calibrated_v3_any_short_context_becomes_observe():
+def test_calibrated_v3_valid_short_context_survives():
     evidence = _evidence(
         anchor_status="HELD",
         close=61_750.0,
@@ -383,9 +383,9 @@ def test_calibrated_v3_any_short_context_becomes_observe():
     )
     result = score_auction_context(evidence, mode="calibrated_v3")
     assert result.raw_chosen_context == "SHORT_CONTEXT"
-    assert result.chosen_context == "OBSERVE"
+    assert result.chosen_context == "SHORT_CONTEXT"
     assert result.short_candidate is True
-    assert result.suppress_reason == "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
+    assert result.suppress_reason == ""
 
 
 def test_calibrated_v3_short_diagnostics_preserved():
@@ -402,7 +402,38 @@ def test_calibrated_v3_short_diagnostics_preserved():
     assert result.short_subtype == "FAILED_BULLISH_REVERSAL_BREAKDOWN"
     assert result.tactical_short_candidate is True
     assert result.short_candidate is True
-    assert result.suppress_reason == "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
+    assert result.chosen_context == "OBSERVE"
+    assert result.suppress_reason == "TACTICAL_SHORT_CANDIDATE"
+
+
+def test_calibrated_v3_does_not_emit_retired_global_short_disable():
+    valid_short = score_auction_context(
+        _evidence(
+            anchor_status="HELD",
+            close=61_750.0,
+            market_state="DISTRIBUTION",
+            market_bias="BEARISH",
+            tier1_trigger_event="BUYING_CLIMAX",
+            tier1_location_bias="UPPER_DISTRIBUTION",
+            effort_result_state="EFFICIENT_CONTINUATION",
+            convergence_state="PERSISTENT_DISTRIBUTION",
+            recent_return=-0.007,
+        ),
+        mode="calibrated_v3",
+    )
+    rejected_short = score_auction_context(
+        _evidence(
+            close=61_500.0,
+            anchor_status="FAILED",
+            tier1_trigger_event="STOPPING_VOLUME",
+            tier1_location_bias="LOWER_ABSORPTION",
+            effort_result_state="EFFICIENT_CONTINUATION",
+            recent_return=-0.006,
+        ),
+        mode="calibrated_v3",
+    )
+    assert valid_short.suppress_reason != "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
+    assert rejected_short.suppress_reason != "SHORT_DISABLED_PENDING_LIVE_SAFE_EDGE"
 
 
 def test_calibrated_v3_unchanged_by_forward_outcomes():
