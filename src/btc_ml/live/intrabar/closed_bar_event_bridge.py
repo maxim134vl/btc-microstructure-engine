@@ -274,14 +274,18 @@ def materialize_closed_bar_events(
             if not _event_action_allowed(row):
                 result.skipped.append({"reason": "ACTION_NOT_ALLOWED", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
                 continue
-            if tf in open_tfs:
+            directional_flip = (
+                previous in DIRECTIONAL_CONTEXTS
+                and previous != current
+            )
+            if tf in open_tfs and not directional_flip:
                 result.skipped.append({"reason": "ACTIVE_POSITION", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
                 continue
-            if episode_id in traded:
+            if episode_id in traded and not directional_flip:
                 result.skipped.append({"reason": "EPISODE_ALREADY_TRADED", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
                 continue
             origin_ts = _to_ts(context_origin)
-            if previous in DIRECTIONAL_CONTEXTS and previous != current:
+            if directional_flip:
                 event_type = "CONTEXT_FLIP"
             elif origin_ts is not None and origin_ts < activation_ts:
                 event_type = "CONTEXT_START"
