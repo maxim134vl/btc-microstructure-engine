@@ -35,6 +35,7 @@ from btc_ml.feeds.raw_event_journal.queue import BoundedEventQueue  # noqa: E402
 from btc_ml.feeds.raw_event_journal.schemas import OperationalEventType, StreamType  # noqa: E402
 from btc_ml.feeds.raw_event_journal.session import SessionManager  # noqa: E402
 from btc_ml.feeds.raw_event_journal.timestamps import capture_local_receive, utc_now_iso  # noqa: E402
+from btc_ml.live.intrabar.atomic_json import atomic_write_json  # noqa: E402
 from btc_ml.live.intrabar.cognition_pipeline import IntrabarCognitionEngine  # noqa: E402
 from btc_ml.live.intrabar.closed_bar_event_bridge import ClosedBarContextEventBridge  # noqa: E402
 from btc_ml.live.intrabar.context_event_journal import ContextEventJournal  # noqa: E402
@@ -228,10 +229,7 @@ class IntrabarCognitionService:
             "paper_execution": False,
             "real_execution": False,
         }
-        self.health_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.health_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        tmp.replace(self.health_path)
+        atomic_write_json(self.health_path, payload)
 
     def _enqueue(self, stream: StreamType, event: dict[str, Any]) -> None:
         try:
