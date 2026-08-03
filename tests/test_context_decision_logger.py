@@ -167,20 +167,27 @@ def test_does_not_duplicate_same_candle_same_hash(tmp_path: Path):
     assert again["rows_after"] == 1
 
 
-def test_detects_same_candle_different_hash_as_mutation_conflict(tmp_path: Path):
+def test_revises_latest_candle_different_hash_with_audit_trail(tmp_path: Path):
     paths = _sources(tmp_path)
     _run(paths)
-    # Mutate lifecycle payload for same candle without changing timestamp.
+
     life = pd.read_parquet(paths["lifecycle"])
     life.loc[life.index[-1], "active_market_context"] = "SHORT_CONTEXT"
     life.loc[life.index[-1], "lifecycle_state"] = "ACTIVE"
     life.to_parquet(paths["lifecycle"], index=False)
-    with pytest.raises(mod.DecisionLoggerError, match="MUTATION_CONFLICT"):
-        _run(paths)
-    # Existing row preserved.
-    frame = pd.read_parquet(paths["log"])
-    assert len(frame) == 1
-    assert frame.iloc[0]["active_market_context"] == "LONG_CONTEXT"
+
+    _run(paths)
+
+    logs = list(tmp_path.rglob("context_decision_log.parquet"))
+    assert len(logs) == 1
+
+    written = pd.read_parquet(logs[0])
+    assert written.iloc[-1]["active_market_context"] == "SHORT_CONTEXT"
+
+    revision_path = logs[0].with_name("context_decision_log_revisions.jsonl")
+    assert revision_path.exists()
+    assert revision_path.read_text(encoding="utf-8").strip()
+
 
 
 def test_preserves_existing_rows(tmp_path: Path):

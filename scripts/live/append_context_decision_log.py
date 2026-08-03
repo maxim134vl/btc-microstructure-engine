@@ -2110,19 +2110,32 @@ def append_decision(
     *,
     log_path: Path,
 ) -> dict[str, Any]:
-    """Append-only write. Never mutates existing decision rows."""
+    """Append a new candle or auditably revise only the latest candle."""
     existing = load_decision_log(log_path)
     candle = row["candle_timestamp"]
     new_hash = row["decision_payload_hash"]
+    revised_existing = False
+    revision_record: dict[str, Any] | None = None
+
     if row.get("record_origin") is None:
         row = dict(row)
         row["record_origin"] = RECORD_ORIGIN_LIVE
 
     if len(existing) and "candle_timestamp" in existing.columns:
-        # Preserve existing rows exactly; compare by candle_timestamp string.
-        same = existing.loc[existing["candle_timestamp"].astype(str) == str(candle)]
+        existing_ts = normalize_utc_ns_series(existing["candle_timestamp"])
+        new_ts = _to_utc_ts(candle)
+
+        if new_ts is not None:
+            same = existing.loc[existing_ts == new_ts]
+        else:
+            same = existing.loc[
+                existing["candle_timestamp"].astype(str) == str(candle)
+            ]
+
         if len(same):
-            old_hash = str(same.iloc[-1].get("decision_payload_hash") or "")
+            old_row = same.iloc[-1].to_dict()
+            old_hash = str(old_row.get("decision_payload_hash") or "")
+
             if old_hash == new_hash:
                 return {
                     "status": "SKIPPED_DUPLICATE",
@@ -2131,17 +2144,41 @@ def append_decision(
                     "rows_after": len(existing),
                     "decision_id": None,
                 }
-            raise DecisionLoggerError(
-                f"MUTATION_CONFLICT: candle_timestamp={candle} already logged "
-                f"with different decision_payload_hash "
-                f"(existing={old_hash[:12]}… new={new_hash[:12]}…)"
-            )
 
-        # Only append if newer than latest logged candle.
-        latest_logged = existing["candle_timestamp"].dropna().astype(str)
-        if len(latest_logged):
-            latest_ts = max(_to_utc_ts(v) for v in latest_logged if _to_utc_ts(v) is not None)
-            new_ts = _to_utc_ts(candle)
+            valid_existing_ts = existing_ts.dropna()
+            latest_ts = valid_existing_ts.max() if len(valid_existing_ts) else None
+
+            if new_ts is None or latest_ts is None or new_ts != latest_ts:
+                raise DecisionLoggerError(
+                    f"HISTORICAL_MUTATION_CONFLICT: candle_timestamp={candle} "
+                    f"is not the latest logged candle "
+                    f"(latest={_iso(latest_ts)}, "
+                    f"existing={old_hash[:12]}… new={new_hash[:12]}…)"
+                )
+
+            replace_index = same.index[-1]
+            for col in DECISION_COLUMNS:
+                existing.at[replace_index, col] = row.get(col)
+
+            revision_record = {
+                "revision_recorded_at_utc": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "revision_type": "LATEST_CANDLE_CANONICAL_REPLACEMENT",
+                "candle_timestamp": candle,
+                "old_decision_payload_hash": old_hash,
+                "new_decision_payload_hash": new_hash,
+                "old_decision_id": old_row.get("decision_id"),
+                "new_decision_id": row.get("decision_id"),
+                "old_row": old_row,
+                "new_row": dict(row),
+            }
+            revised_existing = True
+
+        if not revised_existing:
+            valid_existing_ts = existing_ts.dropna()
+            latest_ts = valid_existing_ts.max() if len(valid_existing_ts) else None
+
             if latest_ts is not None and new_ts is not None and new_ts <= latest_ts:
                 return {
                     "status": "SKIPPED_NOT_NEWER",
@@ -2153,17 +2190,42 @@ def append_decision(
                 }
 
     new_frame = pd.DataFrame([row], columns=DECISION_COLUMNS)
-    if len(existing):
-        # Reindex to schema; keep all previous values untouched.
+
+    if revised_existing:
+        combined = _align_frame_to_schema(existing)[DECISION_COLUMNS].copy()
+    elif len(existing):
         for col in DECISION_COLUMNS:
             if col not in existing.columns:
                 existing[col] = None
-        combined = pd.concat([existing[DECISION_COLUMNS], new_frame], ignore_index=True)
+        combined = pd.concat(
+            [existing[DECISION_COLUMNS], new_frame],
+            ignore_index=True,
+        )
     else:
         combined = new_frame
 
     combined = normalize_canonical_timestamp_columns(combined)
+
+    revision_path = log_path.with_name("context_decision_log_revisions.jsonl")
+    if revision_record is not None:
+        import json as _json
+
+        revision_path.parent.mkdir(parents=True, exist_ok=True)
+        with revision_path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                _json.dumps(
+                    revision_record,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+                + "\n"
+            )
+            fh.flush()
+            os.fsync(fh.fileno())
+
     write_atomic_parquet(combined, log_path)
+
     try:
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
@@ -2176,15 +2238,27 @@ def append_decision(
         )
     except Exception as _meta_exc:  # noqa: BLE001
         print(f"METADATA_WARN decision_log sidecar: {_meta_exc}")
+
     return {
-        "status": "APPENDED",
+        "status": (
+            "REVISED_LATEST_CANDLE"
+            if revised_existing
+            else "APPENDED"
+        ),
         "candle_timestamp": candle,
         "rows_before": len(existing),
         "rows_after": len(combined),
         "decision_id": row["decision_id"],
         "decision_stale": bool(row.get("decision_stale")),
-        "technical_refresh_lag_present": bool(row.get("technical_refresh_lag_present")),
+        "technical_refresh_lag_present": bool(
+            row.get("technical_refresh_lag_present")
+        ),
         "decision_payload_hash": new_hash,
+        "revision_log_path": (
+            str(revision_path)
+            if revision_record is not None
+            else None
+        ),
     }
 
 
