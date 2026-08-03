@@ -20,6 +20,7 @@ from .consumer import (
     idempotency_key,
 )
 from .economics import closed_trade_economics, resolve_risk_sizing
+from .entry_eligibility import stale_entry_block_reason
 from .epoch import PaperEpoch
 from .sleeves import SleeveLedger
 
@@ -323,7 +324,9 @@ class IntrabarPaperEngine:
 
     def poll_context_journal(self) -> list[dict[str, Any]]:
         all_actions: list[dict[str, Any]] = []
-        for ev in self.consumer.iter_new_events():
+        for ev in self.consumer.iter_new_events(
+            max_entry_signal_age_seconds=self.cfg.max_entry_signal_age_seconds,
+        ):
             actions = self.process_context_event(ev)
             eid = str(ev.get("context_event_id") or ev.get("event_id") or "")
             mono = int(ev.get("event_monotonic_ns") or 0)
@@ -394,6 +397,18 @@ class IntrabarPaperEngine:
             return None
         if event_type not in ENTRY_EVENTS:
             return None
+        stale_reason = stale_entry_block_reason(
+            event,
+            max_age_seconds=self.cfg.max_entry_signal_age_seconds,
+        )
+        if stale_reason:
+            self._block(stale_reason, tf, context_event_id, side, event=event)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
         if tf in self.positions:
             self._block("ENTRY_BLOCKED_ACTIVE_POSITION", tf, context_event_id, side)
             return None
@@ -927,18 +942,32 @@ class IntrabarPaperEngine:
                 use_local_bbo=use_local_bbo,
             )
 
-    def _block(self, reason: str, tf: str, context_event_id: str, side: str) -> None:
+    def _block(
+        self,
+        reason: str,
+        tf: str,
+        context_event_id: str,
+        side: str,
+        *,
+        event: dict[str, Any] | None = None,
+    ) -> None:
         self.blocked_commands += 1
-        self.books.append(
-            "blocked",
-            {
-                "ts": _utc_iso(),
-                "reason": reason,
-                "timeframe": tf,
-                "context_event_id": context_event_id,
-                "side": side,
-            },
-        )
+        payload: dict[str, Any] = {
+            "ts": _utc_iso(),
+            "reason": reason,
+            "timeframe": tf,
+            "context_event_id": context_event_id,
+            "side": side,
+        }
+        if event:
+            payload["decision_available_at"] = event.get("decision_available_at")
+            payload["event_timestamp"] = event.get("event_timestamp")
+            payload["ingested_at"] = event.get("ingested_at")
+            payload["evaluation_mode"] = event.get("evaluation_mode")
+            payload["restart_backfill"] = event.get("restart_backfill")
+            payload["materialization_class"] = event.get("materialization_class")
+            payload["lifecycle_episode_id"] = event.get("lifecycle_episode_id")
+        self.books.append("blocked", payload)
 
     def health(self) -> dict[str, Any]:
         import os

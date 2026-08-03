@@ -164,13 +164,16 @@ def test_first_fresh_post_activation_bar_revalidates_active_long(tmp_path: Path)
     assert ev["historical_context_origin_timestamp"] == "2026-08-02T08:30:00Z"
 
 
-def test_revalidated_timestamp_is_not_historical_origin_and_not_before_decision(tmp_path: Path):
+def test_revalidated_timestamp_preserves_decision_available_at(tmp_path: Path):
     row = _row(current="LONG_CONTEXT", previous="LONG_CONTEXT", origin="2026-08-02T08:30:00Z")
     _, result = _materialize(tmp_path, [row])
     ev = result.emitted[0]
+    assert ev["event_timestamp"] == ev["decision_available_at"]
     assert ev["event_timestamp"] != ev["historical_context_origin_timestamp"]
-    assert ev["event_timestamp"] >= ev["decision_available_at"]
-    assert ev["execution_not_before"] == ev["event_timestamp"]
+    assert ev["execution_not_before"] == "2026-08-02T12:16:02Z"
+    assert ev["execution_not_before"] != ev["decision_available_at"]
+    assert ev["restart_backfill"] is True
+    assert ev["materialization_class"] == "RESTART_BACKFILL"
 
 
 def test_bbo_before_decision_available_is_rejected(tmp_path: Path):
@@ -200,8 +203,12 @@ def _tmp_intrabar_config(tmp_path: Path) -> tuple[object, object, Path]:
 
 
 def test_live1b_uses_causal_bbo_not_source_bar_close(tmp_path: Path):
-    row = _row(current="LONG_CONTEXT")
-    _, result = _materialize(tmp_path, [row], current_bbo=_bbo(ts="2026-08-02T12:16:02Z", mono=2_000_000))
+    from datetime import datetime, timedelta, timezone
+
+    fresh_decision = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
+    fresh_bbo = (datetime.now(timezone.utc) - timedelta(seconds=25)).isoformat().replace("+00:00", "Z")
+    row = _row(current="LONG_CONTEXT", decision_at=fresh_decision)
+    _, result = _materialize(tmp_path, [row], current_bbo=_bbo(ts=fresh_bbo, mono=2_000_000))
     ev = result.emitted[0]
     assert ev["source_bar_close"] == 90.0
     assert float(ev["context_event_price"]) == pytest.approx(100.1)

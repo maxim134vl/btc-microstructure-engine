@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
+from .entry_eligibility import is_stale_entry_signal
+
 ENTRY_EVENTS = frozenset({"CONTEXT_START", "CONTEXT_FLIP"})
 EXIT_EVENTS = frozenset({"CONTEXT_END", "CONTEXT_FLIP"})
 
@@ -119,7 +121,11 @@ class ContextEventConsumer:
             return []
         return sorted(self.journal_root.rglob("*.jsonl"))
 
-    def iter_new_events(self) -> Iterator[dict[str, Any]]:
+    def iter_new_events(
+        self,
+        *,
+        max_entry_signal_age_seconds: float | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Yield events with event_monotonic_ns > checkpoint, sorted causally."""
         pending: list[dict[str, Any]] = []
         last_mono = int(self.checkpoint.last_event_monotonic_ns or 0)
@@ -139,15 +145,25 @@ class ContextEventConsumer:
                 mono = int(ev.get("event_monotonic_ns") or 0)
                 if mono <= last_mono:
                     continue
-                # Post-activation gate: ISO first (safe across processes).
-                # Optional monotonic gate only when explicitly provided (same-clock tests).
                 if self.activated_at_iso:
-                    ts = str(ev.get("event_timestamp") or ev.get("timestamp") or "")
-                    if ts and ts < str(self.activated_at_iso):
-                        continue
+                    materialized_at = str(
+                        ev.get("ingested_at") or ev.get("event_timestamp") or ev.get("timestamp") or ""
+                    )
+                    ev["_materialized_before_manager_activation"] = bool(
+                        materialized_at and materialized_at < str(self.activated_at_iso)
+                    )
+                else:
+                    ev["_materialized_before_manager_activation"] = False
                 if self.activated_at_monotonic_ns is not None:
-                    if mono < int(self.activated_at_monotonic_ns):
-                        continue
+                    ev["_monotonic_before_manager_activation"] = mono < int(self.activated_at_monotonic_ns)
+                else:
+                    ev["_monotonic_before_manager_activation"] = False
+                if max_entry_signal_age_seconds is not None:
+                    etype = str(ev.get("event_type") or ev.get("type") or "").upper()
+                    if etype in ENTRY_EVENTS:
+                        ev["_startup_entry_eligibility"] = (
+                            "STALE" if is_stale_entry_signal(ev, max_age_seconds=max_entry_signal_age_seconds) else "FRESH"
+                        )
                 ev["_journal_path"] = str(path)
                 ev["_journal_offset"] = i
                 pending.append(ev)

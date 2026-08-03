@@ -170,15 +170,17 @@ def _valid_bbo(current_bbo: Mapping[str, Any] | None, decision_available_at: pd.
         return None, "INVALID_BBO"
     if bbo_ts < decision_available_at:
         return None, "STALE_BBO_BEFORE_DECISION_AVAILABLE"
+    decision_iso = _iso(decision_available_at)
     return {
         "best_bid": bid_f,
         "best_ask": ask_f,
         "book_update_id": current_bbo.get("book_update_id"),
         "bbo_receive_monotonic_ns": mono_i,
         "bbo_receive_timestamp": _iso(bbo_ts),
-        "event_timestamp": _iso(bbo_ts),
+        "event_timestamp": decision_iso,
         "event_monotonic_ns": mono_i,
         "bbo_age_ms": 0.0,
+        "execution_not_before": _iso(bbo_ts),
     }, None
 
 
@@ -292,6 +294,8 @@ def materialize_closed_bar_events(
                 previous_context = "OBSERVE"
                 extra = {
                     "revalidated_after_restart": True,
+                    "restart_backfill": True,
+                    "materialization_class": "RESTART_BACKFILL",
                     "revalidation_event_type": "CONTEXT_START",
                     "historical_context_origin_timestamp": context_origin,
                     "revalidation_reason": "PRE_EXISTING_ACTIVE_CONTEXT_CONFIRMED_ON_FRESH_BAR",
@@ -320,7 +324,7 @@ def materialize_closed_bar_events(
             "context_event_price_source": "causal_bbo_mid",
             "source_bar_close": row.get("close") if row.get("close") is not None else row.get("candle_close"),
             "source_bar_close_not_execution_price": True,
-            "execution_not_before": bbo["event_timestamp"],
+            "execution_not_before": bbo["execution_not_before"],
             "paper_action_candidate": row.get("paper_action_candidate"),
             "intended_side": row.get("intended_side"),
             "signal_eligibility_status": row.get("signal_eligibility_status"),
@@ -359,7 +363,7 @@ def materialize_closed_bar_events(
             source_bar_timestamp=_iso(source_bar_ts),
             decision_available_at=_iso(decision_available),
             context_origin_timestamp=context_origin,
-            execution_not_before=bbo["event_timestamp"],
+            execution_not_before=bbo["execution_not_before"],
             direction=direction,
             evaluation_mode="CLOSED_BAR_CONTEXT_DECISION",
             extra_metadata=metadata,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,14 @@ def _engine(cfg, repo) -> IntrabarPaperEngine:
     return eng
 
 
+def _fresh_ts(seconds_ago: int = 30) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat().replace("+00:00", "Z")
+
+
+def _stale_ts(hours_ago: int = 6) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat().replace("+00:00", "Z")
+
+
 def _ctx(
     *,
     eid: str,
@@ -67,22 +76,33 @@ def _ctx(
     episode: str = "ep1",
     bid: float = 100.0,
     ask: float = 100.2,
+    decision_available_at: str | None = None,
+    restart_backfill: bool = False,
 ) -> dict:
-    return {
+    ts = decision_available_at or _fresh_ts(30)
+    payload = {
         "context_event_id": eid,
         "event_type": etype,
         "timeframe": tf,
         "previous_context": prev,
         "new_context": new,
         "event_monotonic_ns": mono,
-        "event_timestamp": "2026-07-28T12:00:00Z",
+        "event_timestamp": ts,
+        "decision_available_at": ts,
         "context_event_price": "100.1",
         "best_bid": bid,
         "best_ask": ask,
         "bbo_receive_monotonic_ns": mono - 1000,
         "book_update_id": "b1",
         "lifecycle_episode_id": episode,
+        "evaluation_mode": "CLOSED_BAR_CONTEXT_DECISION",
+        "ingested_at": _fresh_ts(5),
     }
+    if restart_backfill:
+        payload["restart_backfill"] = True
+        payload["materialization_class"] = "RESTART_BACKFILL"
+        payload["revalidated_after_restart"] = True
+    return payload
 
 
 def test_long_start_fills_ask(cfg):
@@ -121,31 +141,30 @@ def test_no_entry_observe_or_end(cfg):
     )
 
 
-def test_no_entry_before_activation(cfg):
+def test_pre_activation_stale_start_is_yielded_blocked_and_checkpointed(cfg):
     c, repo = cfg
     ep = _epoch(c, repo)
+    stale = _ctx(
+        eid="pre_act_stale",
+        etype="CONTEXT_START",
+        tf="M15",
+        prev="OBSERVE",
+        new="LONG_CONTEXT",
+        mono=2_000_000,
+        decision_available_at=_stale_ts(hours_ago=6),
+    )
+    stale["ingested_at"] = _stale_ts(hours_ago=8)
+    journal = c.context_journal_root / "events.jsonl"
+    journal.write_text(json.dumps(stale) + "\n", encoding="utf-8")
     eng = IntrabarPaperEngine(cfg=c, epoch=ep, activation_monotonic_ns=5_000_000)
     eng.bbo.update_from_book_ticker(
         best_bid=100.0, best_ask=100.2, receive_monotonic_ns=1_000_000, book_update_id="1", domain="context"
     )
-    # Consumer gate: write journal event before activation mono and poll
-    journal = c.context_journal_root / "events.jsonl"
-    journal.write_text(
-        json.dumps(
-            _ctx(
-                eid="old",
-                etype="CONTEXT_START",
-                tf="M15",
-                prev="OBSERVE",
-                new="LONG_CONTEXT",
-                mono=2_000_000,
-            )
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    assert eng.poll_context_journal() == []
+    acts = eng.poll_context_journal()
+    assert len(acts) == 1
+    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_SIGNAL"
     assert eng.positions == {}
+    assert eng.consumer.checkpoint.last_event_monotonic_ns == 2_000_000
 
 
 def test_no_duplicate_after_restart(cfg):

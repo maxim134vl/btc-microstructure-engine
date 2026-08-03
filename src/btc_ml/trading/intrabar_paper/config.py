@@ -27,6 +27,7 @@ class IntrabarPaperConfig:
     exit_slippage_bps: float
     stop_exit_slippage_bps: float
     max_bbo_age_ms: float
+    max_entry_signal_age_seconds: float
     max_open_positions_per_timeframe: int
     timeframes: tuple[str, ...]
     context_journal_root: Path
@@ -50,6 +51,7 @@ def load_intrabar_paper_config(
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
     required = (
         "max_bbo_age_ms",
+        "max_entry_signal_age_seconds",
         "initial_equity_usd",
         "max_risk_per_trade_usd",
         "entry_fee_bps",
@@ -82,6 +84,7 @@ def load_intrabar_paper_config(
         exit_slippage_bps=float(raw["exit_slippage_bps"]),
         stop_exit_slippage_bps=float(raw["stop_exit_slippage_bps"]),
         max_bbo_age_ms=float(raw["max_bbo_age_ms"]),
+        max_entry_signal_age_seconds=float(raw["max_entry_signal_age_seconds"]),
         max_open_positions_per_timeframe=int(raw["max_open_positions_per_timeframe"]),
         timeframes=tuple(str(x) for x in raw["timeframes"]),
         context_journal_root=(root / str(raw["context_journal_root"])).resolve(),
