@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -106,6 +107,24 @@ def _load_context_event(repo: Path, context_event_id: str | None) -> dict[str, A
 
 
 class ShadowEconomicCorrelationEngine:
+    _TRANSACTION_STATE_FIELDS = (
+        "processed_candidates",
+        "processed_closes",
+        "processed_enrichments",
+        "baseline_match_count",
+        "baseline_divergence_count",
+        "lookahead_violation_count",
+        "write_boundary_violation_count",
+        "research_valid",
+        "last_candidate_timestamp",
+        "last_trade_close_timestamp",
+        "last_enrichment_timestamp",
+        "errors",
+        "sleeves",
+        "open_by_policy",
+        "state_generation",
+    )
+
     def __init__(
         self,
         *,
@@ -115,15 +134,36 @@ class ShadowEconomicCorrelationEngine:
         strict_epoch: bool = True,
     ) -> None:
         self.repo = repo or repo_root()
-        self.cfg = load_intrabar_paper_config(repo_root=self.repo)
-        active_path = self.repo / "data" / "trading" / "paper_epochs" / "active.json"
+        self.cfg = load_intrabar_paper_config(
+            repo_root=self.repo
+        )
+
+        active_path = (
+            self.repo
+            / "data"
+            / "trading"
+            / "paper_epochs"
+            / "active.json"
+        )
+
         try:
-            active = json.loads(active_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError) as exc:
+            active = json.loads(
+                active_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+        ) as exc:
             if strict_epoch:
                 raise RuntimeError(
-                    f"{SOURCE_EPOCH_MISMATCH}: active contract unreadable: {exc}"
+                    f"{SOURCE_EPOCH_MISMATCH}: "
+                    "active contract unreadable: "
+                    f"{exc}"
                 ) from exc
+
             active = {}
 
         if strict_epoch:
@@ -132,107 +172,540 @@ class ShadowEconomicCorrelationEngine:
                 "trading_contract_fingerprint",
                 "parent_trading_contract_fingerprint",
             )
-            missing = [name for name in required if not active.get(name)]
+            missing = [
+                name
+                for name in required
+                if not active.get(name)
+            ]
+
             if missing:
                 raise RuntimeError(
-                    f"{SOURCE_EPOCH_MISMATCH}: active contract missing "
+                    f"{SOURCE_EPOCH_MISMATCH}: "
+                    "active contract missing "
                     + ",".join(missing)
                 )
 
-        self.epoch_id = epoch_id or str(active.get("paper_epoch_id") or EXPECTED_EPOCH)
-        self.source_fp = str(active.get("trading_contract_fingerprint") or EXPECTED_ACTIVE_FP)
-        self.parent_fp = str(active.get("parent_trading_contract_fingerprint") or EXPECTED_PARENT_FP)
+        self.epoch_id = (
+            epoch_id
+            or str(
+                active.get(
+                    "paper_epoch_id"
+                )
+                or EXPECTED_EPOCH
+            )
+        )
+        self.source_fp = str(
+            active.get(
+                "trading_contract_fingerprint"
+            )
+            or EXPECTED_ACTIVE_FP
+        )
+        self.parent_fp = str(
+            active.get(
+                "parent_trading_contract_fingerprint"
+            )
+            or EXPECTED_PARENT_FP
+        )
 
-        # PAPER epoch identity namespaces observations; contract fingerprints
-        # determine whether the shadow logic is compatible with the source.
         if strict_epoch and self.source_fp != EXPECTED_ACTIVE_FP:
-            raise RuntimeError(f"{SOURCE_EPOCH_MISMATCH}: fingerprint {self.source_fp}")
+            raise RuntimeError(
+                f"{SOURCE_EPOCH_MISMATCH}: "
+                f"fingerprint {self.source_fp}"
+            )
+
         if strict_epoch and self.parent_fp != EXPECTED_PARENT_FP:
-            raise RuntimeError(f"{SOURCE_EPOCH_MISMATCH}: parent fingerprint {self.parent_fp}")
+            raise RuntimeError(
+                f"{SOURCE_EPOCH_MISMATCH}: "
+                "parent fingerprint "
+                f"{self.parent_fp}"
+            )
 
         self.store = ShadowStore(
-            shadow_dir or shadow_epoch_root(self.repo, epoch_id=self.epoch_id),
+            shadow_dir
+            or shadow_epoch_root(
+                self.repo,
+                epoch_id=self.epoch_id,
+            ),
             repo=self.repo,
         )
         self.books = _ReadOnlyPaperBooks(
-            paper_books_root(self.repo, epoch_id=self.epoch_id),
+            paper_books_root(
+                self.repo,
+                epoch_id=self.epoch_id,
+            ),
             paper_epoch_id=self.epoch_id,
         )
-        ck = self.store.read_json("checkpoint.json")
-        self.processed_candidates: set[str] = set(ck.get("processed_candidates") or [])
-        self.processed_closes: set[str] = set(ck.get("processed_closes") or [])
-        self.processed_enrichments: set[str] = set(ck.get("processed_enrichments") or [])
-        self.baseline_match_count = int(ck.get("baseline_match_count") or 0)
-        self.baseline_divergence_count = int(ck.get("baseline_divergence_count") or 0)
-        self.lookahead_violation_count = int(ck.get("lookahead_violation_count") or 0)
-        self.write_boundary_violation_count = int(ck.get("write_boundary_violation_count") or 0)
-        self.research_valid = bool(ck.get("research_valid", True))
-        self.last_candidate_timestamp = ck.get("last_candidate_timestamp")
-        self.last_trade_close_timestamp = ck.get("last_trade_close_timestamp")
-        self.last_enrichment_timestamp = ck.get("last_enrichment_timestamp")
-        self.errors: list[str] = []
 
-        sleeves = self.store.read_json("policy_sleeves.json")
-        if not sleeves or "BASELINE_ALL_ELIGIBLE" not in sleeves:
-            sleeves = initial_policy_sleeves()
-            self.store.write_json("policy_sleeves.json", sleeves)
-        self.sleeves = sleeves
+        previous_manifest = (
+            self.store.read_json(
+                "policy_manifest.json"
+            )
+        )
 
         self.manifest = {
+            "shadow_model_version":
+            "SHADOW_EQCORR1_2_V2",
+            "lineage_contract":
+            "EQCORR_POLICY_MANIFEST_LINEAGE_V1",
+            "transaction_contract":
+            "EQCORR_CRASH_SAFE_JSONL_V1",
             "mode": "OBSERVE_ONLY",
             "enforcement_enabled": False,
             "quality_scoring_enabled": False,
             "feature_enrichment_enabled": True,
             "policy_ids": list(POLICY_IDS),
             "source_epoch_id": self.epoch_id,
-            "source_contract_fingerprint": self.source_fp,
-            "parent_trading_contract_fingerprint": self.parent_fp,
-            "expected_active_fingerprint": EXPECTED_ACTIVE_FP,
-            "expected_parent_fingerprint": EXPECTED_PARENT_FP,
+            "source_contract_fingerprint":
+            self.source_fp,
+            "parent_trading_contract_fingerprint":
+            self.parent_fp,
+            "expected_active_fingerprint":
+            EXPECTED_ACTIVE_FP,
+            "expected_parent_fingerprint":
+            EXPECTED_PARENT_FP,
         }
-        self.manifest_fp = policy_manifest_fingerprint(self.manifest)
-        self.manifest["shadow_policy_manifest_fingerprint"] = self.manifest_fp
-        self.store.write_json("policy_manifest.json", self.manifest)
-        # Persist source audit snapshot (shadow-only write).
+
+        self.manifest_fp = (
+            policy_manifest_fingerprint(
+                self.manifest
+            )
+        )
+        self.manifest[
+            "shadow_policy_manifest_fingerprint"
+        ] = self.manifest_fp
+
+        self.store.set_lineage(
+            {
+                "source_epoch_id":
+                self.epoch_id,
+                "source_contract_fingerprint":
+                self.source_fp,
+                "shadow_policy_manifest_fingerprint":
+                self.manifest_fp,
+            }
+        )
+
+        before_recovery = (
+            self.store.read_json(
+                "checkpoint.json"
+            )
+        )
+
+        self.transaction_recovery = (
+            self.store.recover_inflight(
+                committed_generation=int(
+                    before_recovery.get(
+                        "state_generation"
+                    )
+                    or 0
+                ),
+                committed_candidates=set(
+                    before_recovery.get(
+                        "processed_candidates"
+                    )
+                    or []
+                ),
+                committed_closes=set(
+                    before_recovery.get(
+                        "processed_closes"
+                    )
+                    or []
+                ),
+            )
+        )
+
+        checkpoint = self.store.read_json(
+            "checkpoint.json"
+        )
+
+        self.state_generation = int(
+            checkpoint.get(
+                "state_generation"
+            )
+            or 0
+        )
+        self.invalidated_manifest_fps = set(
+            checkpoint.get(
+                "invalidated_manifest_fingerprints"
+            )
+            or []
+        )
+        self.errors: list[str] = []
+
+        previous_fp = str(
+            previous_manifest.get(
+                "shadow_policy_manifest_fingerprint"
+            )
+            or ""
+        )
+        checkpoint_fp = str(
+            checkpoint.get(
+                "active_shadow_policy_manifest_fingerprint"
+            )
+            or checkpoint.get(
+                "active_policy_manifest_fingerprint"
+            )
+            or ""
+        )
+
+        mirror = self.store.read_json(
+            "policy_sleeves.json"
+        )
+
+        legacy_state_present = bool(
+            any(
+                size > 0
+                for size
+                in self.store.table_sizes().values()
+            )
+            or checkpoint.get(
+                "processed_candidates"
+            )
+            or checkpoint.get(
+                "processed_closes"
+            )
+            or (
+                isinstance(mirror, dict)
+                and "BASELINE_ALL_ELIGIBLE"
+                in mirror
+            )
+        )
+
+        migration_required = (
+            legacy_state_present
+            and checkpoint_fp
+            != self.manifest_fp
+        )
+
+        if migration_required:
+            for value in (
+                previous_fp,
+                checkpoint_fp,
+            ):
+                if (
+                    value
+                    and value
+                    != self.manifest_fp
+                ):
+                    self.invalidated_manifest_fps.add(
+                        value
+                    )
+
+            self.processed_candidates = set()
+            self.processed_closes = set()
+            self.processed_enrichments = set()
+            self.baseline_match_count = 0
+            self.baseline_divergence_count = 0
+            self.lookahead_violation_count = 0
+            self.write_boundary_violation_count = 0
+            self.research_valid = True
+            self.last_candidate_timestamp = None
+            self.last_trade_close_timestamp = None
+            self.last_enrichment_timestamp = None
+            self.sleeves = (
+                initial_policy_sleeves()
+            )
+            self.open_by_policy = {
+                policy_id: []
+                for policy_id in POLICY_IDS
+            }
+
+            self._save_checkpoint()
+        else:
+            self.processed_candidates = set(
+                checkpoint.get(
+                    "processed_candidates"
+                )
+                or []
+            )
+            self.processed_closes = set(
+                checkpoint.get(
+                    "processed_closes"
+                )
+                or []
+            )
+            self.processed_enrichments = set(
+                checkpoint.get(
+                    "processed_enrichments"
+                )
+                or []
+            )
+            self.baseline_match_count = int(
+                checkpoint.get(
+                    "baseline_match_count"
+                )
+                or 0
+            )
+            self.baseline_divergence_count = int(
+                checkpoint.get(
+                    "baseline_divergence_count"
+                )
+                or 0
+            )
+            self.lookahead_violation_count = int(
+                checkpoint.get(
+                    "lookahead_violation_count"
+                )
+                or 0
+            )
+            self.write_boundary_violation_count = int(
+                checkpoint.get(
+                    "write_boundary_violation_count"
+                )
+                or 0
+            )
+            self.research_valid = bool(
+                checkpoint.get(
+                    "research_valid",
+                    True,
+                )
+            )
+            self.last_candidate_timestamp = (
+                checkpoint.get(
+                    "last_candidate_timestamp"
+                )
+            )
+            self.last_trade_close_timestamp = (
+                checkpoint.get(
+                    "last_trade_close_timestamp"
+                )
+            )
+            self.last_enrichment_timestamp = (
+                checkpoint.get(
+                    "last_enrichment_timestamp"
+                )
+            )
+
+            sleeves = checkpoint.get(
+                "policy_sleeves"
+            )
+
+            if (
+                not isinstance(sleeves, dict)
+                or "BASELINE_ALL_ELIGIBLE"
+                not in sleeves
+            ):
+                sleeves = mirror
+
+            if (
+                not isinstance(sleeves, dict)
+                or "BASELINE_ALL_ELIGIBLE"
+                not in sleeves
+            ):
+                sleeves = (
+                    initial_policy_sleeves()
+                )
+
+            self.sleeves = sleeves
+            self._rebuild_open_index()
+
+        self.store.write_json(
+            "policy_manifest.json",
+            self.manifest,
+        )
+
         try:
-            audit = audit_cognition_sources(repo=self.repo)
-            self.store.write_json("cognition_source_audit.json", {"generated_at": utc_now(), "sources": audit})
-        except Exception as exc:  # noqa: BLE001
-            self.errors.append(f"source_audit:{exc}")
-        self.enricher = CausalFeatureEnricher(repo=self.repo)
-        self._rebuild_open_index()
+            audit = audit_cognition_sources(
+                repo=self.repo
+            )
+            self.store.write_json(
+                "cognition_source_audit.json",
+                {
+                    "generated_at": utc_now(),
+                    "sources": audit,
+                    "shadow_policy_manifest_fingerprint":
+                    self.manifest_fp,
+                },
+            )
+        except Exception as exc:
+            self._append_error_once(
+                f"source_audit:{exc}"
+            )
 
-    def _rebuild_open_index(self) -> None:
-        self.open_by_policy: dict[str, list[dict[str, Any]]] = {pid: [] for pid in POLICY_IDS}
-        latest: dict[str, dict[str, Any]] = {}
-        for row in self.store.read_all("virtual_positions"):
-            key = f"{row.get('policy_id')}|{row.get('virtual_position_id')}"
+        self.enricher = CausalFeatureEnricher(
+            repo=self.repo
+        )
+
+    def _active_rows(
+        self,
+        table: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in self.store.read_all(
+                table
+            )
+            if row.get(
+                "shadow_policy_manifest_fingerprint"
+            )
+            == self.manifest_fp
+        ]
+
+    def _capture_transaction_state(
+        self,
+    ) -> dict[str, Any]:
+        return {
+            name: copy.deepcopy(
+                getattr(self, name)
+            )
+            for name in (
+                self._TRANSACTION_STATE_FIELDS
+            )
+        }
+
+    def _restore_transaction_state(
+        self,
+        snapshot: dict[str, Any],
+    ) -> None:
+        for name, value in snapshot.items():
+            setattr(
+                self,
+                name,
+                copy.deepcopy(value),
+            )
+
+    def _append_error_once(
+        self,
+        message: str,
+    ) -> None:
+        if message not in self.errors:
+            self.errors.append(message)
+
+    def _disk_transaction_committed(
+        self,
+        *,
+        kind: str,
+        key: str,
+        base_generation: int,
+    ) -> bool:
+        checkpoint = self.store.read_json(
+            "checkpoint.json"
+        )
+        generation = int(
+            checkpoint.get(
+                "state_generation"
+            )
+            or 0
+        )
+
+        committed_keys = (
+            set(
+                checkpoint.get(
+                    "processed_candidates"
+                )
+                or []
+            )
+            if kind == "candidate"
+            else set(
+                checkpoint.get(
+                    "processed_closes"
+                )
+                or []
+            )
+        )
+
+        return (
+            generation
+            > int(base_generation)
+            and key in committed_keys
+        )
+
+    def _rebuild_open_index(
+        self,
+    ) -> None:
+        self.open_by_policy = {
+            policy_id: []
+            for policy_id in POLICY_IDS
+        }
+        latest: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        for row in self._active_rows(
+            "virtual_positions"
+        ):
+            key = (
+                f"{row.get('policy_id')}|"
+                f"{row.get('virtual_position_id')}"
+            )
             latest[key] = row
-        for row in latest.values():
-            if str(row.get("status") or "").upper() != "OPEN":
-                continue
-            pid = str(row.get("policy_id"))
-            self.open_by_policy.setdefault(pid, []).append(row)
 
-    def _save_checkpoint(self) -> None:
+        for row in latest.values():
+            if (
+                str(
+                    row.get("status") or ""
+                ).upper()
+                != "OPEN"
+            ):
+                continue
+
+            policy_id = str(
+                row.get("policy_id") or ""
+            )
+            self.open_by_policy.setdefault(
+                policy_id,
+                [],
+            ).append(row)
+
+    def _save_checkpoint(
+        self,
+    ) -> None:
+        self.state_generation += 1
+
+        payload = {
+            "state_generation":
+            self.state_generation,
+            "policy_sleeves":
+            copy.deepcopy(self.sleeves),
+            "processed_candidates":
+            sorted(self.processed_candidates),
+            "processed_closes":
+            sorted(self.processed_closes),
+            "processed_enrichments":
+            sorted(self.processed_enrichments),
+            "baseline_match_count":
+            self.baseline_match_count,
+            "baseline_divergence_count":
+            self.baseline_divergence_count,
+            "lookahead_violation_count":
+            self.lookahead_violation_count,
+            "write_boundary_violation_count":
+            self.write_boundary_violation_count,
+            "research_valid":
+            self.research_valid,
+            "last_candidate_timestamp":
+            self.last_candidate_timestamp,
+            "last_trade_close_timestamp":
+            self.last_trade_close_timestamp,
+            "last_enrichment_timestamp":
+            self.last_enrichment_timestamp,
+            "active_shadow_policy_manifest_fingerprint":
+            self.manifest_fp,
+            "active_policy_manifest_fingerprint":
+            self.manifest_fp,
+            "invalidated_manifest_fingerprints":
+            sorted(
+                self.invalidated_manifest_fps
+            ),
+            "updated_at": utc_now(),
+        }
+
         self.store.write_json(
             "checkpoint.json",
-            {
-                "processed_candidates": sorted(self.processed_candidates),
-                "processed_closes": sorted(self.processed_closes),
-                "processed_enrichments": sorted(self.processed_enrichments),
-                "baseline_match_count": self.baseline_match_count,
-                "baseline_divergence_count": self.baseline_divergence_count,
-                "lookahead_violation_count": self.lookahead_violation_count,
-                "write_boundary_violation_count": self.write_boundary_violation_count,
-                "research_valid": self.research_valid,
-                "last_candidate_timestamp": self.last_candidate_timestamp,
-                "last_trade_close_timestamp": self.last_trade_close_timestamp,
-                "last_enrichment_timestamp": self.last_enrichment_timestamp,
-                "updated_at": utc_now(),
-            },
+            payload,
         )
-        self.store.write_json("policy_sleeves.json", self.sleeves)
+
+        try:
+            self.store.write_json(
+                "policy_sleeves.json",
+                self.sleeves,
+            )
+        except Exception as exc:
+            self._append_error_once(
+                "policy_sleeves_mirror:"
+                f"{exc}"
+            )
 
     def _candidate_from_entry_chain(self, fill: dict[str, Any], position: dict[str, Any]) -> dict[str, Any]:
         command_id = str(fill.get("command_id") or "")
@@ -285,49 +758,237 @@ class ShadowEconomicCorrelationEngine:
             "stop_distance_usd": position.get("stop_distance_usd") or sig.get("stop_distance_usd"),
         }
 
-    def process_new_entries(self) -> list[dict[str, Any]]:
+    def process_new_entries(
+        self,
+    ) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
-        fills = [f for f in self.books.read_all("fills") if str(f.get("action") or "").upper() == "ENTRY"]
-        positions = {str(p.get("position_id")): p for p in self.books.read_all("positions")}
-        open_now = _latest_positions(self.books.read_all("positions"))
+        committed_any = False
 
-        # Sync baseline sleeves from live health if present.
-        health_path = self.repo / "data" / "runtime" / "intrabar_paper_health.json"
+        fills = [
+            fill
+            for fill in self.books.read_all(
+                "fills"
+            )
+            if str(
+                fill.get("action") or ""
+            ).upper()
+            == "ENTRY"
+        ]
+        positions = {
+            str(
+                position.get(
+                    "position_id"
+                )
+            ): position
+            for position in self.books.read_all(
+                "positions"
+            )
+        }
+        open_now = _latest_positions(
+            self.books.read_all(
+                "positions"
+            )
+        )
+
+        health_path = (
+            self.repo
+            / "data"
+            / "runtime"
+            / "intrabar_paper_health.json"
+        )
+
         if health_path.exists():
             try:
-                health = json.loads(health_path.read_text(encoding="utf-8"))
-                if isinstance(health.get("sleeves"), dict):
-                    sync_baseline_from_real(self.sleeves, real_sleeves=health["sleeves"])
-            except Exception as exc:  # noqa: BLE001
-                self.errors.append(f"sleeve_sync:{exc}")
+                health = json.loads(
+                    health_path.read_text(
+                        encoding="utf-8"
+                    )
+                )
+
+                if isinstance(
+                    health.get("sleeves"),
+                    dict,
+                ):
+                    sync_baseline_from_real(
+                        self.sleeves,
+                        real_sleeves=health[
+                            "sleeves"
+                        ],
+                    )
+            except Exception as exc:
+                self._append_error_once(
+                    f"sleeve_sync:{exc}"
+                )
 
         for fill in fills:
-            # Match position by entry_fill_id or timeframe+qty+side open/closed.
-            pos = None
-            for p in positions.values():
-                if str(p.get("entry_fill_id") or "") == str(fill.get("fill_id") or ""):
-                    pos = p
+            position = None
+
+            for current in positions.values():
+                if (
+                    str(
+                        current.get(
+                            "entry_fill_id"
+                        )
+                        or ""
+                    )
+                    == str(
+                        fill.get("fill_id")
+                        or ""
+                    )
+                ):
+                    position = current
                     break
-            if pos is None:
-                # Fallback: OPEN/CLOSED row with same tf/side/qty/entry.
-                for p in positions.values():
+
+            if position is None:
+                for current in positions.values():
                     if (
-                        str(p.get("timeframe")) == str(fill.get("timeframe"))
-                        and str(p.get("side")).upper() == str(fill.get("side")).upper()
-                        and abs(float(p.get("quantity") or 0) - float(fill.get("quantity") or 0)) < 1e-12
-                        and abs(float(p.get("entry_price") or 0) - float(fill.get("paper_fill_price") or fill.get("gross_entry_price") or 0))
+                        str(
+                            current.get(
+                                "timeframe"
+                            )
+                        )
+                        == str(
+                            fill.get(
+                                "timeframe"
+                            )
+                        )
+                        and str(
+                            current.get("side")
+                        ).upper()
+                        == str(
+                            fill.get("side")
+                        ).upper()
+                        and abs(
+                            float(
+                                current.get(
+                                    "quantity"
+                                )
+                                or 0
+                            )
+                            - float(
+                                fill.get(
+                                    "quantity"
+                                )
+                                or 0
+                            )
+                        )
+                        < 1e-12
+                        and abs(
+                            float(
+                                current.get(
+                                    "entry_price"
+                                )
+                                or 0
+                            )
+                            - float(
+                                fill.get(
+                                    "paper_fill_price"
+                                )
+                                or fill.get(
+                                    "gross_entry_price"
+                                )
+                                or 0
+                            )
+                        )
                         < 1e-6
                     ):
-                        pos = p
+                        position = current
                         break
-            if pos is None:
+
+            if position is None:
                 continue
-            cand = self._candidate_from_entry_chain(fill, pos)
-            cid = str(cand["candidate_id"])
-            if cid in self.processed_candidates:
+
+            candidate = (
+                self._candidate_from_entry_chain(
+                    fill,
+                    position,
+                )
+            )
+            candidate_id = str(
+                candidate["candidate_id"]
+            )
+
+            if (
+                candidate_id
+                in self.processed_candidates
+            ):
                 continue
-            actions.append(self._ingest_candidate(cand, open_positions_before=open_now))
-        self._save_checkpoint()
+
+            snapshot = (
+                self._capture_transaction_state()
+            )
+            transaction = (
+                self.store.begin_transaction(
+                    kind="candidate",
+                    key=candidate_id,
+                    base_generation=(
+                        self.state_generation
+                    ),
+                )
+            )
+
+            try:
+                result = self._ingest_candidate(
+                    candidate,
+                    open_positions_before=(
+                        open_now
+                    ),
+                )
+                self._save_checkpoint()
+            except Exception as exc:
+                committed = (
+                    self._disk_transaction_committed(
+                        kind="candidate",
+                        key=candidate_id,
+                        base_generation=int(
+                            transaction.get(
+                                "base_generation"
+                            )
+                            or 0
+                        ),
+                    )
+                )
+
+                if committed:
+                    self.store.clear_inflight()
+                    actions.append(
+                        {
+                            "candidate_id":
+                            candidate_id,
+                            "status":
+                            "COMMITTED_AFTER_ERROR",
+                            "error": str(exc),
+                        }
+                    )
+                    committed_any = True
+                    continue
+
+                self.store.rollback_inflight()
+                self._restore_transaction_state(
+                    snapshot
+                )
+                self._append_error_once(
+                    "candidate:"
+                    f"{candidate_id}:{exc}"
+                )
+                actions.append(
+                    {
+                        "candidate_id":
+                        candidate_id,
+                        "status":
+                        "CANDIDATE_ERROR",
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            self.store.clear_inflight()
+            actions.append(result)
+            committed_any = True
+
+        if not committed_any:
+            self._save_checkpoint()
+
         self.write_health()
         return actions
 
@@ -473,7 +1134,7 @@ class ShadowEconomicCorrelationEngine:
         if not cid or cid in self.processed_enrichments:
             return None
         # Journal-level idempotency (survives checkpoint gaps).
-        for existing in self.store.read_all("candidate_feature_enrichments"):
+        for existing in self._active_rows("candidate_feature_enrichments"):
             if str(existing.get("candidate_id") or "") == cid:
                 self.processed_enrichments.add(cid)
                 return None
@@ -495,7 +1156,7 @@ class ShadowEconomicCorrelationEngine:
     def backfill_enrichments(self) -> list[dict[str, Any]]:
         """Causally enrich existing candidates without rewriting decisions/snapshots."""
         actions: list[dict[str, Any]] = []
-        for snap in self.store.read_all("candidate_snapshots"):
+        for snap in self._active_rows("candidate_snapshots"):
             cid = str(snap.get("candidate_id") or "")
             if not cid or cid in self.processed_enrichments:
                 continue
@@ -523,17 +1184,112 @@ class ShadowEconomicCorrelationEngine:
             self.research_valid = False
             self.errors.append(BASELINE_DIVERGENCE)
 
-    def process_new_closes(self) -> list[dict[str, Any]]:
+    def process_new_closes(
+        self,
+    ) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
-        trades = self.books.read_all("trades")
-        for trade in trades:
-            tid = str(trade.get("trade_id") or "")
-            if not tid or tid in self.processed_closes:
+        committed_any = False
+
+        for trade in self.books.read_all(
+            "trades"
+        ):
+            trade_id = str(
+                trade.get("trade_id") or ""
+            )
+
+            if (
+                not trade_id
+                or trade_id
+                in self.processed_closes
+            ):
                 continue
-            actions.append(self._close_trade(trade))
-            self.processed_closes.add(tid)
-            self.last_trade_close_timestamp = trade.get("exit_ts")
-        self._save_checkpoint()
+
+            snapshot = (
+                self._capture_transaction_state()
+            )
+            transaction = (
+                self.store.begin_transaction(
+                    kind="close",
+                    key=trade_id,
+                    base_generation=(
+                        self.state_generation
+                    ),
+                )
+            )
+
+            try:
+                result = self._close_trade(
+                    trade
+                )
+
+                if (
+                    result.get("status")
+                    == "NO_CANDIDATE"
+                ):
+                    self.store.clear_inflight()
+                    actions.append(result)
+                    continue
+
+                self.processed_closes.add(
+                    trade_id
+                )
+                self.last_trade_close_timestamp = (
+                    trade.get("exit_ts")
+                )
+                self._save_checkpoint()
+            except Exception as exc:
+                committed = (
+                    self._disk_transaction_committed(
+                        kind="close",
+                        key=trade_id,
+                        base_generation=int(
+                            transaction.get(
+                                "base_generation"
+                            )
+                            or 0
+                        ),
+                    )
+                )
+
+                if committed:
+                    self.store.clear_inflight()
+                    actions.append(
+                        {
+                            "trade_id":
+                            trade_id,
+                            "status":
+                            "COMMITTED_AFTER_ERROR",
+                            "error": str(exc),
+                        }
+                    )
+                    committed_any = True
+                    continue
+
+                self.store.rollback_inflight()
+                self._restore_transaction_state(
+                    snapshot
+                )
+                self._append_error_once(
+                    f"close:{trade_id}:{exc}"
+                )
+                actions.append(
+                    {
+                        "trade_id":
+                        trade_id,
+                        "status":
+                        "CLOSE_ERROR",
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            self.store.clear_inflight()
+            actions.append(result)
+            committed_any = True
+
+        if not committed_any:
+            self._save_checkpoint()
+
         self.write_health()
         return actions
 
@@ -541,7 +1297,7 @@ class ShadowEconomicCorrelationEngine:
         position_id = str(trade.get("position_id") or "")
         # Find candidate
         cand = None
-        for row in reversed(self.store.read_all("candidate_snapshots")):
+        for row in reversed(self._active_rows("candidate_snapshots")):
             if str(row.get("position_id")) == position_id:
                 cand = row
                 break
@@ -557,10 +1313,19 @@ class ShadowEconomicCorrelationEngine:
             opens = [p for p in self.open_by_policy.get(policy_id, []) if str(p.get("position_id")) == position_id]
             decision_action = None
             risk_mult = 0.0
-            for d in reversed(self.store.read_all("policy_decisions")):
-                if d.get("candidate_id") == cand.get("candidate_id") and d.get("policy_id") == policy_id:
+            for d in reversed(self._active_rows("policy_decisions")):
+                if (
+                    not d.get("record_type")
+                    and d.get("candidate_id")
+                    == cand.get("candidate_id")
+                    and d.get("policy_id")
+                    == policy_id
+                ):
                     decision_action = d.get("action")
-                    risk_mult = float(d.get("risk_multiplier") or 0.0)
+                    risk_mult = float(
+                        d.get("risk_multiplier")
+                        or 0.0
+                    )
                     break
 
             counterfactual_net = float(trade.get("net_pnl_usd") or 0.0)
@@ -746,7 +1511,7 @@ class ShadowEconomicCorrelationEngine:
                     lag = max(0.0, (tip - last).total_seconds())
             except Exception:
                 lag = None
-        enrich_rows = self.store.read_all("candidate_feature_enrichments")
+        enrich_rows = self._active_rows("candidate_feature_enrichments")
         # Deduplicate by candidate_id keeping latest
         latest_enrich: dict[str, dict[str, Any]] = {}
         for row in enrich_rows:
@@ -788,6 +1553,22 @@ class ShadowEconomicCorrelationEngine:
             "source_epoch_id": self.epoch_id,
             "source_contract_fingerprint": self.source_fp,
             "parent_trading_contract_fingerprint": self.parent_fp,
+            "shadow_policy_manifest_fingerprint":
+            self.manifest_fp,
+            "shadow_model_version":
+            "SHADOW_EQCORR1_2_V2",
+            "lineage_contract":
+            "EQCORR_POLICY_MANIFEST_LINEAGE_V1",
+            "transaction_contract":
+            "EQCORR_CRASH_SAFE_JSONL_V1",
+            "state_generation":
+            self.state_generation,
+            "transaction_recovery":
+            self.transaction_recovery,
+            "invalidated_manifest_fingerprints":
+            sorted(
+                self.invalidated_manifest_fps
+            ),
             "last_candidate_timestamp": self.last_candidate_timestamp,
             "last_trade_close_timestamp": self.last_trade_close_timestamp,
             "lag_seconds": lag if lag is not None else FIELD_NOT_AVAILABLE,
