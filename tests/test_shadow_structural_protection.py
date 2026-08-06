@@ -21,6 +21,7 @@ from btc_ml.trading.shadow_structural_protection import (
 from btc_ml.trading.shadow_structural_protection.engine import StructuralProtectionEngine
 from btc_ml.trading.shadow_structural_protection.paths import assert_shadow_write_path
 from btc_ml.trading.shadow_structural_protection.policies import (
+    POLICY_SPECS,
     geometry_valid,
     structural_stop_price,
     structural_take_price,
@@ -536,3 +537,442 @@ def test_stp_strict_start_requires_readable_active_contract(stp_repo: Path):
         match="SOURCE_EPOCH_MISMATCH: active contract unreadable",
     ):
         StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)
+
+
+def _rows_for_candidate(
+    eng: StructuralProtectionEngine,
+    table: str,
+    candidate_id: str,
+) -> list[dict]:
+    return [
+        row
+        for row in eng.store.read_all(table)
+        if row.get("candidate_id") == candidate_id
+    ]
+
+
+def test_candidate_partial_write_rolls_back_and_retries_once(
+    stp_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    candidate_id = f"{EXPECTED_EPOCH}|pos1|fill1"
+
+    original_append = eng.store.append
+    raised = {"value": False}
+
+    def flaky_append(table: str, row: dict):
+        result = original_append(table, row)
+        if (
+            table == "policy_decisions"
+            and not row.get("record_type")
+            and not raised["value"]
+        ):
+            raised["value"] = True
+            raise RuntimeError("SIMULATED_CANDIDATE_CRASH")
+        return result
+
+    monkeypatch.setattr(eng.store, "append", flaky_append)
+    result = eng.process_new_entries()
+
+    assert result[0]["status"] == "INGEST_ERROR"
+    assert candidate_id not in eng.processed_candidates
+    assert not eng.store.read_inflight()
+
+    for table in eng.store.TABLES:
+        assert not _rows_for_candidate(
+            eng,
+            table,
+            candidate_id,
+        )
+
+    monkeypatch.setattr(eng.store, "append", original_append)
+    eng.process_new_entries()
+
+    assert candidate_id in eng.processed_candidates
+
+    assert len(
+        _rows_for_candidate(
+            eng,
+            "candidate_snapshots",
+            candidate_id,
+        )
+    ) == 1
+
+    assert len(
+        _rows_for_candidate(
+            eng,
+            "policy_decisions",
+            candidate_id,
+        )
+    ) == len(POLICY_SPECS)
+
+    before = {
+        table: len(
+            _rows_for_candidate(eng, table, candidate_id)
+        )
+        for table in eng.store.TABLES
+    }
+
+    restarted = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    restarted.process_new_entries()
+
+    after = {
+        table: len(
+            _rows_for_candidate(
+                restarted,
+                table,
+                candidate_id,
+            )
+        )
+        for table in restarted.store.TABLES
+    }
+
+    assert after == before
+
+
+def test_restart_rolls_back_uncommitted_candidate_transaction(
+    stp_repo: Path,
+):
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    candidate_id = f"{EXPECTED_EPOCH}|pos1|fill1"
+
+    eng.store.begin_transaction(
+        kind="candidate",
+        key=candidate_id,
+        base_generation=eng.state_generation,
+    )
+    eng.store.append(
+        "candidate_snapshots",
+        {
+            "candidate_id": candidate_id,
+            "policy_manifest_fingerprint": eng.manifest_fp,
+            "simulated_partial": True,
+        },
+    )
+
+    marker = eng.store.read_inflight()
+    marker["owner_pid"] = 2_147_483_647
+    eng.store.write_json(
+        eng.store.INFLIGHT_NAME,
+        marker,
+    )
+
+    restarted = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    assert (
+        restarted.transaction_recovery["status"]
+        == "ROLLED_BACK"
+    )
+    assert not restarted.store.read_inflight()
+    assert not _rows_for_candidate(
+        restarted,
+        "candidate_snapshots",
+        candidate_id,
+    )
+
+    restarted.process_new_entries()
+
+    assert len(
+        _rows_for_candidate(
+            restarted,
+            "candidate_snapshots",
+            candidate_id,
+        )
+    ) == 1
+
+
+def test_no_candidate_close_is_not_marked_processed_or_reclaimed(
+    stp_repo: Path,
+):
+    books = (
+        stp_repo
+        / "data/trading/intrabar_paper"
+        / EXPECTED_EPOCH
+        / "books"
+    )
+
+    trade = {
+        "trade_id": "trade_without_candidate",
+        "position_id": "missing_position",
+        "exit_ts": "2026-07-29T18:40:00Z",
+        "exit_price": 64300.0,
+        "exit_reason": "CONTEXT_END",
+        "net_pnl_usd": 0.0,
+    }
+
+    (books / "trades.jsonl").write_text(
+        json.dumps(trade) + "\n",
+        encoding="utf-8",
+    )
+
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    first = eng.process_new_closes()
+    second = eng.process_new_closes()
+
+    assert first[0]["status"] == "NO_CANDIDATE"
+    assert second[0]["status"] == "NO_CANDIDATE"
+    assert trade["trade_id"] not in eng.processed_closes
+
+    assert not any(
+        "reclaimed_stale_processed_closes" in error
+        for error in eng.errors
+    )
+
+
+def test_partial_close_rolls_back_then_closes_once(
+    stp_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _seed_entry(stp_repo, tf="M15")
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    eng.process_new_entries()
+
+    books = (
+        stp_repo
+        / "data/trading/intrabar_paper"
+        / EXPECTED_EPOCH
+        / "books"
+    )
+
+    trade = {
+        "trade_id": "trade1",
+        "position_id": "pos1",
+        "exit_ts": "2026-07-29T18:40:00Z",
+        "exit_price": 64300.0,
+        "exit_reason": "CONTEXT_END",
+        "net_pnl_usd": 0.0,
+    }
+
+    (books / "trades.jsonl").write_text(
+        json.dumps(trade) + "\n",
+        encoding="utf-8",
+    )
+
+    original_append = eng.store.append
+    raised = {"value": False}
+
+    def flaky_append(table: str, row: dict):
+        result = original_append(table, row)
+        if table == "virtual_trades" and not raised["value"]:
+            raised["value"] = True
+            raise RuntimeError("SIMULATED_CLOSE_CRASH")
+        return result
+
+    monkeypatch.setattr(eng.store, "append", flaky_append)
+    failed = eng.process_new_closes()
+
+    assert failed[0]["status"] == "CLOSE_ERROR"
+    assert trade["trade_id"] not in eng.processed_closes
+
+    assert not [
+        row
+        for row in eng.store.read_all("virtual_trades")
+        if row.get("trade_id") == trade["trade_id"]
+    ]
+
+    monkeypatch.setattr(eng.store, "append", original_append)
+    eng.process_new_closes()
+
+    assert trade["trade_id"] in eng.processed_closes
+
+    baseline = [
+        row
+        for row in eng.store.read_all("virtual_trades")
+        if row.get("trade_id") == trade["trade_id"]
+        and row.get("policy_id") == "BASELINE_CANONICAL"
+    ]
+    assert len(baseline) == 1
+
+    restarted = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    restarted.process_new_closes()
+
+    baseline_after_restart = [
+        row
+        for row in restarted.store.read_all("virtual_trades")
+        if row.get("trade_id") == trade["trade_id"]
+        and row.get("policy_id") == "BASELINE_CANONICAL"
+    ]
+    assert len(baseline_after_restart) == 1
+
+
+def test_checkpoint_sleeves_are_authoritative_after_restart(
+    stp_repo: Path,
+):
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    eng.sleeves["BASELINE_CANONICAL"]["sleeves"]["M15"][
+        "current_equity_usd"
+    ] = 123456.0
+    eng._save_checkpoint()
+
+    mirror = eng.store.read_json("policy_sleeves.json")
+    mirror["BASELINE_CANONICAL"]["sleeves"]["M15"][
+        "current_equity_usd"
+    ] = 999.0
+    eng.store.write_json("policy_sleeves.json", mirror)
+
+    restarted = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    assert (
+        restarted.sleeves["BASELINE_CANONICAL"]["sleeves"]["M15"][
+            "current_equity_usd"
+        ]
+        == 123456.0
+    )
+
+
+def test_live_transaction_owner_blocks_duplicate_engine(
+    stp_repo: Path,
+):
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    eng.store.begin_transaction(
+        kind="candidate",
+        key="live_candidate",
+        base_generation=eng.state_generation,
+    )
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="SHADOW_TRANSACTION_OWNER_ALIVE",
+        ):
+            StructuralProtectionEngine(
+                repo=stp_repo,
+                strict_epoch=True,
+            )
+    finally:
+        eng.store.clear_inflight()
+
+
+def test_atomic_transaction_claim_rejects_second_owner(
+    stp_repo: Path,
+):
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    eng.store.begin_transaction(
+        kind="candidate",
+        key="exclusive_candidate",
+        base_generation=eng.state_generation,
+    )
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="SHADOW_TRANSACTION_ALREADY_ACTIVE",
+        ):
+            eng.store.begin_transaction(
+                kind="candidate",
+                key="second_candidate",
+                base_generation=eng.state_generation,
+            )
+    finally:
+        eng.store.clear_inflight()
+
+
+def test_committed_checkpoint_clears_leftover_marker(
+    stp_repo: Path,
+):
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    candidate_id = "committed_candidate"
+
+    eng.store.begin_transaction(
+        kind="candidate",
+        key=candidate_id,
+        base_generation=eng.state_generation,
+    )
+    eng.processed_candidates.add(candidate_id)
+    eng._save_checkpoint()
+
+    restarted = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    assert (
+        restarted.transaction_recovery["status"]
+        == "COMMITTED_MARKER_CLEARED"
+    )
+    assert candidate_id in restarted.processed_candidates
+    assert not restarted.store.read_inflight()
+
+
+def test_policy_sleeves_mirror_failure_does_not_fail_commit(
+    stp_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    eng = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    original_write_json = eng.store.write_json
+    generation_before = eng.state_generation
+
+    def flaky_write_json(name: str, payload: dict):
+        if name == "policy_sleeves.json":
+            raise OSError("SIMULATED_MIRROR_FAILURE")
+        return original_write_json(name, payload)
+
+    monkeypatch.setattr(
+        eng.store,
+        "write_json",
+        flaky_write_json,
+    )
+
+    eng._save_checkpoint()
+
+    checkpoint = original_write_json
+    _ = checkpoint
+    persisted = eng.store.read_json("checkpoint.json")
+
+    assert (
+        int(persisted["state_generation"])
+        == generation_before + 1
+    )
+    assert "policy_sleeves" in persisted
+    assert any(
+        error
+        == "policy_sleeves_mirror:"
+        "SIMULATED_MIRROR_FAILURE"
+        for error in eng.errors
+    )

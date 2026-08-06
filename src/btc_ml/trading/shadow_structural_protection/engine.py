@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from datetime import datetime, timedelta
@@ -187,7 +188,20 @@ class StructuralProtectionEngine:
         self.manifest["policy_manifest_fingerprint"] = self.manifest_fp
         self.store.write_json("policy_manifest.json", self.manifest)
 
+        ck_before_recovery = self.store.read_json("checkpoint.json")
+        self.transaction_recovery = self.store.recover_inflight(
+            committed_generation=int(
+                ck_before_recovery.get("state_generation") or 0
+            ),
+            committed_candidates=set(
+                ck_before_recovery.get("processed_candidates") or []
+            ),
+            committed_closes=set(
+                ck_before_recovery.get("processed_closes") or []
+            ),
+        )
         ck = self.store.read_json("checkpoint.json")
+        self.state_generation = int(ck.get("state_generation") or 0)
         self.processed_candidates: set[str] = set(ck.get("processed_candidates") or [])
         self.processed_closes: set[str] = set(ck.get("processed_closes") or [])
         self.baseline_match_count = int(ck.get("baseline_match_count") or 0)
@@ -294,7 +308,9 @@ class StructuralProtectionEngine:
         self.bar_coverage: dict[str, Any] = dict(ck.get("bar_coverage") or {})
         self._bar_coverage_dirty = True
 
-        sleeves = self.store.read_json("policy_sleeves.json")
+        sleeves = ck.get("policy_sleeves")
+        if not isinstance(sleeves, dict) or "BASELINE_CANONICAL" not in sleeves:
+            sleeves = self.store.read_json("policy_sleeves.json")
         if not sleeves or "BASELINE_CANONICAL" not in sleeves:
             sleeves = initial_policy_sleeves()
             self.store.write_json("policy_sleeves.json", sleeves)
@@ -348,7 +364,9 @@ class StructuralProtectionEngine:
                 reclaim.add(tid)
         if reclaim:
             self.processed_closes -= reclaim
-            self.errors.append(f"reclaimed_stale_processed_closes:{sorted(reclaim)}")
+            self._append_error_once(
+                f"reclaimed_stale_processed_closes:{sorted(reclaim)}"
+            )
             self._save_checkpoint()
 
     def _materialize_baseline_for_close(self, cand: dict[str, Any], position_id: str) -> dict[str, Any]:
@@ -602,7 +620,19 @@ class StructuralProtectionEngine:
             "market_recon_ok": True,
             "updated_at": utc_now(),
         }
+        self.state_generation += 1
+        ck_out["state_generation"] = self.state_generation
+        ck_out["policy_sleeves"] = copy.deepcopy(self.sleeves)
         self.store.write_json("checkpoint.json", ck_out)
+        try:
+            self.store.write_json(
+                "policy_sleeves.json",
+                self.sleeves,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._append_error_once(
+                f"policy_sleeves_mirror:{exc}"
+            )
         _ = prev_manifest
 
     def _rebuild_open_index(self) -> None:
@@ -646,9 +676,80 @@ class StructuralProtectionEngine:
             self.counters.get("target_zone_usable_count") or 0
         )
 
+    _TRANSACTION_STATE_FIELDS = (
+        "processed_candidates",
+        "processed_closes",
+        "baseline_match_count",
+        "baseline_divergence_count",
+        "lookahead_violation_count",
+        "write_boundary_violation_count",
+        "insufficient_causal_data_count",
+        "research_valid",
+        "evidence_gate_failure_count",
+        "errors",
+        "counters",
+        "m15_parity",
+        "classification_parity_blocked",
+        "market_recon_ok",
+        "_unique_zone_ids",
+        "_unique_proven_zone_ids",
+        "_unique_usable_zone_ids",
+        "_unique_usable_protective_ids",
+        "_unique_usable_target_ids",
+        "_unique_closed_candle_ids",
+        "lookback_coverage_by_timeframe",
+        "target_absence_audits",
+        "bar_coverage",
+        "_bar_coverage_dirty",
+        "sleeves",
+        "open_by_policy",
+        "state_generation",
+    )
+
+    def _capture_transaction_state(self) -> dict[str, Any]:
+        return {
+            name: copy.deepcopy(getattr(self, name))
+            for name in self._TRANSACTION_STATE_FIELDS
+        }
+
+    def _restore_transaction_state(
+        self,
+        snapshot: dict[str, Any],
+    ) -> None:
+        for name, value in snapshot.items():
+            setattr(self, name, copy.deepcopy(value))
+
+    def _append_error_once(self, message: str) -> None:
+        if message not in self.errors:
+            self.errors.append(message)
+
+    def _disk_transaction_committed(
+        self,
+        *,
+        kind: str,
+        key: str,
+        base_generation: int,
+    ) -> bool:
+        checkpoint = self.store.read_json("checkpoint.json")
+        committed_generation = int(
+            checkpoint.get("state_generation") or 0
+        )
+        committed_keys = (
+            set(checkpoint.get("processed_candidates") or [])
+            if kind == "candidate"
+            else set(checkpoint.get("processed_closes") or [])
+        )
+        return (
+            committed_generation > int(base_generation)
+            and key in committed_keys
+        )
+
     def _save_checkpoint(self) -> None:
         self._sync_unique_counter_views()
+        self.state_generation += 1
         payload = {
+            "state_generation": self.state_generation,
+            "policy_sleeves": copy.deepcopy(self.sleeves),
             "processed_candidates": sorted(self.processed_candidates),
             "processed_closes": sorted(self.processed_closes),
             "baseline_match_count": self.baseline_match_count,
@@ -684,8 +785,18 @@ class StructuralProtectionEngine:
             **self.counters,
             "updated_at": utc_now(),
         }
+        # checkpoint.json is the atomic source of truth.
+        # policy_sleeves.json remains a compatibility mirror.
         self.store.write_json("checkpoint.json", payload)
-        self.store.write_json("policy_sleeves.json", self.sleeves)
+        try:
+            self.store.write_json(
+                "policy_sleeves.json",
+                self.sleeves,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._append_error_once(
+                f"policy_sleeves_mirror:{exc}"
+            )
 
     def _candidate_from_entry(self, fill: dict[str, Any], position: dict[str, Any]) -> dict[str, Any]:
         commands = {str(c.get("command_id")): c for c in self.books.read_all("commands")}
@@ -726,77 +837,178 @@ class StructuralProtectionEngine:
         if not self.exact_ok:
             self.write_health()
             return [{"status": BLOCKED_NO_EXACT}]
+
         self._trade_cache: dict = {}
-        actions = []
-        fills = [f for f in self.books.read_all("fills") if str(f.get("action") or "").upper() == "ENTRY"]
+        actions: list[dict[str, Any]] = []
+
+        fills = [
+            fill
+            for fill in self.books.read_all("fills")
+            if str(fill.get("action") or "").upper() == "ENTRY"
+        ]
+
         positions: dict[str, dict[str, Any]] = {}
-        for p in self.books.read_all("positions"):
-            pid = str(p.get("position_id") or "")
-            if not pid:
+        for position in self.books.read_all("positions"):
+            position_id = str(position.get("position_id") or "")
+            if not position_id:
                 continue
-            prev = positions.get(pid)
-            if prev is None:
-                positions[pid] = p
+
+            previous = positions.get(position_id)
+            if previous is None:
+                positions[position_id] = position
                 continue
-            prev_has = bool(prev.get("entry_fill_id"))
-            cur_has = bool(p.get("entry_fill_id"))
-            if cur_has and not prev_has:
-                positions[pid] = p
-            elif cur_has == prev_has and str(p.get("status") or "").upper() == "OPEN":
-                positions[pid] = p
-        health_path = self.repo / "data" / "runtime" / "intrabar_paper_health.json"
+
+            previous_has_fill = bool(previous.get("entry_fill_id"))
+            current_has_fill = bool(position.get("entry_fill_id"))
+
+            if current_has_fill and not previous_has_fill:
+                positions[position_id] = position
+            elif (
+                current_has_fill == previous_has_fill
+                and str(position.get("status") or "").upper() == "OPEN"
+            ):
+                positions[position_id] = position
+
+        health_path = (
+            self.repo
+            / "data"
+            / "runtime"
+            / "intrabar_paper_health.json"
+        )
+
         if health_path.exists():
             try:
-                health = json.loads(health_path.read_text(encoding="utf-8"))
+                health = json.loads(
+                    health_path.read_text(encoding="utf-8")
+                )
                 if isinstance(health.get("sleeves"), dict):
-                    sync_baseline_from_real(self.sleeves, real_sleeves=health["sleeves"])
+                    sync_baseline_from_real(
+                        self.sleeves,
+                        real_sleeves=health["sleeves"],
+                    )
             except Exception as exc:  # noqa: BLE001
-                self.errors.append(f"sleeve_sync:{exc}")
+                self._append_error_once(f"sleeve_sync:{exc}")
 
-        processed_this_cycle = 0
-        max_per_cycle = 1
+        transaction: dict[str, Any] | None = None
+        transaction_state: dict[str, Any] | None = None
+        candidate_id: str | None = None
+
         for fill in fills:
-            pos = None
-            for p in positions.values():
-                if str(p.get("entry_fill_id") or "") == str(fill.get("fill_id") or ""):
-                    pos = p
+            position = None
+
+            for candidate_position in positions.values():
+                if str(
+                    candidate_position.get("entry_fill_id") or ""
+                ) == str(fill.get("fill_id") or ""):
+                    position = candidate_position
                     break
-            if pos is None:
+
+            if position is None:
                 continue
-            cand = self._candidate_from_entry(fill, pos)
-            if cand["candidate_id"] in self.processed_candidates:
+
+            candidate = self._candidate_from_entry(fill, position)
+            candidate_id = str(candidate["candidate_id"])
+
+            if candidate_id in self.processed_candidates:
                 continue
+
+            transaction_state = self._capture_transaction_state()
+            transaction = self.store.begin_transaction(
+                kind="candidate",
+                key=candidate_id,
+                base_generation=self.state_generation,
+            )
+
             try:
-                actions.append(self._ingest_candidate(cand))
+                actions.append(self._ingest_candidate(candidate))
             except Exception as exc:  # noqa: BLE001
-                self.errors.append(f"ingest:{cand.get('candidate_id')}:{exc}")
-                self.processed_candidates.add(cand["candidate_id"])
-                actions.append({"candidate_id": cand["candidate_id"], "status": "INGEST_ERROR", "error": str(exc)})
-            processed_this_cycle += 1
-            if processed_this_cycle >= max_per_cycle:
-                break
+                self.store.rollback_inflight()
+                self._restore_transaction_state(transaction_state)
+                self._append_error_once(
+                    f"ingest:{candidate_id}:{exc}"
+                )
+                actions.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "status": "INGEST_ERROR",
+                        "error": str(exc),
+                    }
+                )
+                transaction = None
+                transaction_state = None
+
+            # Preserve the existing maximum of one candidate per poll.
+            break
+
         self._trade_cache = {}
+
         if self._bar_coverage_dirty:
             try:
-                snaps = [
-                    s
-                    for s in self.store.read_all("candidate_snapshots")
-                    if s.get("policy_manifest_fingerprint") == self.manifest_fp
+                snapshots = [
+                    snapshot
+                    for snapshot in self.store.read_all(
+                        "candidate_snapshots"
+                    )
+                    if snapshot.get(
+                        "policy_manifest_fingerprint"
+                    ) == self.manifest_fp
                 ]
+
                 self.bar_coverage = recompute_absolute_bar_coverage(
                     repo=self.repo,
-                    candidate_snapshots=snaps,
+                    candidate_snapshots=snapshots,
                 )
-                self.bar_coverage["unique_closed_bars_seen_in_candidate_windows_by_timeframe"] = {
-                    tf: len(self._unique_closed_candle_ids[tf]) for tf in TIMEFRAMES
+
+                self.bar_coverage[
+                    "unique_closed_bars_seen_in_candidate_windows_by_timeframe"
+                ] = {
+                    timeframe: len(
+                        self._unique_closed_candle_ids[timeframe]
+                    )
+                    for timeframe in TIMEFRAMES
                 }
-                self.bar_coverage["candidate_window_bars_sum_by_timeframe"] = dict(
-                    self.counters.get("candidate_window_bars_sum_by_timeframe") or empty_tf_counts()
+
+                self.bar_coverage[
+                    "candidate_window_bars_sum_by_timeframe"
+                ] = dict(
+                    self.counters.get(
+                        "candidate_window_bars_sum_by_timeframe"
+                    )
+                    or empty_tf_counts()
                 )
+
                 self._bar_coverage_dirty = False
             except Exception as exc:  # noqa: BLE001
-                self.errors.append(f"bar_coverage:{exc}")
-        self._save_checkpoint()
+                self._append_error_once(f"bar_coverage:{exc}")
+
+        if transaction is not None:
+            assert transaction_state is not None
+            assert candidate_id is not None
+
+            try:
+                self._save_checkpoint()
+            except Exception:
+                committed = self._disk_transaction_committed(
+                    kind="candidate",
+                    key=candidate_id,
+                    base_generation=int(
+                        transaction["base_generation"]
+                    ),
+                )
+
+                if committed:
+                    self.store.clear_inflight()
+                else:
+                    self.store.rollback_inflight()
+                    self._restore_transaction_state(
+                        transaction_state
+                    )
+                raise
+            else:
+                self.store.clear_inflight()
+        else:
+            self._save_checkpoint()
+
         self.write_health()
         return actions
 
@@ -1460,14 +1672,78 @@ class StructuralProtectionEngine:
 
     def process_new_closes(self) -> list[dict[str, Any]]:
         self._repair_stale_processed_closes()
-        actions = []
+        actions: list[dict[str, Any]] = []
+
         for trade in self.books.read_all("trades"):
-            tid = str(trade.get("trade_id") or "")
-            if not tid or tid in self.processed_closes:
+            trade_id = str(trade.get("trade_id") or "")
+            position_id = str(trade.get("position_id") or "")
+
+            if not trade_id or trade_id in self.processed_closes:
                 continue
-            actions.append(self._close_against_trade(trade))
-            self.processed_closes.add(tid)
-        self._save_checkpoint()
+
+            transaction_state = self._capture_transaction_state()
+            transaction = self.store.begin_transaction(
+                kind="close",
+                key=trade_id,
+                base_generation=self.state_generation,
+            )
+
+            try:
+                result = self._close_against_trade(trade)
+                status = str(result.get("status") or "")
+
+                already_attached = (
+                    status == "NO_OPEN_VIRTUAL"
+                    and self._baseline_outcome_attached(
+                        trade_id=trade_id,
+                        position_id=position_id,
+                    )
+                )
+
+                complete = status == "CLOSED" or already_attached
+
+                if not complete:
+                    self.store.rollback_inflight()
+                    self._restore_transaction_state(
+                        transaction_state
+                    )
+                    actions.append(result)
+                    continue
+
+                self.processed_closes.add(trade_id)
+                self._save_checkpoint()
+            except Exception as exc:  # noqa: BLE001
+                committed = self._disk_transaction_committed(
+                    kind="close",
+                    key=trade_id,
+                    base_generation=int(
+                        transaction["base_generation"]
+                    ),
+                )
+
+                if committed:
+                    self.store.clear_inflight()
+                else:
+                    self.store.rollback_inflight()
+                    self._restore_transaction_state(
+                        transaction_state
+                    )
+
+                self._append_error_once(
+                    f"close:{trade_id}:{exc}"
+                )
+                actions.append(
+                    {
+                        "status": "CLOSE_ERROR",
+                        "trade_id": trade_id,
+                        "error": str(exc),
+                    }
+                )
+                break
+            else:
+                self.store.clear_inflight()
+                actions.append(result)
+
         self.write_health()
         return actions
 
