@@ -13,9 +13,13 @@ import statistics
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from btc_ml.model_assurance.registry import read_active_runtime
+from btc_ml.model_assurance.registry import (
+    load_active_trading_contract,
+    read_active_runtime,
+)
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.economics import closed_trade_economics
 from btc_ml.trading.intrabar_paper.books import EpochBooks
@@ -282,8 +286,18 @@ def build_evaluation_record(
         "registry_record_id": active.get("registry_record_id"),
         "model_id": active.get("model_id"),
         "model_version": active.get("model_version"),
-        "runtime_fingerprint": active.get("runtime_fingerprint"),
-        "paper_epoch_id": active.get("paper_epoch_id"),
+        "runtime_fingerprint":
+            active.get(
+                "runtime_fingerprint"
+            ),
+        "trading_contract_fingerprint":
+            active.get(
+                "trading_contract_fingerprint"
+            ),
+        "paper_epoch_id":
+            active.get(
+                "paper_epoch_id"
+            ),
         "trade_id": trade.get("trade_id"),
         "position_id": trade.get("position_id"),
         "timeframe": str(trade.get("timeframe") or "").upper(),
@@ -446,9 +460,24 @@ def build_summary(
         "monitoring_mode": "LIVE_CURRENT",
         "registry_record_id": active.get("registry_record_id"),
         "model_id": active.get("model_id"),
-        "model_version": active.get("model_version"),
-        "paper_epoch_id": active.get("paper_epoch_id"),
-        "closed_trades": closed_trade_count,
+        "model_version":
+            active.get(
+                "model_version"
+            ),
+        "runtime_fingerprint":
+            active.get(
+                "runtime_fingerprint"
+            ),
+        "trading_contract_fingerprint":
+            active.get(
+                "trading_contract_fingerprint"
+            ),
+        "paper_epoch_id":
+            active.get(
+                "paper_epoch_id"
+            ),
+        "closed_trades":
+            closed_trade_count,
         "open_positions": open_positions,
         "evaluated_trades": len(evaluations),
         "pending_trades": max(0, closed_trade_count - len(evaluations)),
@@ -482,162 +511,942 @@ def build_summary(
     }
 
 
-def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
+def load_epoch_execution_config(
+    *,
+    repo_root: Path,
+    epoch: dict[str, Any],
+):
+    """Load only immutable fields used by closed-trade economics."""
+    contract = load_active_trading_contract(
+        repo_root,
+        epoch=epoch,
+    )
+
+    if contract is None:
+        # Legacy epochs predate immutable trading contracts.
+        return (
+            load_intrabar_paper_config(
+                repo_root=repo_root
+            ),
+            None,
+        )
+
+    manifest = contract.get(
+        "trading_contract_manifest"
+    )
+
+    if not isinstance(
+        manifest,
+        dict,
+    ):
+        raise RuntimeError(
+            "ECONOMIC_CONTRACT_MANIFEST_INVALID"
+        )
+
+    snapshot = manifest.get(
+        "execution_config_snapshot"
+    )
+
+    if not isinstance(
+        snapshot,
+        dict,
+    ):
+        raise RuntimeError(
+            "ECONOMIC_EXECUTION_SNAPSHOT_MISSING"
+        )
+
+    required = (
+        "entry_fee_bps",
+        "exit_fee_bps",
+        "entry_slippage_bps",
+        "exit_slippage_bps",
+        "stop_exit_slippage_bps",
+    )
+
+    missing = [
+        key
+        for key in required
+        if key not in snapshot
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "ECONOMIC_EXECUTION_"
+            "SNAPSHOT_INCOMPLETE:"
+            + ",".join(
+                sorted(missing)
+            )
+        )
+
+    paper_only = bool(
+        snapshot.get(
+            "paper_only",
+            True,
+        )
+    )
+    real_execution = bool(
+        snapshot.get(
+            "real_execution_enabled",
+            False,
+        )
+    )
+
+    if (
+        paper_only is not True
+        or real_execution is not False
+    ):
+        raise RuntimeError(
+            "ECONOMIC_EXECUTION_"
+            "SNAPSHOT_UNSAFE"
+        )
+
+    config = SimpleNamespace(
+        entry_fee_bps=float(
+            snapshot[
+                "entry_fee_bps"
+            ]
+        ),
+        exit_fee_bps=float(
+            snapshot[
+                "exit_fee_bps"
+            ]
+        ),
+        entry_slippage_bps=float(
+            snapshot[
+                "entry_slippage_bps"
+            ]
+        ),
+        exit_slippage_bps=float(
+            snapshot[
+                "exit_slippage_bps"
+            ]
+        ),
+        stop_exit_slippage_bps=float(
+            snapshot[
+                "stop_exit_slippage_bps"
+            ]
+        ),
+        economics_source=str(
+            snapshot.get(
+                "economics_source",
+                "canonical_paper_"
+                "trade_economics_v1",
+            )
+        ),
+        paper_only=paper_only,
+        real_execution_enabled=
+            real_execution,
+        raw=dict(snapshot),
+    )
+
+    return config, contract
+
+
+def active_binding_mismatch(
+    *,
+    active: dict[str, Any],
+    epoch: dict[str, Any],
+) -> str | None:
+    registry_epoch = str(
+        active.get(
+            "paper_epoch_id"
+        )
+        or ""
+    )
+    paper_epoch = str(
+        epoch.get(
+            "paper_epoch_id"
+        )
+        or ""
+    )
+
+    if registry_epoch != paper_epoch:
+        return (
+            "PAPER_EPOCH_ID_MISMATCH"
+        )
+
+    paper_fingerprint = str(
+        epoch.get(
+            "trading_contract_fingerprint"
+        )
+        or ""
+    )
+    registry_fingerprint = str(
+        active.get(
+            "trading_contract_fingerprint"
+        )
+        or ""
+    )
+
+    if (
+        paper_fingerprint
+        and registry_fingerprint
+        != paper_fingerprint
+    ):
+        return (
+            "TRADING_CONTRACT_"
+            "FINGERPRINT_MISMATCH"
+        )
+
+    return None
+
+
+def mark_health_stopped(
+    *,
+    repo_root: Path | None = None,
+    pid: int | None = None,
+) -> dict[str, Any]:
+    """Persist that the economic validation process is no longer alive."""
+    p = paths(repo_root)
+    payload = (
+        _read_json(
+            p["health"]
+        )
+        or {}
+    )
+
+    payload.update(
+        {
+            "alive":
+                False,
+            "pid": (
+                pid
+                if pid is not None
+                else payload.get(
+                    "pid"
+                )
+            ),
+            "stopped_at":
+                _utc_now_iso(),
+            "updated_at":
+                _utc_now_iso(),
+            "runtime_impact":
+                "NON_BLOCKING",
+        }
+    )
+
+    _atomic_write_json(
+        p["health"],
+        payload,
+    )
+
+    return payload
+
+
+def run_once(
+    *,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
     root = repo_root or _repo_root()
     p = paths(root)
     config = load_config(root)
-    active = read_active_runtime(repo_root=root)
-    epoch = load_active_epoch(repo_root=root)
+    active = read_active_runtime(
+        repo_root=root
+    )
+    epoch = load_active_epoch(
+        repo_root=root
+    )
+
     if not active or not epoch:
+        status = (
+            "NO_ACTIVE_MODEL"
+            if not active
+            else "NO_ACTIVE_PAPER_EPOCH"
+        )
+
         summary = {
-            "status": "NO_ACTIVE_MODEL" if not active else "NO_ELIGIBLE_TRADES_YET",
-            "runtime_impact": "NON_BLOCKING",
-            "monitoring_mode": "LIVE_CURRENT",
-            "closed_trades": 0,
-            "open_positions": 0,
-            "evaluated_trades": 0,
-            "pending_trades": 0,
-            "updated_at": _utc_now_iso(),
+            "status":
+                status,
+            "runtime_impact":
+                "NON_BLOCKING",
+            "monitoring_mode":
+                "LIVE_CURRENT",
+            "registry_record_id": (
+                (active or {}).get(
+                    "registry_record_id"
+                )
+            ),
+            "registry_paper_epoch_id": (
+                (active or {}).get(
+                    "paper_epoch_id"
+                )
+            ),
+            "paper_epoch_id": (
+                (epoch or {}).get(
+                    "paper_epoch_id"
+                )
+            ),
+            "closed_trades":
+                0,
+            "open_positions":
+                0,
+            "evaluated_trades":
+                0,
+            "pending_trades":
+                0,
+            "updated_at":
+                _utc_now_iso(),
         }
-        _atomic_write_json(p["summary"], summary)
+
+        _atomic_write_json(
+            p["summary"],
+            summary,
+        )
         _atomic_write_json(
             p["health"],
-            {"status": summary["status"], "alive": True, "updated_at": _utc_now_iso(), "runtime_impact": "NON_BLOCKING"},
+            {
+                **summary,
+                "alive":
+                    True,
+                "pid":
+                    os.getpid(),
+                "paper_only": (
+                    (active or {}).get(
+                        "paper_only",
+                        True,
+                    )
+                ),
+                "real_execution": (
+                    (active or {}).get(
+                        "real_execution",
+                        False,
+                    )
+                ),
+            },
         )
+
         return summary
 
-    # Bind epoch from active model
-    paper_epoch_id = str(active.get("paper_epoch_id") or epoch.get("paper_epoch_id"))
-    activated = _parse_ts(active.get("paper_epoch_activated_at") or epoch.get("activated_at"))
+    mismatch = active_binding_mismatch(
+        active=active,
+        epoch=epoch,
+    )
+
+    if mismatch:
+        summary = {
+            "status":
+                "ACTIVE_BINDING_MISMATCH",
+            "binding_mismatch_reason":
+                mismatch,
+            "runtime_impact":
+                "NON_BLOCKING",
+            "monitoring_mode":
+                "LIVE_CURRENT",
+            "registry_record_id":
+                active.get(
+                    "registry_record_id"
+                ),
+            "model_id":
+                active.get(
+                    "model_id"
+                ),
+            "model_version":
+                active.get(
+                    "model_version"
+                ),
+            "runtime_fingerprint":
+                active.get(
+                    "runtime_fingerprint"
+                ),
+            "registry_paper_epoch_id":
+                active.get(
+                    "paper_epoch_id"
+                ),
+            "paper_epoch_id":
+                epoch.get(
+                    "paper_epoch_id"
+                ),
+            "registry_trading_contract_fingerprint":
+                active.get(
+                    "trading_contract_fingerprint"
+                ),
+            "trading_contract_fingerprint":
+                epoch.get(
+                    "trading_contract_fingerprint"
+                ),
+            "closed_trades":
+                0,
+            "open_positions":
+                0,
+            "evaluated_trades":
+                0,
+            "pending_trades":
+                0,
+            "updated_at":
+                _utc_now_iso(),
+        }
+
+        _atomic_write_json(
+            p["summary"],
+            summary,
+        )
+        _atomic_write_json(
+            p["checkpoint"],
+            {
+                "status":
+                    summary["status"],
+                "binding_mismatch_reason":
+                    mismatch,
+                "registry_record_id":
+                    active.get(
+                        "registry_record_id"
+                    ),
+                "registry_paper_epoch_id":
+                    active.get(
+                        "paper_epoch_id"
+                    ),
+                "paper_epoch_id":
+                    epoch.get(
+                        "paper_epoch_id"
+                    ),
+                "trading_contract_fingerprint":
+                    epoch.get(
+                        "trading_contract_fingerprint"
+                    ),
+                "evaluated_trade_ids":
+                    [],
+                "updated_at":
+                    _utc_now_iso(),
+            },
+        )
+        _atomic_write_json(
+            p["health"],
+            {
+                **summary,
+                "alive":
+                    True,
+                "pid":
+                    os.getpid(),
+                "paper_only":
+                    active.get(
+                        "paper_only",
+                        True,
+                    ),
+                "real_execution":
+                    active.get(
+                        "real_execution",
+                        False,
+                    ),
+            },
+        )
+
+        return summary
+
+    paper_epoch_id = str(
+        epoch[
+            "paper_epoch_id"
+        ]
+    )
+    paper_fingerprint = str(
+        epoch.get(
+            "trading_contract_fingerprint"
+        )
+        or active.get(
+            "trading_contract_fingerprint"
+        )
+        or ""
+    )
+
+    binding = {
+        **active,
+        "paper_epoch_id":
+            paper_epoch_id,
+        "paper_epoch_activated_at":
+            epoch.get(
+                "activated_at"
+            ),
+        "trading_contract_fingerprint":
+            paper_fingerprint,
+    }
+
+    try:
+        cfg, _contract = (
+            load_epoch_execution_config(
+                repo_root=root,
+                epoch=epoch,
+            )
+        )
+    except RuntimeError as exc:
+        summary = {
+            "status":
+                "ACTIVE_CONTRACT_INVALID",
+            "contract_error":
+                str(exc),
+            "runtime_impact":
+                "NON_BLOCKING",
+            "monitoring_mode":
+                "LIVE_CURRENT",
+            "registry_record_id":
+                binding.get(
+                    "registry_record_id"
+                ),
+            "runtime_fingerprint":
+                binding.get(
+                    "runtime_fingerprint"
+                ),
+            "trading_contract_fingerprint":
+                paper_fingerprint,
+            "paper_epoch_id":
+                paper_epoch_id,
+            "closed_trades":
+                0,
+            "open_positions":
+                0,
+            "evaluated_trades":
+                0,
+            "pending_trades":
+                0,
+            "updated_at":
+                _utc_now_iso(),
+        }
+
+        _atomic_write_json(
+            p["summary"],
+            summary,
+        )
+        _atomic_write_json(
+            p["health"],
+            {
+                **summary,
+                "alive":
+                    True,
+                "pid":
+                    os.getpid(),
+                "paper_only":
+                    binding.get(
+                        "paper_only",
+                        True,
+                    ),
+                "real_execution":
+                    binding.get(
+                        "real_execution",
+                        False,
+                    ),
+            },
+        )
+
+        return summary
+
+    activated = _parse_ts(
+        epoch.get(
+            "activated_at"
+        )
+    )
+
     if activated is None:
-        activated = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        activated = datetime(
+            1970,
+            1,
+            1,
+            tzinfo=timezone.utc,
+        )
 
-    cfg = load_intrabar_paper_config(repo_root=root)
-    books = books_for_epoch(paper_epoch_id, repo_root=root)
-    trades = books.read_all("trades")
+    books = books_for_epoch(
+        paper_epoch_id,
+        repo_root=root,
+    )
+    trades = books.read_all(
+        "trades"
+    )
     eligible = [
-        t
-        for t in trades
-        if is_eligible_closed_trade(t, paper_epoch_id=paper_epoch_id, activated_at=activated)
+        trade
+        for trade in trades
+        if is_eligible_closed_trade(
+            trade,
+            paper_epoch_id=
+                paper_epoch_id,
+            activated_at=
+                activated,
+        )
     ]
-    open_positions = len(books.open_positions())
+    open_positions = len(
+        books.open_positions()
+    )
 
-    existing = {str(r.get("economic_evaluation_id")): r for r in _read_jsonl(p["evaluations"])}
-    existing_ids = set(existing.keys())
-    tolerance = float(config.get("pnl_reconciliation_tolerance_usd", 0.01))
+    existing = {
+        str(
+            row.get(
+                "economic_evaluation_id"
+            )
+        ): row
+        for row in _read_jsonl(
+            p["evaluations"]
+        )
+    }
+    existing_ids = set(
+        existing.keys()
+    )
+    tolerance = float(
+        config.get(
+            "pnl_reconciliation_tolerance_usd",
+            0.01,
+        )
+    )
 
     for trade in eligible:
-        eid = economic_evaluation_id(
-            registry_record_id=str(active["registry_record_id"]),
-            paper_epoch_id=paper_epoch_id,
-            trade_id=str(trade["trade_id"]),
+        evaluation_id = (
+            economic_evaluation_id(
+                registry_record_id=str(
+                    binding[
+                        "registry_record_id"
+                    ]
+                ),
+                paper_epoch_id=
+                    paper_epoch_id,
+                trade_id=str(
+                    trade[
+                        "trade_id"
+                    ]
+                ),
+            )
         )
-        if eid in existing_ids:
-            continue
-        side = str(trade.get("side") or trade.get("direction") or "LONG")
-        risk = _f(trade.get("risk_amount_usd")) or 0.0
-        econ = compute_trade_economics(
-            side=side,
-            entry_price=float(trade["entry_price"]),
-            exit_price=float(trade["exit_price"]),
-            quantity=float(trade["quantity"]),
-            risk_amount_usd=risk,
-            exit_reason=trade.get("exit_reason"),
-            cfg=cfg,
-        )
-        # Identity check: gross - fees - slippage == net
-        check = (
-            float(econ["gross_pnl_usd"])
-            - float(econ["entry_fee_usd"])
-            - float(econ["exit_fee_usd"])
-            - float(econ["entry_slippage_usd"])
-            - float(econ["exit_slippage_usd"])
-        )
-        if abs(check - float(econ["net_pnl_usd"])) > 1e-9:
-            raise AssertionError("economic identity broken")
 
-        status, diff = reconcile_net_pnl(
-            computed_net=float(econ["net_pnl_usd"]),
-            canonical_net=_f(trade.get("net_pnl_usd")),
-            tolerance_usd=tolerance,
+        if evaluation_id in existing_ids:
+            continue
+
+        side = str(
+            trade.get("side")
+            or trade.get(
+                "direction"
+            )
+            or "LONG"
         )
-        exit_ts = trade.get("exit_ts") or trade.get("exit_timestamp") or trade.get("closed_at")
-        entry_ts = trade.get("entry_ts") or trade.get("entry_timestamp") or _position_opened_at(
-            books, trade.get("position_id")
+        risk = (
+            _f(
+                trade.get(
+                    "risk_amount_usd"
+                )
+            )
+            or 0.0
         )
+        economics = (
+            compute_trade_economics(
+                side=side,
+                entry_price=float(
+                    trade[
+                        "entry_price"
+                    ]
+                ),
+                exit_price=float(
+                    trade[
+                        "exit_price"
+                    ]
+                ),
+                quantity=float(
+                    trade[
+                        "quantity"
+                    ]
+                ),
+                risk_amount_usd=
+                    risk,
+                exit_reason=trade.get(
+                    "exit_reason"
+                ),
+                cfg=cfg,
+            )
+        )
+
+        identity_check = (
+            float(
+                economics[
+                    "gross_pnl_usd"
+                ]
+            )
+            - float(
+                economics[
+                    "entry_fee_usd"
+                ]
+            )
+            - float(
+                economics[
+                    "exit_fee_usd"
+                ]
+            )
+            - float(
+                economics[
+                    "entry_slippage_usd"
+                ]
+            )
+            - float(
+                economics[
+                    "exit_slippage_usd"
+                ]
+            )
+        )
+
+        if (
+            abs(
+                identity_check
+                - float(
+                    economics[
+                        "net_pnl_usd"
+                    ]
+                )
+            )
+            > 1e-9
+        ):
+            raise AssertionError(
+                "economic identity broken"
+            )
+
+        reconciliation, difference = (
+            reconcile_net_pnl(
+                computed_net=float(
+                    economics[
+                        "net_pnl_usd"
+                    ]
+                ),
+                canonical_net=_f(
+                    trade.get(
+                        "net_pnl_usd"
+                    )
+                ),
+                tolerance_usd=
+                    tolerance,
+            )
+        )
+
+        exit_ts = (
+            trade.get("exit_ts")
+            or trade.get(
+                "exit_timestamp"
+            )
+            or trade.get(
+                "closed_at"
+            )
+        )
+        entry_ts = (
+            trade.get("entry_ts")
+            or trade.get(
+                "entry_timestamp"
+            )
+            or _position_opened_at(
+                books,
+                trade.get(
+                    "position_id"
+                ),
+            )
+        )
+
         holding = None
-        e0, e1 = _parse_ts(entry_ts), _parse_ts(exit_ts)
-        if e0 and e1:
-            holding = max(0.0, (e1 - e0).total_seconds())
+        entry_stamp = _parse_ts(
+            entry_ts
+        )
+        exit_stamp = _parse_ts(
+            exit_ts
+        )
+
+        if (
+            entry_stamp
+            and exit_stamp
+        ):
+            holding = max(
+                0.0,
+                (
+                    exit_stamp
+                    - entry_stamp
+                ).total_seconds(),
+            )
+
         row = build_evaluation_record(
-            active={**active, "paper_epoch_id": paper_epoch_id},
+            active=binding,
             trade=trade,
-            econ=econ,
-            reconciliation_status=status,
-            pnl_difference_usd=diff,
+            econ=economics,
+            reconciliation_status=
+                reconciliation,
+            pnl_difference_usd=
+                difference,
             entry_ts=entry_ts,
             exit_ts=exit_ts,
             holding_seconds=holding,
         )
-        _append_jsonl(p["evaluations"], row)
-        existing[eid] = row
-        existing_ids.add(eid)
 
-    evaluations = list(existing.values())
-    # Keep only current epoch/registry evaluations in summary
+        _append_jsonl(
+            p["evaluations"],
+            row,
+        )
+        existing[
+            evaluation_id
+        ] = row
+        existing_ids.add(
+            evaluation_id
+        )
+
     evaluations = [
-        e
-        for e in evaluations
-        if e.get("paper_epoch_id") == paper_epoch_id
-        and e.get("registry_record_id") == active.get("registry_record_id")
+        evaluation
+        for evaluation
+        in existing.values()
+        if evaluation.get(
+            "paper_epoch_id"
+        )
+        == paper_epoch_id
+        and evaluation.get(
+            "registry_record_id"
+        )
+        == binding.get(
+            "registry_record_id"
+        )
+        and (
+            not paper_fingerprint
+            or evaluation.get(
+                "trading_contract_fingerprint"
+            )
+            == paper_fingerprint
+        )
     ]
 
-    equity_snaps = books.read_all("equity_snapshots")
+    equity_snapshots = [
+        row
+        for row in books.read_all(
+            "equity_snapshots"
+        )
+        if str(
+            row.get(
+                "paper_epoch_id"
+            )
+            or ""
+        )
+        == paper_epoch_id
+    ]
+
     source_age = None
-    # freshness from latest equity or trade exit
     tip_candidates = []
-    for row in equity_snaps:
-        tip_candidates.append(_parse_ts(row.get("ts")))
-    for e in evaluations:
-        tip_candidates.append(_parse_ts(e.get("exit_timestamp")))
-    tips = [t for t in tip_candidates if t is not None]
+
+    for row in equity_snapshots:
+        tip_candidates.append(
+            _parse_ts(
+                row.get("ts")
+            )
+        )
+
+    for evaluation in evaluations:
+        tip_candidates.append(
+            _parse_ts(
+                evaluation.get(
+                    "exit_timestamp"
+                )
+            )
+        )
+
+    tips = [
+        stamp
+        for stamp in tip_candidates
+        if stamp is not None
+    ]
+
     if tips:
-        source_age = max(0.0, (_utc_now() - max(tips)).total_seconds())
+        source_age = max(
+            0.0,
+            (
+                _utc_now()
+                - max(tips)
+            ).total_seconds(),
+        )
 
     summary = build_summary(
-        active={**active, "paper_epoch_id": paper_epoch_id},
+        active=binding,
         evaluations=evaluations,
-        open_positions=open_positions,
-        closed_trade_count=len(eligible),
-        equity_snaps=equity_snaps,
+        open_positions=
+            open_positions,
+        closed_trade_count=len(
+            eligible
+        ),
+        equity_snaps=
+            equity_snapshots,
         config=config,
-        source_age_seconds=source_age,
+        source_age_seconds=
+            source_age,
     )
-    _atomic_write_json(p["summary"], summary)
+
+    _atomic_write_json(
+        p["summary"],
+        summary,
+    )
     _atomic_write_json(
         p["checkpoint"],
         {
-            "paper_epoch_id": paper_epoch_id,
-            "evaluated_trade_ids": sorted(str(e.get("trade_id")) for e in evaluations),
-            "updated_at": _utc_now_iso(),
+            "status":
+                summary["status"],
+            "registry_record_id":
+                binding.get(
+                    "registry_record_id"
+                ),
+            "runtime_fingerprint":
+                binding.get(
+                    "runtime_fingerprint"
+                ),
+            "trading_contract_fingerprint":
+                paper_fingerprint,
+            "paper_epoch_id":
+                paper_epoch_id,
+            "evaluated_trade_ids":
+                sorted(
+                    str(
+                        evaluation.get(
+                            "trade_id"
+                        )
+                    )
+                    for evaluation
+                    in evaluations
+                ),
+            "updated_at":
+                _utc_now_iso(),
         },
     )
     _atomic_write_json(
         p["health"],
         {
-            "status": summary["status"],
-            "alive": True,
-            "runtime_impact": "NON_BLOCKING",
-            "monitoring_mode": "LIVE_CURRENT",
-            "pid": os.getpid(),
-            "paper_epoch_id": paper_epoch_id,
-            "closed_trades": summary["closed_trades"],
-            "open_positions": summary["open_positions"],
-            "evaluated_trades": summary["evaluated_trades"],
-            "mismatched_reconciliations": summary["mismatched_reconciliations"],
-            "paper_only": active.get("paper_only", True),
-            "real_execution": active.get("real_execution", False),
-            "updated_at": _utc_now_iso(),
+            "status":
+                summary["status"],
+            "alive":
+                True,
+            "runtime_impact":
+                "NON_BLOCKING",
+            "monitoring_mode":
+                "LIVE_CURRENT",
+            "pid":
+                os.getpid(),
+            "registry_record_id":
+                binding.get(
+                    "registry_record_id"
+                ),
+            "runtime_fingerprint":
+                binding.get(
+                    "runtime_fingerprint"
+                ),
+            "trading_contract_fingerprint":
+                paper_fingerprint,
+            "paper_epoch_id":
+                paper_epoch_id,
+            "closed_trades":
+                summary[
+                    "closed_trades"
+                ],
+            "open_positions":
+                summary[
+                    "open_positions"
+                ],
+            "evaluated_trades":
+                summary[
+                    "evaluated_trades"
+                ],
+            "mismatched_reconciliations":
+                summary[
+                    "mismatched_reconciliations"
+                ],
+            "paper_only":
+                binding.get(
+                    "paper_only",
+                    True,
+                ),
+            "real_execution":
+                binding.get(
+                    "real_execution",
+                    False,
+                ),
+            "updated_at":
+                _utc_now_iso(),
         },
     )
+
     return summary

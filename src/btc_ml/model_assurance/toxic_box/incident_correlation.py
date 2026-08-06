@@ -799,7 +799,14 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
     atomic_write_json(
         p["checkpoint"],
         {
-            "paper_epoch_id": active.get("paper_epoch_id"),
+            "paper_epoch_id":
+                active.get(
+                    "paper_epoch_id"
+                ),
+            "registry_record_id":
+                active.get(
+                    "registry_record_id"
+                ),
             "external_event_count": len(events_by_branch.get("EXTERNAL_DATA") or []),
             "context_event_count": len(events_by_branch.get("CONTEXT") or []),
             "trade_event_count": len(events_by_branch.get("TRADE") or []),
@@ -815,7 +822,18 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             "runtime_impact": "NON_BLOCKING",
             "monitoring_mode": "LIVE_CURRENT",
             "pid": os.getpid(),
-            "paper_epoch_id": active.get("paper_epoch_id"),
+            "paper_epoch_id":
+                active.get(
+                    "paper_epoch_id"
+                ),
+            "registry_record_id":
+                active.get(
+                    "registry_record_id"
+                ),
+            "trading_contract_fingerprint":
+                active.get(
+                    "trading_contract_fingerprint"
+                ),
             "distinct_incidents": summary["distinct_incidents"],
             "paper_only": active.get("paper_only", True),
             "real_execution": active.get("real_execution", False),

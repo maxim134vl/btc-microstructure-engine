@@ -24,6 +24,51 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def _same_active_binding(
+    row: dict[str, Any],
+    active: dict[str, Any],
+) -> bool:
+    return (
+        str(
+            row.get("paper_epoch_id")
+            or ""
+        )
+        == str(
+            active.get("paper_epoch_id")
+            or ""
+        )
+        and str(
+            row.get("registry_record_id")
+            or ""
+        )
+        == str(
+            active.get("registry_record_id")
+            or ""
+        )
+    )
+
+
+def events_for_active_binding(
+    rows: list[dict[str, Any]],
+    *,
+    branch: str,
+    active: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if str(
+            row.get("branch")
+            or ""
+        )
+        == branch
+        and _same_active_binding(
+            row,
+            active,
+        )
+    ]
+
+
 def paths(repo_root: Path | None = None) -> dict[str, Path]:
     root = repo_root or _repo_root()
     base = root / "data" / "model_assurance" / "toxic_box"
@@ -218,8 +263,24 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
     )
 
     # Refresh event lists after writes
-    context_stats["events"] = [e for e in read_jsonl(p["context_events"]) if e.get("branch") == "CONTEXT"]
-    trade_stats["events"] = [e for e in read_jsonl(p["trade_events"]) if e.get("branch") == "TRADE"]
+    context_stats["events"] = (
+        events_for_active_binding(
+            read_jsonl(
+                p["context_events"]
+            ),
+            branch="CONTEXT",
+            active=active,
+        )
+    )
+    trade_stats["events"] = (
+        events_for_active_binding(
+            read_jsonl(
+                p["trade_events"]
+            ),
+            branch="TRADE",
+            active=active,
+        )
+    )
     # Recompute candidate/confirmed from full files
     context_stats["toxic_candidates"] = sum(1 for e in context_stats["events"] if e.get("status") == "CANDIDATE")
     context_stats["confirmed_events"] = sum(1 for e in context_stats["events"] if e.get("status") == "CONFIRMED")
@@ -231,10 +292,22 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
     atomic_write_json(
         p["checkpoint"],
         {
-            "paper_epoch_id": paper_epoch_id,
-            "context_event_count": len(context_stats["events"]),
-            "trade_event_count": len(trade_stats["events"]),
-            "updated_at": utc_now_iso(),
+            "paper_epoch_id":
+                paper_epoch_id,
+            "registry_record_id":
+                active.get(
+                    "registry_record_id"
+                ),
+            "context_event_count":
+                len(
+                    context_stats["events"]
+                ),
+            "trade_event_count":
+                len(
+                    trade_stats["events"]
+                ),
+            "updated_at":
+                utc_now_iso(),
         },
     )
     atomic_write_json(
@@ -245,7 +318,16 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             "runtime_impact": "NON_BLOCKING",
             "monitoring_mode": "LIVE_CURRENT",
             "pid": os.getpid(),
-            "paper_epoch_id": paper_epoch_id,
+            "paper_epoch_id":
+                paper_epoch_id,
+            "registry_record_id":
+                active.get(
+                    "registry_record_id"
+                ),
+            "trading_contract_fingerprint":
+                active.get(
+                    "trading_contract_fingerprint"
+                ),
             "context_predictions_evaluable": summary["context_predictions_evaluable"],
             "trades_evaluable": summary["trades_evaluable"],
             "paper_only": active.get("paper_only", True),

@@ -166,15 +166,38 @@ def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
         os.fsync(fh.fileno())
 
 
-def toxic_event_id(*, source_id: str, subtype: str, status: str, detected_at: str) -> str:
+def toxic_event_id(
+    *,
+    source_id: str,
+    subtype: str,
+    status: str,
+    detected_at: str,
+    active: dict[str, Any] | None = None,
+) -> str:
+    """Create a unique event ID inside one registry/epoch namespace."""
+    binding = active or {}
+
     return "TOX_" + _sha256_text(
         _canonical_json(
             {
-                "source_id": source_id,
-                "subtype": subtype,
-                "status": status,
-                "detected_at": detected_at,
-                "nonce": uuid.uuid4().hex,
+                "registry_record_id":
+                    binding.get(
+                        "registry_record_id"
+                    ),
+                "paper_epoch_id":
+                    binding.get(
+                        "paper_epoch_id"
+                    ),
+                "source_id":
+                    source_id,
+                "subtype":
+                    subtype,
+                "status":
+                    status,
+                "detected_at":
+                    detected_at,
+                "nonce":
+                    uuid.uuid4().hex,
             }
         )
     )[:32]
@@ -389,9 +412,14 @@ def append_toxicity_transition(
         if key in open_issues:
             return None
         row = {
-            "toxic_event_id": toxic_event_id(
-                source_id=source_id, subtype=subtype, status="OPEN", detected_at=now
-            ),
+            "toxic_event_id":
+                toxic_event_id(
+                    source_id=source_id,
+                    subtype=subtype,
+                    status="OPEN",
+                    detected_at=now,
+                    active=active,
+                ),
             "branch": "EXTERNAL_DATA",
             "subtype": subtype,
             "severity": severity_for(subtype),
@@ -411,6 +439,7 @@ def append_toxicity_transition(
             "model_id": (active or {}).get("model_id"),
             "model_version": (active or {}).get("model_version"),
             "runtime_fingerprint": (active or {}).get("runtime_fingerprint"),
+            "trading_contract_fingerprint": (active or {}).get("trading_contract_fingerprint"),
             "paper_epoch_id": (active or {}).get("paper_epoch_id"),
             "evidence": evidence or {},
         }
@@ -423,9 +452,14 @@ def append_toxicity_transition(
         return None
     opened = open_issues.pop(key)
     row = {
-        "toxic_event_id": toxic_event_id(
-            source_id=source_id, subtype=subtype, status="RESOLVED", detected_at=now
-        ),
+        "toxic_event_id":
+            toxic_event_id(
+                source_id=source_id,
+                subtype=subtype,
+                status="RESOLVED",
+                detected_at=now,
+                active=active,
+            ),
         "branch": "EXTERNAL_DATA",
         "subtype": subtype,
         "severity": opened.get("severity") or severity_for(subtype),
@@ -445,6 +479,7 @@ def append_toxicity_transition(
         "model_id": (active or {}).get("model_id"),
         "model_version": (active or {}).get("model_version"),
         "runtime_fingerprint": (active or {}).get("runtime_fingerprint"),
+        "trading_contract_fingerprint": (active or {}).get("trading_contract_fingerprint"),
         "paper_epoch_id": (active or {}).get("paper_epoch_id"),
         "evidence": {"resolved_from": opened.get("toxic_event_id"), **(evidence or {})},
     }
@@ -458,25 +493,128 @@ def _event_order_key(index: int, row: dict[str, Any]) -> tuple:
     return (stamp, index)
 
 
-def _open_issues_from_events(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Reconstruct currently-active issues: latest causal state per source_id|subtype."""
-    open_map: dict[str, dict[str, Any]] = {}
-    ordered = sorted(enumerate(events), key=lambda item: _event_order_key(item[0], item[1]))
+def _same_active_binding(
+    row: dict[str, Any],
+    active: dict[str, Any] | None,
+) -> bool:
+    """Match one registry record and PAPER epoch.
+
+    With no active runtime, preserve the legacy unscoped behaviour.
+    """
+    if not active:
+        return True
+
+    return (
+        str(
+            row.get(
+                "paper_epoch_id"
+            )
+            or ""
+        )
+        == str(
+            active.get(
+                "paper_epoch_id"
+            )
+            or ""
+        )
+        and str(
+            row.get(
+                "registry_record_id"
+            )
+            or ""
+        )
+        == str(
+            active.get(
+                "registry_record_id"
+            )
+            or ""
+        )
+    )
+
+
+def events_for_active_binding(
+    events: list[dict[str, Any]],
+    *,
+    active: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return EXTERNAL_DATA rows for only the active binding."""
+    return [
+        row
+        for row in events
+        if str(
+            row.get("branch")
+            or ""
+        )
+        == "EXTERNAL_DATA"
+        and _same_active_binding(
+            row,
+            active,
+        )
+    ]
+
+
+def _open_issues_from_events(
+    events: list[dict[str, Any]],
+    *,
+    active: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Reconstruct current issues for one active binding."""
+    binding_events = (
+        events_for_active_binding(
+            events,
+            active=active,
+        )
+    )
+
+    open_map: dict[
+        str,
+        dict[str, Any],
+    ] = {}
+
+    ordered = sorted(
+        enumerate(
+            binding_events
+        ),
+        key=lambda item:
+            _event_order_key(
+                item[0],
+                item[1],
+            ),
+    )
+
     for _, row in ordered:
-        if str(row.get("branch") or "") != "EXTERNAL_DATA":
-            continue
-        key = f"{row.get('source_id')}|{row.get('subtype')}"
-        status = str(row.get("status") or "").upper()
+        key = (
+            f"{row.get('source_id')}|"
+            f"{row.get('subtype')}"
+        )
+        status = str(
+            row.get("status")
+            or ""
+        ).upper()
+
         if status == "OPEN":
             open_map[key] = row
         elif status == "RESOLVED":
-            open_map.pop(key, None)
+            open_map.pop(
+                key,
+                None,
+            )
+
     return open_map
 
 
-def reconstruct_active_open_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Currently OPEN external-data issues only (historical OPEN after RESOLVED excluded)."""
-    return list(_open_issues_from_events(events).values())
+def reconstruct_active_open_events(
+    events: list[dict[str, Any]],
+    *,
+    active: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return currently OPEN issues for one active binding."""
+    return list(
+        _open_issues_from_events(
+            events,
+            active=active,
+        ).values()
+    )
 
 
 def _enrich_source_current_state(
@@ -908,13 +1046,25 @@ def build_external_data_summary(
     events: list[dict[str, Any]],
     starting: bool,
 ) -> dict[str, Any]:
+    binding_events = (
+        events_for_active_binding(
+            events,
+            active=active,
+        )
+    )
+
     healthy = sum(1 for s in sources if s.get("source_health") == "HEALTHY")
     degraded = sum(1 for s in sources if s.get("source_health") == "DEGRADED")
     unavailable = sum(
         1 for s in sources if s.get("source_health") in {"CRITICAL", "UNAVAILABLE"}
     )
     # Only currently active issues (OPEN after latest RESOLVED for same key is excluded)
-    open_events = reconstruct_active_open_events(events)
+    open_events = (
+        reconstruct_active_open_events(
+            binding_events,
+            active=active,
+        )
+    )
     watch = sum(1 for e in open_events if e.get("severity") == "WATCH")
     warning = sum(1 for e in open_events if e.get("severity") == "WARNING")
     critical = sum(1 for e in open_events if e.get("severity") == "CRITICAL")
@@ -928,7 +1078,16 @@ def build_external_data_summary(
 
     last_event_at = None
     last_resolved_at = None
-    for index, e in sorted(enumerate(events), key=lambda item: _event_order_key(item[0], item[1])):
+    for index, e in sorted(
+        enumerate(
+            binding_events
+        ),
+        key=lambda item:
+            _event_order_key(
+                item[0],
+                item[1],
+            ),
+    ):
         _ = index
         stamp = e.get("detected_at") or e.get("event_time")
         if stamp:
@@ -951,8 +1110,22 @@ def build_external_data_summary(
         "monitoring_mode": "LIVE_CURRENT",
         "registry_record_id": (active or {}).get("registry_record_id"),
         "model_id": (active or {}).get("model_id"),
-        "model_version": (active or {}).get("model_version"),
-        "paper_epoch_id": (active or {}).get("paper_epoch_id"),
+        "model_version":
+            (active or {}).get(
+                "model_version"
+            ),
+        "runtime_fingerprint":
+            (active or {}).get(
+                "runtime_fingerprint"
+            ),
+        "trading_contract_fingerprint":
+            (active or {}).get(
+                "trading_contract_fingerprint"
+            ),
+        "paper_epoch_id":
+            (active or {}).get(
+                "paper_epoch_id"
+            ),
         "configured_sources": len(sources),
         "healthy_sources": healthy,
         "degraded_sources": degraded,
@@ -992,8 +1165,15 @@ def evaluate_external_sources(
     starting = not grace_ok
 
     checkpoint = _read_json(p["checkpoint"]) or {"sources": {}}
-    events_existing = _read_jsonl(p["events"])
-    open_issues = _open_issues_from_events(events_existing)
+    events_existing = _read_jsonl(
+        p["events"]
+    )
+    open_issues = (
+        _open_issues_from_events(
+            events_existing,
+            active=active,
+        )
+    )
 
     raw_root = raw_root_override or p["raw_root"]
     live_feed = live_feed_override or p["live_feed"]
@@ -1079,30 +1259,93 @@ def evaluate_external_sources(
             active=active,
         )
 
-    events_all = _read_jsonl(p["events"])
-    # Rebuild from full journal so restart/checkpoint cannot leave stale OPEN counts
-    open_issues = _open_issues_from_events(events_all)
-    active_open = list(open_issues.values())
-    source_snapshots = _enrich_source_current_state(
-        source_snapshots, events=events_all, active_open=active_open
+    events_all = _read_jsonl(
+        p["events"]
+    )
+    binding_events = (
+        events_for_active_binding(
+            events_all,
+            active=active,
+        )
+    )
+
+    # Restart reconstruction is idempotent and scoped to one binding.
+    open_issues = (
+        _open_issues_from_events(
+            events_all,
+            active=active,
+        )
+    )
+    active_open = list(
+        open_issues.values()
+    )
+    source_snapshots = (
+        _enrich_source_current_state(
+            source_snapshots,
+            events=binding_events,
+            active_open=active_open,
+        )
     )
     summary = build_external_data_summary(
         active=active,
         sources=source_snapshots,
-        events=events_all,
+        events=binding_events,
         starting=starting,
     )
     sources_payload = {
-        "updated_at": _utc_now_iso(),
-        "runtime_impact": "NON_BLOCKING",
-        "monitoring_mode": "LIVE_CURRENT",
-        "sources": source_snapshots,
+        "updated_at":
+            _utc_now_iso(),
+        "runtime_impact":
+            "NON_BLOCKING",
+        "monitoring_mode":
+            "LIVE_CURRENT",
+        "paper_epoch_id":
+            (active or {}).get(
+                "paper_epoch_id"
+            ),
+        "registry_record_id":
+            (active or {}).get(
+                "registry_record_id"
+            ),
+        "runtime_fingerprint":
+            (active or {}).get(
+                "runtime_fingerprint"
+            ),
+        "trading_contract_fingerprint":
+            (active or {}).get(
+                "trading_contract_fingerprint"
+            ),
+        "sources":
+            source_snapshots,
     }
     _atomic_write_json(p["sources"], sources_payload)
     _atomic_write_json(p["summary"], summary)
     _atomic_write_json(
         p["checkpoint"],
-        {"sources": ck_sources, "updated_at": _utc_now_iso(), "service_started_at": _iso(started)},
+        {
+            "paper_epoch_id":
+                (active or {}).get(
+                    "paper_epoch_id"
+                ),
+            "registry_record_id":
+                (active or {}).get(
+                    "registry_record_id"
+                ),
+            "runtime_fingerprint":
+                (active or {}).get(
+                    "runtime_fingerprint"
+                ),
+            "trading_contract_fingerprint":
+                (active or {}).get(
+                    "trading_contract_fingerprint"
+                ),
+            "sources":
+                ck_sources,
+            "updated_at":
+                _utc_now_iso(),
+            "service_started_at":
+                _iso(started),
+        },
     )
     _atomic_write_json(
         p["health"],
@@ -1111,8 +1354,28 @@ def evaluate_external_sources(
             "alive": True,
             "runtime_impact": "NON_BLOCKING",
             "monitoring_mode": "LIVE_CURRENT",
-            "pid": os.getpid(),
-            "configured_sources": summary["configured_sources"],
+            "pid":
+                os.getpid(),
+            "paper_epoch_id":
+                (active or {}).get(
+                    "paper_epoch_id"
+                ),
+            "registry_record_id":
+                (active or {}).get(
+                    "registry_record_id"
+                ),
+            "runtime_fingerprint":
+                (active or {}).get(
+                    "runtime_fingerprint"
+                ),
+            "trading_contract_fingerprint":
+                (active or {}).get(
+                    "trading_contract_fingerprint"
+                ),
+            "configured_sources":
+                summary[
+                    "configured_sources"
+                ],
             "healthy_sources": summary["healthy_sources"],
             "degraded_sources": summary["degraded_sources"],
             "unavailable_sources": summary["unavailable_sources"],

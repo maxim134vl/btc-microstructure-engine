@@ -13,7 +13,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from btc_ml.model_assurance.economic_validation import load_config, run_once  # noqa: E402
+from btc_ml.model_assurance.economic_validation import (  # noqa: E402
+    load_config,
+    mark_health_stopped,
+    run_once,
+)
 
 STOPPING = False
 
@@ -56,6 +60,14 @@ def main(argv: list[str] | None = None) -> int:
                 break
             time.sleep(max(1.0, interval))
     finally:
+        try:
+            mark_health_stopped(
+                repo_root=ROOT,
+                pid=os.getpid(),
+            )
+        except Exception:
+            pass
+
         if pid_path.exists():
             try:
                 if pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):

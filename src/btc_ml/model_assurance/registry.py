@@ -190,32 +190,384 @@ def load_active_paper_epoch(repo_root: Path | None = None) -> dict[str, Any] | N
     return payload
 
 
-def load_safety_flags(repo_root: Path | None = None) -> dict[str, Any]:
-    """Read paper_only / real_execution from LIVE1B execution config."""
-    path = registry_paths(repo_root)["execution_config"]
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    paper_only = bool(raw.get("paper_only", True))
-    # Canonical flag name in config is real_execution_enabled; expose real_execution.
-    real_execution = bool(raw.get("real_execution_enabled", False))
+def load_active_trading_contract(
+    repo_root: Path | None = None,
+    *,
+    epoch: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Load and verify the immutable contract of the active PAPER epoch.
+
+    Legacy epochs without a contract path return ``None`` and retain the
+    pre-contract fallback behaviour. Contract-aware epochs fail closed.
+    """
+    root = (repo_root or _repo_root()).resolve()
+    active_epoch = epoch or load_active_paper_epoch(repo_root)
+
+    if active_epoch is None:
+        return None
+
+    contract_value = str(
+        active_epoch.get("trading_contract_path")
+        or ""
+    ).strip()
+
+    if not contract_value:
+        return None
+
+    contract_path = (
+        root / contract_value
+    ).resolve()
+
+    try:
+        contract_path.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_PATH"
+        ) from exc
+
+    if not contract_path.is_file():
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_MISSING"
+        )
+
+    try:
+        payload = json.loads(
+            contract_path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_INVALID"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_INVALID"
+        )
+
+    manifest = payload.get(
+        "trading_contract_manifest"
+    )
+
+    if not isinstance(manifest, dict):
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_MANIFEST"
+        )
+
+    epoch_id = str(
+        active_epoch.get("paper_epoch_id")
+        or ""
+    )
+    manifest_epoch = str(
+        (
+            manifest.get("epoch_identity")
+            or {}
+        ).get("paper_epoch_id")
+        or (
+            manifest.get("epoch_identity")
+            or {}
+        ).get("epoch_id")
+        or ""
+    )
+
+    if manifest_epoch != epoch_id:
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_EPOCH_MISMATCH"
+        )
+
+    recorded_fp = str(
+        payload.get(
+            "trading_contract_fingerprint"
+        )
+        or ""
+    )
+    epoch_fp = str(
+        active_epoch.get(
+            "trading_contract_fingerprint"
+        )
+        or ""
+    )
+    manifest_fp = str(
+        manifest.get(
+            "trading_contract_fingerprint"
+        )
+        or ""
+    )
+
+    if (
+        not recorded_fp
+        or recorded_fp != epoch_fp
+        or manifest_fp != recorded_fp
+    ):
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_FINGERPRINT_MISMATCH"
+        )
+
+    from btc_ml.trading.intrabar_paper.trading_contract import (
+        trading_contract_fingerprint,
+    )
+
+    derived_fp = trading_contract_fingerprint(
+        manifest
+    )
+
+    if derived_fp != recorded_fp:
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_TRADING_CONTRACT_FINGERPRINT_INVALID"
+        )
+
+    snapshot = manifest.get(
+        "execution_config_snapshot"
+    )
+
+    if not isinstance(snapshot, dict):
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_EXECUTION_SNAPSHOT_MISSING"
+        )
+
+    return payload
+
+
+def _read_live_safety_flags(
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Read the mutable global execution safety flags."""
+    path = registry_paths(
+        repo_root
+    )["execution_config"]
+
+    raw = json.loads(
+        path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    paper_only = bool(
+        raw.get("paper_only", True)
+    )
+    real_execution = bool(
+        raw.get(
+            "real_execution_enabled",
+            False,
+        )
+    )
+
     if "real_execution" in raw:
-        real_execution = bool(raw.get("real_execution"))
+        real_execution = bool(
+            raw.get("real_execution")
+        )
+
     return {
         "paper_only": paper_only,
         "real_execution": real_execution,
-        "rule_contract_version": str(raw.get("rule_contract_version") or ""),
+        "rule_contract_version": str(
+            raw.get(
+                "rule_contract_version"
+            )
+            or ""
+        ),
     }
 
 
-def compute_execution_config_hash(repo_root: Path | None = None) -> str:
-    path = registry_paths(repo_root)["execution_config"]
-    return _sha256_bytes(path.read_bytes())
+def load_safety_flags(
+    repo_root: Path | None = None,
+    *,
+    contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Require both immutable epoch and mutable live safety gates.
+
+    The epoch contract controls runtime identity. The current execution
+    configuration remains an independent fail-closed safety gate.
+    """
+    live = _read_live_safety_flags(
+        repo_root
+    )
+
+    if contract is None:
+        return {
+            **live,
+            "live_rule_contract_version":
+                live[
+                    "rule_contract_version"
+                ],
+            "contract_paper_only": None,
+            "contract_real_execution":
+                None,
+            "live_paper_only":
+                live["paper_only"],
+            "live_real_execution":
+                live["real_execution"],
+        }
+
+    manifest = (
+        contract.get(
+            "trading_contract_manifest"
+        )
+        or {}
+    )
+    snapshot = (
+        manifest.get(
+            "execution_config_snapshot"
+        )
+        or {}
+    )
+
+    contract_paper_only = bool(
+        contract.get(
+            "paper_only",
+            snapshot.get(
+                "paper_only",
+                True,
+            ),
+        )
+    )
+    contract_real_execution = bool(
+        contract.get(
+            "real_execution",
+            contract.get(
+                "real_execution_enabled",
+                snapshot.get(
+                    "real_execution_enabled",
+                    False,
+                ),
+            ),
+        )
+    )
+    contract_rule = str(
+        snapshot.get(
+            "rule_contract_version"
+        )
+        or (
+            manifest.get(
+                "epoch_identity"
+            )
+            or {}
+        ).get(
+            "rule_contract_version"
+        )
+        or ""
+    )
+
+    return {
+        "paper_only": (
+            contract_paper_only
+            and live["paper_only"]
+        ),
+        "real_execution": (
+            contract_real_execution
+            or live["real_execution"]
+        ),
+        "rule_contract_version":
+            contract_rule,
+        "live_rule_contract_version":
+            live[
+                "rule_contract_version"
+            ],
+        "contract_paper_only":
+            contract_paper_only,
+        "contract_real_execution":
+            contract_real_execution,
+        "live_paper_only":
+            live["paper_only"],
+        "live_real_execution":
+            live["real_execution"],
+    }
 
 
-def compute_risk_config_hash(repo_root: Path | None = None) -> str:
-    path = registry_paths(repo_root)["execution_config"]
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    risk = {k: raw.get(k) for k in LIVE1B_RISK_CONFIG_KEYS}
-    return _sha256_text(_canonical_json(risk))
+def compute_execution_config_hash(
+    repo_root: Path | None = None,
+    *,
+    contract: dict[str, Any] | None = None,
+) -> str:
+    if contract is not None:
+        manifest = (
+            contract.get(
+                "trading_contract_manifest"
+            )
+            or {}
+        )
+        snapshot = manifest.get(
+            "execution_config_snapshot"
+        )
+
+        if not isinstance(snapshot, dict):
+            raise RuntimeError(
+                "REGISTRATION_BLOCKED_EXECUTION_SNAPSHOT_MISSING"
+            )
+
+        return _sha256_text(
+            _canonical_json(snapshot)
+        )
+
+    path = registry_paths(
+        repo_root
+    )["execution_config"]
+
+    return _sha256_bytes(
+        path.read_bytes()
+    )
+
+
+def compute_risk_config_hash(
+    repo_root: Path | None = None,
+    *,
+    contract: dict[str, Any] | None = None,
+) -> str:
+    if contract is not None:
+        manifest = (
+            contract.get(
+                "trading_contract_manifest"
+            )
+            or {}
+        )
+        snapshot = (
+            manifest.get(
+                "execution_config_snapshot"
+            )
+            or {}
+        )
+
+        risk_payload = {
+            "execution_risk": {
+                key: snapshot.get(key)
+                for key
+                in LIVE1B_RISK_CONFIG_KEYS
+            },
+            "capital":
+                manifest.get("capital"),
+            "position_sizing":
+                manifest.get(
+                    "position_sizing"
+                ),
+            "protection_geometry":
+                manifest.get(
+                    "protection_geometry"
+                ),
+        }
+
+        return _sha256_text(
+            _canonical_json(
+                risk_payload
+            )
+        )
+
+    path = registry_paths(
+        repo_root
+    )["execution_config"]
+    raw = json.loads(
+        path.read_text(
+            encoding="utf-8"
+        )
+    )
+    risk = {
+        key: raw.get(key)
+        for key in LIVE1B_RISK_CONFIG_KEYS
+    }
+
+    return _sha256_text(
+        _canonical_json(risk)
+    )
 
 
 def compute_feature_schema_hash() -> str:
@@ -344,18 +696,86 @@ def build_active_runtime_record(
     epoch = load_active_paper_epoch(repo_root)
     if epoch is None:
         raise RuntimeError("REGISTRATION_BLOCKED_NO_ACTIVE_EPOCH")
-    safety = load_safety_flags(repo_root)
+    contract = load_active_trading_contract(
+        repo_root,
+        epoch=epoch,
+    )
+    safety = load_safety_flags(
+        repo_root,
+        contract=contract,
+    )
     if safety["paper_only"] is not True or safety["real_execution"] is not False:
         raise RuntimeError("REGISTRATION_BLOCKED_SAFETY_FLAGS")
-    epoch_rule = str(epoch.get("rule_contract_version") or "")
+
+    if (
+        str(
+            safety.get(
+                "rule_contract_version"
+            )
+            or ""
+        )
+        != REQUIRED_RULE_CONTRACT
+        or str(
+            safety.get(
+                "live_rule_contract_version"
+            )
+            or ""
+        )
+        != REQUIRED_RULE_CONTRACT
+    ):
+        raise RuntimeError(
+            "REGISTRATION_BLOCKED_RULE_CONTRACT_MISMATCH"
+        )
+
+    epoch_rule = str(
+        epoch.get("rule_contract_version")
+        or ""
+    )
     if epoch_rule != REQUIRED_RULE_CONTRACT:
         raise RuntimeError("REGISTRATION_BLOCKED_RULE_CONTRACT_MISMATCH")
 
     feature_hash = compute_feature_schema_hash()
     data_hash = compute_data_schema_hash()
-    exec_hash = compute_execution_config_hash(repo_root)
-    risk_hash = compute_risk_config_hash(repo_root)
-    commit = source_commit if source_commit is not None else resolve_source_commit(repo_root)
+    exec_hash = compute_execution_config_hash(
+        repo_root,
+        contract=contract,
+    )
+    risk_hash = compute_risk_config_hash(
+        repo_root,
+        contract=contract,
+    )
+
+    contract_commit = (
+        str(
+            (contract or {}).get(
+                "source_commit"
+            )
+            or (contract or {}).get(
+                "canonical_commit"
+            )
+            or (contract or {}).get(
+                "patch_commit"
+            )
+            or ""
+        )
+    )
+
+    commit = (
+        source_commit
+        if source_commit is not None
+        else contract_commit
+        or resolve_source_commit(repo_root)
+    )
+
+    trading_contract_fp = str(
+        (contract or {}).get(
+            "trading_contract_fingerprint"
+        )
+        or epoch.get(
+            "trading_contract_fingerprint"
+        )
+        or ""
+    )
     fingerprint = compute_runtime_fingerprint(
         model_id=str(identity["model_id"]),
         model_version=str(identity["model_version"]),
@@ -382,6 +802,7 @@ def build_active_runtime_record(
         "paper_epoch_activated_at": epoch.get("activated_at"),
         "source_commit": commit,
         "runtime_fingerprint": fingerprint,
+        "trading_contract_fingerprint": trading_contract_fp,
         "execution_config_hash": exec_hash,
         "risk_config_hash": risk_hash,
         "feature_schema_hash": feature_hash,
@@ -434,6 +855,7 @@ def register_active_runtime(*, repo_root: Path | None = None) -> dict[str, Any]:
         for r in rows
         if r.get("model_id") == model_id
         and r.get("model_version") == model_version
+        and r.get("paper_epoch_id") == paper_epoch_id
         and r.get("runtime_fingerprint") != fingerprint
     ]
     if same_version:

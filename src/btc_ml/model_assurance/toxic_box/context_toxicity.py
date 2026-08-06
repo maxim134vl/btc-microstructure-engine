@@ -35,6 +35,30 @@ def _f(value: Any) -> float | None:
         return None
 
 
+def _same_active_binding(
+    row: dict[str, Any],
+    active: dict[str, Any],
+) -> bool:
+    return (
+        str(
+            row.get("paper_epoch_id")
+            or ""
+        )
+        == str(
+            active.get("paper_epoch_id")
+            or ""
+        )
+        and str(
+            row.get("registry_record_id")
+            or ""
+        )
+        == str(
+            active.get("registry_record_id")
+            or ""
+        )
+    )
+
+
 def evaluate_context_toxicity(
     *,
     active: dict[str, Any],
@@ -283,7 +307,16 @@ def evaluate_context_toxicity(
                         last_event_at = row["detected_at"]
 
     events = read_jsonl(events_path)
-    open_like = [e for e in events if e.get("branch") == "CONTEXT"]
+    open_like = [
+        event
+        for event in events
+        if event.get("branch")
+        == "CONTEXT"
+        and _same_active_binding(
+            event,
+            active,
+        )
+    ]
     return {
         "predictions_seen": len(preds),
         "predictions_evaluable": evaluable,

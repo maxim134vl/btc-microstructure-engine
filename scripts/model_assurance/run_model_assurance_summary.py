@@ -13,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btc_ml.model_assurance.runtime_health import mark_health_stopped  # noqa: E402
+
 from btc_ml.model_assurance.summary import load_summary_config, run_once  # noqa: E402
 
 STOPPING = False
@@ -52,6 +54,16 @@ def main(argv: list[str] | None = None) -> int:
                 break
             time.sleep(max(1.0, interval))
     finally:
+        try:
+            mark_health_stopped(
+                health_path=(
+                    ROOT / "data" / "model_assurance" / "summary" / "runtime" / "health.json"
+                ),
+                pid=os.getpid(),
+            )
+        except Exception:
+            pass
+
         if pid_path.exists():
             try:
                 if pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):

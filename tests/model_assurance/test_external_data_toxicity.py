@@ -424,3 +424,367 @@ def test_multiple_historical_pairs_count_only_latest_states():
     assert by_id["AGG"]["active_issues"] == []
     assert by_id["BOOK"]["active_issue_count"] == 1
     assert by_id["BOOK"]["active_issues"][0]["subtype"] == "DATA_SEQUENCE_REWIND"
+
+
+
+def test_epoch_rollover_reemits_current_issue_for_new_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = datetime(
+        2026,
+        7,
+        28,
+        12,
+        30,
+        tzinfo=timezone.utc,
+    )
+
+    cognition = {
+        "started_at": (
+            now - timedelta(hours=1)
+        ).isoformat().replace(
+            "+00:00",
+            "Z",
+        ),
+        "streams": {
+            "aggTrade": {
+                "received": 10,
+                "last": (
+                    now
+                    - timedelta(
+                        seconds=120
+                    )
+                ).isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+            },
+            "bookTicker": {
+                "received": 10,
+                "last": (
+                    now
+                    - timedelta(
+                        seconds=1
+                    )
+                ).isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+            },
+        },
+        "queue": {
+            "enqueue_rejected": 0,
+            "queue_current_events": 1,
+            "writer_lag_ms": 1,
+        },
+        "writer": {
+            "write_errors": 0,
+            "writer_lag_ms": 1,
+        },
+    }
+
+    root = _seed(
+        tmp_path,
+        now=now,
+        cognition=cognition,
+    )
+
+    active = {
+        "registry_record_id":
+            "REG_OLD",
+        "model_id":
+            "MODEL",
+        "model_version":
+            "V1",
+        "runtime_fingerprint":
+            "RUNTIME_OLD",
+        "trading_contract_fingerprint":
+            "CONTRACT_OLD",
+        "paper_epoch_id":
+            "EPOCH_OLD",
+        "paper_only":
+            True,
+        "real_execution":
+            False,
+    }
+
+    monkeypatch.setattr(
+        ed,
+        "read_active_runtime",
+        lambda repo_root=None:
+            dict(active),
+    )
+
+    first = ed.evaluate_external_sources(
+        repo_root=root,
+        now=now,
+    )
+
+    assert (
+        first["summary"][
+            "open_events"
+        ]
+        == 1
+    )
+
+    events_path = ed.paths(
+        root
+    )["events"]
+
+    events = ed._read_jsonl(
+        events_path
+    )
+
+    old_open = [
+        row
+        for row in events
+        if row.get("subtype")
+        == "DATA_STALE"
+        and row.get("status")
+        == "OPEN"
+        and row.get(
+            "paper_epoch_id"
+        )
+        == "EPOCH_OLD"
+        and row.get(
+            "registry_record_id"
+        )
+        == "REG_OLD"
+    ]
+
+    assert len(old_open) == 1
+
+    active.update(
+        {
+            "registry_record_id":
+                "REG_NEW",
+            "runtime_fingerprint":
+                "RUNTIME_NEW",
+            "trading_contract_fingerprint":
+                "CONTRACT_NEW",
+            "paper_epoch_id":
+                "EPOCH_NEW",
+        }
+    )
+
+    second = ed.evaluate_external_sources(
+        repo_root=root,
+        now=now,
+    )
+
+    events = ed._read_jsonl(
+        events_path
+    )
+
+    new_open = [
+        row
+        for row in events
+        if row.get("subtype")
+        == "DATA_STALE"
+        and row.get("status")
+        == "OPEN"
+        and row.get(
+            "paper_epoch_id"
+        )
+        == "EPOCH_NEW"
+        and row.get(
+            "registry_record_id"
+        )
+        == "REG_NEW"
+    ]
+
+    assert len(new_open) == 1
+    assert (
+        new_open[0][
+            "trading_contract_fingerprint"
+        ]
+        == "CONTRACT_NEW"
+    )
+
+    assert (
+        second["summary"][
+            "open_events"
+        ]
+        == 1
+    )
+    assert (
+        second["summary"][
+            "paper_epoch_id"
+        ]
+        == "EPOCH_NEW"
+    )
+    assert (
+        second["summary"][
+            "registry_record_id"
+        ]
+        == "REG_NEW"
+    )
+
+    # Same binding is idempotent.
+    ed.evaluate_external_sources(
+        repo_root=root,
+        now=now,
+    )
+
+    events = ed._read_jsonl(
+        events_path
+    )
+
+    new_open = [
+        row
+        for row in events
+        if row.get("subtype")
+        == "DATA_STALE"
+        and row.get("status")
+        == "OPEN"
+        and row.get(
+            "paper_epoch_id"
+        )
+        == "EPOCH_NEW"
+        and row.get(
+            "registry_record_id"
+        )
+        == "REG_NEW"
+    ]
+
+    assert len(new_open) == 1
+
+    paths_map = ed.paths(root)
+
+    for artifact in (
+        "checkpoint",
+        "health",
+        "sources",
+        "summary",
+    ):
+        payload = json.loads(
+            paths_map[
+                artifact
+            ].read_text(
+                encoding="utf-8"
+            )
+        )
+
+        assert (
+            payload[
+                "paper_epoch_id"
+            ]
+            == "EPOCH_NEW"
+        )
+        assert (
+            payload[
+                "registry_record_id"
+            ]
+            == "REG_NEW"
+        )
+
+    fresh_cognition = {
+        **cognition,
+        "streams": {
+            "aggTrade": {
+                "received": 11,
+                "last": (
+                    now
+                    - timedelta(
+                        seconds=2
+                    )
+                ).isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+            },
+            "bookTicker": {
+                "received": 11,
+                "last": (
+                    now
+                    - timedelta(
+                        seconds=1
+                    )
+                ).isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+            },
+        },
+    }
+
+    (
+        root
+        / "data/runtime/"
+        "intrabar_cognition_health.json"
+    ).write_text(
+        json.dumps(
+            fresh_cognition
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    recovered = (
+        ed.evaluate_external_sources(
+            repo_root=root,
+            now=now,
+        )
+    )
+
+    assert (
+        recovered["summary"][
+            "status"
+        ]
+        == "CURRENT_HEALTHY"
+    )
+    assert (
+        recovered["summary"][
+            "open_events"
+        ]
+        == 0
+    )
+
+    events = ed._read_jsonl(
+        events_path
+    )
+
+    new_resolved = [
+        row
+        for row in events
+        if row.get("subtype")
+        == "DATA_STALE"
+        and row.get("status")
+        == "RESOLVED"
+        and row.get(
+            "paper_epoch_id"
+        )
+        == "EPOCH_NEW"
+        and row.get(
+            "registry_record_id"
+        )
+        == "REG_NEW"
+    ]
+
+    assert len(new_resolved) == 1
+
+    assert len(
+        ed.reconstruct_active_open_events(
+            events,
+            active={
+                "paper_epoch_id":
+                    "EPOCH_OLD",
+                "registry_record_id":
+                    "REG_OLD",
+            },
+        )
+    ) == 1
+
+    assert (
+        ed.reconstruct_active_open_events(
+            events,
+            active={
+                "paper_epoch_id":
+                    "EPOCH_NEW",
+                "registry_record_id":
+                    "REG_NEW",
+            },
+        )
+        == []
+    )

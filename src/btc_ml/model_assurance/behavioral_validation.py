@@ -348,23 +348,178 @@ class ValidationState:
     processed_event_ids: set[str]
 
 
-def load_state(p: dict[str, Path]) -> ValidationState:
-    preds = {str(r["prediction_id"]): r for r in _read_jsonl(p["predictions"]) if r.get("prediction_id")}
-    outs = {str(r["outcome_id"]): r for r in _read_jsonl(p["outcomes"]) if r.get("outcome_id")}
+def _same_active_binding(
+    row: dict[str, Any],
+    active: dict[str, Any],
+) -> bool:
+    return (
+        str(
+            row.get("paper_epoch_id")
+            or ""
+        )
+        == str(
+            active.get("paper_epoch_id")
+            or ""
+        )
+        and str(
+            row.get("registry_record_id")
+            or ""
+        )
+        == str(
+            active.get("registry_record_id")
+            or ""
+        )
+    )
+
+
+def merge_prediction_rows_for_binding(
+    *,
+    existing_rows: list[dict[str, Any]],
+    active_rows: list[dict[str, Any]],
+    active: dict[str, Any],
+) -> list[dict[str, Any]]:
+    historical = [
+        row
+        for row in existing_rows
+        if not _same_active_binding(
+            row,
+            active,
+        )
+    ]
+
+    return historical + active_rows
+
+
+def load_state(
+    p: dict[str, Path],
+    *,
+    active: dict[str, Any] | None = None,
+) -> ValidationState:
+    prediction_rows = _read_jsonl(
+        p["predictions"]
+    )
+    outcome_rows = _read_jsonl(
+        p["outcomes"]
+    )
+
+    if active is not None:
+        prediction_rows = [
+            row
+            for row in prediction_rows
+            if _same_active_binding(
+                row,
+                active,
+            )
+        ]
+        outcome_rows = [
+            row
+            for row in outcome_rows
+            if _same_active_binding(
+                row,
+                active,
+            )
+        ]
+
+    preds = {
+        str(row["prediction_id"]): row
+        for row in prediction_rows
+        if row.get("prediction_id")
+    }
+    outs = {
+        str(row["outcome_id"]): row
+        for row in outcome_rows
+        if row.get("outcome_id")
+    }
+
     open_by_tf: dict[str, str] = {}
+
     for pred in preds.values():
-        if str(pred.get("prediction_status") or "") == "OPEN":
-            open_by_tf[str(pred.get("timeframe") or "")] = str(pred["prediction_id"])
-    processed = {str(r.get("context_event_id") or "") for r in preds.values() if r.get("context_event_id")}
-    # Also mark FLIP/END close events from checkpoint if present
-    ck = {}
+        if str(
+            pred.get(
+                "prediction_status"
+            )
+            or ""
+        ) == "OPEN":
+            open_by_tf[
+                str(
+                    pred.get("timeframe")
+                    or ""
+                )
+            ] = str(
+                pred["prediction_id"]
+            )
+
+    processed = {
+        str(
+            row.get("context_event_id")
+            or ""
+        )
+        for row in preds.values()
+        if row.get("context_event_id")
+    }
+
+    checkpoint: dict[str, Any] = {}
+
     if p["checkpoint"].exists():
         try:
-            ck = json.loads(p["checkpoint"].read_text(encoding="utf-8"))
+            value = json.loads(
+                p["checkpoint"].read_text(
+                    encoding="utf-8"
+                )
+            )
+            if isinstance(value, dict):
+                checkpoint = value
         except Exception:
-            ck = {}
-    processed |= set(ck.get("processed_event_ids") or [])
-    return ValidationState(preds, outs, open_by_tf, {x for x in processed if x})
+            checkpoint = {}
+
+    checkpoint_matches = (
+        active is None
+        or (
+            str(
+                checkpoint.get(
+                    "paper_epoch_id"
+                )
+                or ""
+            )
+            == str(
+                active.get(
+                    "paper_epoch_id"
+                )
+                or ""
+            )
+            and str(
+                checkpoint.get(
+                    "registry_record_id"
+                )
+                or ""
+            )
+            == str(
+                active.get(
+                    "registry_record_id"
+                )
+                or ""
+            )
+        )
+    )
+
+    if checkpoint_matches:
+        processed |= set(
+            checkpoint.get(
+                "processed_event_ids"
+            )
+            or []
+        )
+
+    return ValidationState(
+        preds,
+        outs,
+        open_by_tf,
+        {
+            value
+            for value in processed
+            if value
+        },
+    )
 
 
 def _close_prediction(
@@ -680,7 +835,10 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
         activated = _parse_ts("1970-01-01T00:00:00Z")
         assert activated is not None
 
-    state = load_state(p)
+    state = load_state(
+        p,
+        active=active,
+    )
     existing_pred_ids = set(state.predictions.keys())
     existing_out_ids = set(state.outcomes.keys())
 
@@ -695,7 +853,23 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
 
     # Persist predictions (including status updates): rewrite file atomically from state for simplicity
     # while remaining append-only for brand-new ids; updates to CLOSED are patched via rewrite of jsonl.
-    _rewrite_predictions(p["predictions"], list(state.predictions.values()))
+    existing_prediction_rows = _read_jsonl(
+        p["predictions"]
+    )
+    merged_prediction_rows = (
+        merge_prediction_rows_for_binding(
+            existing_rows=
+                existing_prediction_rows,
+            active_rows=list(
+                state.predictions.values()
+            ),
+            active=active,
+        )
+    )
+    _rewrite_predictions(
+        p["predictions"],
+        merged_prediction_rows,
+    )
     existing_pred_ids = set(state.predictions.keys())
 
     now = _utc_now()
@@ -724,9 +898,22 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
     _atomic_write_json(
         p["checkpoint"],
         {
-            "processed_event_ids": sorted(state.processed_event_ids),
-            "open_by_tf": state.open_by_tf,
-            "updated_at": _utc_now_iso(),
+            "paper_epoch_id":
+                active.get(
+                    "paper_epoch_id"
+                ),
+            "registry_record_id":
+                active.get(
+                    "registry_record_id"
+                ),
+            "processed_event_ids":
+                sorted(
+                    state.processed_event_ids
+                ),
+            "open_by_tf":
+                state.open_by_tf,
+            "updated_at":
+                _utc_now_iso(),
         },
     )
     _atomic_write_json(
@@ -736,6 +923,14 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             "alive": True,
             "runtime_impact": "NON_BLOCKING",
             "pid": os.getpid(),
+            "paper_epoch_id":
+                active.get(
+                    "paper_epoch_id"
+                ),
+            "registry_record_id":
+                active.get(
+                    "registry_record_id"
+                ),
             "eligible_contexts": summary["eligible_contexts"],
             "open_predictions": summary["open_predictions"],
             "closed_predictions": summary["closed_predictions"],

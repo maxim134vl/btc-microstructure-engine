@@ -265,3 +265,359 @@ def test_summary_aggregation_and_mismatch(tmp_path: Path):
     status, diff = ev.reconcile_net_pnl(computed_net=1.0, canonical_net=1.02, tolerance_usd=0.01)
     assert status == "MISMATCH"
     assert diff == pytest.approx(-0.02)
+
+
+
+def test_binding_mismatch_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+
+    (
+        root
+        / "config"
+    ).mkdir(
+        parents=True
+    )
+    (
+        root
+        / "data/trading/"
+        "paper_epochs"
+    ).mkdir(
+        parents=True
+    )
+
+    (
+        root
+        / "config/"
+        "model_assurance_economic_validation.json"
+    ).write_text(
+        json.dumps(
+            {
+                "pnl_reconciliation_tolerance_usd":
+                    0.01,
+                "min_closed_trades_for_current":
+                    5,
+                "source_stale_seconds":
+                    120,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    (
+        root
+        / "data/trading/"
+        "paper_epochs/active.json"
+    ).write_text(
+        json.dumps(
+            {
+                "paper_epoch_id":
+                    "EPOCH_NEW",
+                "epoch_status":
+                    "ACTIVE",
+                "activated_at":
+                    "2026-08-01T00:00:00Z",
+                "trading_contract_fingerprint":
+                    "CONTRACT_NEW",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        ev,
+        "read_active_runtime",
+        lambda repo_root=None: {
+            "registry_record_id":
+                "REG_OLD",
+            "model_id":
+                "MODEL",
+            "model_version":
+                "V1",
+            "runtime_fingerprint":
+                "RUNTIME_OLD",
+            "trading_contract_fingerprint":
+                "CONTRACT_OLD",
+            "paper_epoch_id":
+                "EPOCH_OLD",
+            "paper_only":
+                True,
+            "real_execution":
+                False,
+        },
+    )
+
+    summary = ev.run_once(
+        repo_root=root
+    )
+
+    assert (
+        summary["status"]
+        == "ACTIVE_BINDING_MISMATCH"
+    )
+    assert (
+        summary[
+            "binding_mismatch_reason"
+        ]
+        == "PAPER_EPOCH_ID_MISMATCH"
+    )
+    assert (
+        summary[
+            "registry_paper_epoch_id"
+        ]
+        == "EPOCH_OLD"
+    )
+    assert (
+        summary[
+            "paper_epoch_id"
+        ]
+        == "EPOCH_NEW"
+    )
+    assert (
+        summary[
+            "evaluated_trades"
+        ]
+        == 0
+    )
+
+    evaluations = (
+        root
+        / "data/model_assurance/"
+        "economic_validation/trades/"
+        "trade_evaluations.jsonl"
+    )
+
+    assert not evaluations.exists()
+
+    health = json.loads(
+        (
+            root
+            / "data/model_assurance/"
+            "economic_validation/runtime/"
+            "health.json"
+        ).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert (
+        health["status"]
+        == "ACTIVE_BINDING_MISMATCH"
+    )
+    assert health["alive"] is True
+
+
+def test_epoch_config_uses_contract_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    config_dir = root / "config"
+    config_dir.mkdir(
+        parents=True
+    )
+
+    global_config = json.loads(
+        Path(
+            "/Users/fontecrypto/btc-ml/"
+            "config/intrabar_paper_execution.json"
+        ).read_text(
+            encoding="utf-8"
+        )
+    )
+    snapshot = dict(
+        global_config
+    )
+
+    snapshot[
+        "entry_fee_bps"
+    ] = 7.0
+
+    global_config[
+        "entry_fee_bps"
+    ] = 999.0
+
+    (
+        config_dir
+        / "intrabar_paper_execution.json"
+    ).write_text(
+        json.dumps(
+            global_config
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        ev,
+        "load_active_trading_contract",
+        lambda repo_root=None, epoch=None: {
+            "trading_contract_manifest": {
+                "execution_config_snapshot":
+                    snapshot,
+            },
+            "trading_contract_fingerprint":
+                "CONTRACT",
+        },
+    )
+
+    loaded, contract = (
+        ev.load_epoch_execution_config(
+            repo_root=root,
+            epoch={
+                "paper_epoch_id":
+                    "EPOCH",
+            },
+        )
+    )
+
+    assert (
+        loaded.entry_fee_bps
+        == pytest.approx(7.0)
+    )
+    assert (
+        loaded.entry_fee_bps
+        != pytest.approx(999.0)
+    )
+    assert contract is not None
+
+
+def test_mark_health_stopped(
+    tmp_path: Path,
+):
+    health_path = (
+        tmp_path
+        / "data/model_assurance/"
+        "economic_validation/runtime/"
+        "health.json"
+    )
+    health_path.parent.mkdir(
+        parents=True
+    )
+    health_path.write_text(
+        json.dumps(
+            {
+                "alive":
+                    True,
+                "pid":
+                    123,
+                "status":
+                    "CURRENT",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = ev.mark_health_stopped(
+        repo_root=tmp_path,
+        pid=123,
+    )
+
+    assert payload["alive"] is False
+    assert payload["pid"] == 123
+    assert payload.get(
+        "stopped_at"
+    )
+
+    persisted = json.loads(
+        health_path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert persisted["alive"] is False
+
+
+
+def test_epoch_config_rejects_incomplete_economic_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        ev,
+        "load_active_trading_contract",
+        lambda repo_root=None, epoch=None: {
+            "trading_contract_manifest": {
+                "execution_config_snapshot": {
+                    "paper_only":
+                        True,
+                    "real_execution_enabled":
+                        False,
+                    "entry_fee_bps":
+                        2.0,
+                    "exit_fee_bps":
+                        5.0,
+                    "entry_slippage_bps":
+                        3.0,
+                    "exit_slippage_bps":
+                        3.0,
+                }
+            }
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "ECONOMIC_EXECUTION_"
+            "SNAPSHOT_INCOMPLETE:"
+            "stop_exit_slippage_bps"
+        ),
+    ):
+        ev.load_epoch_execution_config(
+            repo_root=tmp_path,
+            epoch={
+                "paper_epoch_id":
+                    "EPOCH",
+            },
+        )
+
+
+def test_epoch_config_rejects_unsafe_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        ev,
+        "load_active_trading_contract",
+        lambda repo_root=None, epoch=None: {
+            "trading_contract_manifest": {
+                "execution_config_snapshot": {
+                    "paper_only":
+                        True,
+                    "real_execution_enabled":
+                        True,
+                    "entry_fee_bps":
+                        2.0,
+                    "exit_fee_bps":
+                        5.0,
+                    "entry_slippage_bps":
+                        3.0,
+                    "exit_slippage_bps":
+                        3.0,
+                    "stop_exit_slippage_bps":
+                        5.0,
+                }
+            }
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "ECONOMIC_EXECUTION_"
+            "SNAPSHOT_UNSAFE"
+        ),
+    ):
+        ev.load_epoch_execution_config(
+            repo_root=tmp_path,
+            epoch={
+                "paper_epoch_id":
+                    "EPOCH",
+            },
+        )
