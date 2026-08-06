@@ -1498,3 +1498,270 @@ def test_catchup_status_requires_full_source_universe(
         == "FULL_SOURCE_UNIVERSE"
     )
     assert second["status"] != STATUS_STP21_CATCHUP
+
+
+
+def test_attached_close_outcome_reconciles_stale_open_without_duplicate_pnl(
+    stp_repo: Path,
+):
+    _seed_entry(stp_repo, tf="M15")
+
+    engine = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    engine.process_new_entries()
+
+    books = (
+        stp_repo
+        / "data/trading/intrabar_paper"
+        / EXPECTED_EPOCH
+        / "books"
+    )
+
+    trade = {
+        "trade_id": "trade_exactly_once",
+        "position_id": "pos1",
+        "exit_ts": "2026-07-29T18:40:00Z",
+        "exit_price": 64300.0,
+        "exit_reason": "CONTEXT_END",
+        "net_pnl_usd": 0.0,
+    }
+
+    (books / "trades.jsonl").write_text(
+        json.dumps(trade) + "\n",
+        encoding="utf-8",
+    )
+
+    first = engine.process_new_closes()
+
+    assert first[0]["status"] == "CLOSED"
+    assert (
+        trade["trade_id"]
+        in engine.processed_closes
+    )
+
+    baseline_outcomes = [
+        row
+        for row in engine.store.read_all(
+            "virtual_trades"
+        )
+        if (
+            row.get("trade_id")
+            == trade["trade_id"]
+            and row.get("policy_id")
+            == "BASELINE_CANONICAL"
+            and row.get(
+                "policy_manifest_fingerprint"
+            )
+            == engine.manifest_fp
+        )
+    ]
+
+    assert len(baseline_outcomes) == 1
+
+    baseline_sleeve = engine.sleeves[
+        "BASELINE_CANONICAL"
+    ]["sleeves"]["M15"]
+
+    before_pnl = float(
+        baseline_sleeve[
+            "cumulative_realized_net_pnl_usd"
+        ]
+    )
+    before_equity = float(
+        baseline_sleeve[
+            "current_equity_usd"
+        ]
+    )
+    before_closed_count = int(
+        baseline_sleeve[
+            "closed_trades_count"
+        ]
+    )
+    before_match_count = int(
+        engine.baseline_match_count
+    )
+
+    closed_position = [
+        row
+        for row in engine.store.read_all(
+            "virtual_positions"
+        )
+        if (
+            row.get("policy_id")
+            == "BASELINE_CANONICAL"
+            and row.get("position_id")
+            == "pos1"
+            and row.get("status")
+            == "CLOSED"
+            and row.get(
+                "policy_manifest_fingerprint"
+            )
+            == engine.manifest_fp
+        )
+    ][-1]
+
+    stale_open = {
+        key: value
+        for key, value
+        in closed_position.items()
+        if key
+        not in {
+            "exit_timestamp",
+            "exit_price",
+            "exit_reason",
+            "outcome_already_attached",
+            "state_reconciled_without_pnl",
+        }
+    }
+    stale_open["status"] = "OPEN"
+
+    engine.store.append(
+        "virtual_positions",
+        stale_open,
+    )
+    engine._rebuild_open_index()
+
+    baseline_sleeve[
+        "open_position_id"
+    ] = stale_open["virtual_position_id"]
+
+    second = engine.process_new_closes()
+
+    assert second[0]["status"] == "CLOSED"
+    assert (
+        trade["trade_id"]
+        in engine.processed_closes
+    )
+
+    baseline_after = [
+        row
+        for row in engine.store.read_all(
+            "virtual_trades"
+        )
+        if (
+            row.get("trade_id")
+            == trade["trade_id"]
+            and row.get("policy_id")
+            == "BASELINE_CANONICAL"
+            and row.get(
+                "policy_manifest_fingerprint"
+            )
+            == engine.manifest_fp
+        )
+    ]
+
+    assert len(baseline_after) == 1
+
+    latest_position = [
+        row
+        for row in engine.store.read_all(
+            "virtual_positions"
+        )
+        if (
+            row.get("policy_id")
+            == "BASELINE_CANONICAL"
+            and row.get("position_id")
+            == "pos1"
+            and row.get(
+                "policy_manifest_fingerprint"
+            )
+            == engine.manifest_fp
+        )
+    ][-1]
+
+    assert latest_position["status"] == "CLOSED"
+    assert (
+        latest_position[
+            "outcome_already_attached"
+        ]
+        is True
+    )
+    assert (
+        latest_position[
+            "state_reconciled_without_pnl"
+        ]
+        is True
+    )
+
+    baseline_sleeve_after = engine.sleeves[
+        "BASELINE_CANONICAL"
+    ]["sleeves"]["M15"]
+
+    assert float(
+        baseline_sleeve_after[
+            "cumulative_realized_net_pnl_usd"
+        ]
+    ) == before_pnl
+
+    assert float(
+        baseline_sleeve_after[
+            "current_equity_usd"
+        ]
+    ) == before_equity
+
+    assert int(
+        baseline_sleeve_after[
+            "closed_trades_count"
+        ]
+    ) == before_closed_count
+
+    assert (
+        baseline_sleeve_after[
+            "open_position_id"
+        ]
+        is None
+    )
+
+    assert (
+        engine.baseline_match_count
+        == before_match_count
+    )
+
+    restarted = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    restarted.process_new_closes()
+
+    baseline_after_restart = [
+        row
+        for row in restarted.store.read_all(
+            "virtual_trades"
+        )
+        if (
+            row.get("trade_id")
+            == trade["trade_id"]
+            and row.get("policy_id")
+            == "BASELINE_CANONICAL"
+            and row.get(
+                "policy_manifest_fingerprint"
+            )
+            == restarted.manifest_fp
+        )
+    ]
+
+    assert len(baseline_after_restart) == 1
+
+
+def test_manifest_declares_close_outcome_idempotency_contract(
+    stp_repo: Path,
+):
+    engine = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    assert (
+        engine.manifest[
+            "shadow_model_version"
+        ]
+        == "SHADOW_STP2_1_V3"
+    )
+    assert (
+        engine.manifest[
+            "close_outcome_idempotency_contract"
+        ]
+        == "STP2_1_POLICY_TRADE_EXACTLY_ONCE_V1"
+    )

@@ -324,21 +324,192 @@ class StructuralProtectionEngine:
         self._rebuild_open_index()
         self._repair_stale_processed_closes()
 
-    def _baseline_outcome_attached(self, *, trade_id: str, position_id: str) -> bool:
-        """True when active-manifest BASELINE_CANONICAL virtual trade exists for this close."""
+    def _policy_outcome_attached(
+        self,
+        *,
+        policy_id: str,
+        trade_id: str,
+        position_id: str,
+        virtual_position_id: str = "",
+    ) -> bool:
+        """True when this active-manifest policy/close outcome already exists."""
+
+        policy = str(policy_id or "")
         tid = str(trade_id or "")
         pid = str(position_id or "")
-        for row in self.store.read_all("virtual_trades"):
-            if row.get("policy_id") != "BASELINE_CANONICAL":
+        vpid_expected = str(virtual_position_id or "")
+
+        for row in self.store.read_all(
+            "virtual_trades"
+        ):
+            if (
+                str(row.get("policy_id") or "")
+                != policy
+            ):
                 continue
-            if row.get("policy_manifest_fingerprint") != self.manifest_fp:
+
+            if (
+                row.get(
+                    "policy_manifest_fingerprint"
+                )
+                != self.manifest_fp
+            ):
                 continue
-            if tid and str(row.get("trade_id") or "") == tid:
+
+            row_tid = str(
+                row.get("trade_id") or ""
+            )
+            row_vpid = str(
+                row.get("virtual_position_id") or ""
+            )
+
+            if tid and row_tid == tid:
+                if (
+                    vpid_expected
+                    and row_vpid
+                    and row_vpid != vpid_expected
+                ):
+                    continue
+
                 return True
-            vpid = str(row.get("virtual_position_id") or "")
-            if pid and (vpid.endswith(f"_{pid}") or pid in str(row.get("candidate_id") or "")):
+
+            if (
+                vpid_expected
+                and row_vpid == vpid_expected
+            ):
                 return True
+
+            if pid and (
+                row_vpid.endswith(f"_{pid}")
+                or pid
+                in str(
+                    row.get("candidate_id") or ""
+                )
+            ):
+                return True
+
         return False
+
+    def _baseline_outcome_attached(
+        self,
+        *,
+        trade_id: str,
+        position_id: str,
+    ) -> bool:
+        return self._policy_outcome_attached(
+            policy_id="BASELINE_CANONICAL",
+            trade_id=trade_id,
+            position_id=position_id,
+        )
+
+    def _reconcile_attached_outcome_open(
+        self,
+        *,
+        policy_id: str,
+        vpos: dict[str, Any],
+        trade: dict[str, Any],
+    ) -> None:
+        """Close stale OPEN state without writing or accruing outcome again."""
+
+        policy = str(policy_id or "")
+        position_id = str(
+            trade.get("position_id") or ""
+        )
+        virtual_position_id = str(
+            vpos.get("virtual_position_id") or ""
+        )
+        timeframe = str(
+            vpos.get("timeframe") or ""
+        )
+
+        self.store.append(
+            "virtual_positions",
+            {
+                **vpos,
+                "status": "CLOSED",
+                "exit_timestamp": trade.get(
+                    "exit_ts"
+                ),
+                "exit_price": trade.get(
+                    "exit_price"
+                ),
+                "exit_reason": trade.get(
+                    "exit_reason"
+                ),
+                "outcome_already_attached": True,
+                "state_reconciled_without_pnl": True,
+                "policy_manifest_fingerprint": (
+                    self.manifest_fp
+                ),
+            },
+        )
+
+        self.open_by_policy[policy] = [
+            row
+            for row in self.open_by_policy.get(
+                policy,
+                [],
+            )
+            if (
+                str(
+                    row.get("virtual_position_id")
+                    or ""
+                )
+                != virtual_position_id
+                and str(
+                    row.get("position_id") or ""
+                )
+                != position_id
+            )
+        ]
+
+        sleeve = (
+            self.sleeves.get(policy, {})
+            .get("sleeves", {})
+            .get(timeframe)
+        )
+
+        if isinstance(sleeve, dict):
+            open_id = str(
+                sleeve.get("open_position_id")
+                or ""
+            )
+
+            if (
+                not open_id
+                or open_id == virtual_position_id
+                or open_id.endswith(
+                    f"_{position_id}"
+                )
+            ):
+                sleeve[
+                    "open_position_id"
+                ] = None
+
+                equity = float(
+                    sleeve.get(
+                        "current_equity_usd"
+                    )
+                    or 0.0
+                )
+                risk_pct = float(
+                    sleeve.get(
+                        "risk_pct_per_trade"
+                    )
+                    or 0.0
+                )
+
+                sleeve[
+                    "next_risk_budget_usd"
+                ] = (
+                    equity
+                    * risk_pct
+                    / 100.0
+                )
+
+                self.sleeves[policy][
+                    "updated_at"
+                ] = utc_now()
 
     def _repair_stale_processed_closes(self) -> None:
         """Re-open close processing for catch-up / migration edge cases.
@@ -418,6 +589,9 @@ class StructuralProtectionEngine:
         return {
             "shadow_model_version": SHADOW_MODEL_VERSION,
             "generation": "SHADOW_STP2_1",
+            "close_outcome_idempotency_contract": (
+                "STP2_1_POLICY_TRADE_EXACTLY_ONCE_V1"
+            ),
             "source_commit": "cadc86e2caf195a597d638d96da8876f32882f61",
             "source_epoch_id": self.epoch_id,
             "source_trading_contract_fingerprint": self.source_fp,
@@ -1868,6 +2042,24 @@ class StructuralProtectionEngine:
             bbo = load_book_ticker(repo=self.repo, start=entry_ts, end=exit_ts)
 
         for policy_id, vpos in matched_policies:
+            if self._policy_outcome_attached(
+                policy_id=policy_id,
+                trade_id=trade_id,
+                position_id=position_id,
+                virtual_position_id=str(
+                    vpos.get(
+                        "virtual_position_id"
+                    )
+                    or ""
+                ),
+            ):
+                self._reconcile_attached_outcome_open(
+                    policy_id=policy_id,
+                    vpos=vpos,
+                    trade=trade,
+                )
+                continue
+
             if policy_id == "BASELINE_CANONICAL":
                 exit_price = float(trade.get("exit_price") or 0.0)
                 exit_reason = trade.get("exit_reason")
