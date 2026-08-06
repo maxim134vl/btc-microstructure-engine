@@ -129,8 +129,11 @@ def prove_baseline_only_when_no_same_tf_structural(
     return {"by_timeframe": proof, "proof_ok": overall_ok}
 
 
-def aggregate_target_absence(audits: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def aggregate_target_absence(
+    audits: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
     rows = list(audits)
+
     if not rows:
         return {
             "candidate_audits": 0,
@@ -138,29 +141,67 @@ def aggregate_target_absence(audits: Iterable[Mapping[str, Any]]) -> dict[str, A
             "overall_verdict": "NO_CANDIDATES",
             "legitimate_absence": True,
             "search_or_catalog_defect": False,
+            "insufficient_causal_history": False,
+            "insufficient_causal_history_count": 0,
         }
+
     counts: dict[str, int] = defaultdict(int)
-    for a in rows:
-        counts[str(a.get("verdict") or "UNKNOWN")] += 1
-    defect = any(str(a.get("verdict") or "").startswith("SEARCH_OR_CATALOG_DEFECT") for a in rows)
-    legitimate = not defect
+
+    for audit in rows:
+        counts[
+            str(audit.get("verdict") or "UNKNOWN")
+        ] += 1
+
+    defect = any(
+        str(audit.get("verdict") or "").startswith(
+            "SEARCH_OR_CATALOG_DEFECT"
+        )
+        for audit in rows
+    )
+    insufficient = any(
+        str(audit.get("verdict") or "").startswith(
+            "INSUFFICIENT_CAUSAL_HISTORY"
+        )
+        for audit in rows
+    )
+    legitimate = not defect and not insufficient
+
     if defect:
-        overall = "SEARCH_OR_CATALOG_DEFECT_PRESENT"
+        overall = (
+            "SEARCH_OR_CATALOG_DEFECT_PRESENT"
+        )
+    elif insufficient:
+        overall = (
+            "INSUFFICIENT_CAUSAL_HISTORY_PRESENT"
+        )
     elif all(
-        str(a.get("verdict") or "").startswith("LEGITIMATE_ABSENCE") for a in rows
+        str(audit.get("verdict") or "").startswith(
+            "LEGITIMATE_ABSENCE"
+        )
+        for audit in rows
     ):
-        overall = "LEGITIMATE_ABSENCE_ACROSS_CANDIDATES"
+        overall = (
+            "LEGITIMATE_ABSENCE_ACROSS_CANDIDATES"
+        )
     else:
         overall = "MIXED_OR_UNKNOWN"
+
     return {
         "candidate_audits": len(rows),
         "verdict_counts": dict(counts),
         "overall_verdict": overall,
         "legitimate_absence": legitimate,
         "search_or_catalog_defect": defect,
-        "samples": list(rows)[-8:],
+        "insufficient_causal_history": insufficient,
+        "insufficient_causal_history_count": sum(
+            count
+            for verdict, count in counts.items()
+            if verdict.startswith(
+                "INSUFFICIENT_CAUSAL_HISTORY"
+            )
+        ),
+        "samples": rows[-8:],
     }
-
 
 def recompute_absolute_bar_coverage(
     *,
@@ -265,9 +306,53 @@ def coverage_integrity_ok(
         blockers.append("BAR_COVERAGE_MISSING")
     if lookback_by_tf is not None:
         for tf in TIMEFRAMES:
-            row = lookback_by_tf.get(tf) if isinstance(lookback_by_tf, Mapping) else None
+            row = (
+                lookback_by_tf.get(tf)
+                if isinstance(
+                    lookback_by_tf,
+                    Mapping,
+                )
+                else None
+            )
+
             if row is None:
                 continue
-            # Only require coverage_ok when that TF has candidates
-            pass
+
+            if not isinstance(row, Mapping):
+                blockers.append(
+                    f"{tf}_LOOKBACK_COVERAGE_NOT_MAPPING"
+                )
+                continue
+
+            coverage_value = row.get(
+                "coverage_ok"
+            )
+            reasons = row.get(
+                "coverage_reasons"
+            )
+
+            if not isinstance(
+                coverage_value,
+                bool,
+            ):
+                blockers.append(
+                    f"{tf}_COVERAGE_OK_NOT_BOOLEAN"
+                )
+
+            if not isinstance(reasons, list):
+                blockers.append(
+                    f"{tf}_COVERAGE_REASONS_NOT_LIST"
+                )
+                continue
+
+            if coverage_value is True and reasons:
+                blockers.append(
+                    f"{tf}_COVERAGE_OK_WITH_REASONS"
+                )
+
+            if coverage_value is False and not reasons:
+                blockers.append(
+                    f"{tf}_COVERAGE_FALSE_WITHOUT_REASON"
+                )
+
     return (len(blockers) == 0), blockers

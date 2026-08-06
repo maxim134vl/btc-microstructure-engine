@@ -26,6 +26,8 @@ from . import (
     HISTORICAL_STP11_MANIFEST,
     LEGACY_MANIFEST_INVALIDATION_REASON,
     LOOKBACK_BARS_BY_TF,
+    MAX_CAUSAL_TAIL_LAG_BARS,
+    MIN_CAUSAL_CLOSED_BARS,
     READY_BLOCKED_HISTORY,
     SHADOW_MODEL_VERSION,
     STATUS_ACTIVE,
@@ -475,9 +477,13 @@ class StructuralProtectionEngine:
             "coverage_integrity_contract": COVERAGE_INTEGRITY_CONTRACT,
             "causal_lookback_hours_by_timeframe": dict(CAUSAL_LOOKBACK_HOURS_BY_TF),
             "causal_lookback_bars_equiv_by_timeframe": dict(LOOKBACK_BARS_BY_TF),
+            "minimum_causal_closed_bars": MIN_CAUSAL_CLOSED_BARS,
+            "maximum_causal_tail_lag_bars": MAX_CAUSAL_TAIL_LAG_BARS,
             "causal_lookback_note": (
-                "Lookback expands exact agg_trade history for reconstruction only; "
-                "reaction/economic/zone-age policy thresholds are unchanged."
+                "Structural policies require at least the minimum "
+                "classification history and raw-event/bar tails no "
+                "older than one same-timeframe bar. Reaction, "
+                "economic and zone-age thresholds are unchanged."
             ),
         }
 
@@ -1060,6 +1066,10 @@ class StructuralProtectionEngine:
         ) + len(zones)
 
         lookback = catalog.get("lookback_coverage") or {}
+        causal_history_ok = bool(
+            lookback.get("coverage_ok")
+        )
+
         if lookback:
             self.lookback_coverage_by_timeframe[tf] = lookback
         target_audit = catalog.get("target_absence_audit") or {}
@@ -1121,6 +1131,16 @@ class StructuralProtectionEngine:
             class_info["classification_timestamp"] = last.get("close_timestamp")
             class_info["status"] = last.get("classification_status") or "VALID"
 
+        if not causal_history_ok:
+            class_info["status"] = (
+                "INSUFFICIENT_CAUSAL_HISTORY"
+            )
+            class_info["volume_class"] = None
+            class_info.pop(
+                "classification_timestamp",
+                None,
+            )
+
         spread = None
         if candidate.get("best_bid") is not None and candidate.get("best_ask") is not None:
             spread = abs(float(candidate["best_ask"]) - float(candidate["best_bid"]))
@@ -1132,6 +1152,7 @@ class StructuralProtectionEngine:
             "max_trade_timestamp_used": max_trade_ts,
             "lookahead_detected": lookahead,
             "exact_profile_ok": profile_ok,
+            "causal_history_ok": causal_history_ok,
             "classification": class_info,
             "shadow_volume_class": class_info.get("volume_class"),
             "classification_mode": CLASSIFICATION_MODE,
@@ -1155,6 +1176,10 @@ class StructuralProtectionEngine:
                 "causal_cutoff_timestamp": candidate["decision_timestamp"],
                 "max_trade_timestamp_used": max_trade_ts,
                 "lookahead_detected": lookahead,
+                "causal_history_ok": causal_history_ok,
+                "coverage_status": lookback.get(
+                    "coverage_status"
+                ),
                 "trade_count": 0 if trades is None else int(len(trades)),
                 "market_recon_ok": membership.get("ok", True),
                 "policy_manifest_fingerprint": self.manifest_fp,
@@ -1224,7 +1249,7 @@ class StructuralProtectionEngine:
             self.store.append("volume_zones", row)
             zone_rows.append(z)
 
-        if not profile_ok and not bars:
+        if not causal_history_ok:
             self.insufficient_causal_data_count += 1
 
         for spec in POLICY_SPECS:
@@ -1233,6 +1258,7 @@ class StructuralProtectionEngine:
                 spec=spec,
                 profile_ok=profile_ok,
                 class_info=class_info,
+                causal_history_ok=causal_history_ok,
                 zones=zone_rows,
                 spread=spread,
                 decision_ts=decision_ts,
@@ -1245,6 +1271,7 @@ class StructuralProtectionEngine:
             "zones": len(zone_rows),
             "profile_ok": profile_ok,
             "bars": len(bars),
+            "causal_history_ok": causal_history_ok,
         }
 
     def _select_protective(
@@ -1360,6 +1387,7 @@ class StructuralProtectionEngine:
         spec,
         profile_ok: bool,
         class_info: dict[str, Any],
+        causal_history_ok: bool,
         zones: list[dict[str, Any]],
         spread: float | None,
         decision_ts,
@@ -1380,6 +1408,7 @@ class StructuralProtectionEngine:
             "lookahead_detected": lookahead,
             "outcome_attached": False,
             "research_valid": True,
+            "causal_history_ok": causal_history_ok,
             "protective_zone_detected": False,
             "protective_zone_usable": False,
             "protective_reaction_status": None,
@@ -1408,6 +1437,17 @@ class StructuralProtectionEngine:
             return
 
         if self._decision_already_recorded(candidate["candidate_id"], pid):
+            return
+
+        if (
+            spec.kind != "BASELINE"
+            and not causal_history_ok
+        ):
+            decision_row["research_valid"] = False
+            _skip(
+                "SKIP_INSUFFICIENT_CAUSAL_HISTORY",
+                "INSUFFICIENT_CAUSAL_HISTORY",
+            )
             return
 
         if any(str(p.get("timeframe")) == tf for p in self.open_by_policy.get(pid, [])):
@@ -2048,6 +2088,8 @@ class StructuralProtectionEngine:
             status = STATUS_EVIDENCE_GATE_FAILURE
         elif not integrity_ok and len(self.processed_candidates) > 0:
             status = STATUS_COVERAGE_INTEGRITY_FAILURE
+        elif self.insufficient_causal_data_count > 0:
+            status = READY_BLOCKED_HISTORY
         elif (
             self.research_valid
             and isolation_ok
@@ -2056,8 +2098,6 @@ class StructuralProtectionEngine:
             and len(self.processed_candidates) > 0
         ):
             status = STATUS_STP21_COVERAGE
-        elif self.counters["exact_profile_count"] == 0 and len(self.processed_candidates) > 0:
-            status = READY_BLOCKED_HISTORY
         elif len(self.processed_candidates) > 0 and usable_any == 0 and not proven_any:
             status = STATUS_INSUFFICIENT_REACTION
         elif self.research_valid and isolation_ok and self.baseline_divergence_count == 0:
@@ -2116,6 +2156,7 @@ class StructuralProtectionEngine:
                 and not self.classification_parity_blocked
                 and self.market_recon_ok
                 and integrity_ok
+                and self.insufficient_causal_data_count == 0
             ),
             "updated_at": utc_now(),
             "errors": self.errors[-20:],

@@ -51,12 +51,18 @@ ECONOMIC_GATES = (
 )
 
 DEFAULT_TICK_SIZE = 0.01
-SHADOW_MODEL_VERSION = "SHADOW_STP2_1_V1"
+SHADOW_MODEL_VERSION = "SHADOW_STP2_1_V2"
 LEGACY_MANIFEST_INVALIDATION_REASON = "STP2_GENERATION_SUPERSEDED_NOT_MIXED"
-COVERAGE_INTEGRITY_CONTRACT = "STP2_1_COVERAGE_METRICS_V1"
+COVERAGE_INTEGRITY_CONTRACT = "STP2_1_CAUSAL_COVERAGE_V2"
 # Classification/zone-age policy thresholds unchanged. These lookbacks only control
 # how much pre-decision exact agg_trade history is loaded for reconstruction.
 # Wall-clock hours so H4/H1 receive usable causal history, not just N short bars.
 CAUSAL_LOOKBACK_HOURS_BY_TF = {"M15": 24, "M30": 24, "H1": 48, "H4": 96}
 # Kept for tests/compat: approximate bar counts at the hour lookbacks above.
 LOOKBACK_BARS_BY_TF = {"M15": 96, "M30": 48, "H1": 48, "H4": 24}
+
+# SHADOW_VOLUME_SIGNIFICANCE_V1 requires at least five closed bars.
+# The raw-event and closed-bar tails must reach the decision within
+# one bar of the candidate timeframe.
+MIN_CAUSAL_CLOSED_BARS = 5
+MAX_CAUSAL_TAIL_LAG_BARS = 1

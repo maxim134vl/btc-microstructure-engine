@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -110,6 +110,25 @@ def stp_repo(tmp_path: Path) -> Path:
                     }
                 )
                 tid += 1
+    # Fresh raw-event tail inside the decision timeframe.
+    fresh_tail_ts = "2026-07-29T18:39:53.000000Z"
+    rows.append(
+        {
+            "schema_version": "1.0.0",
+            "stream_type": "AGG_TRADE",
+            "symbol": "BTCUSDT",
+            "exchange_event_timestamp": fresh_tail_ts,
+            "exchange_trade_timestamp": fresh_tail_ts,
+            "local_receive_timestamp": fresh_tail_ts,
+            "aggregate_trade_id": tid,
+            "price": 64199.5,
+            "quantity": 0.001,
+            "quote_quantity": 64.1995,
+            "buyer_is_market_maker": False,
+        }
+    )
+    tid += 1
+
     # duplicate trade id to test dedup
     rows.append({**rows[0], "quantity": 99.0, "quote_quantity": 99.0 * 63950.0})
     # future trade after decision — must be excluded by cutoff
@@ -975,4 +994,366 @@ def test_policy_sleeves_mirror_failure_does_not_fail_commit(
         == "policy_sleeves_mirror:"
         "SIMULATED_MIRROR_FAILURE"
         for error in eng.errors
+    )
+
+
+
+def test_causal_coverage_requires_minimum_history_and_fresh_tail():
+    from btc_ml.trading.shadow_structural_protection.catalog import (
+        lookback_coverage,
+    )
+
+    decision = datetime(
+        2026,
+        7,
+        29,
+        18,
+        39,
+        54,
+        tzinfo=timezone.utc,
+    )
+
+    bars = []
+
+    for offset in range(5):
+        natural_close = decision - timedelta(
+            minutes=5 + (4 - offset) * 15
+        )
+        bars.append(
+            {
+                "incomplete": False,
+                "open_timestamp": (
+                    natural_close
+                    - timedelta(minutes=15)
+                ).isoformat(),
+                "natural_close_timestamp": (
+                    natural_close.isoformat()
+                ),
+            }
+        )
+
+    fresh_trades = pd.DataFrame(
+        {
+            "_ts": [
+                pd.Timestamp(
+                    decision
+                    - timedelta(seconds=10)
+                )
+            ]
+        }
+    )
+
+    fresh = lookback_coverage(
+        timeframe="M15",
+        decision_ts=decision,
+        bars=bars,
+        trades=fresh_trades,
+    )
+
+    assert fresh["coverage_ok"] is True
+    assert fresh["coverage_reasons"] == []
+    assert (
+        fresh["minimum_closed_bars_required"]
+        == 5
+    )
+    assert fresh["max_tail_lag_seconds"] == 900
+
+    stale_bars = []
+
+    for bar in bars:
+        stale_bars.append(
+            {
+                **bar,
+                "open_timestamp": (
+                    datetime.fromisoformat(
+                        bar["open_timestamp"]
+                    )
+                    - timedelta(hours=2)
+                ).isoformat(),
+                "natural_close_timestamp": (
+                    datetime.fromisoformat(
+                        bar[
+                            "natural_close_timestamp"
+                        ]
+                    )
+                    - timedelta(hours=2)
+                ).isoformat(),
+            }
+        )
+
+    stale_trades = pd.DataFrame(
+        {
+            "_ts": [
+                pd.Timestamp(
+                    decision
+                    - timedelta(hours=2)
+                )
+            ]
+        }
+    )
+
+    stale = lookback_coverage(
+        timeframe="M15",
+        decision_ts=decision,
+        bars=stale_bars,
+        trades=stale_trades,
+    )
+
+    assert stale["coverage_ok"] is False
+    assert (
+        "STALE_TRADE_EVENT_TAIL"
+        in stale["coverage_reasons"]
+    )
+    assert (
+        "STALE_CLOSED_BAR_TAIL"
+        in stale["coverage_reasons"]
+    )
+
+
+def test_insufficient_history_is_not_catalog_defect():
+    from btc_ml.trading.shadow_structural_protection.catalog import (
+        audit_target_absence,
+    )
+    from btc_ml.trading.shadow_structural_protection.coverage import (
+        aggregate_target_absence,
+    )
+
+    audit = audit_target_absence(
+        zones=[],
+        side="LONG",
+        coverage={
+            "coverage_ok": False,
+            "coverage_status": (
+                "INSUFFICIENT_CAUSAL_HISTORY"
+            ),
+            "coverage_reasons": [
+                "NO_TRADE_EVENTS"
+            ],
+        },
+    )
+
+    assert (
+        audit["verdict"]
+        == "INSUFFICIENT_CAUSAL_HISTORY_NOT_EVALUABLE"
+    )
+
+    aggregate = aggregate_target_absence(
+        [audit]
+    )
+
+    assert (
+        aggregate["search_or_catalog_defect"]
+        is False
+    )
+    assert (
+        aggregate["insufficient_causal_history"]
+        is True
+    )
+    assert (
+        aggregate[
+            "insufficient_causal_history_count"
+        ]
+        == 1
+    )
+    assert aggregate["legitimate_absence"] is False
+
+
+def test_coverage_integrity_checks_contract_consistency():
+    from btc_ml.trading.shadow_structural_protection.coverage import (
+        coverage_integrity_ok,
+    )
+
+    ok, blockers = coverage_integrity_ok(
+        m15_parity={
+            "compared": 0,
+            "status": (
+                "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
+            ),
+        },
+        execute_proof={"proof_ok": True},
+        target_audit={
+            "search_or_catalog_defect": False
+        },
+        bar_coverage={
+            "explanation": "test"
+        },
+        lookback_by_tf={
+            "M15": {
+                "coverage_ok": False,
+                "coverage_reasons": [
+                    "NO_TRADE_EVENTS"
+                ],
+            }
+        },
+    )
+
+    assert ok is True
+    assert blockers == []
+
+    bad_ok, bad_blockers = (
+        coverage_integrity_ok(
+            m15_parity={
+                "compared": 0,
+                "status": (
+                    "NOT_EVALUABLE_"
+                    "INSUFFICIENT_OVERLAP"
+                ),
+            },
+            execute_proof={"proof_ok": True},
+            target_audit={
+                "search_or_catalog_defect": False
+            },
+            bar_coverage={
+                "explanation": "test"
+            },
+            lookback_by_tf={
+                "M15": {
+                    "coverage_ok": True,
+                    "coverage_reasons": [
+                        "STALE_TRADE_EVENT_TAIL"
+                    ],
+                }
+            },
+        )
+    )
+
+    assert bad_ok is False
+    assert (
+        "M15_COVERAGE_OK_WITH_REASONS"
+        in bad_blockers
+    )
+
+
+def test_insufficient_history_keeps_baseline_only(
+    stp_repo: Path,
+):
+    from btc_ml.trading.shadow_structural_protection import (
+        READY_BLOCKED_HISTORY,
+    )
+
+    _seed_entry(
+        stp_repo,
+        tf="M15",
+    )
+
+    books = (
+        stp_repo
+        / "data/trading/intrabar_paper"
+        / EXPECTED_EPOCH
+        / "books"
+    )
+
+    fill = json.loads(
+        (
+            books / "fills.jsonl"
+        ).read_text(
+            encoding="utf-8"
+        )
+    )
+    position = json.loads(
+        (
+            books / "positions.jsonl"
+        ).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    fill["ts"] = (
+        "2026-07-31T18:39:54Z"
+    )
+    position["opened_at"] = (
+        "2026-07-31T18:39:54Z"
+    )
+
+    (
+        books / "fills.jsonl"
+    ).write_text(
+        json.dumps(fill) + "\n",
+        encoding="utf-8",
+    )
+    (
+        books / "positions.jsonl"
+    ).write_text(
+        json.dumps(position) + "\n",
+        encoding="utf-8",
+    )
+
+    engine = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+    engine.poll_once()
+
+    decisions = _decisions(engine)
+    baseline = [
+        row
+        for row in decisions
+        if row.get("policy_id")
+        == "BASELINE_CANONICAL"
+    ]
+    structural = [
+        row
+        for row in decisions
+        if row.get("policy_id")
+        != "BASELINE_CANONICAL"
+    ]
+
+    assert len(decisions) == len(POLICY_SPECS)
+    assert len(baseline) == 1
+    assert (
+        baseline[0]["action"]
+        == "EXECUTE_STRUCTURAL"
+    )
+    assert (
+        baseline[0]["research_valid"]
+        is True
+    )
+
+    assert structural
+    assert all(
+        row["action"]
+        == "SKIP_INSUFFICIENT_CAUSAL_HISTORY"
+        for row in structural
+    )
+    assert all(
+        row["research_valid"] is False
+        for row in structural
+    )
+
+    snapshot = engine.store.read_all(
+        "candidate_snapshots"
+    )[-1]
+
+    assert (
+        snapshot["causal_history_ok"]
+        is False
+    )
+    assert (
+        snapshot["exact_profile_ok"]
+        is False
+    )
+    assert snapshot["zones_detected"] == 0
+    assert (
+        snapshot[
+            "target_absence_audit"
+        ]["verdict"]
+        == "INSUFFICIENT_CAUSAL_HISTORY_NOT_EVALUABLE"
+    )
+
+    health = engine.write_health()
+
+    assert (
+        health["status"]
+        == READY_BLOCKED_HISTORY
+    )
+    assert (
+        health["coverage_integrity_ok"]
+        is True
+    )
+    assert health["research_valid"] is False
+    assert (
+        health[
+            "target_usable_absence_audit"
+        ]["search_or_catalog_defect"]
+        is False
     )
