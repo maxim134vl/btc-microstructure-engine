@@ -35,7 +35,7 @@ from .enrichment import (
 from .features import build_decision_time_features, parse_ts, utc_now
 from .marginal import marginal_contribution
 from .outcomes import build_quality_outcome, scale_net_pnl
-from .paths import paper_books_root, repo_root, shadow_root
+from .paths import paper_books_root, repo_root, shadow_epoch_root
 from .policies import decide_policy
 from .sleeves import (
     apply_policy_sizing,
@@ -115,18 +115,45 @@ class ShadowEconomicCorrelationEngine:
         strict_epoch: bool = True,
     ) -> None:
         self.repo = repo or repo_root()
-        self.store = ShadowStore(shadow_dir or shadow_root(self.repo), repo=self.repo)
         self.cfg = load_intrabar_paper_config(repo_root=self.repo)
         active_path = self.repo / "data" / "trading" / "paper_epochs" / "active.json"
-        active = json.loads(active_path.read_text(encoding="utf-8")) if active_path.exists() else {}
+        try:
+            active = json.loads(active_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            if strict_epoch:
+                raise RuntimeError(
+                    f"{SOURCE_EPOCH_MISMATCH}: active contract unreadable: {exc}"
+                ) from exc
+            active = {}
+
+        if strict_epoch:
+            required = (
+                "paper_epoch_id",
+                "trading_contract_fingerprint",
+                "parent_trading_contract_fingerprint",
+            )
+            missing = [name for name in required if not active.get(name)]
+            if missing:
+                raise RuntimeError(
+                    f"{SOURCE_EPOCH_MISMATCH}: active contract missing "
+                    + ",".join(missing)
+                )
+
         self.epoch_id = epoch_id or str(active.get("paper_epoch_id") or EXPECTED_EPOCH)
         self.source_fp = str(active.get("trading_contract_fingerprint") or EXPECTED_ACTIVE_FP)
         self.parent_fp = str(active.get("parent_trading_contract_fingerprint") or EXPECTED_PARENT_FP)
-        if strict_epoch and self.epoch_id != EXPECTED_EPOCH:
-            raise RuntimeError(f"{SOURCE_EPOCH_MISMATCH}: {self.epoch_id}")
+
+        # PAPER epoch identity namespaces observations; contract fingerprints
+        # determine whether the shadow logic is compatible with the source.
         if strict_epoch and self.source_fp != EXPECTED_ACTIVE_FP:
             raise RuntimeError(f"{SOURCE_EPOCH_MISMATCH}: fingerprint {self.source_fp}")
+        if strict_epoch and self.parent_fp != EXPECTED_PARENT_FP:
+            raise RuntimeError(f"{SOURCE_EPOCH_MISMATCH}: parent fingerprint {self.parent_fp}")
 
+        self.store = ShadowStore(
+            shadow_dir or shadow_epoch_root(self.repo, epoch_id=self.epoch_id),
+            repo=self.repo,
+        )
         self.books = _ReadOnlyPaperBooks(
             paper_books_root(self.repo, epoch_id=self.epoch_id),
             paper_epoch_id=self.epoch_id,

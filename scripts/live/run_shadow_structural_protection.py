@@ -40,6 +40,59 @@ def _clear_own_pid(path: Path) -> None:
         return
 
 
+def _active_epoch_id(repo: Path | None = None) -> str:
+    root = repo or REPO
+    path = root / "data" / "trading" / "paper_epochs" / "active.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeError(f"ACTIVE_EPOCH_UNREADABLE:{path}:{exc}") from exc
+
+    epoch_id = str(payload.get("paper_epoch_id") or "").strip()
+    if not epoch_id:
+        raise RuntimeError(f"ACTIVE_EPOCH_ID_MISSING:{path}")
+    return epoch_id
+
+
+def _append_error_once(engine: StructuralProtectionEngine, message: str) -> None:
+    if not engine.errors or engine.errors[-1] != message:
+        engine.errors.append(message)
+
+
+def _rollover_if_needed(
+    engine: StructuralProtectionEngine,
+) -> StructuralProtectionEngine:
+    active_epoch = _active_epoch_id()
+    if active_epoch == engine.epoch_id:
+        return engine
+
+    previous_epoch = engine.epoch_id
+    replacement = StructuralProtectionEngine(repo=REPO, strict_epoch=True)
+    health = replacement.write_health()
+
+    if not replacement.exact_ok:
+        raise RuntimeError(f"{BLOCKED_NO_EXACT}:{replacement.epoch_id}")
+    if health.get("baseline_divergence_count"):
+        raise RuntimeError(
+            f"SHADOW_STP1_BASELINE_DIVERGENCE:{replacement.epoch_id}"
+        )
+
+    print(
+        json.dumps(
+            {
+                "status": "SHADOW_STP_EPOCH_ROLLOVER",
+                "pid": os.getpid(),
+                "previous_epoch_id": previous_epoch,
+                "active_epoch_id": replacement.epoch_id,
+                "health": health,
+            },
+            default=str,
+        ),
+        flush=True,
+    )
+    return replacement
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--poll-ms", type=int, default=1000)
@@ -64,6 +117,18 @@ def main() -> int:
     last_health = 0.0
     try:
         while not STOP:
+            try:
+                engine = _rollover_if_needed(engine)
+            except Exception as exc:  # noqa: BLE001
+                _append_error_once(engine, f"epoch_rollover:{exc}")
+                try:
+                    engine.write_health()
+                    _write_pid(pid_path)
+                except Exception as hexc:  # noqa: BLE001
+                    _append_error_once(engine, f"health:{hexc}")
+                time.sleep(max(0.05, args.poll_ms / 1000.0))
+                continue
+
             try:
                 engine.poll_once()
             except Exception as exc:  # noqa: BLE001

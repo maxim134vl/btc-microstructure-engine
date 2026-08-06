@@ -164,10 +164,67 @@ def test_engine_does_not_write_command_bus_or_positions(shadow_repo: Path):
     assert eng.write_health()["command_bus_write_capability"] is False
 
 
-def test_source_epoch_mismatch_raises(shadow_repo: Path):
+def test_new_source_epoch_with_same_contract_is_allowed_and_isolated(
+    shadow_repo: Path,
+):
     active = shadow_repo / "data" / "trading" / "paper_epochs" / "active.json"
-    active.write_text(json.dumps({"paper_epoch_id": "OTHER", "trading_contract_fingerprint": EXPECTED_ACTIVE_FP}) + "\n")
+    active.write_text(
+        json.dumps(
+            {
+                "paper_epoch_id": "OTHER",
+                "trading_contract_fingerprint": EXPECTED_ACTIVE_FP,
+                "parent_trading_contract_fingerprint": EXPECTED_PARENT_FP,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    eng = ShadowEconomicCorrelationEngine(repo=shadow_repo, strict_epoch=True)
+
+    assert eng.epoch_id == "OTHER"
+    assert eng.store.root == (
+        shadow_repo
+        / "data/trading/shadow_economic_correlation/epochs/OTHER"
+    )
+
+
+def test_source_contract_fingerprint_mismatch_raises(shadow_repo: Path):
+    active = shadow_repo / "data" / "trading" / "paper_epochs" / "active.json"
+    active.write_text(
+        json.dumps(
+            {
+                "paper_epoch_id": "OTHER",
+                "trading_contract_fingerprint": "WRONG_ACTIVE_FP",
+                "parent_trading_contract_fingerprint": EXPECTED_PARENT_FP,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     with pytest.raises(RuntimeError, match="SOURCE_EPOCH_MISMATCH"):
+        ShadowEconomicCorrelationEngine(repo=shadow_repo, strict_epoch=True)
+
+
+def test_parent_contract_fingerprint_mismatch_raises(shadow_repo: Path):
+    active = shadow_repo / "data" / "trading" / "paper_epochs" / "active.json"
+    active.write_text(
+        json.dumps(
+            {
+                "paper_epoch_id": "OTHER",
+                "trading_contract_fingerprint": EXPECTED_ACTIVE_FP,
+                "parent_trading_contract_fingerprint": "WRONG_PARENT_FP",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="SOURCE_EPOCH_MISMATCH: parent fingerprint",
+    ):
         ShadowEconomicCorrelationEngine(repo=shadow_repo, strict_epoch=True)
 
 
@@ -446,3 +503,14 @@ def test_shadow_failure_does_not_mutate_live1b_books(shadow_repo: Path):
     after = {p.name: p.read_bytes() for p in books.glob("*.jsonl")}
     assert before_names == after_names
     assert before == after
+
+
+def test_strict_start_requires_readable_active_contract(shadow_repo: Path):
+    active = shadow_repo / "data" / "trading" / "paper_epochs" / "active.json"
+    active.unlink()
+
+    with pytest.raises(
+        RuntimeError,
+        match="SOURCE_EPOCH_MISMATCH: active contract unreadable",
+    ):
+        ShadowEconomicCorrelationEngine(repo=shadow_repo, strict_epoch=True)

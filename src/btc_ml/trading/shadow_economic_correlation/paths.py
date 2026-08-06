@@ -15,6 +15,14 @@ def shadow_root(repo: Path | None = None) -> Path:
     return (repo or repo_root()) / "data" / "trading" / "shadow_economic_correlation"
 
 
+def shadow_epoch_root(repo: Path | None = None, *, epoch_id: str) -> Path:
+    """Return isolated shadow state root for one PAPER epoch."""
+    epoch = str(epoch_id or "").strip()
+    if not epoch or epoch in {".", ".."} or "/" in epoch or "\\" in epoch:
+        raise ValueError(f"invalid paper epoch id: {epoch_id!r}")
+    return shadow_root(repo) / "epochs" / epoch
+
+
 def paper_books_root(repo: Path | None = None, *, epoch_id: str) -> Path:
     return (repo or repo_root()) / "data" / "trading" / "intrabar_paper" / epoch_id / "books"
 

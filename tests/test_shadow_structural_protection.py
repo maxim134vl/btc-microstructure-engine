@@ -525,3 +525,14 @@ def test_stp11_invalidated_manifest_excluded_from_valid_metrics(stp_repo: Path):
     assert h["virtual_positions_open"] == len(eng._valid_open_positions())
     assert all(p.get("policy_manifest_fingerprint") == eng.manifest_fp for p in eng._valid_open_positions())
     assert all(p.get("policy_id") == "BASELINE_CANONICAL" or p.get("research_valid") for p in eng._valid_open_positions())
+
+
+def test_stp_strict_start_requires_readable_active_contract(stp_repo: Path):
+    active = stp_repo / "data" / "trading" / "paper_epochs" / "active.json"
+    active.unlink()
+
+    with pytest.raises(
+        RuntimeError,
+        match="SOURCE_EPOCH_MISMATCH: active contract unreadable",
+    ):
+        StructuralProtectionEngine(repo=stp_repo, strict_epoch=True)

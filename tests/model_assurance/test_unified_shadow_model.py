@@ -80,7 +80,7 @@ def _seed_repo(tmp_path: Path, *, pending_stp: bool = False, hist_stp: bool = Fa
     _write_jsonl(books / "positions.jsonl", [])
 
     # EQCORR
-    eq = repo / "data/trading/shadow_economic_correlation"
+    eq = repo / "data/trading/shadow_economic_correlation/epochs" / EXPECTED_EPOCH
     _write_json(
         eq / "health.json",
         {
@@ -124,7 +124,7 @@ def _seed_repo(tmp_path: Path, *, pending_stp: bool = False, hist_stp: bool = Fa
 
     # STP
     stp_fp = HIST_STP11 if hist_stp else STP_FP
-    stp = repo / "data/trading/shadow_structural_protection"
+    stp = repo / "data/trading/shadow_structural_protection/epochs" / EXPECTED_EPOCH
     _write_json(
         stp / "health.json",
         {
@@ -362,8 +362,9 @@ def test_read_only_builder_does_not_change_source_hashes(tmp_path: Path, monkeyp
 def test_integration_live_repo_snapshot_if_available():
     """Optional live integration — skip if shadow journals absent."""
     root = Path(__file__).resolve().parents[2]
-    eq_h = root / "data/trading/shadow_economic_correlation/health.json"
-    stp_h = root / "data/trading/shadow_structural_protection/health.json"
+    paths = usm.unified_paths(root)
+    eq_h = paths["eqcorr_dir"] / "health.json"
+    stp_h = paths["stp_dir"] / "health.json"
     if not eq_h.exists() or not stp_h.exists():
         pytest.skip("live shadow health not present")
     snap = usm.build_unified_shadow_model_snapshot(repo_root=root)

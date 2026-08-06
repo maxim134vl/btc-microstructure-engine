@@ -68,6 +68,15 @@ def _repo_root() -> Path:
 def unified_paths(repo_root: Path | None = None) -> dict[str, Path]:
     root = repo_root or _repo_root()
     base = root / "data" / "model_assurance" / "shadow"
+    active_epoch = root / "data" / "trading" / "paper_epochs" / "active.json"
+    active = load_json(active_epoch) or {}
+    epoch_id = str(active.get("paper_epoch_id") or "").strip()
+
+    eqcorr_base = root / "data" / "trading" / "shadow_economic_correlation"
+    stp_base = root / "data" / "trading" / "shadow_structural_protection"
+    eqcorr_dir = eqcorr_base / "epochs" / epoch_id if epoch_id else eqcorr_base
+    stp_dir = stp_base / "epochs" / epoch_id if epoch_id else stp_base
+
     return {
         "root": root,
         "base": base,
@@ -76,9 +85,9 @@ def unified_paths(repo_root: Path | None = None) -> dict[str, Path]:
         "comparisons_dir": base / "comparisons",
         "model7_comparisons": base / "comparisons" / "active_shadow_comparisons.jsonl",
         "model7_summary": base / "snapshots" / "latest_summary.json",
-        "active_epoch": root / "data" / "trading" / "paper_epochs" / "active.json",
-        "eqcorr_dir": root / "data" / "trading" / "shadow_economic_correlation",
-        "stp_dir": root / "data" / "trading" / "shadow_structural_protection",
+        "active_epoch": active_epoch,
+        "eqcorr_dir": eqcorr_dir,
+        "stp_dir": stp_dir,
         "live1a_pid": root / "run" / "intrabar_cognition.pid",
         "live1b_pid": root / "run" / "intrabar_paper_manager.pid",
         "eqcorr_pid": root / "run" / "shadow_economic_correlation.pid",
