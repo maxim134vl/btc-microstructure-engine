@@ -39,6 +39,7 @@ from . import (
     STATUS_INSUFFICIENT_REACTION,
     STATUS_LOOKAHEAD_STP11,
     STATUS_MARKET_RECON_FAILURE,
+    STATUS_STP21_CATCHUP,
     STATUS_STP21_COVERAGE,
     STATUS_WRITE_BOUNDARY,
     TIMEFRAMES,
@@ -839,6 +840,78 @@ class StructuralProtectionEngine:
             "best_ask": fill.get("best_ask"),
         }
 
+    def _resolved_source_entries(
+        self,
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        fills = [
+            fill
+            for fill in self.books.read_all("fills")
+            if str(fill.get("action") or "").upper()
+            == "ENTRY"
+        ]
+
+        positions: dict[str, dict[str, Any]] = {}
+
+        for position in self.books.read_all("positions"):
+            position_id = str(
+                position.get("position_id") or ""
+            )
+
+            if not position_id:
+                continue
+
+            previous = positions.get(position_id)
+
+            if previous is None:
+                positions[position_id] = position
+                continue
+
+            previous_has_fill = bool(
+                previous.get("entry_fill_id")
+            )
+            current_has_fill = bool(
+                position.get("entry_fill_id")
+            )
+
+            if current_has_fill and not previous_has_fill:
+                positions[position_id] = position
+            elif (
+                current_has_fill == previous_has_fill
+                and str(
+                    position.get("status") or ""
+                ).upper()
+                == "OPEN"
+            ):
+                positions[position_id] = position
+
+        positions_by_fill = {
+            str(position.get("entry_fill_id")): position
+            for position in positions.values()
+            if position.get("entry_fill_id")
+        }
+
+        resolved = []
+
+        for fill in fills:
+            fill_id = str(fill.get("fill_id") or "")
+            position = positions_by_fill.get(fill_id)
+
+            if position is not None:
+                resolved.append((fill, position))
+
+        return resolved
+
+    def _source_candidate_ids(self) -> set[str]:
+        return {
+            (
+                f"{self.epoch_id}|"
+                f"{position.get('position_id')}|"
+                f"{fill.get('fill_id')}"
+            )
+            for fill, position
+            in self._resolved_source_entries()
+        }
+
     def process_new_entries(self) -> list[dict[str, Any]]:
         if not self.exact_ok:
             self.write_health()
@@ -846,34 +919,7 @@ class StructuralProtectionEngine:
 
         self._trade_cache: dict = {}
         actions: list[dict[str, Any]] = []
-
-        fills = [
-            fill
-            for fill in self.books.read_all("fills")
-            if str(fill.get("action") or "").upper() == "ENTRY"
-        ]
-
-        positions: dict[str, dict[str, Any]] = {}
-        for position in self.books.read_all("positions"):
-            position_id = str(position.get("position_id") or "")
-            if not position_id:
-                continue
-
-            previous = positions.get(position_id)
-            if previous is None:
-                positions[position_id] = position
-                continue
-
-            previous_has_fill = bool(previous.get("entry_fill_id"))
-            current_has_fill = bool(position.get("entry_fill_id"))
-
-            if current_has_fill and not previous_has_fill:
-                positions[position_id] = position
-            elif (
-                current_has_fill == previous_has_fill
-                and str(position.get("status") or "").upper() == "OPEN"
-            ):
-                positions[position_id] = position
+        resolved_entries = self._resolved_source_entries()
 
         health_path = (
             self.repo
@@ -899,20 +945,11 @@ class StructuralProtectionEngine:
         transaction_state: dict[str, Any] | None = None
         candidate_id: str | None = None
 
-        for fill in fills:
-            position = None
-
-            for candidate_position in positions.values():
-                if str(
-                    candidate_position.get("entry_fill_id") or ""
-                ) == str(fill.get("fill_id") or ""):
-                    position = candidate_position
-                    break
-
-            if position is None:
-                continue
-
-            candidate = self._candidate_from_entry(fill, position)
+        for fill, position in resolved_entries:
+            candidate = self._candidate_from_entry(
+                fill,
+                position,
+            )
             candidate_id = str(candidate["candidate_id"])
 
             if candidate_id in self.processed_candidates:
@@ -2069,6 +2106,51 @@ class StructuralProtectionEngine:
             lookback_by_tf=self.lookback_coverage_by_timeframe,
         )
 
+        source_candidate_ids = self._source_candidate_ids()
+        processed_source_ids = (
+            self.processed_candidates
+            & source_candidate_ids
+        )
+        remaining_source_ids = (
+            source_candidate_ids
+            - self.processed_candidates
+        )
+        unexpected_processed_ids = (
+            self.processed_candidates
+            - source_candidate_ids
+        )
+
+        source_candidate_count = len(
+            source_candidate_ids
+        )
+        processed_source_candidate_count = len(
+            processed_source_ids
+        )
+        remaining_candidate_count = len(
+            remaining_source_ids
+        )
+        unexpected_processed_candidate_count = len(
+            unexpected_processed_ids
+        )
+        catchup_complete = (
+            processed_source_ids
+            == source_candidate_ids
+            and unexpected_processed_candidate_count == 0
+        )
+
+        if source_candidate_count == 0:
+            coverage_integrity_scope = (
+                "NO_SOURCE_CANDIDATES"
+            )
+        elif catchup_complete:
+            coverage_integrity_scope = (
+                "FULL_SOURCE_UNIVERSE"
+            )
+        else:
+            coverage_integrity_scope = (
+                "PROCESSED_SUBSET"
+            )
+
         if self.write_boundary_violation_count:
             status = STATUS_WRITE_BOUNDARY
         elif not self.exact_ok:
@@ -2088,6 +2170,11 @@ class StructuralProtectionEngine:
             status = STATUS_EVIDENCE_GATE_FAILURE
         elif not integrity_ok and len(self.processed_candidates) > 0:
             status = STATUS_COVERAGE_INTEGRITY_FAILURE
+        elif (
+            source_candidate_count > 0
+            and not catchup_complete
+        ):
+            status = STATUS_STP21_CATCHUP
         elif self.insufficient_causal_data_count > 0:
             status = READY_BLOCKED_HISTORY
         elif (
@@ -2124,6 +2211,20 @@ class StructuralProtectionEngine:
             "legacy_manifest_invalidated": bool(self._legacy_manifest_fps),
             "invalidated_manifest_fingerprints": sorted(self._legacy_manifest_fps),
             "candidate_count": len(self.processed_candidates),
+            "source_candidate_count": source_candidate_count,
+            "processed_source_candidate_count": (
+                processed_source_candidate_count
+            ),
+            "remaining_candidate_count": (
+                remaining_candidate_count
+            ),
+            "unexpected_processed_candidate_count": (
+                unexpected_processed_candidate_count
+            ),
+            "catchup_complete": catchup_complete,
+            "coverage_integrity_scope": (
+                coverage_integrity_scope
+            ),
             **self.counters,
             "m15_parity": self.m15_parity,
             "classification_parity_blocked": self.classification_parity_blocked,
@@ -2157,6 +2258,7 @@ class StructuralProtectionEngine:
                 and self.market_recon_ok
                 and integrity_ok
                 and self.insufficient_causal_data_count == 0
+                and catchup_complete
             ),
             "updated_at": utc_now(),
             "errors": self.errors[-20:],

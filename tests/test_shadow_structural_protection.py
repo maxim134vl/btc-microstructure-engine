@@ -1357,3 +1357,144 @@ def test_insufficient_history_keeps_baseline_only(
         ]["search_or_catalog_defect"]
         is False
     )
+
+
+
+def test_catchup_status_requires_full_source_universe(
+    stp_repo: Path,
+):
+    from btc_ml.trading.shadow_structural_protection import (
+        STATUS_STP21_CATCHUP,
+    )
+
+    _seed_entry(stp_repo, tf="M15")
+
+    books = (
+        stp_repo
+        / "data/trading/intrabar_paper"
+        / EXPECTED_EPOCH
+        / "books"
+    )
+
+    fill_1 = json.loads(
+        (books / "fills.jsonl").read_text(
+            encoding="utf-8"
+        )
+    )
+    position_1 = json.loads(
+        (books / "positions.jsonl").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    fill_2 = {
+        **fill_1,
+        "fill_id": "fill2",
+        "order_id": "ord2",
+        "command_id": "cmd2",
+        "ts": "2026-07-29T18:39:55Z",
+    }
+    position_2 = {
+        **position_1,
+        "position_id": "pos2",
+        "entry_fill_id": "fill2",
+        "entry_command_id": "cmd2",
+        "opened_at": "2026-07-29T18:39:55Z",
+    }
+
+    (books / "fills.jsonl").write_text(
+        json.dumps(fill_1)
+        + "\n"
+        + json.dumps(fill_2)
+        + "\n",
+        encoding="utf-8",
+    )
+    (books / "positions.jsonl").write_text(
+        json.dumps(position_1)
+        + "\n"
+        + json.dumps(position_2)
+        + "\n",
+        encoding="utf-8",
+    )
+    (books / "commands.jsonl").write_text(
+        json.dumps(
+            {
+                "command_id": "cmd1",
+                "signal_id": "sig1",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "command_id": "cmd2",
+                "signal_id": "sig2",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (books / "signals.jsonl").write_text(
+        json.dumps(
+            {
+                "signal_id": "sig1",
+                "context_event_id": "ctx1",
+                "timeframe": "M15",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "signal_id": "sig2",
+                "context_event_id": "ctx2",
+                "timeframe": "M15",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    engine = StructuralProtectionEngine(
+        repo=stp_repo,
+        strict_epoch=True,
+    )
+
+    engine.poll_once()
+    first = engine.write_health()
+
+    assert first["source_candidate_count"] == 2
+    assert (
+        first["processed_source_candidate_count"]
+        == 1
+    )
+    assert first["remaining_candidate_count"] == 1
+    assert (
+        first["unexpected_processed_candidate_count"]
+        == 0
+    )
+    assert first["catchup_complete"] is False
+    assert (
+        first["coverage_integrity_scope"]
+        == "PROCESSED_SUBSET"
+    )
+    assert first["status"] == STATUS_STP21_CATCHUP
+    assert first["research_valid"] is False
+
+    engine.poll_once()
+    second = engine.write_health()
+
+    assert second["source_candidate_count"] == 2
+    assert (
+        second["processed_source_candidate_count"]
+        == 2
+    )
+    assert second["remaining_candidate_count"] == 0
+    assert (
+        second["unexpected_processed_candidate_count"]
+        == 0
+    )
+    assert second["catchup_complete"] is True
+    assert (
+        second["coverage_integrity_scope"]
+        == "FULL_SOURCE_UNIVERSE"
+    )
+    assert second["status"] != STATUS_STP21_CATCHUP
