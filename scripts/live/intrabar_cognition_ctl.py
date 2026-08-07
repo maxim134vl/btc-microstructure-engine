@@ -17,9 +17,20 @@ PYTHON = ROOT / "venv" / "bin" / "python"
 SERVICE = ROOT / "scripts" / "live" / "run_intrabar_cognition_service.py"
 DEFAULT_PID = ROOT / "run" / "intrabar_cognition.pid"
 DEFAULT_HEALTH = ROOT / "data" / "runtime" / "intrabar_cognition_health.json"
+DEFAULT_STOP_INTENT = ROOT / "run" / "intrabar_cognition.stop_intent.json"
+DEFAULT_CONTROLLED_RESTART = ROOT / "run" / "intrabar_cognition.controlled_restart.json"
 DEFAULT_JOURNAL = ROOT / "data" / "raw_market_events_v2"
 DEFAULT_CONTEXT = ROOT / "data" / "cognition" / "intrabar_context_events"
 DEFAULT_LOG = ROOT / "logs" / "intrabar_cognition.log"
+
+sys.path.insert(0, str(ROOT / "src"))
+from btc_ml.runtime.intrabar_supervision import (  # noqa: E402
+    RestartPolicy,
+    clear_stop_intent,
+    load_config,
+    mark_controlled_restart,
+    write_stop_intent,
+)
 
 
 def _read_pid(path: Path) -> int | None:
@@ -66,13 +77,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0 if _alive(pid) else 1
 
 
-def cmd_stop(args: argparse.Namespace) -> int:
+def _kill_process(args: argparse.Namespace) -> tuple[int | None, bool]:
     pid = _read_pid(args.pid_file)
     if not _alive(pid):
-        print(json.dumps({"stopped": True, "pid": pid, "note": "not_running"}))
         if args.pid_file.exists():
             args.pid_file.unlink(missing_ok=True)
-        return 0
+        return pid, False
     assert pid is not None
     os.kill(pid, signal.SIGTERM)
     for _ in range(60):
@@ -85,11 +95,25 @@ def cmd_stop(args: argparse.Namespace) -> int:
         time.sleep(0.5)
     if args.pid_file.exists() and not _alive(pid):
         args.pid_file.unlink(missing_ok=True)
-    print(json.dumps({"stopped": not _alive(pid), "pid": pid, "forced_kill": still}))
+    return pid, still
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    pid = _read_pid(args.pid_file)
+    if not _alive(pid):
+        print(json.dumps({"stopped": True, "pid": pid, "note": "not_running"}))
+        if args.pid_file.exists():
+            args.pid_file.unlink(missing_ok=True)
+        write_stop_intent(args.stop_intent_file, reason="manual", stopped_by="intrabar_cognition_ctl stop")
+        return 0
+    pid, still = _kill_process(args)
+    write_stop_intent(args.stop_intent_file, reason="manual", stopped_by="intrabar_cognition_ctl stop")
+    print(json.dumps({"stopped": not _alive(pid), "pid": pid, "forced_kill": still, "stop_intent": True}))
     return 0 if not _alive(pid) else 1
 
 
 def cmd_start(args: argparse.Namespace) -> int:
+    clear_stop_intent(args.stop_intent_file)
     if _alive(_read_pid(args.pid_file)):
         print(json.dumps({"started": False, "error": "already_running", "pid": _read_pid(args.pid_file)}))
         return 1
@@ -148,11 +172,13 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Intrabar cognition control")
-    parser.add_argument("command", choices=["start", "stop", "status"])
+    parser.add_argument("command", choices=["start", "stop", "status", "restart"])
     parser.add_argument("--journal-root", type=Path, default=DEFAULT_JOURNAL)
     parser.add_argument("--context-root", type=Path, default=DEFAULT_CONTEXT)
     parser.add_argument("--health-path", type=Path, default=DEFAULT_HEALTH)
     parser.add_argument("--pid-file", type=Path, default=DEFAULT_PID)
+    parser.add_argument("--stop-intent-file", type=Path, default=DEFAULT_STOP_INTENT)
+    parser.add_argument("--controlled-restart-file", type=Path, default=DEFAULT_CONTROLLED_RESTART)
     parser.add_argument("--log-file", type=Path, default=DEFAULT_LOG)
     parser.add_argument("--symbol", default="BTCUSDT")
     args = parser.parse_args()
@@ -160,6 +186,16 @@ def main() -> int:
         return cmd_start(args)
     if args.command == "stop":
         return cmd_stop(args)
+    if args.command == "restart":
+        policy = RestartPolicy.from_config(load_config(ROOT))
+        mark_controlled_restart(
+            args.controlled_restart_file,
+            grace_seconds=policy.controlled_restart_grace_seconds,
+        )
+        _kill_process(args)
+        clear_stop_intent(args.stop_intent_file)
+        time.sleep(0.5)
+        return cmd_start(args)
     return cmd_status(args)
 
 

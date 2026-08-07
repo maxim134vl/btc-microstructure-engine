@@ -33,6 +33,7 @@ CONTEXT_VISUAL_REFRESHER_PID_FILE="$STACK_DIR/context_visual_refresher.pid"
 CONTEXT_VISUAL_REFRESHER_PID_COMPAT="$ROOT/runtime_context_visual_refresher.pid"
 CONTEXT_VISUAL_REFRESHER_LOCK="$ROOT/runtime_context_visual_refresher.lock"
 CONTEXT_VISUAL_VIEWER_PID_FILE="$STACK_DIR/context_visual_viewer.pid"
+INTRABAR_SUPERVISOR_PID_FILE="$STACK_DIR/intrabar_process_supervisor.pid"
 
 WATCHDOG_LOG="$STACK_DIR/collector_watchdog.log"
 RUNTIME_LOG="$STACK_DIR/runtime.log"
@@ -40,6 +41,7 @@ API_LOG="$STACK_DIR/dashboard_api.log"
 UI_LOG="$STACK_DIR/dashboard_ui.log"
 CONTEXT_VISUAL_REFRESHER_LOG="$ROOT/logs/context_visual_refresher.log"
 CONTEXT_VISUAL_VIEWER_LOG="$STACK_DIR/context_visual_viewer.log"
+INTRABAR_SUPERVISOR_LOG="$STACK_DIR/intrabar_process_supervisor.log"
 CONTEXT_VISUAL_STATUS_JSON="$ROOT/apps/context_visualizer/public/data/visual_status.json"
 
 API_PORT="${DASHBOARD_PORT:-8080}"
@@ -53,7 +55,7 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") {start|stop|status|restart}
 
-  start    Start collector watchdog, runtime, dashboard, context visual refresher
+  start    Start collector watchdog, intrabar supervisor, runtime, dashboard, context visual refresher
   stop     Stop stack processes managed by this launcher
   status   Show process / port / feed / context visual health
   restart  stop + start
@@ -240,6 +242,16 @@ for name, pid in list(pids.items()):
     except Exception:
         pass
 PY
+}
+
+start_intrabar_supervisor() {
+  if adopt_or_skip "intrabar_process_supervisor" "$INTRABAR_SUPERVISOR_PID_FILE" "intrabar_process_supervisor.py"; then
+    return 0
+  fi
+  echo "  [start] intrabar_process_supervisor.py"
+  detach_start "$INTRABAR_SUPERVISOR_PID_FILE" "$INTRABAR_SUPERVISOR_LOG" \
+    "$PYTHON" scripts/live/intrabar_process_supervisor.py >/dev/null
+  sleep 1
 }
 
 start_watchdog() {
@@ -491,6 +503,7 @@ cmd_start() {
   echo "Logs: $STACK_DIR"
   echo
   start_watchdog
+  start_intrabar_supervisor
   start_runtime
   start_dashboard_api
   start_dashboard_ui
@@ -516,6 +529,8 @@ cmd_stop() {
   stop_pid_file "runtime" "$RUNTIME_PID_FILE"
   stop_matching "runtime" "run\\.py"
   clear_pid "$RUNTIME_PID_COMPAT"
+  stop_pid_file "intrabar_process_supervisor" "$INTRABAR_SUPERVISOR_PID_FILE"
+  stop_matching "intrabar_process_supervisor" "intrabar_process_supervisor\\.py"
   stop_pid_file "collector_watchdog" "$WATCHDOG_PID_FILE"
   stop_matching "collector_watchdog" "collector_watchdog\\.py"
   stop_collector_children
@@ -563,6 +578,29 @@ api_health() {
   fi
 }
 
+intrabar_supervision_status() {
+  echo "Intrabar supervision:"
+  component_line "intrabar_process_supervisor" "$INTRABAR_SUPERVISOR_PID_FILE"
+  if [[ -f "$ROOT/data/runtime/intrabar_operational_status.json" ]]; then
+    "$PYTHON" - <<'PY' 2>/dev/null || true
+import json
+from pathlib import Path
+p = Path("data/runtime/intrabar_operational_status.json")
+data = json.loads(p.read_text(encoding="utf-8"))
+for name, svc in (data.get("services") or {}).items():
+    print(
+        f"  {name:24} lifecycle={svc.get('lifecycle_state')} "
+        f"pid={svc.get('pid')} execution={svc.get('execution_state')}"
+    )
+alerts = data.get("alerts") or []
+if alerts:
+    print(f"  alerts: {', '.join(alerts)}")
+PY
+  else
+    echo "  operational_status: missing"
+  fi
+}
+
 context_visual_status() {
   local pid status="STOPPED"
   pid="$(read_pid "$CONTEXT_VISUAL_REFRESHER_PID_FILE")"
@@ -597,11 +635,15 @@ cmd_status() {
   echo "Root: $ROOT"
   echo
   component_line "collector_watchdog" "$WATCHDOG_PID_FILE"
+  component_line "intrabar_process_supervisor" "$INTRABAR_SUPERVISOR_PID_FILE"
   component_line "runtime (run.py)" "$RUNTIME_PID_FILE"
   component_line "dashboard_api" "$API_PID_FILE" "  :${API_PORT}"
   component_line "dashboard_ui" "$UI_PID_FILE" "  :${UI_PORT}"
   component_line "context_visual_refresher" "$CONTEXT_VISUAL_REFRESHER_PID_FILE"
   component_line "context_visual_viewer" "$CONTEXT_VISUAL_VIEWER_PID_FILE" "  :${CONTEXT_VISUAL_PORT}"
+
+  echo
+  intrabar_supervision_status
 
   echo
   context_visual_status

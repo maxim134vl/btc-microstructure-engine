@@ -105,6 +105,7 @@ class IntrabarPaperEngine:
         self.last_context_event: dict[str, Any] | None = None
         self.errors: list[str] = []
         self._command_seq = 0
+        self.execution_market: Any | None = None
         self.health_path = epoch_root / "health.json"
         self.trading_contract = self._load_trading_contract(epoch_root)
         self.sleeves = SleeveLedger.load(epoch_root)
@@ -172,6 +173,14 @@ class IntrabarPaperEngine:
                 self.traded_episodes.add(str(ep))
         self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
 
+    def execution_market_ready_for_entry(self) -> bool:
+        if self.execution_market is None:
+            return True
+        return bool(self.execution_market.execution_market_ready_for_entry())
+
+    def attach_execution_market(self, processor: Any) -> None:
+        self.execution_market = processor
+
     def update_bbo_from_market(
         self,
         *,
@@ -181,6 +190,7 @@ class IntrabarPaperEngine:
         receive_timestamp: str | None = None,
         book_update_id: str | None = None,
         source_event_id: str | None = None,
+        market_provenance: dict[str, Any] | None = None,
     ) -> None:
         self.bbo.update_from_book_ticker(
             best_bid=best_bid,
@@ -191,13 +201,6 @@ class IntrabarPaperEngine:
             source_event_id=source_event_id,
             domain="local",
         )
-        self._check_tp_sl_on_market(
-            trigger_monotonic_ns=receive_monotonic_ns,
-            trigger_event_id=source_event_id or f"bbo_{receive_monotonic_ns}",
-            trigger_timestamp=receive_timestamp,
-            trade_price=None,
-            use_local_bbo=True,
-        )
 
     def update_from_trade(
         self,
@@ -206,13 +209,15 @@ class IntrabarPaperEngine:
         receive_monotonic_ns: int,
         receive_timestamp: str | None = None,
         source_event_id: str | None = None,
-    ) -> None:
-        self._check_tp_sl_on_market(
+        market_provenance: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._check_tp_sl_on_market(
             trigger_monotonic_ns=receive_monotonic_ns,
             trigger_event_id=source_event_id or f"trade_{receive_monotonic_ns}",
             trigger_timestamp=receive_timestamp,
             trade_price=float(price),
             use_local_bbo=True,
+            market_provenance=market_provenance,
         )
 
     def process_context_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -421,6 +426,9 @@ class IntrabarPaperEngine:
         if tf in self.positions:
             self._block("ENTRY_BLOCKED_ACTIVE_POSITION", tf, context_event_id, side)
             return None
+        if not self.execution_market_ready_for_entry():
+            self._block("ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", tf, context_event_id, side, event=event)
+            return {"status": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", "timeframe": tf}
         # Episode lock applies to CONTEXT_START re-entry, not FLIP close→open.
         if event_type == "CONTEXT_START" and episode_id and episode_id in self.traded_episodes:
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
@@ -625,6 +633,7 @@ class IntrabarPaperEngine:
         flip_to_side: str | None = None,
         episode_id: str | None = None,
         use_local_bbo: bool = False,
+        market_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         pos = self.positions.get(tf)
         if not pos:
@@ -638,6 +647,31 @@ class IntrabarPaperEngine:
         )
         if self.consumer.already_processed(key):
             return {"status": "DUPLICATE_PREVENTED", "key": key}
+
+        trigger_u = str(trigger_type).upper()
+
+        protective_exit_price: float | None = None
+        if trigger_u in {"SL", "STOP", "STOP_LOSS"}:
+            protective_exit_price = float(pos.stop_loss_price)
+        elif trigger_u in {"TP", "TAKE_PROFIT"}:
+            protective_exit_price = float(pos.take_profit_price)
+
+        if protective_exit_price is not None:
+            return self._complete_exit(
+                pos=pos,
+                key=key,
+                bbo=None,
+                age_ms=None,
+                trigger_type=trigger_type,
+                trigger_event_id=trigger_event_id,
+                trigger_timestamp=trigger_timestamp,
+                trigger_monotonic_ns=trigger_monotonic_ns,
+                trigger_price=protective_exit_price,
+                context_event_id=context_event_id,
+                episode_id=episode_id or pos.lifecycle_episode_id,
+                execution_price_override=protective_exit_price,
+                market_provenance=market_provenance,
+            )
 
         if use_local_bbo:
             bbo, reason, age_ms = self.bbo.resolve_local(
@@ -676,6 +710,7 @@ class IntrabarPaperEngine:
             trigger_price=trigger_price,
             context_event_id=context_event_id,
             episode_id=episode_id or pos.lifecycle_episode_id,
+            market_provenance=market_provenance,
         )
 
     def _try_pending_exit(self, tf: str) -> dict[str, Any] | None:
@@ -724,8 +759,14 @@ class IntrabarPaperEngine:
         trigger_price: Any,
         context_event_id: str,
         episode_id: str | None,
+        execution_price_override: float | None = None,
+        market_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        fill_px = fill_price_for(side=pos.side, action="EXIT", bbo=bbo)
+        fill_px = (
+            float(execution_price_override)
+            if execution_price_override is not None
+            else fill_price_for(side=pos.side, action="EXIT", bbo=bbo)
+        )
         econ = closed_trade_economics(
             cfg=self.cfg,
             side=pos.side,
@@ -740,32 +781,32 @@ class IntrabarPaperEngine:
         order_id = _new_id("ord")
         fill_id = _new_id("fill")
         trade_id = _new_id("trd")
-        command = self.books.append(
-            "commands",
-            {
-                "command_id": cmd_id,
-                "timeframe": pos.timeframe,
-                "side": pos.side,
-                "action": "EXIT",
-                "trigger_type": trigger_type,
-                "trigger_event_id": trigger_event_id,
-                "trigger_timestamp": trigger_timestamp,
-                "trigger_monotonic_ns": trigger_monotonic_ns,
-                "trigger_price": trigger_price,
-                "context_event_id": context_event_id,
-                "command_monotonic_ns": trigger_monotonic_ns,
-                "book_update_id": bbo.book_update_id,
-                "best_bid": bbo.best_bid,
-                "best_ask": bbo.best_ask,
-                "bbo_receive_timestamp": bbo.receive_timestamp,
-                "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
-                "bbo_age_ms": age_ms,
-                "fill_bid": bbo.best_bid,
-                "fill_ask": bbo.best_ask,
-                "paper_fill_price": fill_px,
-                "ts": now,
-            },
-        )
+        command_payload: dict[str, Any] = {
+            "command_id": cmd_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "action": "EXIT",
+            "trigger_type": trigger_type,
+            "trigger_event_id": trigger_event_id,
+            "trigger_timestamp": trigger_timestamp,
+            "trigger_monotonic_ns": trigger_monotonic_ns,
+            "trigger_price": trigger_price,
+            "context_event_id": context_event_id,
+            "command_monotonic_ns": trigger_monotonic_ns,
+            "book_update_id": (bbo.book_update_id if bbo is not None else None),
+            "best_bid": (bbo.best_bid if bbo is not None else None),
+            "best_ask": (bbo.best_ask if bbo is not None else None),
+            "bbo_receive_timestamp": (bbo.receive_timestamp if bbo is not None else None),
+            "bbo_receive_monotonic_ns": (bbo.receive_monotonic_ns if bbo is not None else None),
+            "bbo_age_ms": age_ms,
+            "fill_bid": (bbo.best_bid if bbo is not None else None),
+            "fill_ask": (bbo.best_ask if bbo is not None else None),
+            "paper_fill_price": fill_px,
+            "ts": now,
+        }
+        if market_provenance:
+            command_payload.update(market_provenance)
+        command = self.books.append("commands", command_payload)
         self.books.append(
             "orders",
             {
@@ -779,28 +820,28 @@ class IntrabarPaperEngine:
                 "ts": now,
             },
         )
-        fill = self.books.append(
-            "fills",
-            {
-                "fill_id": fill_id,
-                "order_id": order_id,
-                "command_id": cmd_id,
-                "timeframe": pos.timeframe,
-                "side": pos.side,
-                "action": "EXIT",
-                "gross_exit_price": fill_px,
-                "paper_fill_price": fill_px,
-                "quantity": pos.quantity,
-                "fill_bid": bbo.best_bid,
-                "fill_ask": bbo.best_ask,
-                "trigger_type": trigger_type,
-                "trigger_event_id": trigger_event_id,
-                "trigger_timestamp": trigger_timestamp,
-                "trigger_monotonic_ns": trigger_monotonic_ns,
-                "trigger_price": trigger_price,
-                "ts": now,
-            },
-        )
+        fill_payload: dict[str, Any] = {
+            "fill_id": fill_id,
+            "order_id": order_id,
+            "command_id": cmd_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "action": "EXIT",
+            "gross_exit_price": fill_px,
+            "paper_fill_price": fill_px,
+            "quantity": pos.quantity,
+            "fill_bid": (bbo.best_bid if bbo is not None else None),
+            "fill_ask": (bbo.best_ask if bbo is not None else None),
+            "trigger_type": trigger_type,
+            "trigger_event_id": trigger_event_id,
+            "trigger_timestamp": trigger_timestamp,
+            "trigger_monotonic_ns": trigger_monotonic_ns,
+            "trigger_price": trigger_price,
+            "ts": now,
+        }
+        if market_provenance:
+            fill_payload.update(market_provenance)
+        fill = self.books.append("fills", fill_payload)
         trade = self.books.append(
             "trades",
             {
@@ -884,53 +925,26 @@ class IntrabarPaperEngine:
         trigger_timestamp: str | None,
         trade_price: float | None,
         use_local_bbo: bool = False,
-    ) -> None:
-        """First causal TP/SL hit wins; uses bid/ask/trade causally available now."""
-        if use_local_bbo:
-            bbo, reason, _age = self.bbo.resolve_local(
-                command_monotonic_ns=trigger_monotonic_ns,
-                max_age_ms=self.cfg.max_bbo_age_ms,
-            )
-            if bbo is None:
-                return
-        else:
-            bbo = self.bbo.latest
-            if bbo is None:
-                return
-            if bbo.receive_monotonic_ns > trigger_monotonic_ns:
-                return
+        market_provenance: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Protective TP/SL is triggered by the market trade price only."""
+        actions: list[dict[str, Any]] = []
+        if trade_price is None:
+            return actions
+
+        px = float(trade_price)
+
         for tf, pos in list(self.positions.items()):
-            # Evaluate using causally available side
             if pos.side == "LONG":
-                # TP/SL on bid or trade
-                px_bid = bbo.best_bid
-                px_trade = trade_price
-                hit_tp = px_bid >= pos.take_profit_price or (
-                    px_trade is not None and px_trade >= pos.take_profit_price
-                )
-                hit_sl = px_bid <= pos.stop_loss_price or (
-                    px_trade is not None and px_trade <= pos.stop_loss_price
-                )
+                hit_tp = px >= pos.take_profit_price
+                hit_sl = px <= pos.stop_loss_price
             else:
-                px_ask = bbo.best_ask
-                px_trade = trade_price
-                hit_tp = px_ask <= pos.take_profit_price or (
-                    px_trade is not None and px_trade <= pos.take_profit_price
-                )
-                hit_sl = px_ask >= pos.stop_loss_price or (
-                    px_trade is not None and px_trade >= pos.stop_loss_price
-                )
-            # Same cycle: use causal event order — if both, prefer whichever
-            # threshold the market price crossed first by comparing distances
-            # from entry along the move. If both true on one tick, use the
-            # price that actually prints: trade_price if present else quote.
+                hit_tp = px <= pos.take_profit_price
+                hit_sl = px >= pos.stop_loss_price
+
             if hit_tp and hit_sl:
-                ref = trade_price if trade_price is not None else (
-                    bbo.best_bid if pos.side == "LONG" else bbo.best_ask
-                )
-                d_tp = abs(ref - pos.take_profit_price)
-                d_sl = abs(ref - pos.stop_loss_price)
-                # Closer level is treated as first hit on this causal tick
+                d_tp = abs(px - pos.take_profit_price)
+                d_sl = abs(px - pos.stop_loss_price)
                 trigger = "TP" if d_tp <= d_sl else "SL"
             elif hit_tp:
                 trigger = "TP"
@@ -938,18 +952,27 @@ class IntrabarPaperEngine:
                 trigger = "SL"
             else:
                 continue
-            self._exit_position(
+
+            protective_price = (
+                pos.take_profit_price
+                if trigger == "TP"
+                else pos.stop_loss_price
+            )
+
+            act = self._exit_position(
                 tf=tf,
                 trigger_type=trigger,
                 trigger_event_id=trigger_event_id,
                 trigger_timestamp=trigger_timestamp,
                 trigger_monotonic_ns=trigger_monotonic_ns,
-                trigger_price=trade_price
-                if trade_price is not None
-                else (bbo.best_bid if pos.side == "LONG" else bbo.best_ask),
+                trigger_price=protective_price,
                 context_event_id=trigger_event_id,
-                use_local_bbo=use_local_bbo,
+                use_local_bbo=False,
+                market_provenance=market_provenance,
             )
+            if act:
+                actions.append(act)
+        return actions
 
     def _block(
         self,
@@ -1045,6 +1068,8 @@ class IntrabarPaperEngine:
             "capital_model": self.capital_model,
             "updated_at": _utc_iso(),
         }
+        if self.execution_market is not None:
+            payload["execution_market"] = self.execution_market.snapshot()
         if self._uses_sleeves() and self.sleeves is not None:
             master = self.sleeves.master_snapshot()
             payload.update(

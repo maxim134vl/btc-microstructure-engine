@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detached LIVE1B intrabar paper manager: context journal + causal BBO WS."""
+"""Detached LIVE1B intrabar paper manager: context journal + execution market WAL."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,9 +18,13 @@ sys.path.insert(0, str(REPO / "src"))
 
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
-from btc_ml.trading.intrabar_paper.epoch import load_active_epoch, mark_epoch_status
+from btc_ml.trading.intrabar_paper.epoch import load_active_epoch
+from btc_ml.trading.intrabar_paper.execution_market_processor import ExecutionMarketProcessor
 
 STOP = False
+
+FUTURES_PUBLIC_WS_URL = "wss://fstream.binance.com/public/stream?streams={symbol}@bookTicker"
+FUTURES_MARKET_WS_URL = "wss://fstream.binance.com/market/stream?streams={symbol}@aggTrade"
 
 
 def _utc() -> str:
@@ -31,51 +36,39 @@ def _handle_stop(*_args: object) -> None:
     STOP = True
 
 
-def _start_bbo_feed(engine: IntrabarPaperEngine, symbol: str = "btcusdt") -> threading.Thread | None:
+def _start_routed_ws_feed(
+    *,
+    url: str,
+    thread_name: str,
+    on_connected: Callable[[], None],
+    on_disconnected: Callable[[], None],
+    on_payload: Callable[[dict], None],
+    processor: ExecutionMarketProcessor,
+) -> threading.Thread | None:
     try:
         import websocket
     except ImportError:
-        engine.errors.append("websocket-client missing; BBO feed disabled (context-event BBO only)")
+        processor.engine.errors.append(f"websocket-client missing; {thread_name} feed disabled")
         return None
 
-    streams = f"{symbol}@bookTicker/{symbol}@aggTrade"
-    url = f"wss://fstream.binance.com/stream?streams={streams}"
+    def on_open(_ws: object) -> None:
+        on_connected()
+
+    def on_close(_ws: object, *_args: object) -> None:
+        on_disconnected()
 
     def on_message(_ws: object, message: str) -> None:
         try:
             payload = json.loads(message)
-            data = payload.get("data") or payload
-            mono = time.monotonic_ns()
-            ts = _utc()
-            stream = str(payload.get("stream") or "")
-            if "bookTicker" in stream or ("b" in data and "a" in data and "T" in data):
-                bid = float(data.get("b") or data.get("bidPrice") or 0)
-                ask = float(data.get("a") or data.get("askPrice") or 0)
-                if bid > 0 and ask > 0:
-                    engine.update_bbo_from_market(
-                        best_bid=bid,
-                        best_ask=ask,
-                        receive_monotonic_ns=mono,
-                        receive_timestamp=ts,
-                        book_update_id=str(data.get("u") or data.get("updateId") or ""),
-                        source_event_id=f"bbo_{data.get('u') or mono}",
-                    )
-            if "aggTrade" in stream or data.get("e") == "aggTrade":
-                px = float(data.get("p") or 0)
-                if px > 0:
-                    engine.update_from_trade(
-                        price=px,
-                        receive_monotonic_ns=mono,
-                        receive_timestamp=ts,
-                        source_event_id=f"agg_{data.get('a') or mono}",
-                    )
+            on_payload(payload)
         except Exception as exc:  # noqa: BLE001
-            engine.errors.append(f"ws_msg:{exc}")
-            if len(engine.errors) > 50:
-                engine.errors = engine.errors[-50:]
+            processor.engine.errors.append(f"{thread_name}_msg:{exc}")
+            if len(processor.engine.errors) > 50:
+                processor.engine.errors = processor.engine.errors[-50:]
 
     def on_error(_ws: object, err: object) -> None:
-        engine.errors.append(f"ws_error:{err}")
+        processor.engine.errors.append(f"{thread_name}_error:{err}")
+        on_disconnected()
 
     def run() -> None:
         import ssl
@@ -83,17 +76,55 @@ def _start_bbo_feed(engine: IntrabarPaperEngine, symbol: str = "btcusdt") -> thr
         sslopt = {"cert_reqs": ssl.CERT_NONE}
         while not STOP:
             try:
-                ws = websocket.WebSocketApp(url, on_message=on_message, on_error=on_error)
+                ws = websocket.WebSocketApp(
+                    url,
+                    on_message=on_message,
+                    on_open=on_open,
+                    on_close=on_close,
+                    on_error=on_error,
+                )
                 ws.run_forever(sslopt=sslopt, ping_interval=15, ping_timeout=10)
             except Exception as exc:  # noqa: BLE001
-                engine.errors.append(f"ws_reconnect:{exc}")
+                processor.engine.errors.append(f"{thread_name}_reconnect:{exc}")
+            on_disconnected()
             if STOP:
                 break
             time.sleep(1.0)
 
-    t = threading.Thread(target=run, name="live1b-bbo", daemon=True)
+    t = threading.Thread(target=run, name=thread_name, daemon=True)
     t.start()
     return t
+
+
+def _start_execution_market_feeds(
+    processor: ExecutionMarketProcessor,
+    *,
+    symbol: str = "btcusdt",
+) -> list[threading.Thread]:
+    public_url = FUTURES_PUBLIC_WS_URL.format(symbol=symbol)
+    market_url = FUTURES_MARKET_WS_URL.format(symbol=symbol)
+    threads: list[threading.Thread] = []
+    public = _start_routed_ws_feed(
+        url=public_url,
+        thread_name="live1b-futures-public",
+        on_connected=processor.on_public_websocket_connected,
+        on_disconnected=processor.on_public_websocket_disconnected,
+        on_payload=processor.handle_public_ws_payload,
+        processor=processor,
+    )
+    market = _start_routed_ws_feed(
+        url=market_url,
+        thread_name="live1b-futures-market",
+        on_connected=processor.on_market_websocket_connected,
+        on_disconnected=processor.on_market_websocket_disconnected,
+        on_payload=processor.handle_market_ws_payload,
+        processor=processor,
+    )
+    if public is not None:
+        threads.append(public)
+    if market is not None:
+        threads.append(market)
+    return threads
 
 
 def main() -> int:
@@ -115,7 +146,16 @@ def main() -> int:
         return 3
 
     engine = IntrabarPaperEngine(cfg=cfg, epoch=epoch)
-    _start_bbo_feed(engine)
+    epoch_root = cfg.books_root / epoch.paper_epoch_id
+    processor = ExecutionMarketProcessor.create(
+        engine=engine,
+        epoch_root=epoch_root,
+        paper_epoch_id=epoch.paper_epoch_id,
+        max_bbo_age_ms=cfg.max_bbo_age_ms,
+        max_agg_trade_age_ms=cfg.max_agg_trade_age_ms,
+    )
+    engine.attach_execution_market(processor)
+    _start_execution_market_feeds(processor)
     engine.write_health()
 
     pid_path = REPO / "run" / "intrabar_paper_manager.pid"
@@ -131,6 +171,10 @@ def main() -> int:
                 "paper_only": True,
                 "real_execution_enabled": False,
                 "max_bbo_age_ms": cfg.max_bbo_age_ms,
+                "max_agg_trade_age_ms": cfg.max_agg_trade_age_ms,
+                "execution_market_wal": str(epoch_root / "execution_market_wal"),
+                "futures_public_ws_url": FUTURES_PUBLIC_WS_URL.format(symbol="btcusdt"),
+                "futures_market_ws_url": FUTURES_MARKET_WS_URL.format(symbol="btcusdt"),
                 "pid": __import__("os").getpid(),
             }
         ),

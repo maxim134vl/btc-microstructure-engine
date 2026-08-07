@@ -16,7 +16,18 @@ REPO = Path(__file__).resolve().parents[2]
 PID_PATH = REPO / "run" / "intrabar_paper_manager.pid"
 LOG_PATH = REPO / "run" / "logs" / "intrabar_paper_manager.log"
 HEALTH_PATH = REPO / "data" / "runtime" / "intrabar_paper_health.json"
+STOP_INTENT_PATH = REPO / "run" / "intrabar_paper_manager.stop_intent.json"
+CONTROLLED_RESTART_PATH = REPO / "run" / "intrabar_paper_manager.controlled_restart.json"
 RUNNER = REPO / "scripts" / "live" / "run_intrabar_paper_manager.py"
+
+sys.path.insert(0, str(REPO / "src"))
+from btc_ml.runtime.intrabar_supervision import (  # noqa: E402
+    RestartPolicy,
+    clear_stop_intent,
+    load_config,
+    mark_controlled_restart,
+    write_stop_intent,
+)
 
 
 def _python() -> str:
@@ -72,6 +83,7 @@ def cmd_status() -> int:
 
 
 def cmd_start() -> int:
+    clear_stop_intent(STOP_INTENT_PATH)
     pid = _read_pid()
     if _alive(pid):
         print(json.dumps({"status": "already_running", "pid": pid}))
@@ -96,13 +108,12 @@ def cmd_start() -> int:
     return 0
 
 
-def cmd_stop() -> int:
+def _kill_process() -> tuple[int | None, bool]:
     pid = _read_pid()
     if not _alive(pid):
         if PID_PATH.exists():
             PID_PATH.unlink(missing_ok=True)
-        print(json.dumps({"status": "not_running"}))
-        return 0
+        return pid, False
     assert pid is not None
     os.kill(pid, signal.SIGTERM)
     for _ in range(30):
@@ -114,7 +125,17 @@ def cmd_stop() -> int:
         os.kill(pid, signal.SIGKILL)
         forced = True
     PID_PATH.unlink(missing_ok=True)
-    print(json.dumps({"status": "stopped", "pid": pid, "forced_kill": forced}))
+    return pid, forced
+
+
+def cmd_stop() -> int:
+    pid, forced = _kill_process()
+    if pid is None and not PID_PATH.exists():
+        write_stop_intent(STOP_INTENT_PATH, reason="manual", stopped_by="intrabar_paper_ctl stop")
+        print(json.dumps({"status": "not_running", "stop_intent": True}))
+        return 0
+    write_stop_intent(STOP_INTENT_PATH, reason="manual", stopped_by="intrabar_paper_ctl stop")
+    print(json.dumps({"status": "stopped", "pid": pid, "forced_kill": forced, "stop_intent": True}))
     return 0
 
 
@@ -129,7 +150,13 @@ def main() -> int:
     if args.action == "stop":
         return cmd_stop()
     if args.action == "restart":
-        cmd_stop()
+        policy = RestartPolicy.from_config(load_config(REPO))
+        mark_controlled_restart(
+            CONTROLLED_RESTART_PATH,
+            grace_seconds=policy.controlled_restart_grace_seconds,
+        )
+        _kill_process()
+        clear_stop_intent(STOP_INTENT_PATH)
         time.sleep(0.5)
         return cmd_start()
     return 1

@@ -293,13 +293,11 @@ def test_tp_before_end(cfg):
         _ctx(eid="t0", etype="CONTEXT_START", tf="M15", prev="OBSERVE", new="LONG_CONTEXT", mono=2_000_000)
     )
     pos = eng.positions["M15"]
-    # Push bid through TP on manager-local BBO stream
-    eng.update_bbo_from_market(
-        best_bid=pos.take_profit_price + 0.01,
-        best_ask=pos.take_profit_price + 0.2,
+    # Protective TP is triggered by actual market trade price.
+    eng.update_from_trade(
+        price=pos.take_profit_price + 0.01,
         receive_monotonic_ns=3_000_000,
-        book_update_id="tp",
-        source_event_id="bbo_tp",
+        source_event_id="agg_tp",
     )
     assert "M15" not in eng.positions
     trades = eng.books.read_all("trades")
@@ -313,12 +311,10 @@ def test_sl_before_flip(cfg):
         _ctx(eid="sl0", etype="CONTEXT_START", tf="M15", prev="OBSERVE", new="LONG_CONTEXT", mono=2_000_000)
     )
     pos = eng.positions["M15"]
-    eng.update_bbo_from_market(
-        best_bid=pos.stop_loss_price - 0.01,
-        best_ask=pos.stop_loss_price + 0.1,
+    eng.update_from_trade(
+        price=pos.stop_loss_price - 0.01,
         receive_monotonic_ns=3_000_000,
-        book_update_id="sl",
-        source_event_id="bbo_sl",
+        source_event_id="agg_sl",
     )
     assert "M15" not in eng.positions
     assert eng.books.read_all("trades")[-1]["exit_reason"] == "SL"
@@ -375,3 +371,53 @@ def test_config_requires_explicit_bbo_age():
     assert cfg.paper_only is True
     assert cfg.initial_equity_usd == 100000.0
     assert cfg.max_risk_per_trade_usd == 1000.0
+
+
+def test_sl_executes_from_aggtrade_without_any_bbo(cfg):
+    """
+    Regression: protective SL must not depend on BBO availability.
+
+    Once a position is open, an aggTrade crossing the fixed stop level
+    must close the position immediately at stop_loss_price.
+    """
+    c, repo = cfg
+    eng = _engine(c, repo)
+
+    eng.process_context_event(
+        _ctx(
+            eid="sl_no_bbo_start",
+            etype="CONTEXT_START",
+            tf="M30",
+            prev="OBSERVE",
+            new="LONG_CONTEXT",
+            mono=2_000_000,
+            episode="M30:regression:sl_no_bbo",
+        )
+    )
+
+    pos = eng.positions["M30"]
+    stop = pos.stop_loss_price
+
+    # Simulate complete BBO unavailability AFTER the position is open.
+    eng.bbo._latest = None
+    eng.bbo._latest_local = None
+
+    # Actual market trade crosses the protective stop.
+    eng.update_from_trade(
+        price=stop - 0.01,
+        receive_monotonic_ns=3_000_000,
+        receive_timestamp="2026-08-07T00:00:00Z",
+        source_event_id="agg_sl_no_bbo",
+    )
+
+    assert "M30" not in eng.positions
+
+    assert eng.last_command is not None
+    assert eng.last_command["trigger_type"] == "SL"
+    assert eng.last_command["trigger_event_id"] == "agg_sl_no_bbo"
+    assert eng.last_command["trigger_price"] == pytest.approx(stop)
+    assert eng.last_command["paper_fill_price"] == pytest.approx(stop)
+
+    # Protective execution must not fabricate BBO metadata.
+    assert eng.last_command["best_bid"] is None
+    assert eng.last_command["best_ask"] is None

@@ -27,6 +27,7 @@ class IntrabarPaperConfig:
     exit_slippage_bps: float
     stop_exit_slippage_bps: float
     max_bbo_age_ms: float
+    max_agg_trade_age_ms: float
     max_entry_signal_age_seconds: float
     max_open_positions_per_timeframe: int
     timeframes: tuple[str, ...]
@@ -84,6 +85,7 @@ def load_intrabar_paper_config(
         exit_slippage_bps=float(raw["exit_slippage_bps"]),
         stop_exit_slippage_bps=float(raw["stop_exit_slippage_bps"]),
         max_bbo_age_ms=float(raw["max_bbo_age_ms"]),
+        max_agg_trade_age_ms=float(raw.get("max_agg_trade_age_ms", raw["max_bbo_age_ms"] * 2.5)),
         max_entry_signal_age_seconds=float(raw["max_entry_signal_age_seconds"]),
         max_open_positions_per_timeframe=int(raw["max_open_positions_per_timeframe"]),
         timeframes=tuple(str(x) for x in raw["timeframes"]),

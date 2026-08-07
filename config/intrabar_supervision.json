@@ -1,0 +1,40 @@
+{
+  "schema_version": "intrabar_supervision_v1",
+  "check_interval_seconds": 15,
+  "health_stale_seconds": {
+    "intrabar_cognition": 45,
+    "intrabar_paper_manager": 45
+  },
+  "restart_policy": {
+    "window_seconds": 600,
+    "max_attempts_in_window": 5,
+    "min_delay_seconds": 2,
+    "max_delay_seconds": 60,
+    "stable_runtime_reset_seconds": 1800,
+    "controlled_restart_grace_seconds": 30
+  },
+  "services": {
+    "intrabar_cognition": {
+      "display_name": "LIVE1A cognition",
+      "ctl_script": "scripts/live/intrabar_cognition_ctl.py",
+      "runner_script": "scripts/live/run_intrabar_cognition_service.py",
+      "pid_file": "run/intrabar_cognition.pid",
+      "health_file": "data/runtime/intrabar_cognition_health.json",
+      "stop_intent_file": "run/intrabar_cognition.stop_intent.json",
+      "controlled_restart_file": "run/intrabar_cognition.controlled_restart.json",
+      "log_file": "logs/intrabar_cognition.log"
+    },
+    "intrabar_paper_manager": {
+      "display_name": "LIVE1B paper manager",
+      "ctl_script": "scripts/live/intrabar_paper_ctl.py",
+      "runner_script": "scripts/live/run_intrabar_paper_manager.py",
+      "pid_file": "run/intrabar_paper_manager.pid",
+      "health_file": "data/runtime/intrabar_paper_health.json",
+      "stop_intent_file": "run/intrabar_paper_manager.stop_intent.json",
+      "controlled_restart_file": "run/intrabar_paper_manager.controlled_restart.json",
+      "log_file": "run/logs/intrabar_paper_manager.log"
+    }
+  },
+  "operational_status_file": "data/runtime/intrabar_operational_status.json",
+  "supervisor_state_file": "data/runtime/intrabar_supervision_state.json"
+}
