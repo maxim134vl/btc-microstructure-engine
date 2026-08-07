@@ -30,9 +30,9 @@
       "path": "/Users/fontecrypto/btc-ml/benchmark/memory/history/cycles/integrated_20260528_181603.json"
     },
     "conformance": {
-      "run_id": "20260528_181603",
-      "generated_at": "2026-05-28T18:16:03.387835",
-      "path": "/Users/fontecrypto/btc-ml/benchmark/memory/history/cycles/conformance_20260528_181603.json"
+      "run_id": "20260807_085508",
+      "generated_at": "2026-08-07T08:55:10.541981",
+      "path": "/Users/fontecrypto/btc-ml/benchmark/memory/history/cycles/conformance_20260807_085508.json"
     },
     "stage2_5": {
       "run_id": "20260529_092158",
@@ -45,5 +45,5 @@
       "path": "/Users/fontecrypto/btc-ml/benchmark/memory/history/cycles/stage2_5_calibration_20260529_093052.json"
     }
   },
-  "updated_at": "2026-05-29T09:30:53.413088"
+  "updated_at": "2026-08-07T08:55:10.544652"
 }

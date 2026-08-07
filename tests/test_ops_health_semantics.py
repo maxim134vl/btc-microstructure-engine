@@ -184,14 +184,20 @@ def test_governance_missing_not_runtime() -> None:
 def test_frontend_mapper_source_guards() -> None:
     mappers = (ROOT / "dashboard/frontend/src/components/status/mappers.ts").read_text(encoding="utf-8")
     research = (ROOT / "dashboard/frontend/src/components/status/researchMappers.ts").read_text(encoding="utf-8")
-    dashboard = (ROOT / "dashboard/frontend/src/components/ops/OpsDashboard.tsx").read_text(encoding="utf-8")
+    dashboard_entry = (ROOT / "dashboard/frontend/src/components/ops/OpsDashboard.tsx").read_text(
+        encoding="utf-8"
+    )
+    dashboard = (ROOT / "dashboard/frontend/src/components/ops/OpsUnifiedDashboard.tsx").read_text(
+        encoding="utf-8"
+    )
 
     assert "resolveRuntimeStability" in mappers
     assert "resolveHealthDimensionStatus" in mappers
     assert "HISTORICAL ONLY" in research or "LEGACY_ONLY" in research
     assert "STALE_VALIDATION" in research or "HISTORICAL / STALE" in research
+    assert "OpsUnifiedDashboard" in dashboard_entry
     assert "Historical Audit" in dashboard
-    assert "Research / Validation" in dashboard
+    assert "Research / Validation" in dashboard or "Model Assurance" in dashboard
     assert "Legacy Paper Controller" in dashboard or "Paper Controller" in dashboard
     assert "NOT_IN_CANONICAL_RUNTIME" in dashboard or "Legacy / Excluded" in dashboard
     assert 'translateStallCount(stallCount)' not in dashboard

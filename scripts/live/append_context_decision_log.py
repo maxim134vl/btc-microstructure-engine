@@ -1762,6 +1762,45 @@ def load_decision_log(path: Path) -> pd.DataFrame:
     return frame
 
 
+def previous_decision_before(
+    frame: pd.DataFrame,
+    before_candle: Any,
+) -> dict[str, Any] | None:
+    """Return the latest immutable decision strictly before ``before_candle``.
+
+    The strict inequality is intentional:
+      * a first append uses the previous completed candle;
+      * a latest-candle revision must not use its own old row as its predecessor;
+      * historical backfill must never use a future decision.
+
+    This helper reads decision history only. Lifecycle state is not used to
+    fabricate previous-decision lineage.
+    """
+    if frame is None or len(frame) == 0 or "candle_timestamp" not in frame.columns:
+        return None
+
+    cutoff = _to_utc_ts(before_candle)
+    if cutoff is None:
+        return None
+
+    work = frame.copy()
+    work["_previous_lookup_ts"] = normalize_utc_ns_series(work["candle_timestamp"])
+    work = work.loc[
+        work["_previous_lookup_ts"].notna()
+        & (work["_previous_lookup_ts"] < cutoff)
+    ].copy()
+    if len(work) == 0:
+        return None
+
+    sort_cols = ["_previous_lookup_ts"]
+    if "decision_written_at_utc" in work.columns:
+        sort_cols.append("decision_written_at_utc")
+
+    work = work.sort_values(sort_cols, kind="mergesort")
+    row = work.iloc[-1].drop(labels=["_previous_lookup_ts"], errors="ignore")
+    return row.to_dict()
+
+
 def write_atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
@@ -2008,15 +2047,13 @@ def backfill_missing_decisions(
 
     written_at = pd.Timestamp.now(tz="UTC")
     new_rows: list[dict[str, Any]] = []
-    previous: dict[str, Any] | None = None
-    if len(existing):
-        tmp = existing.copy()
-        tmp["_ts"] = normalize_utc_ns_series(tmp["candle_timestamp"])
-        tmp = tmp.sort_values("_ts")
-        if len(tmp):
-            previous = tmp.iloc[-1].to_dict()
 
     for ts in missing:
+        # Build the predecessor set causally for this exact historical candle.
+        # Existing future rows must never become previous_decision.
+        available = merge_decision_frames_preserving_existing(existing, new_rows)
+        previous = previous_decision_before(available, ts)
+
         row = build_context_decision_row(
             live=live,
             auction=auction,
@@ -2032,7 +2069,6 @@ def backfill_missing_decisions(
             record_origin=RECORD_ORIGIN_BACKFILL,
         )
         new_rows.append(row)
-        previous = row
 
     combined = merge_decision_frames_preserving_existing(existing, new_rows)
     target = output_path or log_path
@@ -2291,6 +2327,16 @@ def run_once(
     # Optional shadow status is diagnostic only — never a decision source.
     shadow_present = SHADOW_STATUS.exists()
 
+    # Live lineage must come from immutable published decision history.
+    # Use strictly earlier candle history so a latest-candle revision cannot
+    # treat its own old row as the predecessor.
+    decision_candle = latest_timestamp(lifecycle)
+    existing_decisions = load_decision_log(log_path)
+    previous_decision = previous_decision_before(
+        existing_decisions,
+        decision_candle,
+    )
+
     row = build_context_decision_row(
         live=live,
         auction=auction,
@@ -2299,6 +2345,7 @@ def run_once(
         lifecycle=lifecycle,
         runtime=runtime,
         source_hash=src_hash,
+        previous_decision=previous_decision,
         record_origin=RECORD_ORIGIN_LIVE,
     )
     result = append_decision(row, log_path=log_path)

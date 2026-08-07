@@ -444,6 +444,16 @@ def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
         ("paper_controller", ("bounded_paper_trading_controller_auto_ledger",), not activated and not live1b),
         ("ops_backend", ("run_api.py", "dashboard/backend"), False),
         ("dashboard_refresher", ("run_market_context_visual_refresher.py",), False),
+        (
+            "shadow_structural_protection",
+            ("run_shadow_structural_protection.py",),
+            False,
+        ),
+        (
+            "shadow_economic_correlation",
+            ("run_shadow_economic_correlation.py",),
+            False,
+        ),
     ]
     if live1b:
         specs.extend(
@@ -1392,7 +1402,38 @@ def _load_context_event_by_id(context_event_id: str | None) -> dict[str, Any] | 
 
 
 def _latest_book_ticker_bbo() -> dict[str, Any] | None:
-    """Tip BBO from raw book_ticker journal (presentation mark; not mid)."""
+    """Fresh presentation BBO; prefer PAPER manager live WebSocket snapshot."""
+    import json as _json
+
+    health_path = ROOT / "data/runtime/intrabar_paper_health.json"
+    try:
+        health = _json.loads(health_path.read_text(encoding="utf-8"))
+        current = health.get("current_bbo") or {}
+        bid = _sf(current.get("best_bid"))
+        ask = _sf(current.get("best_ask"))
+        freshness_ms = _sf(current.get("freshness_ms"))
+        max_age_ms = _sf(health.get("max_bbo_age_ms")) or 2000.0
+
+        if (
+            health.get("alive") is True
+            and health.get("paper_only") is True
+            and health.get("real_execution_enabled") is False
+            and bid is not None
+            and ask is not None
+            and ask >= bid
+            and freshness_ms is not None
+            and freshness_ms <= max_age_ms
+        ):
+            return {
+                "best_bid": float(bid),
+                "best_ask": float(ask),
+                "mark_timestamp": current.get("bbo_receive_timestamp"),
+                "mark_source": "intrabar_paper_health/current_bbo",
+            }
+    except Exception:
+        pass
+
+    # Legacy archive fallback is allowed only while genuinely fresh.
     root = ROOT / "data/raw_market_events_v2/book_ticker"
     if not root.exists():
         return None
@@ -1400,42 +1441,42 @@ def _latest_book_ticker_bbo() -> dict[str, Any] | None:
         import pandas as pd
     except Exception:
         return None
-    dates = sorted([p for p in root.iterdir() if p.is_dir() and p.name.startswith("date=")])
+
+    dates = sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("date="))
     if not dates:
         return None
-    hours = sorted([p for p in dates[-1].iterdir() if p.is_dir() and p.name.startswith("hour=")])
+    hours = sorted(p for p in dates[-1].iterdir() if p.is_dir() and p.name.startswith("hour="))
     if not hours:
         return None
     files = sorted(hours[-1].glob("*.parquet"))
     if not files:
         return None
+
     try:
         frame = pd.read_parquet(files[-1])
-    except Exception:
-        return None
-    if frame is None or not len(frame):
-        return None
-    row = frame.iloc[-1]
-    try:
+        if frame is None or not len(frame):
+            return None
+        row = frame.iloc[-1]
         bid = _sf(row["best_bid_price"])
         ask = _sf(row["best_ask_price"])
         ts = row["local_receive_timestamp"]
+        parsed_ts = pd.to_datetime(ts, utc=True)
+        age_ms = (pd.Timestamp.now(tz="UTC") - parsed_ts).total_seconds() * 1000.0
     except Exception:
         return None
-    if bid is None or ask is None or ask < bid:
+
+    if bid is None or ask is None or ask < bid or age_ms > 5000.0:
         return None
-    ts_s = None
-    if ts is not None and str(ts) not in {"nan", "NaT", "None"}:
-        ts_s = str(ts)
-        if ts_s.endswith("+00:00"):
-            ts_s = ts_s.replace("+00:00", "Z")
+
+    ts_s = str(ts)
+    if ts_s.endswith("+00:00"):
+        ts_s = ts_s.replace("+00:00", "Z")
     return {
         "best_bid": float(bid),
         "best_ask": float(ask),
         "mark_timestamp": ts_s,
         "mark_source": "raw_market_events_v2/book_ticker",
     }
-
 
 def _build_live1b_timeframe_traders(
     *,
@@ -2508,71 +2549,131 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
     live1b_epoch = live1b_active_epoch() if live1b_paper_active() else None
     paper_health = _read_json(ROOT / "data/runtime/intrabar_paper_health.json") or {}
     cognition_health = _read_json(ROOT / "data/runtime/intrabar_cognition_health.json") or {}
-    shadow_stp = _read_json(
-        ROOT / "data/trading/shadow_structural_protection/health.json"
-    ) or {}
-    if shadow_stp:
-        shadow_stp = {
-            "mode": shadow_stp.get("mode") or "OBSERVE_ONLY",
-            "read_only": True,
-            "enforcement_enabled": False,
-            "status": shadow_stp.get("status"),
-            "exact_intrabar_data": shadow_stp.get("exact_intrabar_data"),
-            "source_epoch_id": shadow_stp.get("source_epoch_id"),
-            "candidate_count": shadow_stp.get("candidate_count"),
-            "exact_profile_count": shadow_stp.get("exact_profile_count"),
-            "protective_zone_detected_count": shadow_stp.get("protective_zone_detected_count"),
-            "protective_zone_usable_count": shadow_stp.get("protective_zone_usable_count"),
-            "protective_zone_found_count": shadow_stp.get("protective_zone_usable_count")
-            or shadow_stp.get("protective_zone_found_count"),
-            "target_zone_detected_count": shadow_stp.get("target_zone_detected_count"),
-            "target_zone_usable_count": shadow_stp.get("target_zone_usable_count"),
-            "target_zone_found_count": shadow_stp.get("target_zone_usable_count")
-            or shadow_stp.get("target_zone_found_count"),
-            "reaction_proven_count": shadow_stp.get("reaction_proven_count"),
-            "reaction_missing_count": shadow_stp.get("reaction_missing_count"),
-            "reaction_status_breakdown": shadow_stp.get("reaction_status_breakdown"),
-            "virtual_positions_open": shadow_stp.get("virtual_positions_open_valid")
-            or shadow_stp.get("virtual_positions_open"),
-            "virtual_positions_invalidated": shadow_stp.get("virtual_positions_invalidated"),
-            "virtual_trades_closed": shadow_stp.get("virtual_trades_closed"),
-            "economic_execute_count": shadow_stp.get("economic_execute_count"),
-            "economic_skip_count": shadow_stp.get("economic_skip_count"),
-            "baseline_match_count": shadow_stp.get("baseline_match_count"),
-            "baseline_divergence_count": shadow_stp.get("baseline_divergence_count"),
-            "lookahead_violation_count": shadow_stp.get("lookahead_violation_count"),
-            "canonical_economics_isolated": shadow_stp.get("canonical_economics_isolated"),
-            "legacy_manifest_invalidated": shadow_stp.get("legacy_manifest_invalidated"),
-            "research_valid": shadow_stp.get("research_valid"),
-            "updated_at": shadow_stp.get("updated_at"),
+    # Active-epoch research shadows only.
+    #
+    # Never fall back to root-level health.json here: those files may belong
+    # to a previous PAPER epoch and must not appear as current dashboard truth.
+    active_shadow_epoch_id = str(
+        (live1b_epoch or {}).get("paper_epoch_id") or ""
+    )
+    active_shadow_fingerprint = str(
+        (live1b_epoch or {}).get("trading_contract_fingerprint") or ""
+    )
+
+    process_by_id = {
+        str(p.get("process_id")): p
+        for p in processes
+        if isinstance(p, dict)
+    }
+
+    def _shadow_process_truth(process_id: str) -> dict[str, Any]:
+        proc = process_by_id.get(process_id) or {}
+        return {
+            "process_id": process_id,
+            "pid": proc.get("pid"),
+            "alive": bool(proc.get("alive")),
+            "process_health": proc.get("health") or "STOPPED",
+            "process_state": proc.get("process_state") or "STOPPED",
+            "uptime_seconds": proc.get("uptime_seconds"),
+            "started_at": proc.get("started_at"),
+            "command": proc.get("command"),
+            "health_reason": proc.get("health_reason"),
         }
-    shadow_eqcorr = _read_json(
-        ROOT / "data/trading/shadow_economic_correlation/health.json"
-    ) or {}
-    if shadow_eqcorr:
-        shadow_eqcorr = {
-            "mode": shadow_eqcorr.get("mode") or "OBSERVE_ONLY",
-            "read_only": True,
-            "enforcement_enabled": False,
-            "source_epoch_id": shadow_eqcorr.get("source_epoch_id"),
-            "status": shadow_eqcorr.get("status"),
-            "candidate_count": shadow_eqcorr.get("candidate_count"),
-            "closed_outcome_count": shadow_eqcorr.get("closed_outcome_count"),
-            "baseline_match_count": shadow_eqcorr.get("baseline_match_count"),
-            "baseline_divergence_count": shadow_eqcorr.get("baseline_divergence_count"),
-            "open_virtual_positions": shadow_eqcorr.get("open_virtual_positions"),
-            "same_direction_clusters": shadow_eqcorr.get("same_direction_clusters"),
-            "research_valid": shadow_eqcorr.get("research_valid"),
-            "lookahead_violation_count": shadow_eqcorr.get("lookahead_violation_count"),
-            "cognition_enrichment": shadow_eqcorr.get("cognition_enrichment"),
-            "feature_enrichment_enabled": shadow_eqcorr.get("feature_enrichment_enabled"),
-            "enriched_candidate_count": shadow_eqcorr.get("enriched_candidate_count"),
-            "valid_feature_count": shadow_eqcorr.get("valid_feature_count"),
-            "stale_feature_count": shadow_eqcorr.get("stale_feature_count"),
-            "missing_feature_count": shadow_eqcorr.get("missing_feature_count"),
-            "future_row_rejected_count": shadow_eqcorr.get("future_row_rejected_count"),
-            "updated_at": shadow_eqcorr.get("updated_at"),
-        }
+
+    def _epoch_shadow_health(
+        component_dir: str,
+        process_id: str,
+    ) -> dict[str, Any]:
+        if not active_shadow_epoch_id:
+            return {
+                "mode": "OBSERVE_ONLY",
+                "read_only": True,
+                "enforcement_enabled": False,
+                "status": "ACTIVE_EPOCH_UNAVAILABLE",
+                "binding_status": "ACTIVE_EPOCH_UNAVAILABLE",
+                **_shadow_process_truth(process_id),
+            }
+
+        path = (
+            ROOT
+            / "data/trading"
+            / component_dir
+            / "epochs"
+            / active_shadow_epoch_id
+            / "health.json"
+        )
+
+        payload = _read_json(path) or {}
+
+        proc = _shadow_process_truth(process_id)
+
+        if not payload:
+            return {
+                "mode": "OBSERVE_ONLY",
+                "read_only": True,
+                "enforcement_enabled": False,
+                "status": "ACTIVE_EPOCH_DATA_MISSING",
+                "binding_status": "ACTIVE_EPOCH_DATA_MISSING",
+                "source_epoch_id": active_shadow_epoch_id,
+                "source_path": str(path.relative_to(ROOT)),
+                **proc,
+            }
+
+        result = dict(payload)
+
+        source_epoch = str(result.get("source_epoch_id") or "")
+        source_fp = str(
+            result.get("source_contract_fingerprint")
+            or result.get("trading_contract_fingerprint")
+            or ""
+        )
+
+        epoch_match = source_epoch == active_shadow_epoch_id
+        fingerprint_match = (
+            bool(active_shadow_fingerprint)
+            and source_fp == active_shadow_fingerprint
+        )
+
+        original_status = result.get("status")
+
+        if not epoch_match:
+            binding_status = "EPOCH_MISMATCH"
+        elif not fingerprint_match:
+            binding_status = "FINGERPRINT_MISMATCH"
+        else:
+            binding_status = "BOUND_CURRENT"
+
+        result.update(
+            {
+                "mode": result.get("mode") or "OBSERVE_ONLY",
+                "read_only": True,
+                "enforcement_enabled": False,
+                "research_status": original_status,
+                "active_paper_epoch_id": active_shadow_epoch_id,
+                "active_trading_fingerprint": active_shadow_fingerprint,
+                "epoch_match": epoch_match,
+                "fingerprint_match": fingerprint_match,
+                "binding_status": binding_status,
+                "source_path": str(path.relative_to(ROOT)),
+                **proc,
+            }
+        )
+
+        # Fail visibly instead of silently presenting wrong-epoch metrics.
+        if binding_status != "BOUND_CURRENT":
+            result["status"] = binding_status
+
+        return result
+
+    shadow_stp = _epoch_shadow_health(
+        "shadow_structural_protection",
+        "shadow_structural_protection",
+    )
+
+    shadow_eqcorr = _epoch_shadow_health(
+        "shadow_economic_correlation",
+        "shadow_economic_correlation",
+    )
 
     # Read-only cross-layer outcome reconciliation diagnostics (TRD-OUTCOME2)
     cross_layer = _read_json(ROOT / "output/audits/trd_outcome2/latest.json") or {}

@@ -594,84 +594,11 @@ function drawContextOverlays(chart, tfBlock, g) {
   const zones = contextBandSegments(tfBlock).filter((z) => (z.timeframe || chart.tf) === chart.tf);
   const selected = state.selectedContextKey;
 
-  zones.forEach((zone) => {
-    const price = finitePrice(zone.context_price);
-    if (price == null) return;
-    const name = String(zone.directional_state || zone.direction || "").toUpperCase();
-    if (!name.includes("LONG") && !name.includes("SHORT")) return;
-    const i0 = containingBarIndex(chart.visible, zone.start_timestamp, zone.bar_anchor_time);
-    if (i0 == null) return;
-    const i1 = zone.end_timestamp
-      ? containingBarIndex(chart.visible, zone.end_timestamp, null)
-      : chart.visible.length - 1;
-    if (i1 == null) return;
-    const x1 = g.xAt(Math.min(i0, i1));
-    const x2 = g.xAt(Math.max(i0, i1));
-    const y = g.yAt(price);
-    ctx.save();
-    ctx.strokeStyle = name.includes("SHORT") ? colors.negative : colors.positive;
-    ctx.lineWidth = 1.25;
-    ctx.setLineDash([6, 4]);
-    ctx.beginPath();
-    ctx.moveTo(x1, y);
-    ctx.lineTo(x2, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = name.includes("SHORT") ? colors.negative : colors.positive;
-    ctx.font = `9px ${colors.mono}`;
-    ctx.textAlign = "left";
-    ctx.fillText("Цена контекста", x2 + 3, y + 3);
-    ctx.restore();
-  });
+  // Context-price overlays are intentionally hidden.
+  // Only paper-trade OPEN/CLOSE markers remain visible.
 
-  events.forEach((ev) => {
-    const et = String(ev.event_type || "").toUpperCase();
-    if (!["CONTEXT_START", "CONTEXT_END", "CONTEXT_FLIP"].includes(et)) return;
-    const direction = String(ev.direction || "").toUpperCase();
-    if (et !== "CONTEXT_END" && direction !== "LONG" && direction !== "SHORT") return;
-    const i = containingBarIndex(chart.visible, ev.event_timestamp, ev.bar_anchor_time);
-    if (i == null) return;
-    const candle = chart.visible[i];
-    const x = g.xAt(i);
-    const key = `ctx:${ev.context_event_id || ev.event_timestamp}:${et}`;
-    const isSel = selected && selected === key;
-    const label = et === "CONTEXT_END"
-      ? "Конец контекста"
-      : et === "CONTEXT_FLIP"
-        ? `FLIP ${direction}`
-        : `Контекст ${direction}`;
-    const yBase = direction === "SHORT"
-      ? g.yAt(candle.high) - 22
-      : g.yAt(candle.low) + 22;
-    ctx.save();
-    ctx.globalAlpha = selected && !isSel ? 0.25 : 1;
-    ctx.fillStyle = direction === "SHORT" ? colors.negative : colors.positive;
-    if (et === "CONTEXT_END") ctx.fillStyle = colors.info;
-    // Distinct square marker (not trade triangle).
-    const half = isSel ? 6 : 4;
-    ctx.fillRect(x - half, yBase - half, half * 2, half * 2);
-    ctx.strokeStyle = colors.markerStroke;
-    ctx.strokeRect(x - half, yBase - half, half * 2, half * 2);
-    ctx.font = `${isSel ? "bold 10" : "9"}px ${colors.mono}`;
-    ctx.textAlign = "center";
-    const metrics = ctx.measureText(label);
-    const boxW = metrics.width + 8;
-    const boxY = direction === "SHORT" ? yBase - 16 : yBase + 14;
-    ctx.fillStyle = isSel ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.3)";
-    ctx.fillRect(x - boxW / 2, boxY - 10, boxW, 12);
-    ctx.fillStyle = direction === "SHORT" ? colors.negative : (et === "CONTEXT_END" ? colors.info : colors.positive);
-    ctx.fillText(label, x, boxY);
-    ctx.textAlign = "left";
-    chart.hitRegions.push({
-      key,
-      x,
-      y: yBase,
-      entity: ev,
-      kind: "context",
-      role: "context",
-    });
-    ctx.restore();
-  });
+  // Context lifecycle events are intentionally not drawn as candle markers.
+  // Trade OPEN/CLOSE events are rendered by the separate paper-trade overlay.
 }
 
 function drawCandles(chart, tfBlock) {

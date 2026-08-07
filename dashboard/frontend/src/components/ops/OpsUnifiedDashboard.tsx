@@ -630,6 +630,22 @@ export function OpsUnifiedDashboard({
                 return (
                   <>
                     <MetricLine label="Mode" value={String(sh?.mode || "OBSERVE_ONLY")} />
+                    <MetricLine
+                      label="Process"
+                      value={`${String(sh?.process_health || (sh?.alive ? "RUNNING" : "STOPPED"))} · PID ${String(sh?.pid ?? "—")}`}
+                    />
+                    <MetricLine
+                      label="Binding"
+                      value={`${String(sh?.binding_status || "—")} · epoch ${sh?.epoch_match === true ? "MATCH" : sh?.epoch_match === false ? "MISMATCH" : "—"} · fp ${sh?.fingerprint_match === true ? "MATCH" : sh?.fingerprint_match === false ? "MISMATCH" : "—"}`}
+                    />
+                    <MetricLine label="Source epoch" value={String(sh?.source_epoch_id || "—")} />
+                    <MetricLine
+                      label="Trading fingerprint"
+                      value={(() => {
+                        const fp = String(sh?.active_trading_fingerprint || "—");
+                        return fp === "—" ? fp : `${fp.slice(0, 16)}${fp.length > 16 ? "…" : ""}`;
+                      })()}
+                    />
                     <MetricLine label="STP generation" value={String(sh?.stp_generation || "—")} />
                     <MetricLine
                       label="Classification"
@@ -758,8 +774,8 @@ export function OpsUnifiedDashboard({
                     />
                     <MetricLine label="Lookahead violations" value={String(sh?.lookahead_violation_count ?? "—")} />
                     <MetricLine
-                      label="Research validity"
-                      value={sh?.research_valid == null ? "—" : sh.research_valid ? "VALID" : "INVALID"}
+                      label="Research status"
+                      value={String(sh?.research_status || sh?.status || "—")}
                     />
                     <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
                       Structural levels are VIRTUAL / NOT ACTIVE research-only and never sent to LIVE1B or paper books.
@@ -783,7 +799,22 @@ export function OpsUnifiedDashboard({
                 return (
                   <>
                     <MetricLine label="Mode" value={String(sh?.mode || "OBSERVE_ONLY")} />
+                    <MetricLine
+                      label="Process"
+                      value={`${String(sh?.process_health || (sh?.alive ? "RUNNING" : "STOPPED"))} · PID ${String(sh?.pid ?? "—")}`}
+                    />
+                    <MetricLine
+                      label="Binding"
+                      value={`${String(sh?.binding_status || "—")} · epoch ${sh?.epoch_match === true ? "MATCH" : sh?.epoch_match === false ? "MISMATCH" : "—"} · fp ${sh?.fingerprint_match === true ? "MATCH" : sh?.fingerprint_match === false ? "MISMATCH" : "—"}`}
+                    />
                     <MetricLine label="Source epoch" value={String(sh?.source_epoch_id || "—")} />
+                    <MetricLine
+                      label="Trading fingerprint"
+                      value={(() => {
+                        const fp = String(sh?.active_trading_fingerprint || "—");
+                        return fp === "—" ? fp : `${fp.slice(0, 16)}${fp.length > 16 ? "…" : ""}`;
+                      })()}
+                    />
                     <MetricLine label="Candidates" value={String(sh?.candidate_count ?? "—")} />
                     <MetricLine label="Closed outcomes" value={String(sh?.closed_outcome_count ?? "—")} />
                     <MetricLine
@@ -796,8 +827,8 @@ export function OpsUnifiedDashboard({
                       value={`LONG ${String(clusters.BTC_LONG ?? "—")} · SHORT ${String(clusters.BTC_SHORT ?? "—")}`}
                     />
                     <MetricLine
-                      label="Research validity"
-                      value={sh?.research_valid == null ? "—" : sh.research_valid ? "VALID" : "INVALID"}
+                      label="Research status"
+                      value={String(sh?.research_status || sh?.status || "—")}
                     />
                     <MetricLine label="Lookahead violations" value={String(sh?.lookahead_violation_count ?? "—")} />
                     <MetricLine
@@ -1081,7 +1112,7 @@ export function OpsUnifiedDashboard({
           <SectionLabel>Model Assurance</SectionLabel>
           <SectionCard>
             <p className="px-0.5 text-[12px] text-ds-text-secondary">
-              CURRENT ACTIVE MODEL · observational · non-blocking for paper runtime · promotion controlled by governance gate
+              CURRENT PAPER REGISTRY · Model Assurance stopped · not required before 400 closed trades
             </p>
             <div className="grid gap-3.5 md:grid-cols-2 xl:grid-cols-4">
               <AssuranceSummaryCard title="Overall" status={overallCardStatus}>
@@ -1095,6 +1126,11 @@ export function OpsUnifiedDashboard({
                 <p className="text-[12px] text-ds-text-secondary">
                   {liveConnected
                     ? `${assurance?.active_runtime?.model_version || "—"} · ${assurance?.active_runtime?.paper_epoch_id || "—"}`
+                    : "—"}
+                </p>
+                <p className="text-[12px] text-ds-text-secondary">
+                  {liveConnected
+                    ? `${assurance?.active_runtime_binding_status || "—"} · registry=${assurance?.active_runtime?.registry_record_id || "—"}`
                     : "—"}
                 </p>
               </AssuranceSummaryCard>

@@ -7,6 +7,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from .performance_eligibility import is_void_position_row
+
 
 class EpochBooks:
     """Append-only JSONL books stamped with paper_epoch_id."""
@@ -60,18 +62,26 @@ class EpochBooks:
                 continue
         return out
 
+    def latest_positions(self) -> dict[str, dict[str, Any]]:
+        latest: dict[str, dict[str, Any]] = {}
+        for row in self.read_all("positions"):
+            pid = str(row.get("position_id") or "")
+            if pid:
+                latest[pid] = row
+        return latest
+
     def open_positions(self) -> list[dict[str, Any]]:
         """Latest status per position_id; return only still-OPEN."""
-        latest: dict[str, dict[str, Any]] = {}
-        for p in self.read_all("positions"):
-            pid = str(p.get("position_id") or "")
-            if not pid:
-                continue
-            latest[pid] = p
-        return [p for p in latest.values() if str(p.get("status") or "").upper() == "OPEN"]
+        return [
+            row
+            for row in self.latest_positions().values()
+            if str(row.get("status") or "").upper() == "OPEN" and not is_void_position_row(row)
+        ]
 
     def closed_trades(self) -> list[dict[str, Any]]:
-        return self.read_all("trades")
+        from .performance_eligibility import counts_toward_strategy_performance
+
+        return [row for row in self.read_all("trades") if counts_toward_strategy_performance(row)]
 
     def count(self, table: str) -> int:
         return len(self.read_all(table))

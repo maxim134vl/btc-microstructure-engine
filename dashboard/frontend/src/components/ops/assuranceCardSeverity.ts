@@ -38,7 +38,8 @@ export function mapActiveRuntimeSeverity(active?: {
   if (
     runtimeStatus.includes("MISSING") ||
     runtimeStatus.includes("INVALID") ||
-    runtimeStatus.includes("CONFLICT")
+    runtimeStatus.includes("CONFLICT") ||
+    runtimeStatus.includes("MISMATCH")
   ) {
     return status("Critical", "critical", "critical");
   }

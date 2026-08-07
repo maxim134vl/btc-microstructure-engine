@@ -110,11 +110,14 @@ class ContextEventConsumer:
     ) -> None:
         self.checkpoint.processed_keys.add(key)
         self.checkpoint.last_consumed_context_event_id = context_event_id
-        self.checkpoint.last_event_monotonic_ns = int(event_monotonic_ns)
+        self.checkpoint.last_event_monotonic_ns = max(
+            int(self.checkpoint.last_event_monotonic_ns or 0),
+            int(event_monotonic_ns),
+        )
         if path is not None:
-            self.checkpoint.last_path = path
+            self.checkpoint.last_path = str(Path(path).resolve())
         if offset is not None:
-            self.checkpoint.last_offset = int(offset)
+            self.checkpoint.last_offset = max(int(self.checkpoint.last_offset or -1), int(offset))
 
     def _iter_files(self) -> list[Path]:
         if not self.journal_root.exists():
@@ -129,11 +132,16 @@ class ContextEventConsumer:
         """Yield events with event_monotonic_ns > checkpoint, sorted causally."""
         pending: list[dict[str, Any]] = []
         last_mono = int(self.checkpoint.last_event_monotonic_ns or 0)
+        last_offset = int(self.checkpoint.last_offset or -1)
+        last_path = self.checkpoint.last_path
+        last_path_resolved = str(Path(last_path).resolve()) if last_path else None
         for path in self._iter_files():
             try:
                 text = path.read_text(encoding="utf-8")
             except OSError:
                 continue
+            path_str = str(path)
+            path_resolved = str(path.resolve())
             for i, line in enumerate(text.splitlines()):
                 line = line.strip()
                 if not line:
@@ -142,8 +150,14 @@ class ContextEventConsumer:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                same_file = bool(
+                    last_path_resolved
+                    and (path_resolved == last_path_resolved or path_str == last_path)
+                )
+                if same_file and i <= last_offset:
+                    continue
                 mono = int(ev.get("event_monotonic_ns") or 0)
-                if mono <= last_mono:
+                if mono <= last_mono and not (same_file and i > last_offset):
                     continue
                 if self.activated_at_iso:
                     materialized_at = str(
@@ -167,6 +181,12 @@ class ContextEventConsumer:
                 ev["_journal_path"] = str(path)
                 ev["_journal_offset"] = i
                 pending.append(ev)
-        pending.sort(key=lambda e: (int(e.get("event_monotonic_ns") or 0), str(e.get("context_event_id") or "")))
+        pending.sort(
+            key=lambda e: (
+                int(e.get("_journal_offset") or 0),
+                int(e.get("event_monotonic_ns") or 0),
+                str(e.get("context_event_id") or ""),
+            )
+        )
         for ev in pending:
             yield ev

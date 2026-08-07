@@ -9,6 +9,9 @@ from typing import Any
 import pandas as pd
 
 
+from .performance_eligibility import counts_toward_strategy_performance
+
+
 def load_active_paper_epoch(repo_root: Path | None = None) -> dict[str, Any] | None:
     root = repo_root or Path(__file__).resolve().parents[4]
     path = root / "data" / "trading" / "paper_epochs" / "active.json"
@@ -94,7 +97,7 @@ def build_intrabar_epoch_performance_summary(
     root = repo_root or Path(__file__).resolve().parents[4]
     eid = str(epoch["paper_epoch_id"])
     books_dir = root / "data" / "trading" / "intrabar_paper" / eid / "books"
-    trades = _read_jsonl(books_dir / "trades.jsonl")
+    trades = [t for t in _read_jsonl(books_dir / "trades.jsonl") if counts_toward_strategy_performance(t)]
     positions_raw = _read_jsonl(books_dir / "positions.jsonl")
     latest: dict[str, dict[str, Any]] = {}
     for p in positions_raw:

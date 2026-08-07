@@ -23,8 +23,13 @@ PROVIDER_ID = "LIVE1A_CANONICAL_INTRABAR_CONTEXT"
 MODEL_VERSION = "live1a_closed_bar_context_event_bridge_v1"
 EVENT_TIME_CONTRACT = "CLOSED_BAR_DECISION_AVAILABLE_THEN_CAUSAL_BBO_V1"
 ENTRY_INTENTS = frozenset({"INTENT_OPEN_LONG", "INTENT_OPEN_SHORT"})
+ENTRY_EVENT_TYPES = frozenset({"CONTEXT_START", "CONTEXT_FLIP"})
 DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
 NON_DIRECTIONAL_CONTEXTS = frozenset({"", "OBSERVE", "NO_ACTIVE_CONTEXT", "STAND_ASIDE", "NONE", "NAN", "NAT"})
+DELIVERY_MODE_LIVE = "LIVE"
+DELIVERY_MODE_RECOVERY = "RECOVERY"
+RECOVERY_DECISION_LOOKBACK_ROWS = 4096
+SUPPORTED_RECOVERY_TIMEFRAMES = frozenset({"M15", "M30", "H1", "H4"})
 
 
 def utc_now_iso() -> str:
@@ -184,6 +189,234 @@ def _valid_bbo(current_bbo: Mapping[str, Any] | None, decision_available_at: pd.
     }, None
 
 
+@dataclass(frozen=True)
+class PerTfRecoveryWatermark:
+    """Durable per-timeframe lineage from the published context journal."""
+
+    timeframe: str
+    active_context: str
+    lifecycle_episode_id: str
+    source_bar_timestamp: str
+    decision_available_at: pd.Timestamp
+    source_decision_id: str | None = None
+    context_event_id: str | None = None
+    event_identity_key: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timeframe": self.timeframe,
+            "active_context": self.active_context,
+            "lifecycle_episode_id": self.lifecycle_episode_id,
+            "source_bar_timestamp": self.source_bar_timestamp,
+            "decision_available_at": _iso(self.decision_available_at),
+            "source_decision_id": self.source_decision_id,
+            "context_event_id": self.context_event_id,
+            "event_identity_key": self.event_identity_key,
+        }
+
+
+def _decision_available_ts(row: Mapping[str, Any]) -> pd.Timestamp | None:
+    return _to_ts(row.get("decision_available_at") or row.get("decision_written_at_utc"))
+
+
+def _source_bar_ts(row: Mapping[str, Any]) -> pd.Timestamp | None:
+    return _to_ts(row.get("source_bar_timestamp") or row.get("candle_timestamp"))
+
+
+def _row_sort_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        _decision_available_ts(row) or pd.Timestamp.min.tz_localize("UTC"),
+        _source_bar_ts(row) or pd.Timestamp.min.tz_localize("UTC"),
+        _clean(row.get("decision_id")),
+    )
+
+
+def _row_at_or_before_watermark(row: Mapping[str, Any], watermark: PerTfRecoveryWatermark) -> bool:
+    row_da = _decision_available_ts(row)
+    if row_da is None:
+        return False
+    if row_da < watermark.decision_available_at:
+        return True
+    if row_da > watermark.decision_available_at:
+        return False
+    row_bar = _source_bar_ts(row)
+    wm_bar = _to_ts(watermark.source_bar_timestamp)
+    if row_bar is None or wm_bar is None:
+        return True
+    if row_bar < wm_bar:
+        return True
+    if row_bar > wm_bar:
+        return False
+    row_id = _clean(row.get("decision_id"))
+    wm_id = _clean(watermark.source_decision_id)
+    if row_id and wm_id:
+        return row_id <= wm_id
+    return True
+
+
+def load_per_tf_recovery_watermarks(journal_path: Path) -> dict[str, PerTfRecoveryWatermark]:
+    """Load the latest published canonical context state per timeframe."""
+    watermarks: dict[str, PerTfRecoveryWatermark] = {}
+    if not journal_path.exists():
+        return watermarks
+    try:
+        text = journal_path.read_text(encoding="utf-8")
+    except OSError:
+        return watermarks
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        tf = _timeframe(event.get("timeframe"))
+        if tf not in SUPPORTED_RECOVERY_TIMEFRAMES:
+            continue
+        decision_available = _to_ts(event.get("decision_available_at") or event.get("event_timestamp"))
+        source_bar = _iso(event.get("source_bar_timestamp"))
+        if decision_available is None or not source_bar:
+            continue
+        candidate = PerTfRecoveryWatermark(
+            timeframe=tf,
+            active_context=_context(event.get("new_context")),
+            lifecycle_episode_id=_clean(event.get("lifecycle_episode_id")),
+            source_bar_timestamp=source_bar,
+            decision_available_at=decision_available,
+            source_decision_id=_clean(event.get("source_decision_id"))
+            or _clean((event.get("extra_metadata") or {}).get("source_decision_id"))
+            or None,
+            context_event_id=_clean(event.get("context_event_id")) or None,
+            event_identity_key=_clean(event.get("event_identity_key")) or None,
+        )
+        current = watermarks.get(tf)
+        if current is None or _row_sort_key(
+            {
+                "decision_written_at_utc": candidate.decision_available_at,
+                "candle_timestamp": candidate.source_bar_timestamp,
+                "decision_id": candidate.source_decision_id,
+            }
+        ) >= _row_sort_key(
+            {
+                "decision_written_at_utc": current.decision_available_at,
+                "candle_timestamp": current.source_bar_timestamp,
+                "decision_id": current.source_decision_id,
+            }
+        ):
+            watermarks[tf] = candidate
+    return watermarks
+
+
+def _candidate_decision_rows(
+    frame: pd.DataFrame,
+    recovery_watermarks: Mapping[str, PerTfRecoveryWatermark] | None,
+) -> list[dict[str, Any]]:
+    if frame is None or len(frame) == 0:
+        return []
+    rows = _rows_from_frame(frame)
+    if recovery_watermarks:
+        min_wm = min(wm.decision_available_at for wm in recovery_watermarks.values())
+        rows = [
+            row
+            for row in rows
+            if (_decision_available_ts(row) or pd.Timestamp.min.tz_localize("UTC")) >= (min_wm - pd.Timedelta(seconds=1))
+        ]
+    rows = sorted(rows, key=_row_sort_key)
+    if len(rows) > RECOVERY_DECISION_LOOKBACK_ROWS:
+        rows = rows[-RECOVERY_DECISION_LOOKBACK_ROWS:]
+    return rows
+
+
+def _classify_delivery_mode(
+    *,
+    event_type: str,
+    extra: Mapping[str, Any],
+    decision_available: pd.Timestamp,
+    previous_bridge_invocation_at: pd.Timestamp | None,
+    bridge_activated_at: pd.Timestamp,
+) -> str:
+    """Classify whether an entry event is live or recovery delivery.
+
+    Recovery is deterministic from explicit materialization markers and the
+    durable previous-bridge-invocation watermark. It does not depend on batch
+    cardinality, timeframe count, or consumer-side age thresholds.
+    """
+    if str(event_type or "").upper() not in ENTRY_EVENT_TYPES:
+        return DELIVERY_MODE_LIVE
+
+    if bool(extra.get("restart_backfill")):
+        return DELIVERY_MODE_RECOVERY
+    if str(extra.get("materialization_class") or "").upper() == "RESTART_BACKFILL":
+        return DELIVERY_MODE_RECOVERY
+    if bool(extra.get("revalidated_after_restart")):
+        return DELIVERY_MODE_RECOVERY
+    if bool(extra.get("recovered_after_restart")):
+        return DELIVERY_MODE_RECOVERY
+    if str(extra.get("materialization_class") or "").upper() == "DURABLE_CONTEXT_RECOVERY":
+        return DELIVERY_MODE_RECOVERY
+
+    watermark = previous_bridge_invocation_at or bridge_activated_at
+    if decision_available < watermark:
+        return DELIVERY_MODE_RECOVERY
+
+    return DELIVERY_MODE_LIVE
+
+
+def _recovery_source_bar_close(row: Mapping[str, Any]) -> Any:
+    """Historical attribution price for recovery events (never execution fill price)."""
+    for key in ("close", "candle_close", "context_origin_price"):
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+        return value
+    return None
+
+
+def _valid_recovery_bbo(
+    current_bbo: Mapping[str, Any] | None,
+    *,
+    decision_available_at: pd.Timestamp,
+    source_bar_close: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Recovery events keep historical decision time/price separate from execution BBO."""
+    if not current_bbo:
+        return None, "MISSING_RECOVERY_BBO"
+    bid = current_bbo.get("best_bid") or current_bbo.get("best_bid_price")
+    ask = current_bbo.get("best_ask") or current_bbo.get("best_ask_price")
+    mono = current_bbo.get("bbo_receive_monotonic_ns") or current_bbo.get("local_receive_monotonic_ns")
+    ts = current_bbo.get("bbo_receive_timestamp") or current_bbo.get("local_receive_timestamp")
+    bbo_ts = _to_ts(ts)
+    try:
+        bid_f = float(bid)
+        ask_f = float(ask)
+        mono_i = int(mono)
+        historical_price = float(source_bar_close)
+    except (TypeError, ValueError):
+        return None, "MISSING_RECOVERY_HISTORICAL_PRICE"
+    if bid_f <= 0 or ask_f <= 0 or ask_f < bid_f or bbo_ts is None or historical_price <= 0:
+        return None, "INVALID_RECOVERY_BBO"
+    decision_iso = _iso(decision_available_at)
+    return {
+        "best_bid": bid_f,
+        "best_ask": ask_f,
+        "book_update_id": current_bbo.get("book_update_id"),
+        "bbo_receive_monotonic_ns": mono_i,
+        "bbo_receive_timestamp": _iso(bbo_ts),
+        "event_timestamp": decision_iso,
+        "event_monotonic_ns": mono_i,
+        "bbo_age_ms": 0.0,
+        "execution_not_before": _iso(bbo_ts),
+        "historical_context_event_price": historical_price,
+    }, None
+
+
 def _rows_from_frame(frame: pd.DataFrame) -> list[dict[str, Any]]:
     if frame is None or len(frame) == 0:
         return []
@@ -196,6 +429,17 @@ class MaterializationResult:
     emitted: list[dict[str, Any]] = field(default_factory=list)
     skipped: list[dict[str, Any]] = field(default_factory=list)
     duplicate_events: int = 0
+    recovery: dict[str, Any] = field(
+        default_factory=lambda: {
+            "mode_active": False,
+            "per_tf_watermarks": {},
+            "rows_scanned": 0,
+            "transitions_reconstructed": 0,
+            "duplicates_skipped": 0,
+            "last_recovered_source_decision_id": None,
+            "last_run_result": "idle",
+        }
+    )
 
     @property
     def emitted_count(self) -> int:
@@ -207,6 +451,7 @@ class MaterializationResult:
             "duplicate_events": self.duplicate_events,
             "emitted_event_ids": [str(e.get("context_event_id")) for e in self.emitted],
             "skipped": self.skipped[-20:],
+            "recovery": dict(self.recovery),
         }
 
 
@@ -218,6 +463,8 @@ def materialize_closed_bar_events(
     epoch_id: str,
     current_bbo: Mapping[str, Any] | None,
     bridge_activated_at: Any,
+    previous_bridge_invocation_at: Any = None,
+    recovery_watermarks: Mapping[str, PerTfRecoveryWatermark] | None = None,
     active_positions_by_timeframe: set[str] | None = None,
     traded_episodes: set[str] | None = None,
 ) -> MaterializationResult:
@@ -225,27 +472,59 @@ def materialize_closed_bar_events(
     activation_ts = _to_ts(bridge_activated_at)
     if activation_ts is None:
         raise ValueError("bridge_activated_at must be a valid UTC timestamp")
+    previous_invocation_ts = _to_ts(previous_bridge_invocation_at)
     open_tfs = {str(x).upper() for x in (active_positions_by_timeframe or set())}
     traded = {str(x) for x in (traded_episodes or set())}
-    ordered = sorted(
-        list(rows),
-        key=lambda r: (
-            _to_ts(r.get("decision_available_at") or r.get("decision_written_at_utc"))
-            or pd.Timestamp.min.tz_localize("UTC"),
-            _to_ts(r.get("source_bar_timestamp") or r.get("candle_timestamp"))
-            or pd.Timestamp.min.tz_localize("UTC"),
-        ),
-    )
+    watermarks = dict(recovery_watermarks or {})
+    result.recovery["mode_active"] = bool(watermarks)
+    result.recovery["per_tf_watermarks"] = {
+        tf: wm.to_dict() for tf, wm in sorted(watermarks.items())
+    }
+
+    # Causal lineage from earlier already-published decisions in this batch.
+    # Seed from durable journal watermarks so missed transitions can be reconstructed.
+    last_published_context_by_tf: dict[str, str] = {
+        tf: wm.active_context for tf, wm in watermarks.items() if wm.active_context
+    }
+    pending_events: list[dict[str, Any]] = []
+
+    ordered = sorted(list(rows), key=_row_sort_key)
+    result.recovery["rows_scanned"] = len(ordered)
     for row in ordered:
         tf = _source_timeframe(row)
-        source_bar_ts = _to_ts(row.get("source_bar_timestamp") or row.get("candle_timestamp"))
-        decision_available = _to_ts(row.get("decision_available_at") or row.get("decision_written_at_utc"))
+        source_bar_ts = _source_bar_ts(row)
+        decision_available = _decision_available_ts(row)
         if source_bar_ts is None or decision_available is None:
             result.skipped.append({"reason": "MISSING_SOURCE_OR_DECISION_TIME", "timeframe": tf})
             continue
-        if decision_available < activation_ts:
-            result.skipped.append({"reason": "PRE_BRIDGE_ACTIVATION_ROW", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
+
+        watermark = watermarks.get(tf)
+        if watermark and _row_at_or_before_watermark(row, watermark):
+            result.skipped.append(
+                {
+                    "reason": "BEFORE_RECOVERY_WATERMARK",
+                    "timeframe": tf,
+                    "source_bar_timestamp": _iso(source_bar_ts),
+                }
+            )
             continue
+
+        is_recovery_delivery = False
+        if watermark and decision_available < activation_ts:
+            is_recovery_delivery = True
+        elif (
+            not watermark
+            and decision_available < activation_ts
+        ):
+            result.skipped.append(
+                {
+                    "reason": "PRE_BRIDGE_ACTIVATION_ROW",
+                    "timeframe": tf,
+                    "source_bar_timestamp": _iso(source_bar_ts),
+                }
+            )
+            continue
+
         if decision_available < source_bar_ts:
             result.skipped.append({"reason": "DECISION_BEFORE_SOURCE_BAR", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
             continue
@@ -255,8 +534,31 @@ def materialize_closed_bar_events(
 
         current = _context(row.get("active_market_context") or row.get("candidate_context"))
         previous = _context(row.get("previous_active_market_context"))
+
+        lineage_previous = last_published_context_by_tf.get(tf, "")
+        previous_context_source = "decision_row"
+        if previous in {"", "NONE", "NAN", "NAT", "NULL"} and lineage_previous:
+            previous = lineage_previous
+            previous_context_source = "previous_published_decision"
+
         direction = _direction(current)
         prev_direction = _direction(previous)
+
+        if current and lineage_previous and current == lineage_previous:
+            result.skipped.append(
+                {
+                    "reason": "SAME_CONTEXT_CONTINUATION",
+                    "timeframe": tf,
+                    "source_bar_timestamp": _iso(source_bar_ts),
+                }
+            )
+            continue
+
+        # The row already passed causal timestamp/freshness checks above.
+        # It therefore becomes the previous immutable decision for this TF,
+        # regardless of whether materialization below emits or skips it.
+        if current:
+            last_published_context_by_tf[tf] = current
         context_origin = _iso(
             row.get("context_origin_timestamp")
             or row.get("lifecycle_episode_start_time")
@@ -312,23 +614,57 @@ def materialize_closed_bar_events(
             result.skipped.append({"reason": "NON_DIRECTIONAL", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
             continue
 
-        bbo, bbo_reason = _valid_bbo(current_bbo, decision_available)
-        if bbo is None:
-            result.skipped.append({"reason": bbo_reason or "NO_CAUSAL_BBO", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
-            continue
+        source_bar_close = _recovery_source_bar_close(row)
+        if is_recovery_delivery:
+            bbo, bbo_reason = _valid_recovery_bbo(
+                current_bbo,
+                decision_available_at=decision_available,
+                source_bar_close=source_bar_close,
+            )
+            if bbo is None:
+                result.skipped.append(
+                    {
+                        "reason": bbo_reason or "NO_RECOVERY_BBO",
+                        "timeframe": tf,
+                        "source_bar_timestamp": _iso(source_bar_ts),
+                    }
+                )
+                continue
+            extra.update(
+                {
+                    "recovered_after_restart": True,
+                    "materialization_class": "DURABLE_CONTEXT_RECOVERY",
+                    "recovery_reason": "MISSED_CANONICAL_TRANSITION_AFTER_JOURNAL_WATERMARK",
+                    "historical_context_event_price": bbo["historical_context_event_price"],
+                    "recovery_execution_bbo_timestamp": bbo["execution_not_before"],
+                }
+            )
+            context_event_price = str(bbo["historical_context_event_price"])
+            context_event_price_source = (
+                "context_origin_price_recovery"
+                if row.get("close") is None and row.get("candle_close") is None
+                else "source_bar_close_recovery"
+            )
+        else:
+            bbo, bbo_reason = _valid_bbo(current_bbo, decision_available)
+            if bbo is None:
+                result.skipped.append({"reason": bbo_reason or "NO_CAUSAL_BBO", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
+                continue
+            context_event_price = str((float(bbo["best_bid"]) + float(bbo["best_ask"])) / 2.0)
+            context_event_price_source = "causal_bbo_mid"
 
-        mid = (float(bbo["best_bid"]) + float(bbo["best_ask"])) / 2.0
         metadata = {
             "event_time_contract": EVENT_TIME_CONTRACT,
             "source": "closed_bar_context_decision",
-            "context_event_price_source": "causal_bbo_mid",
-            "source_bar_close": row.get("close") if row.get("close") is not None else row.get("candle_close"),
+            "context_event_price_source": context_event_price_source,
+            "source_bar_close": source_bar_close,
             "source_bar_close_not_execution_price": True,
             "execution_not_before": bbo["execution_not_before"],
             "paper_action_candidate": row.get("paper_action_candidate"),
             "intended_side": row.get("intended_side"),
             "signal_eligibility_status": row.get("signal_eligibility_status"),
             "source_decision_id": row.get("decision_id"),
+            "previous_context_source": previous_context_source,
             **extra,
         }
         event = journal.build_event(
@@ -338,7 +674,7 @@ def materialize_closed_bar_events(
             new_context=new_context,
             event_timestamp=str(bbo["event_timestamp"]),
             event_monotonic_ns=int(bbo["event_monotonic_ns"]),
-            context_event_price=str(mid),
+            context_event_price=context_event_price,
             last_trade_id=row.get("last_trade_id"),
             last_trade_timestamp=row.get("last_trade_timestamp"),
             best_bid=bbo["best_bid"],
@@ -355,6 +691,7 @@ def materialize_closed_bar_events(
             evidence={
                 "active_market_context": current,
                 "previous_active_market_context": previous,
+                "previous_active_market_context_source": previous_context_source,
                 "lifecycle_state": row.get("lifecycle_state"),
                 "transition_reason": row.get("transition_reason"),
             },
@@ -368,10 +705,47 @@ def materialize_closed_bar_events(
             evaluation_mode="CLOSED_BAR_CONTEXT_DECISION",
             extra_metadata=metadata,
         )
+        event["delivery_mode"] = _classify_delivery_mode(
+            event_type=str(event_type),
+            extra=extra,
+            decision_available=decision_available,
+            previous_bridge_invocation_at=previous_invocation_ts,
+            bridge_activated_at=activation_ts,
+        )
+        if is_recovery_delivery:
+            result.recovery["transitions_reconstructed"] += 1
+            result.recovery["last_recovered_source_decision_id"] = _clean(row.get("decision_id")) or None
+            result.recovery["last_run_result"] = "recovered"
+        pending_events.append(event)
+
+        # Keep only batch-local OPEN/CLOSED state coherent. Do NOT mutate the
+        # persistent traded-episode set here: lifecycle episode identifiers are
+        # not globally unique across timeframes.
+        if event_type in {"CONTEXT_START", "CONTEXT_FLIP"}:
+            open_tfs.add(tf)
+        elif event_type == "CONTEXT_END":
+            open_tfs.discard(tf)
+
+    entry_event_count = sum(
+        1
+        for event in pending_events
+        if str(event.get("event_type") or "").upper() in ENTRY_EVENT_TYPES
+    )
+    if entry_event_count > 1:
+        for event in pending_events:
+            if str(event.get("event_type") or "").upper() in ENTRY_EVENT_TYPES:
+                event["materialization_batch_entry_count"] = entry_event_count
+
+    for event in pending_events:
         if journal.append(event):
             result.emitted.append(event)
         else:
             result.duplicate_events += 1
+            result.recovery["duplicates_skipped"] += 1
+
+    if result.recovery["last_run_result"] == "idle" and ordered:
+        result.recovery["last_run_result"] = "scanned_no_recovery_needed"
+
     return result
 
 
@@ -466,7 +840,8 @@ class ClosedBarContextEventBridge:
             self.last_result = MaterializationResult(skipped=[{"reason": "MISSING_DECISION_LOG"}])
             return self.last_result
         frame = pd.read_parquet(self.decision_log_path)
-        rows = _rows_from_frame(frame.tail(256))
+        recovery_watermarks = load_per_tf_recovery_watermarks(self.context_journal.path)
+        rows = _candidate_decision_rows(frame, recovery_watermarks)
         epoch_id = str(epoch["paper_epoch_id"])
         open_tfs, traded = self._open_timeframes_and_traded_episodes(epoch_id)
         self.last_result = materialize_closed_bar_events(
@@ -476,6 +851,8 @@ class ClosedBarContextEventBridge:
             epoch_id=epoch_id,
             current_bbo=current_bbo,
             bridge_activated_at=self.bridge_activated_at,
+            previous_bridge_invocation_at=self.last_run_at,
+            recovery_watermarks=recovery_watermarks,
             active_positions_by_timeframe=open_tfs,
             traded_episodes=traded,
         )

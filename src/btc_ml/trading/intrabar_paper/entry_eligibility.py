@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 ENTRY_EVENT_TYPES = frozenset({"CONTEXT_START", "CONTEXT_FLIP"})
+DELIVERY_MODE_RECOVERY = "RECOVERY"
 
 
 def _to_utc_ts(value: Any) -> pd.Timestamp | None:
@@ -58,7 +59,31 @@ def is_restart_backfill_event(event: dict[str, Any]) -> bool:
         return True
     if bool(event.get("revalidated_after_restart")):
         return True
+    if bool(event.get("recovered_after_restart")):
+        return True
+    if str(event.get("materialization_class") or "").upper() == "DURABLE_CONTEXT_RECOVERY":
+        return True
     return False
+
+
+def is_recovery_delivery_event(event: dict[str, Any]) -> bool:
+    """True when materialization marked the event as recovery/catch-up delivery."""
+    if str(event.get("delivery_mode") or "").upper() == DELIVERY_MODE_RECOVERY:
+        return True
+    return is_restart_backfill_event(event)
+
+
+def is_replay_entry_blocked(event: dict[str, Any]) -> bool:
+    etype = str(event.get("event_type") or event.get("type") or "").upper()
+    if etype not in ENTRY_EVENT_TYPES:
+        return False
+    return is_recovery_delivery_event(event)
+
+
+def replay_entry_block_reason(event: dict[str, Any]) -> str | None:
+    if not is_replay_entry_blocked(event):
+        return None
+    return "ENTRY_BLOCKED_REPLAY_SIGNAL"
 
 
 def is_stale_entry_signal(

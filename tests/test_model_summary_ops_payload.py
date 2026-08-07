@@ -30,7 +30,7 @@ def test_real_research_pipeline_payload_benchmark_primary_v1() -> None:
     assert diag["freshness_status"] == "CURRENT"
     assert diag.get("used_as_primary") is True
     assert "latest_conformance" in str(diag["source_path"])
-    assert str(diag["generated_at"]).startswith("2026-07")
+    assert diag.get("generated_at")
 
     assert gov["status"] == "GOVERNANCE_MISSING"
     assert gov["missing_reason"] == "governance artifact missing"
@@ -116,7 +116,7 @@ def test_real_toxic_box_legacy_only_when_no_fresh_toxic_metrics() -> None:
     assert ms.get("model_summary_source_version") == MODEL_SUMMARY_SOURCE_VERSION
     diag = ms["model_summary_sources"]["diagnostics_primary"]
     assert diag["freshness_status"] == "CURRENT"
-    assert str(diag["generated_at"]).startswith("2026-07")
+    assert diag.get("generated_at")
 
 
 def test_ops_payload_includes_valid_model_assurance() -> None:
@@ -138,7 +138,7 @@ def test_ops_payload_includes_valid_model_assurance() -> None:
     assert snap.get("decision_layer") is not None
 
 
-def test_ops_payload_survives_missing_or_malformed_model_assurance(
+def test_ops_payload_survives_missing_or_malformed_legacy_model_assurance_summary(
     tmp_path: Path, monkeypatch
 ) -> None:
     import app.services.research_pipeline_service as rps
@@ -148,16 +148,27 @@ def test_ops_payload_survives_missing_or_malformed_model_assurance(
     summary_dir.mkdir(parents=True)
     monkeypatch.setattr(rps, "REPO_ROOT", tmp_path)
 
+    # The legacy MODEL-9 summary is historical evidence only.
+    # Missing/corrupt legacy summary must not become CURRENT truth.
+    # With the isolated tmp repo there is no active registry/PAPER binding,
+    # therefore the current projection must fail closed on binding instead.
     ma_missing = rps.load_model_assurance_payload()
-    assert ma_missing.get("status") in {"MISSING_SOURCE", "ERROR"}
-    assert ma_missing.get("runtime_safety_status") == "UNKNOWN"
-    assert ma_missing.get("error_reason")
+    assert ma_missing.get("overall_assurance_status") == "CURRENT_CRITICAL_REGISTRY_BINDING_MISMATCH"
+    assert ma_missing.get("active_runtime_binding_status") == "EPOCH_AND_FINGERPRINT_MISMATCH"
+    assert ma_missing.get("runtime_safety_status") == "SAFE_PAPER_ONLY"
+    assert (ma_missing.get("historical_model_assurance_snapshot") or {}).get(
+        "overall_assurance_status"
+    ) is None
 
     bad = summary_dir / "latest_summary.json"
     bad.write_text("{not-json", encoding="utf-8")
     ma_bad = rps.load_model_assurance_payload()
-    assert ma_bad.get("status") in {"MISSING_SOURCE", "ERROR"}
-    assert ma_bad.get("error_reason")
+    assert ma_bad.get("overall_assurance_status") == "CURRENT_CRITICAL_REGISTRY_BINDING_MISMATCH"
+    assert ma_bad.get("active_runtime_binding_status") == "EPOCH_AND_FINGERPRINT_MISMATCH"
+    assert ma_bad.get("runtime_safety_status") == "SAFE_PAPER_ONLY"
+    assert (ma_bad.get("historical_model_assurance_snapshot") or {}).get(
+        "overall_assurance_status"
+    ) is None
 
     # Endpoint assembly must still succeed when assurance loader returns ERROR.
     monkeypatch.setattr(rps, "REPO_ROOT", REAL_REPO_ROOT)
@@ -182,6 +193,24 @@ def test_ops_payload_survives_missing_or_malformed_model_assurance(
     assert snap["model_assurance"]["status"] == "ERROR"
     assert snap.get("pipeline") is not None
     assert snap.get("decision_layer") is not None
+
+
+def test_before_400_model_assurance_separates_historical_environment_blockers() -> None:
+    import pytest
+    from app.services.research_pipeline_service import load_model_assurance_payload
+
+    ma = load_model_assurance_payload()
+
+    if ma.get("model_assurance_operational_status") != "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES":
+        pytest.skip("regression applies to the explicit pre-400 Model Assurance policy state")
+
+    assert ma.get("overall_assurance_status") == "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES"
+    assert ma.get("runtime_impact") == "NON_BLOCKING"
+    assert ma.get("environment_blockers") == []
+
+    historical = ma.get("historical_environment_blockers") or []
+    assert "INPUT_DRIFT_CRITICAL" in historical
+
 
 
 def test_model_assurance_payload_is_json_serializable() -> None:

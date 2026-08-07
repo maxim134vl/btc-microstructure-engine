@@ -1354,8 +1354,11 @@ def _compose_health_dimensions(
         research_bits.append("economic validation stale")
     if shadow_status == "MISSING_DATA":
         research_bits.append("shadow metrics missing")
-    if "LEGACY" in toxic_status.upper() or "MISSING" in toxic_status.upper():
-        research_bits.append("toxic monitoring legacy/missing")
+    if any(
+        token in toxic_status.upper()
+        for token in ("LEGACY", "HISTORICAL", "MISSING")
+    ):
+        research_bits.append("toxic monitoring historical/legacy/missing")
     if str(model_summary.get("promotion_eligible_label") or "NO").upper() == "NO":
         research_bits.append("promotion not eligible")
 
@@ -1684,6 +1687,15 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         "overall_health": overall_out,
         "overall_reason": (runtime_truth or {}).get("overall_reason"),
         "runtime_truth": runtime_truth,
+        "shadow_structural_protection": (
+            (runtime_truth or {}).get("shadow_structural_protection") or {}
+        ),
+        "shadow_economic_correlation": (
+            (runtime_truth or {}).get("shadow_economic_correlation") or {}
+        ),
+        "cross_layer_outcome_reconciliation": (
+            (runtime_truth or {}).get("cross_layer_outcome_reconciliation") or {}
+        ),
         "processes": (runtime_truth or {}).get("processes") or [],
         "pipeline_engines": (runtime_truth or {}).get("pipeline_engines") or [],
         "datasets": (runtime_truth or {}).get("datasets") or [],

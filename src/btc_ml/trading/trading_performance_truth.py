@@ -29,6 +29,7 @@ from .paper_core import (
     safe_float,
 )
 from .trader_book import PRODUCTION_BOOKS_ROOT
+from btc_ml.trading.intrabar_paper.performance_eligibility import counts_toward_strategy_performance
 
 SCHEMA_VERSION = "trading_performance_truth_v1"
 MTM_BASIS_GROSS = "GROSS_UNREALISED"
@@ -297,6 +298,8 @@ def _build_closed_trades(
             continue
         maps = _lineage_maps(books)
         for _, trade in trades.iterrows():
+            if not counts_toward_strategy_performance(trade.to_dict()):
+                continue
             trade_id = str(trade.get("trade_id"))
             key = (tf, trade_id)
             if key in seen:
@@ -393,7 +396,10 @@ def _build_open_positions(
         if not len(positions):
             continue
         maps = _lineage_maps(books)
-        open_rows = positions[positions["status"].astype(str).str.upper() == "OPEN"]
+        open_rows = positions[
+            (positions["status"].astype(str).str.upper() == "OPEN")
+            & ~positions["status"].astype(str).str.upper().str.startswith("VOID")
+        ]
         for _, pos in open_rows.iterrows():
             pid = str(pos.get("position_id"))
             key = (tf, pid)
@@ -1096,6 +1102,8 @@ def build_trading_performance_truth(
             from btc_ml.trading.intrabar_paper.ops_adapter import _read_jsonl
 
             for trade in _read_jsonl(books_dir / "trades.jsonl"):
+                if not counts_toward_strategy_performance(trade):
+                    continue
                 tf = str(trade.get("timeframe") or "")
                 net = float(trade.get("net_pnl_usd") or 0.0)
                 fees = float(trade.get("fees_usd") or 0.0)

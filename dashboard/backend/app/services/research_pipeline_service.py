@@ -1918,55 +1918,321 @@ def load_unified_shadow_model_payload() -> dict[str, Any] | None:
 
 
 def load_model_assurance_payload() -> dict[str, Any]:
-    """Read canonical MODEL-9 summary only — never raise into the OPS endpoint."""
-    path = Path(REPO_ROOT) / "data" / "model_assurance" / "summary" / "latest_summary.json"
-    try:
-        if not path.exists():
-            return _model_assurance_missing(reason="latest_summary.json not found")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            return _model_assurance_missing(reason="latest_summary.json is not an object")
-        safe = _json_safe(payload)
-        if not isinstance(safe, dict):
-            return _model_assurance_missing(reason="latest_summary.json failed JSON sanitization")
-        # Prove serializability before attaching to OPS response.
-        json.dumps(safe, allow_nan=False)
-        unified = load_unified_shadow_model_payload()
-        if unified is not None:
-            safe["unified_shadow_model"] = unified
-            # Enrich MODEL-7 candidate_shadow summary with current overlay statuses for the existing panel.
-            cand = safe.get("candidate_shadow")
-            if isinstance(cand, dict):
-                summary = dict(cand.get("summary") or {})
-                summary["unified_operational_status"] = unified.get("operational_status")
-                summary["unified_evidence_status"] = unified.get("evidence_status")
-                summary["unified_status"] = unified.get("status")
-                summary["promotion_eligible"] = bool(unified.get("promotion_eligible", False))
-                summary["promotion_ineligibility_reason"] = unified.get("promotion_ineligibility_reason")
-                summary["runtime_impact"] = (unified.get("runtime_safety") or {}).get("runtime_impact") or "NONE"
-                cov = unified.get("coverage") or {}
-                summary["cross_layer_covered"] = cov.get("cross_layer_fully_covered_closed_trades")
-                summary["cross_layer_total"] = cov.get("cross_layer_total_closed_trades")
-                comps = unified.get("shadow_components") or {}
-                eq = comps.get("EQCORR") or {}
-                stp = comps.get("STP2.1") or {}
-                summary["eqcorr_process_status"] = eq.get("process_status")
-                summary["eqcorr_baseline_pending"] = eq.get("baseline_outcomes_pending")
-                summary["eqcorr_baseline_divergence"] = eq.get("baseline_divergence_count")
-                summary["stp_process_status"] = stp.get("process_status")
-                summary["stp_baseline_pending"] = stp.get("baseline_outcomes_pending")
-                summary["stp_baseline_divergence"] = stp.get("baseline_divergence_count")
-                summary["stp_manifest_fingerprint"] = stp.get("manifest_fingerprint")
-                summary["eqcorr_manifest_fingerprint"] = eq.get("manifest_fingerprint")
-                cand = {**cand, "summary": summary}
-                safe["candidate_shadow"] = cand
-        return safe
-    except Exception as exc:
-        return {
-            **_model_assurance_missing(reason=f"{type(exc).__name__}: {exc}"),
-            "status": "ERROR",
-            "overall_assurance_status": "ERROR",
+    """
+    Dashboard-only current Model Assurance projection.
+
+    CURRENT runtime identity comes from the immutable active registry and
+    active PAPER epoch. Legacy MODEL-9 summary/shadow snapshots remain on disk
+    as historical evidence and are never allowed to masquerade as CURRENT.
+
+    Model Assurance services are intentionally not started here.
+    """
+
+    import os
+    import subprocess
+    from datetime import datetime as _dt, timezone as _tz
+
+    repo = Path(REPO_ROOT)
+    summary_path = repo / "data" / "model_assurance" / "summary" / "latest_summary.json"
+    registry_path = repo / "data" / "model_assurance" / "registry" / "active" / "active_model.json"
+    paper_path = repo / "data" / "trading" / "paper_epochs" / "active.json"
+
+    def _read_object(path: Path) -> dict[str, Any]:
+        try:
+            if not path.exists():
+                return {}
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+
+    legacy = _read_object(summary_path)
+    safe = _json_safe(legacy)
+    if not isinstance(safe, dict):
+        safe = {}
+
+    legacy_active_runtime = dict(safe.get("active_runtime") or {})
+    legacy_generated_at = safe.get("generated_at")
+    legacy_overall = safe.get("overall_assurance_status")
+    legacy_current_toxicity = (
+        dict(safe.get("current_toxicity") or {})
+        if isinstance(safe.get("current_toxicity"), dict)
+        else {}
+    )
+
+    registry = _read_object(registry_path)
+    paper = _read_object(paper_path)
+
+    registry_epoch = str(registry.get("paper_epoch_id") or "")
+    paper_epoch = str(paper.get("paper_epoch_id") or "")
+    registry_fp = str(registry.get("trading_contract_fingerprint") or "")
+    paper_fp = str(paper.get("trading_contract_fingerprint") or "")
+
+    epoch_match = bool(registry_epoch and paper_epoch and registry_epoch == paper_epoch)
+    fingerprint_match = bool(registry_fp and paper_fp and registry_fp == paper_fp)
+    binding_ok = epoch_match and fingerprint_match
+
+    active_runtime = {
+        "status": "ACTIVE_REGISTERED" if binding_ok else "REGISTRY_BINDING_MISMATCH",
+        "registry_record_id": registry.get("registry_record_id"),
+        "model_id": registry.get("model_id"),
+        "model_version": registry.get("model_version"),
+        "model_type": registry.get("model_type"),
+        "runtime_fingerprint": registry.get("runtime_fingerprint"),
+        "trading_contract_fingerprint": registry.get("trading_contract_fingerprint"),
+        "paper_epoch_id": registry.get("paper_epoch_id"),
+        "paper_epoch_activated_at": registry.get("paper_epoch_activated_at") or paper.get("activated_at"),
+        "paper_only": registry.get("paper_only", True),
+        "real_execution": registry.get("real_execution", False),
+        "source_commit": registry.get("source_commit"),
+        "epoch_match": epoch_match,
+        "fingerprint_match": fingerprint_match,
+    }
+
+    service_specs = {
+        "behavioral_validation": repo / "data/model_assurance/behavioral_validation/runtime/health.json",
+        "drift_monitoring": repo / "data/model_assurance/drift/runtime/health.json",
+        "economic_validation": repo / "data/model_assurance/economic_validation/runtime/health.json",
+        "governance_promotion": repo / "data/model_assurance/governance/runtime/health.json",
+        "candidate_shadow": repo / "data/model_assurance/shadow/runtime/health.json",
+        "current_toxicity": repo / "data/model_assurance/toxic_box/current/runtime/health.json",
+        "external_data": repo / "data/model_assurance/toxic_box/external_data/runtime/health.json",
+        "incident_correlation": repo / "data/model_assurance/toxic_box/incidents/runtime/health.json",
+        "summary": repo / "data/model_assurance/summary/runtime/health.json",
+    }
+
+    process_truth: dict[str, Any] = {}
+    service_health: dict[str, str] = {}
+    historical_service_snapshots: dict[str, Any] = {}
+
+    for name, health_path in service_specs.items():
+        health = _read_object(health_path)
+        raw_pid = health.get("pid")
+        try:
+            pid = int(raw_pid) if raw_pid is not None else None
+        except Exception:
+            pid = None
+
+        command = ""
+        actual_alive = False
+
+        if pid and pid > 0:
+            try:
+                proc = subprocess.run(
+                    ["ps", "-ww", "-p", str(pid), "-o", "command="],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=False,
+                )
+                command = (proc.stdout or "").strip()
+                actual_alive = bool(
+                    proc.returncode == 0
+                    and command
+                    and (
+                        "model_assurance" in command
+                        or "run_model" in command
+                        or "toxic_box" in command
+                    )
+                )
+            except Exception:
+                actual_alive = False
+                command = ""
+
+        current_status = (
+            "RUNNING_UNEXPECTED_BEFORE_400_TRADES"
+            if actual_alive
+            else "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES"
+        )
+
+        legacy_section = safe.get(name)
+        legacy_section = (
+            dict(legacy_section)
+            if isinstance(legacy_section, dict)
+            else {}
+        )
+
+        historical_service_snapshots[name] = {
+            "status": "HISTORICAL_NOT_CURRENT",
+            "model_assurance_snapshot": legacy_section or None,
+            "health_snapshot": {
+                "source_path": str(health_path),
+                "status": health.get("status"),
+                "claimed_alive": health.get("alive"),
+                "pid": pid,
+                "paper_epoch_id": health.get("paper_epoch_id"),
+                "updated_at": health.get("updated_at"),
+            },
         }
+
+        # CURRENT process truth contains only verified OS process state.
+        # Disk health claims belong exclusively to historical_service_snapshots.
+        process_truth[name] = {
+            "status": current_status,
+            "pid": pid,
+            "alive": actual_alive,
+            "command": command or None,
+        }
+        service_health[name] = current_status
+
+        if name != "summary":
+            # CURRENT service cards are rebuilt from operational truth only.
+            # Never merge legacy MODEL-9 fields (ALIVE_FRESH, source_path,
+            # old summary, updated_at, old PAPER epoch) into CURRENT.
+            safe[name] = {
+                "status": current_status,
+                "operational_status": current_status,
+                "pid": pid,
+                "alive": actual_alive,
+                "runtime_impact": (
+                    "NON_BLOCKING"
+                    if actual_alive
+                    else "NONE"
+                ),
+            }
+
+    unexpected_running = [
+        name for name, truth in process_truth.items() if truth.get("alive") is True
+    ]
+
+    now = _dt.now(_tz.utc).isoformat()
+
+    safe["historical_model_assurance_snapshot"] = {
+        "status": "HISTORICAL_NOT_CURRENT",
+        "source_path": str(summary_path),
+        "generated_at": legacy_generated_at,
+        "overall_assurance_status": legacy_overall,
+        "active_runtime": legacy_active_runtime or None,
+    }
+
+    safe["historical_current_toxicity"] = {
+        "status": "HISTORICAL_NOT_CURRENT",
+        "source_path": legacy_current_toxicity.get("source_path"),
+        "updated_at": legacy_current_toxicity.get("updated_at"),
+        "snapshot_status": legacy_current_toxicity.get("status"),
+        "health_status": legacy_current_toxicity.get("health_status"),
+        "snapshot": legacy_current_toxicity or None,
+    }
+
+    old_unified = load_unified_shadow_model_payload()
+    if isinstance(old_unified, dict):
+        safe["historical_unified_shadow_model"] = {
+            "status": "HISTORICAL_NOT_CURRENT",
+            "source_path": str(repo / "data/model_assurance/shadow/latest/current.json"),
+            "snapshot_status": old_unified.get("status"),
+            "updated_at": old_unified.get("updated_at"),
+            "created_at": old_unified.get("created_at"),
+            "snapshot_id": old_unified.get("snapshot_id"),
+        }
+
+    safe["active_runtime"] = active_runtime
+    safe["active_runtime_binding_status"] = (
+        "BOUND_CURRENT"
+        if binding_ok
+        else (
+            "EPOCH_AND_FINGERPRINT_MISMATCH"
+            if not epoch_match and not fingerprint_match
+            else "EPOCH_MISMATCH"
+            if not epoch_match
+            else "FINGERPRINT_MISMATCH"
+        )
+    )
+
+    safe["scope"] = "CURRENT_ACTIVE_REGISTRY_MODEL_ONLY"
+    safe["runtime_impact"] = "NON_BLOCKING"
+    safe["promotion_control"] = "GOVERNANCE_GATE"
+    safe["runtime_safety_status"] = (
+        "SAFE_PAPER_ONLY"
+        if active_runtime.get("paper_only") is not False
+        and active_runtime.get("real_execution") is not True
+        else "UNSAFE"
+    )
+
+    if not binding_ok:
+        safe["overall_assurance_status"] = "CURRENT_CRITICAL_REGISTRY_BINDING_MISMATCH"
+        safe["overall_cause"] = safe["active_runtime_binding_status"]
+    elif unexpected_running:
+        safe["overall_assurance_status"] = "CURRENT_WARNING_MODEL_ASSURANCE_RUNNING_BEFORE_400_TRADES"
+        safe["overall_cause"] = "UNEXPECTED_MODEL_ASSURANCE_PROCESS_RUNNING"
+    else:
+        safe["overall_assurance_status"] = "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES"
+        safe["overall_cause"] = "MODEL_ASSURANCE_SERVICES_STOPPED_BY_POLICY_UNTIL_400_CLOSED_TRADES"
+
+    safe["service_health"] = service_health
+    safe["service_process_truth"] = process_truth
+    safe["historical_service_snapshots"] = historical_service_snapshots
+    safe["model_assurance_operational_status"] = (
+        "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES"
+        if not unexpected_running
+        else "RUNNING_UNEXPECTED_BEFORE_400_TRADES"
+    )
+    safe["required_closed_trade_threshold"] = 400
+
+    # Old MODEL-9 current-state arrays belong to the historical snapshot.
+    safe["historical_environment_blockers"] = list(safe.get("environment_blockers") or [])
+    safe["historical_current_blockers"] = list(safe.get("current_blockers") or [])
+    safe["historical_current_incidents"] = list(safe.get("current_incidents") or [])
+    safe["historical_current_toxic_events"] = list(safe.get("current_toxic_events") or [])
+    safe["environment_blockers"] = []
+    safe["current_blockers"] = []
+    safe["current_incidents"] = []
+    safe["current_toxic_events"] = []
+
+    stale_sources = list(safe.get("stale_sources") or [])
+    for marker in ("legacy_model_assurance_summary", "legacy_unified_shadow_model"):
+        if marker not in stale_sources:
+            stale_sources.append(marker)
+    safe["stale_sources"] = stale_sources
+
+    info = list(safe.get("informational_conditions") or [])
+    marker = "MODEL_ASSURANCE_NOT_REQUIRED_BEFORE_400_CLOSED_TRADES"
+    if marker not in info:
+        info.append(marker)
+    safe["informational_conditions"] = info
+
+    # Candidate Model Assurance Shadow is a future trained candidate.
+    # Do not mix it with the already-running STP/EQCORR research shadows.
+    candidate = safe.get("candidate_shadow")
+    candidate = dict(candidate) if isinstance(candidate, dict) else {}
+    candidate_summary = dict(candidate.get("summary") or {})
+    candidate_summary.update(
+        {
+            "shadow_status": "STOPPED_NO_CANDIDATE",
+            "unified_operational_status": "STOPPED",
+            "unified_evidence_status": "NO_CANDIDATE",
+            "unified_status": "STOPPED_NO_CANDIDATE",
+            "promotion_eligible": False,
+            "promotion_ineligibility_reason": "NOT_REQUIRED_BEFORE_400_CLOSED_TRADES",
+            "runtime_impact": "NONE",
+            "eqcorr_process_status": "SEPARATE_RESEARCH_RUNTIME",
+            "stp_process_status": "SEPARATE_RESEARCH_RUNTIME",
+        }
+    )
+    candidate["status"] = process_truth["candidate_shadow"]["status"]
+    candidate["summary"] = candidate_summary
+    safe["candidate_shadow"] = candidate
+
+    safe["unified_shadow_model"] = {
+        "status": "STOPPED_NO_CANDIDATE",
+        "operational_status": "STOPPED",
+        "evidence_status": "NO_CANDIDATE",
+        "promotion_eligible": False,
+        "promotion_ineligibility_reason": "NOT_REQUIRED_BEFORE_400_CLOSED_TRADES",
+        "runtime_impact": "NONE",
+        "runtime_safety": {
+            "runtime_impact": "NONE",
+            "paper_runtime_unchanged": True,
+        },
+        "candidate_model": None,
+        "active_model": active_runtime,
+        "historical_separation": True,
+        "updated_at": now,
+    }
+
+    safe["generated_at"] = now
+
+    json.dumps(safe, allow_nan=False)
+    return safe
 
 
 async def build_research_pipeline_snapshot() -> dict[str, Any]:

@@ -21,7 +21,10 @@ from epoch_isolation_helpers import (  # noqa: E402
 )
 
 REPO = WORKSPACE
-EPOCH = "PER_TF_EQUITY_1PCT_V1_20260729_181431"
+ACTIVE = json.loads(
+    (REPO / "data/trading/paper_epochs/active.json").read_text(encoding="utf-8")
+)
+EPOCH = str(ACTIVE["paper_epoch_id"])
 CONTRACT_FP = "ca13177674222de7991dc26688ee2f91e018e5728a1660af6dc81c326acf7129"
 HISTORICAL_STP11 = "e300d491fe470df4df754369ebbaedac25e66505950b555e76d0579467f7115b"
 SCRIPT = REPO / "scripts/live/audit_all_closed_trades_cross_layer.py"
@@ -51,7 +54,7 @@ def test_closed_trades_discovered_once_sorted(audit_module):
 
 
 def test_active_stp_manifest_not_historical_stp11(audit_module):
-    meta = audit_module.resolve_active_stp_manifest(REPO)
+    meta = audit_module.resolve_active_stp_manifest(REPO, EPOCH)
     assert meta["active_stp_manifest_fingerprint"]
     assert meta["active_stp_manifest_fingerprint"] != HISTORICAL_STP11
     assert meta["is_historical_stp11"] is False
@@ -91,7 +94,7 @@ def test_eqcorr_baseline_at_most_one(audit_module):
     trades = audit_module.find_closed_trades(REPO, EPOCH)
     for t in trades:
         chain = audit_module.reconstruct_chain(REPO, EPOCH, t)
-        eq = audit_module.eqcorr_for_trade(REPO, t, chain)
+        eq = audit_module.eqcorr_for_trade(REPO, EPOCH, t, chain)
         bases = [p for p in eq["policies"] if p.get("policy_id") == "BASELINE_ALL_ELIGIBLE"]
         assert len(bases) <= 1
         if bases:
@@ -99,12 +102,12 @@ def test_eqcorr_baseline_at_most_one(audit_module):
 
 
 def test_stp_excludes_other_manifests(audit_module):
-    meta = audit_module.resolve_active_stp_manifest(REPO)
+    meta = audit_module.resolve_active_stp_manifest(REPO, EPOCH)
     fp = meta["active_stp_manifest_fingerprint"]
     trades = audit_module.find_closed_trades(REPO, EPOCH)
     for t in trades:
         chain = audit_module.reconstruct_chain(REPO, EPOCH, t)
-        stp = audit_module.stp_for_trade(REPO, t, chain, fp)
+        stp = audit_module.stp_for_trade(REPO, EPOCH, t, chain, fp)
         assert stp["active_manifest"] == fp
         if stp["baseline_row"]:
             assert stp["baseline_row"].get("policy_manifest_fingerprint") == fp

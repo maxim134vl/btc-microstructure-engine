@@ -38,15 +38,15 @@ WATCHDOG_LOG="$STACK_DIR/collector_watchdog.log"
 RUNTIME_LOG="$STACK_DIR/runtime.log"
 API_LOG="$STACK_DIR/dashboard_api.log"
 UI_LOG="$STACK_DIR/dashboard_ui.log"
-CONTEXT_VISUAL_REFRESHER_LOG="$ROOT/logs/market_context_visual_refresher.log"
+CONTEXT_VISUAL_REFRESHER_LOG="$ROOT/logs/context_visual_refresher.log"
 CONTEXT_VISUAL_VIEWER_LOG="$STACK_DIR/context_visual_viewer.log"
-CONTEXT_VISUAL_STATUS_JSON="$ROOT/data/cognition/market_context_visual_refresher_status.json"
+CONTEXT_VISUAL_STATUS_JSON="$ROOT/apps/context_visualizer/public/data/visual_status.json"
 
 API_PORT="${DASHBOARD_PORT:-8080}"
 UI_PORT="${DASHBOARD_UI_PORT:-5173}"
 UI_HOST="${DASHBOARD_UI_HOST:-127.0.0.1}"
 CONTEXT_VISUAL_PORT="${CONTEXT_VISUAL_PORT:-8765}"
-CONTEXT_VISUAL_INTERVAL_SECONDS="${CONTEXT_VISUAL_INTERVAL_SECONDS:-180}"
+CONTEXT_VISUAL_INTERVAL_SECONDS="${CONTEXT_VISUAL_INTERVAL_SECONDS:-20}"
 CONTEXT_VISUAL_PUBLIC="$ROOT/apps/context_visualizer/public"
 
 usage() {
@@ -426,12 +426,12 @@ start_context_visual_refresher() {
   echo "  [context-visual-refresher] immediate refresh (--once)"
   (
     cd "$ROOT"
-    "$PYTHON" scripts/research/run_market_context_visual_refresher.py --once \
+    "$PYTHON" scripts/live/run_market_context_visual_refresher.py --once \
       >>"$CONTEXT_VISUAL_REFRESHER_LOG" 2>&1 || true
   )
 
   detach_start "$CONTEXT_VISUAL_REFRESHER_PID_FILE" "$CONTEXT_VISUAL_REFRESHER_LOG" \
-    "$PYTHON" scripts/research/run_market_context_visual_refresher.py \
+    "$PYTHON" scripts/live/run_market_context_visual_refresher.py \
     --interval-seconds "$CONTEXT_VISUAL_INTERVAL_SECONDS" >/dev/null
 
   local pid
@@ -442,10 +442,10 @@ start_context_visual_refresher() {
     "$PYTHON" - <<'PY' 2>/dev/null || true
 import json
 from pathlib import Path
-p = Path("data/cognition/market_context_visual_refresher_status.json")
+p = Path("apps/context_visualizer/public/data/visual_status.json")
 data = json.loads(p.read_text(encoding="utf-8"))
-print(f"  [context-visual-refresher] latest_visual={data.get('latest_visual_timestamp')}")
-print(f"  [context-visual-refresher] lag_min={data.get('live_to_visual_lag_minutes')} stale={data.get('visual_data_stale')}")
+print(f"  [context-visual-refresher] last_refresh={data.get('last_visual_refresh_ts')}")
+print(f"  [context-visual-refresher] source_lag_min={data.get('source_lag_minutes')} status={data.get('visual_data_status')}")
 PY
   fi
 }
@@ -577,13 +577,14 @@ context_visual_status() {
     "$PYTHON" - <<'PY' 2>/dev/null || true
 import json
 from pathlib import Path
-p = Path("data/cognition/market_context_visual_refresher_status.json")
+p = Path("apps/context_visualizer/public/data/visual_status.json")
 data = json.loads(p.read_text(encoding="utf-8"))
 print(f"  last_success_at: {data.get('last_success_at')}")
-print(f"  latest_visual_timestamp: {data.get('latest_visual_timestamp')}")
-print(f"  latest_live_timestamp: {data.get('latest_live_timestamp')}")
-print(f"  live_to_visual_lag_minutes: {data.get('live_to_visual_lag_minutes')}")
-print(f"  visual_data_stale: {data.get('visual_data_stale')}")
+print(f"  last_visual_refresh_ts: {data.get('last_visual_refresh_ts')}")
+print(f"  latest_live_feed_ts: {data.get('latest_live_feed_ts')}")
+print(f"  latest_decision_log_ts: {data.get('latest_decision_log_ts')}")
+print(f"  source_lag_minutes: {data.get('source_lag_minutes')}")
+print(f"  visual_data_status: {data.get('visual_data_status')}")
 print(f"  refresher_status: {data.get('status')}")
 PY
   else

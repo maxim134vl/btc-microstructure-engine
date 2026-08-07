@@ -220,6 +220,7 @@ class IntrabarCognitionService:
                 "bridge_activated_at": self.closed_bar_bridge.bridge_activated_at,
                 "last_run_at": self.closed_bar_bridge.last_run_at,
                 "last_result": self.closed_bar_bridge.last_result.to_dict(),
+                "recovery": self.closed_bar_bridge.last_result.recovery,
             },
             "queue": self.queue.metrics.to_dict(),
             "writer": self.writer.stats.to_dict(),

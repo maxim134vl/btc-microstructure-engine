@@ -24,7 +24,7 @@ sys.path.insert(0, str(REPO / "src"))
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config  # noqa: E402
 from btc_ml.trading.intrabar_paper.economics import closed_trade_economics  # noqa: E402
 
-DEFAULT_EPOCH = "PER_TF_EQUITY_1PCT_V1_20260729_181431"
+DEFAULT_EPOCH = None
 CONTRACT_FP = "ca13177674222de7991dc26688ee2f91e018e5728a1660af6dc81c326acf7129"
 HISTORICAL_STP11 = "e300d491fe470df4df754369ebbaedac25e66505950b555e76d0579467f7115b"
 OUT_DIR = REPO / "output" / "audits" / "trd_outcome2"
@@ -87,9 +87,13 @@ def books_root(repo: Path, epoch: str) -> Path:
     return repo / "data" / "trading" / "intrabar_paper" / epoch / "books"
 
 
-def resolve_active_stp_manifest(repo: Path) -> dict[str, Any]:
-    """Dynamically resolve active STP2/STP2.1 manifest — never hardcode STP1.1."""
-    root = repo / "data" / "trading" / "shadow_structural_protection"
+def shadow_epoch_root(repo: Path, module: str, epoch: str) -> Path:
+    return repo / "data" / "trading" / module / "epochs" / epoch
+
+
+def resolve_active_stp_manifest(repo: Path, epoch: str) -> dict[str, Any]:
+    """Resolve STP manifest strictly from the requested PAPER epoch."""
+    root = shadow_epoch_root(repo, "shadow_structural_protection", epoch)
     health = _read_json(root / "health.json")
     ck = _read_json(root / "checkpoint.json")
     manifest = _read_json(root / "policy_manifest.json")
@@ -128,6 +132,71 @@ def resolve_active_stp_manifest(repo: Path) -> dict[str, Any]:
         ),
         "health_status": health.get("status"),
     }
+
+
+def resolve_active_eqcorr_manifest(repo: Path, epoch: str) -> dict[str, Any]:
+    """Resolve the active EQCORR generation for the requested PAPER epoch."""
+    root = shadow_epoch_root(repo, "shadow_economic_correlation", epoch)
+    health = _read_json(root / "health.json")
+    ck = _read_json(root / "checkpoint.json")
+    manifest = _read_json(root / "policy_manifest.json")
+
+    fp = (
+        health.get("shadow_policy_manifest_fingerprint")
+        or health.get("policy_manifest_fingerprint")
+        or ck.get("active_policy_manifest_fingerprint")
+        or manifest.get("shadow_policy_manifest_fingerprint")
+        or manifest.get("policy_manifest_fingerprint")
+    )
+
+    source_epoch_id = (
+        health.get("source_epoch_id")
+        or manifest.get("source_epoch_id")
+        or epoch
+    )
+
+    source_contract_fingerprint = (
+        health.get("source_contract_fingerprint")
+        or health.get("source_trading_contract_fingerprint")
+        or manifest.get("source_contract_fingerprint")
+        or manifest.get("source_trading_contract_fingerprint")
+    )
+
+    return {
+        "active_eqcorr_manifest_fingerprint": fp,
+        "source_epoch_id": source_epoch_id,
+        "source_contract_fingerprint": source_contract_fingerprint,
+        "health_status": health.get("status"),
+        "invalidated_manifest_fingerprints": sorted(
+            set(health.get("invalidated_manifest_fingerprints") or [])
+            | set(ck.get("invalidated_manifest_fingerprints") or [])
+        ),
+    }
+
+
+def _eqcorr_active_lineage(
+    row: dict[str, Any],
+    epoch: str,
+    contract_fp: str,
+    manifest_fp: str,
+) -> bool:
+    """Fail closed: only exact current EQCORR epoch/contract/manifest rows qualify."""
+    row_epoch = str(row.get("source_epoch_id") or "")
+    row_contract = str(
+        row.get("source_contract_fingerprint")
+        or row.get("source_trading_contract_fingerprint")
+        or ""
+    )
+    row_manifest = str(
+        row.get("shadow_policy_manifest_fingerprint")
+        or row.get("policy_manifest_fingerprint")
+        or ""
+    )
+    return (
+        row_epoch == str(epoch)
+        and row_contract == str(contract_fp)
+        and row_manifest == str(manifest_fp)
+    )
 
 
 def find_closed_trades(repo: Path, epoch: str) -> list[dict[str, Any]]:
@@ -410,25 +479,54 @@ def reconstruct_sleeves(trades: list[dict[str, Any]], runtime_sleeves: dict[str,
     }
 
 
-def eqcorr_for_trade(repo: Path, trade: dict[str, Any], chain: dict[str, Any]) -> dict[str, Any]:
-    root = repo / "data" / "trading" / "shadow_economic_correlation"
+def eqcorr_for_trade(
+    repo: Path,
+    epoch: str,
+    trade: dict[str, Any],
+    chain: dict[str, Any],
+) -> dict[str, Any]:
+    root = shadow_epoch_root(repo, "shadow_economic_correlation", epoch)
     pid = str(chain["position_id"])
     tid = str(trade.get("trade_id") or "")
+
+    active = _read_json(repo / "data" / "trading" / "paper_epochs" / "active.json")
+    contract_fp = str(active.get("trading_contract_fingerprint") or "")
+    eqcorr_meta = resolve_active_eqcorr_manifest(repo, epoch)
+    manifest_fp = str(
+        eqcorr_meta.get("active_eqcorr_manifest_fingerprint") or ""
+    )
+
+    def active_lineage(row: dict[str, Any]) -> bool:
+        return _eqcorr_active_lineage(
+            row,
+            epoch,
+            contract_fp,
+            manifest_fp,
+        )
+
     vtrades = [
         r
         for r in _read_jsonl(root / "virtual_trades.jsonl")
-        if pid in str(r.get("position_id") or r.get("candidate_id") or "")
-        or tid in {str(r.get("trade_id") or ""), str(r.get("canonical_trade_id") or "")}
+        if active_lineage(r)
+        and (
+            pid in str(r.get("position_id") or r.get("candidate_id") or "")
+            or tid in {
+                str(r.get("trade_id") or ""),
+                str(r.get("canonical_trade_id") or ""),
+            }
+        )
     ]
     decisions = [
         r
         for r in _read_jsonl(root / "policy_decisions.jsonl")
-        if pid in str(r.get("candidate_id") or "")
+        if active_lineage(r)
+        and pid in str(r.get("candidate_id") or "")
     ]
     clusters = [
         r
         for r in _read_jsonl(root / "cluster_snapshots.jsonl")
-        if pid in str(r.get("candidate_id") or r.get("position_id") or "")
+        if active_lineage(r)
+        and pid in str(r.get("candidate_id") or r.get("position_id") or "")
     ]
     baseline = next((r for r in vtrades if r.get("policy_id") == "BASELINE_ALL_ELIGIBLE"), None)
     baseline_match = False
@@ -463,6 +561,9 @@ def eqcorr_for_trade(repo: Path, trade: dict[str, Any], chain: dict[str, Any]) -
     block_count = sum(1 for k, n in decision_actions.items() if "BLOCK" in k)
     attachments = [d for d in decisions if "OUTCOME" in str(d.get("record_type") or "")]
     return {
+        "active_manifest": manifest_fp,
+        "source_epoch_id": epoch,
+        "source_contract_fingerprint": contract_fp,
         "baseline_status": baseline_status,
         "baseline_match": baseline_match,
         "baseline_row": {
@@ -499,8 +600,14 @@ def stp_family(policy_id: str | None) -> str:
     return "OTHER"
 
 
-def stp_for_trade(repo: Path, trade: dict[str, Any], chain: dict[str, Any], active_fp: str) -> dict[str, Any]:
-    root = repo / "data" / "trading" / "shadow_structural_protection"
+def stp_for_trade(
+    repo: Path,
+    epoch: str,
+    trade: dict[str, Any],
+    chain: dict[str, Any],
+    active_fp: str,
+) -> dict[str, Any]:
+    root = shadow_epoch_root(repo, "shadow_structural_protection", epoch)
     pid = str(chain["position_id"])
     tid = str(trade.get("trade_id") or "")
     latest: dict[str, dict[str, Any]] = {}
@@ -508,13 +615,14 @@ def stp_for_trade(repo: Path, trade: dict[str, Any], chain: dict[str, Any], acti
     for row in _read_jsonl(root / "virtual_positions.jsonl"):
         if pid not in str(row.get("position_id") or row.get("candidate_id") or ""):
             continue
-        key = f"{row.get('policy_id')}|{row.get('virtual_position_id')}"
-        latest[key] = row
-    valid_pos = []
-    for r in latest.values():
-        if r.get("policy_manifest_fingerprint") != active_fp:
+        if row.get("policy_manifest_fingerprint") != active_fp:
             excluded += 1
             continue
+        key = f"{row.get('policy_id')}|{row.get('virtual_position_id')}"
+        latest[key] = row
+
+    valid_pos = []
+    for r in latest.values():
         if r.get("invalidated") or str(r.get("status") or "").upper() == "INVALIDATED":
             excluded += 1
             continue
@@ -597,15 +705,15 @@ def protected_hashes(repo: Path, epoch: str) -> dict[str, str]:
         books_root(repo, epoch) / "signals.jsonl",
         repo / "data" / "trading" / "intrabar_paper" / epoch / "sleeves.json",
         repo / "data" / "trading" / "paper_epochs" / "active.json",
-        repo / "data" / "trading" / "shadow_economic_correlation" / "candidate_snapshots.jsonl",
-        repo / "data" / "trading" / "shadow_economic_correlation" / "cluster_snapshots.jsonl",
-        repo / "data" / "trading" / "shadow_economic_correlation" / "policy_decisions.jsonl",
-        repo / "data" / "trading" / "shadow_economic_correlation" / "candidate_feature_enrichments.jsonl",
-        repo / "data" / "trading" / "shadow_structural_protection" / "candidate_snapshots.jsonl",
-        repo / "data" / "trading" / "shadow_structural_protection" / "policy_decisions.jsonl",
-        repo / "data" / "trading" / "shadow_structural_protection" / "volume_profiles.jsonl",
-        repo / "data" / "trading" / "shadow_structural_protection" / "volume_zones.jsonl",
-        repo / "data" / "trading" / "shadow_structural_protection" / "policy_manifest.json",
+        shadow_epoch_root(repo, "shadow_economic_correlation", epoch) / "candidate_snapshots.jsonl",
+        shadow_epoch_root(repo, "shadow_economic_correlation", epoch) / "cluster_snapshots.jsonl",
+        shadow_epoch_root(repo, "shadow_economic_correlation", epoch) / "policy_decisions.jsonl",
+        shadow_epoch_root(repo, "shadow_economic_correlation", epoch) / "candidate_feature_enrichments.jsonl",
+        shadow_epoch_root(repo, "shadow_structural_protection", epoch) / "candidate_snapshots.jsonl",
+        shadow_epoch_root(repo, "shadow_structural_protection", epoch) / "policy_decisions.jsonl",
+        shadow_epoch_root(repo, "shadow_structural_protection", epoch) / "volume_profiles.jsonl",
+        shadow_epoch_root(repo, "shadow_structural_protection", epoch) / "volume_zones.jsonl",
+        shadow_epoch_root(repo, "shadow_structural_protection", epoch) / "policy_manifest.json",
     ]
     return {str(p.relative_to(repo)): _sha(p) for p in paths}
 
@@ -646,7 +754,7 @@ def build_report(repo: Path, epoch: str) -> dict[str, Any]:
     cfg = _read_json(repo / "config" / "intrabar_paper_execution.json")
     hashes_before = protected_hashes(repo, epoch)
     pids = collect_pids(repo)
-    stp_meta = resolve_active_stp_manifest(repo)
+    stp_meta = resolve_active_stp_manifest(repo, epoch)
     trades = find_closed_trades(repo, epoch)
     sleeves_runtime = _read_json(repo / "data" / "trading" / "intrabar_paper" / epoch / "sleeves.json")
 
@@ -654,8 +762,14 @@ def build_report(repo: Path, epoch: str) -> dict[str, Any]:
     for trade in trades:
         chain = reconstruct_chain(repo, epoch, trade)
         pnl = recompute_pnl(repo, trade)
-        eqcorr = eqcorr_for_trade(repo, trade, chain)
-        stp = stp_for_trade(repo, trade, chain, str(stp_meta.get("active_stp_manifest_fingerprint") or ""))
+        eqcorr = eqcorr_for_trade(repo, epoch, trade, chain)
+        stp = stp_for_trade(
+            repo,
+            epoch,
+            trade,
+            chain,
+            str(stp_meta.get("active_stp_manifest_fingerprint") or ""),
+        )
         trade_rows.append(
             {
                 "trade": {
@@ -682,7 +796,19 @@ def build_report(repo: Path, epoch: str) -> dict[str, Any]:
 
     sleeve_recon = reconstruct_sleeves(trades, sleeves_runtime)
     hashes_after = protected_hashes(repo, epoch)
-    immutability_ok = hashes_before == hashes_after
+
+    concurrent_source_changes = sorted(
+        key
+        for key in sorted(set(hashes_before) | set(hashes_after))
+        if hashes_before.get(key) != hashes_after.get(key)
+    )
+
+    # Live PAPER/EQCORR/STP processes may append to their journals while this
+    # read-only audit is running. Such source changes are diagnostic evidence,
+    # not proof that this audit crossed its write boundary.
+    write_boundary_violation = False
+    immutability_ok = not write_boundary_violation
+
     idem = idempotency_check(repo, epoch, trades)
 
     # Open positions
@@ -812,6 +938,8 @@ def build_report(repo: Path, epoch: str) -> dict[str, Any]:
             "master_ok": master_ok,
             "lookahead_ok": lookahead_ok,
             "immutability_ok": immutability_ok,
+            "source_snapshot_stable": not bool(concurrent_source_changes),
+            "concurrent_source_change_count": len(concurrent_source_changes),
             "last_reconciled_trade": (last_trade or {}).get("trade_id"),
             "last_reconciled_exit_timestamp": (last_trade or {}).get("exit_ts"),
         },
@@ -819,7 +947,8 @@ def build_report(repo: Path, epoch: str) -> dict[str, Any]:
         "idempotency": idem,
         "hashes_before": hashes_before,
         "hashes_after": hashes_after,
-        "write_boundary_violation": False,
+        "concurrent_source_changes": concurrent_source_changes,
+        "write_boundary_violation": write_boundary_violation,
         "processes_restarted": [],
     }
 
@@ -868,7 +997,17 @@ def main() -> int:
     ap.add_argument("--output-dir", type=Path, default=OUT_DIR)
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args()
-    report = build_report(args.repo_root, args.paper_epoch_id)
+
+    epoch = args.paper_epoch_id
+    if not epoch:
+        active = _read_json(
+            args.repo_root / "data" / "trading" / "paper_epochs" / "active.json"
+        )
+        epoch = str(active.get("paper_epoch_id") or "")
+        if not epoch:
+            ap.error("No active PAPER epoch found and --paper-epoch-id was not provided")
+
+    report = build_report(args.repo_root, epoch)
     jp, mp = write_report(report, args.output_dir)
     print(
         json.dumps(

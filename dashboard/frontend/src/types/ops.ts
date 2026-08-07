@@ -570,6 +570,12 @@ export interface ModelAssuranceSnapshot {
   runtime_safety_status?: string;
   runtime_impact?: string;
   promotion_control?: string;
+  active_runtime_binding_status?: string;
+  model_assurance_operational_status?: string;
+  required_closed_trade_threshold?: number;
+  service_process_truth?: Record<string, unknown>;
+  historical_model_assurance_snapshot?: Record<string, unknown>;
+  historical_unified_shadow_model?: Record<string, unknown>;
   active_runtime?: {
     status?: string;
     registry_record_id?: string;
@@ -577,7 +583,10 @@ export interface ModelAssuranceSnapshot {
     model_version?: string;
     model_type?: string;
     runtime_fingerprint?: string;
+    trading_contract_fingerprint?: string;
     paper_epoch_id?: string;
+    epoch_match?: boolean;
+    fingerprint_match?: boolean;
     paper_epoch_activated_at?: string;
     paper_only?: boolean;
     real_execution?: boolean;

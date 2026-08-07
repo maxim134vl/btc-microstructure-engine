@@ -20,7 +20,7 @@ from .consumer import (
     idempotency_key,
 )
 from .economics import closed_trade_economics, resolve_risk_sizing
-from .entry_eligibility import stale_entry_block_reason
+from .entry_eligibility import replay_entry_block_reason, stale_entry_block_reason
 from .epoch import PaperEpoch
 from .sleeves import SleeveLedger
 
@@ -397,6 +397,15 @@ class IntrabarPaperEngine:
             return None
         if event_type not in ENTRY_EVENTS:
             return None
+        replay_reason = replay_entry_block_reason(event)
+        if replay_reason:
+            self._block(replay_reason, tf, context_event_id, side, event=event)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {"status": replay_reason, "timeframe": tf, "context_event_id": context_event_id}
         stale_reason = stale_entry_block_reason(
             event,
             max_age_seconds=self.cfg.max_entry_signal_age_seconds,
@@ -975,8 +984,18 @@ class IntrabarPaperEngine:
         bbo = self.bbo.latest
         age = None
         local = self.bbo._latest_local
+        current_bbo = None
         if local is not None:
             age = max(0.0, (time.monotonic_ns() - local.receive_monotonic_ns) / 1_000_000.0)
+            current_bbo = {
+                "best_bid": local.best_bid,
+                "best_ask": local.best_ask,
+                "bbo_receive_timestamp": local.receive_timestamp,
+                "book_update_id": local.book_update_id,
+                "source_event_id": local.source_event_id,
+                "source": "manager_local_book_ticker",
+                "freshness_ms": age,
+            }
         elif bbo is not None and bbo.receive_timestamp:
             age = None  # context-domain mono not comparable to wall clock
         manager_alive = True
@@ -1012,6 +1031,7 @@ class IntrabarPaperEngine:
             "realized_pnl_usd": self.realized_pnl,
             "unrealized_pnl_usd": self.unrealized_pnl,
             "bbo_freshness_ms": age,
+            "current_bbo": current_bbo,
             "max_bbo_age_ms": self.cfg.max_bbo_age_ms,
             "blocked_commands": self.blocked_commands,
             "duplicate_events_prevented": ck.duplicate_events_prevented,

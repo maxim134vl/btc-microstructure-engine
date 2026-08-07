@@ -160,7 +160,7 @@ def _load_live1b_open_positions(*, timeframe: str | None = None) -> list[dict[st
                 take_profit_price=take,
             )
         mark_px = None
-        upnl = 0.0
+        upnl = None
         mark_side = None
         if (
             mark_price_for_side is not None
@@ -232,6 +232,16 @@ def _load_live1b_closed_trades(*, timeframe: str | None = None) -> list[dict[str
     if books is None:
         return []
     selected = TIMEFRAMES if timeframe in (None, "", "ALL") else (str(timeframe).upper(),)
+
+    # trades.jsonl may contain entry_ts=null. Recover the canonical entry
+    # timestamp from the corresponding OPEN position record.
+    opened_at_by_position: dict[str, str] = {}
+    for position in _read_jsonl(books / "positions.jsonl"):
+        position_id = _txt(position.get("position_id"))
+        opened_at = _iso(position.get("opened_at"))
+        if position_id and opened_at and position_id not in opened_at_by_position:
+            opened_at_by_position[position_id] = opened_at
+
     out: list[dict[str, Any]] = []
     for row in _read_jsonl(books / "trades.jsonl"):
         tf = str(row.get("timeframe") or "").upper()
@@ -240,13 +250,19 @@ def _load_live1b_closed_trades(*, timeframe: str | None = None) -> list[dict[str
         exit_ts = _iso(row.get("exit_ts"))
         if not exit_ts:
             continue
+
+        position_id = _txt(row.get("position_id"))
+        entry_ts = _iso(row.get("entry_ts")) or opened_at_by_position.get(position_id)
+
         out.append(
             {
                 "trade_id": _txt(row.get("trade_id")),
+                "position_id": position_id,
                 "timeframe": tf,
                 "status": "CLOSED",
                 "side": (_txt(row.get("side")) or "LONG").upper(),
-                "entry_timestamp": _iso(row.get("entry_ts")),
+                "entry_timestamp": entry_ts,
+                "entry_fill_timestamp": entry_ts,
                 "exit_timestamp": exit_ts,
                 "entry_price": _f(row.get("entry_price")),
                 "exit_price": _f(row.get("exit_price")),

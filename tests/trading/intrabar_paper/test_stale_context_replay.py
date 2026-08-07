@@ -11,6 +11,7 @@ import pytest
 
 from btc_ml.trading import activation
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
+from btc_ml.trading.intrabar_paper.consumer import idempotency_key
 from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
 from btc_ml.trading.intrabar_paper.entry_eligibility import (
     decision_timestamp,
@@ -204,7 +205,23 @@ def test_pre_activation_stale_context_flip_exits_but_blocks_reverse_entry(cfg):
     acts = eng.poll_context_journal()
     assert [a["status"] for a in acts] == ["EXITED", "ENTRY_BLOCKED_STALE_SIGNAL"]
     assert "M15" not in eng.positions
-    assert eng.consumer.checkpoint.last_event_monotonic_ns == 2_000_000
+    ck = eng.consumer.checkpoint
+    assert ck.last_consumed_context_event_id == "pre_act_flip"
+    assert ck.last_offset == 0
+    # FLIP entry leg uses mono+1 for strict exit-before-entry ordering.
+    assert ck.last_event_monotonic_ns == 2_000_001
+    assert ck.last_event_monotonic_ns >= 2_000_000
+    consume_key = idempotency_key(
+        paper_epoch_id=ep.paper_epoch_id,
+        context_event_id="pre_act_flip",
+        timeframe="M15",
+        action="CONSUME",
+    )
+    assert consume_key in ck.processed_keys
+    assert sum(1 for k in ck.processed_keys if k.endswith("|CONSUME")) == 1
+    acts_repeat = eng.poll_context_journal()
+    assert all(a.get("status") == "DUPLICATE_PREVENTED" for a in acts_repeat)
+    assert "M15" not in eng.positions
 
 
 def test_restart_backfill_missing_decision_time_blocks_despite_fresh_lure_fields(cfg):
@@ -222,10 +239,11 @@ def test_restart_backfill_missing_decision_time_blocks_despite_fresh_lure_fields
     lure["bbo_receive_timestamp"] = _fresh_ts(1)
     _append_journal(c, lure)
     acts = eng.poll_context_journal()
-    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_SIGNAL_NO_DECISION_TIME"
+    assert acts[0]["status"] == "ENTRY_BLOCKED_REPLAY_SIGNAL"
     assert eng.positions == {}
     blocked = eng.books.read_all("blocked")
-    assert blocked[-1]["reason"] == "ENTRY_BLOCKED_STALE_SIGNAL_NO_DECISION_TIME"
+    assert blocked
+    assert blocked[-1]["reason"] == "ENTRY_BLOCKED_REPLAY_SIGNAL"
 
 
 def test_preflight_unconsumed_zero_after_stale_events_consumed(cfg, monkeypatch):
@@ -278,12 +296,12 @@ def test_stale_replay_context_start_blocked_checkpoint_advances(cfg):
     assert eng.positions == {}
     acts = eng.poll_context_journal()
     assert len(acts) == 1
-    assert acts[0]["status"] == "ENTRY_BLOCKED_RESTART_BACKFILL"
+    assert acts[0]["status"] == "ENTRY_BLOCKED_REPLAY_SIGNAL"
     assert eng.positions == {}
     assert eng.consumer.checkpoint.last_event_monotonic_ns == 2_000_000
     blocked = eng.books.read_all("blocked")
     assert blocked
-    assert blocked[-1]["reason"] == "ENTRY_BLOCKED_RESTART_BACKFILL"
+    assert blocked[-1]["reason"] == "ENTRY_BLOCKED_REPLAY_SIGNAL"
     assert blocked[-1]["decision_available_at"] == stale["decision_available_at"]
     assert "ingested_at" in blocked[-1]
 
