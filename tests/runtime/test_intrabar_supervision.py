@@ -181,6 +181,42 @@ def test_05_live1b_execution_degraded_does_not_restart(repo: Path):
     assert result["needs_restart"] is False
 
 
+def test_05b_cognition_ws_opened_is_healthy(repo: Path):
+    spec = _spec(repo, "intrabar_cognition")
+    pid = os.getpid()
+    spec.pid_file.write_text(f"{pid}\n", encoding="utf-8")
+    _write_health(
+        spec.health_file,
+        pid=pid,
+        extra={
+            "queue": {"enqueue_rejected": 0},
+            "writer": {"write_errors": 0},
+            "errors": ["ws:opened"],
+        },
+    )
+    result = evaluate_service(spec, restart_entry=ServiceRestartState(), policy=RestartPolicy())
+    assert result["lifecycle_state"] == ProcessLifecycleState.RUNNING_HEALTHY.value
+    assert result["needs_restart"] is False
+
+
+def test_05c_cognition_queue_reject_is_degraded(repo: Path):
+    spec = _spec(repo, "intrabar_cognition")
+    pid = os.getpid()
+    spec.pid_file.write_text(f"{pid}\n", encoding="utf-8")
+    _write_health(
+        spec.health_file,
+        pid=pid,
+        extra={
+            "queue": {"enqueue_rejected": 3},
+            "writer": {"write_errors": 0},
+            "errors": ["ws:opened"],
+        },
+    )
+    result = evaluate_service(spec, restart_entry=ServiceRestartState(), policy=RestartPolicy())
+    assert result["lifecycle_state"] == ProcessLifecycleState.RUNNING_DEGRADED.value
+    assert result["needs_restart"] is False
+
+
 def test_06_live1b_execution_recovering_does_not_restart(repo: Path):
     spec = _spec(repo, "intrabar_paper_manager")
     pid = os.getpid()

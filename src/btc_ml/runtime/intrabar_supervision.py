@@ -370,15 +370,25 @@ def adopt_pid(spec: ServiceSpec, *, repo_root: Path | None = None) -> int | None
     return live[0] if live else None
 
 
+_COGNITION_BENIGN_ERRORS = frozenset({"ws:opened"})
+
+
+def _cognition_actionable_errors(health: dict[str, Any]) -> list[str]:
+    return [str(err) for err in (health.get("errors") or []) if str(err) not in _COGNITION_BENIGN_ERRORS]
+
+
 def _cognition_internal_degraded(health: dict[str, Any]) -> bool:
-    errors = health.get("errors") or []
     queue = health.get("queue") or {}
-    if queue.get("dropped_total"):
+    if int(queue.get("dropped_total") or 0) > 0:
+        return True
+    if int(queue.get("enqueue_rejected") or 0) > 0:
         return True
     writer = health.get("writer") or {}
     if writer.get("last_error"):
         return True
-    return bool(errors)
+    if int(writer.get("write_errors") or 0) > 0:
+        return True
+    return bool(_cognition_actionable_errors(health))
 
 
 def _paper_execution_state(health: dict[str, Any]) -> str | None:
