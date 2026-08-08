@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT = 4096
+
 
 @dataclass
 class ExecutionMarketCheckpoint:
@@ -23,9 +25,19 @@ class ExecutionMarketCheckpoint:
             "processed_agg_trade_ids": sorted(self.processed_agg_trade_ids),
         }
 
+    def note_processed(self, *, aggregate_trade_id: int, wal_offset: int) -> None:
+        self.last_processed_wal_offset = int(wal_offset)
+        self.last_processed_agg_trade_id = int(aggregate_trade_id)
+        self.processed_agg_trade_ids.add(int(aggregate_trade_id))
+        if len(self.processed_agg_trade_ids) > RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT:
+            recent = sorted(self.processed_agg_trade_ids)[-RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT:]
+            self.processed_agg_trade_ids = set(recent)
+
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ExecutionMarketCheckpoint":
-        ids = raw.get("processed_agg_trade_ids") or []
+        ids = sorted(int(x) for x in (raw.get("processed_agg_trade_ids") or []))[
+            -RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT:
+        ]
         return cls(
             paper_epoch_id=str(raw.get("paper_epoch_id") or ""),
             last_processed_wal_offset=int(raw.get("last_processed_wal_offset") or 0),
@@ -34,7 +46,7 @@ class ExecutionMarketCheckpoint:
                 if raw.get("last_processed_agg_trade_id") is not None
                 else None
             ),
-            processed_agg_trade_ids={int(x) for x in ids},
+            processed_agg_trade_ids=set(ids),
         )
 
     def save(self, path: Path) -> None:

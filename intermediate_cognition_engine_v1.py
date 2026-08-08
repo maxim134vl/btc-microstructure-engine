@@ -42,6 +42,65 @@ BASE_CONFIDENCE = {
 
 MAX_MEMORY_ROWS = 520
 
+CANDLE_SOURCE = "candle_structure_memory.parquet"
+VOLUME_CLASS_SOURCE = "volume_classification_memory.parquet"
+RUNTIME_COGNITION_SOURCE = "runtime_cognition_memory.parquet"
+
+
+def _utc_timestamp(
+    value: Any,
+    *,
+    source_name: str,
+    naive_timestamps_are_utc: bool = False,
+) -> pd.Timestamp:
+    """Normalize one timestamp without silently guessing a naive timezone."""
+
+    timestamp = pd.Timestamp(value)
+    if pd.isna(timestamp):
+        return pd.NaT
+    if timestamp.tzinfo is None:
+        if not naive_timestamps_are_utc:
+            raise ValueError(
+                f"NAIVE_TIMESTAMP_SOURCE_CONTRACT_REQUIRED:{source_name}"
+            )
+        timestamp = timestamp.tz_localize("UTC")
+    else:
+        timestamp = timestamp.tz_convert("UTC")
+    return timestamp
+
+
+def _utc_timestamp_series(
+    values: pd.Series,
+    *,
+    source_name: str,
+    naive_timestamps_are_utc: bool = False,
+) -> pd.Series:
+    """Normalize a timestamp column to timezone-aware UTC."""
+
+    parsed = pd.to_datetime(values, errors="coerce")
+    if isinstance(parsed.dtype, pd.DatetimeTZDtype):
+        return parsed.dt.tz_convert("UTC")
+    if pd.api.types.is_datetime64_dtype(parsed.dtype):
+        if not naive_timestamps_are_utc and parsed.notna().any():
+            raise ValueError(
+                f"NAIVE_TIMESTAMP_SOURCE_CONTRACT_REQUIRED:{source_name}"
+            )
+        return parsed.dt.tz_localize("UTC")
+    return pd.Series(
+        [
+            _utc_timestamp(
+                value,
+                source_name=source_name,
+                naive_timestamps_are_utc=naive_timestamps_are_utc,
+            )
+            if pd.notna(value)
+            else pd.NaT
+            for value in parsed
+        ],
+        index=values.index,
+        dtype="datetime64[us, UTC]",
+    )
+
 
 def _active_thresholds(
     thresholds: Stage25Thresholds | None = None,
@@ -49,17 +108,31 @@ def _active_thresholds(
     return thresholds or load_stage2_5_thresholds()
 
 
-def _prep(df: pd.DataFrame) -> pd.DataFrame:
+def _prep(
+    df: pd.DataFrame,
+    *,
+    source_name: str,
+    naive_timestamps_are_utc: bool = False,
+) -> pd.DataFrame:
     if len(df) == 0:
         return df
     frame = df.copy()
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    frame["timestamp"] = _utc_timestamp_series(
+        frame["timestamp"],
+        source_name=source_name,
+        naive_timestamps_are_utc=naive_timestamps_are_utc,
+    )
     return frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
 
 def _stage2_anchor(stage2: pd.DataFrame, ts: pd.Timestamp) -> dict[str, Any] | None:
     if len(stage2) == 0:
         return None
+    ts = _utc_timestamp(
+        ts,
+        source_name=CANDLE_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
     prior = stage2[stage2["timestamp"] <= ts]
     if len(prior) == 0:
         return None
@@ -103,7 +176,12 @@ def _collapse_bar_candidates(candidates: list[dict[str, Any]]) -> list[dict[str,
 
     by_ts: dict[pd.Timestamp, dict[str, Any]] = {}
     for candidate in candidates:
-        ts = pd.Timestamp(candidate["timestamp"])
+        ts = _utc_timestamp(
+            candidate["timestamp"],
+            source_name=CANDLE_SOURCE,
+            naive_timestamps_are_utc=True,
+        )
+        candidate = {**candidate, "timestamp": ts}
         current = by_ts.get(ts)
         if current is None:
             by_ts[ts] = candidate
@@ -131,18 +209,32 @@ def detect_candidates(
     """Evaluate Phase 1 intermediate triggers over M15 candles."""
 
     thresholds = _active_thresholds(thresholds)
-    candles = _prep(candles)
+    candles = _prep(
+        candles,
+        source_name=CANDLE_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
     if len(candles) < 6:
         return []
 
     if start is not None:
+        start = _utc_timestamp(start, source_name="detect_candidates.start")
         candles = candles[candles["timestamp"] >= start]
     if end is not None:
+        end = _utc_timestamp(end, source_name="detect_candidates.end")
         candles = candles[candles["timestamp"] <= end]
     if len(candles) < 6:
         return []
 
-    vol_class = _prep(volume_class) if volume_class is not None else pd.DataFrame()
+    vol_class = (
+        _prep(
+            volume_class,
+            source_name=VOLUME_CLASS_SOURCE,
+            naive_timestamps_are_utc=True,
+        )
+        if volume_class is not None
+        else pd.DataFrame()
+    )
     vol_lookup = {}
     if len(vol_class) > 0 and "volume_class" in vol_class.columns:
         for _, row in vol_class.iterrows():
@@ -237,6 +329,16 @@ def detect_candidates(
 
 
 def _bars_between(ts_a: pd.Timestamp, ts_b: pd.Timestamp) -> float:
+    ts_a = _utc_timestamp(
+        ts_a,
+        source_name=MEMORY_PATH,
+        naive_timestamps_are_utc=True,
+    )
+    ts_b = _utc_timestamp(
+        ts_b,
+        source_name=CANDLE_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
     return abs((ts_b - ts_a).total_seconds()) / (15 * 60)
 
 
@@ -260,7 +362,16 @@ def should_persist(
         return True
 
     state = candidate["intermediate_state"]
-    ts = pd.Timestamp(candidate["timestamp"])
+    ts = _utc_timestamp(
+        candidate["timestamp"],
+        source_name=CANDLE_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    existing = _prep(
+        existing,
+        source_name=MEMORY_PATH,
+        naive_timestamps_are_utc=True,
+    )
     same = existing[existing["intermediate_state"] == state]
     if len(same) == 0:
         return True
@@ -296,10 +407,18 @@ def should_persist(
 
 
 def enrich_with_anchor(rows: list[dict[str, Any]], stage2: pd.DataFrame) -> list[dict[str, Any]]:
-    stage2 = _prep(stage2)
+    stage2 = _prep(
+        stage2,
+        source_name=RUNTIME_COGNITION_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
     enriched: list[dict[str, Any]] = []
     for row in rows:
-        ts = pd.Timestamp(row["timestamp"])
+        ts = _utc_timestamp(
+            row["timestamp"],
+            source_name=CANDLE_SOURCE,
+            naive_timestamps_are_utc=True,
+        )
         anchor = _stage2_anchor(stage2, ts)
         enriched.append(
             {
@@ -317,7 +436,15 @@ def persist_candidates(
     reset: bool = False,
     thresholds: Stage25Thresholds | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
-    existing = pd.DataFrame() if reset else _prep(safe_read_parquet(MEMORY_PATH))
+    existing = (
+        pd.DataFrame()
+        if reset
+        else _prep(
+            safe_read_parquet(MEMORY_PATH),
+            source_name=MEMORY_PATH,
+            naive_timestamps_are_utc=True,
+        )
+    )
     appended: list[dict[str, Any]] = []
     thresholds = _active_thresholds(thresholds)
 
@@ -367,12 +494,28 @@ def build_gap_comparison(
 ) -> dict[str, Any]:
     """Compare Stage 2.5 output against Behavioral Gap Analysis baseline."""
 
-    memory = _prep(safe_read_parquet(MEMORY_PATH))
-    start_ts = pd.Timestamp(start)
-    end_ts = pd.Timestamp(end)
+    memory = _prep(
+        safe_read_parquet(MEMORY_PATH),
+        source_name=MEMORY_PATH,
+        naive_timestamps_are_utc=True,
+    )
+    start_ts = _utc_timestamp(
+        start,
+        source_name="historical_window.start",
+        naive_timestamps_are_utc=True,
+    )
+    end_ts = _utc_timestamp(
+        end,
+        source_name="historical_window.end",
+        naive_timestamps_are_utc=True,
+    )
     period = memory[(memory["timestamp"] >= start_ts) & (memory["timestamp"] <= end_ts)] if len(memory) else pd.DataFrame()
 
-    stage2 = _prep(safe_read_parquet("runtime_cognition_memory.parquet"))
+    stage2 = _prep(
+        safe_read_parquet(RUNTIME_COGNITION_SOURCE),
+        source_name=RUNTIME_COGNITION_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
     stage2_in_period = stage2[(stage2["timestamp"] >= start_ts) & (stage2["timestamp"] <= end_ts)] if len(stage2) else pd.DataFrame()
 
     return {
@@ -392,8 +535,16 @@ def build_cognition_chain_example(memory: pd.DataFrame, stage2: pd.DataFrame) ->
     """Build example narrative chain linking Stage 2 anchor → Tier-2 → Stage 2."""
 
     chain: list[dict[str, Any]] = []
-    stage2 = _prep(stage2)
-    memory = _prep(memory)
+    stage2 = _prep(
+        stage2,
+        source_name=RUNTIME_COGNITION_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    memory = _prep(
+        memory,
+        source_name=MEMORY_PATH,
+        naive_timestamps_are_utc=True,
+    )
 
     if len(stage2) == 0:
         return chain
@@ -447,11 +598,31 @@ def run_validation_report(
     """Full retrospective validation payload for acceptance criteria."""
 
     retrospective = run_retrospective(start=start, end=end, reset=True)
-    memory = _prep(safe_read_parquet(MEMORY_PATH))
-    stage2 = _prep(safe_read_parquet("runtime_cognition_memory.parquet"))
-    candles = _prep(safe_read_parquet("candle_structure_memory.parquet"))
-    start_ts = pd.Timestamp(start)
-    end_ts = pd.Timestamp(end)
+    memory = _prep(
+        safe_read_parquet(MEMORY_PATH),
+        source_name=MEMORY_PATH,
+        naive_timestamps_are_utc=True,
+    )
+    stage2 = _prep(
+        safe_read_parquet(RUNTIME_COGNITION_SOURCE),
+        source_name=RUNTIME_COGNITION_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    candles = _prep(
+        safe_read_parquet(CANDLE_SOURCE),
+        source_name=CANDLE_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    start_ts = _utc_timestamp(
+        start,
+        source_name="historical_window.start",
+        naive_timestamps_are_utc=True,
+    )
+    end_ts = _utc_timestamp(
+        end,
+        source_name="historical_window.end",
+        naive_timestamps_are_utc=True,
+    )
     candle_span = candles[(candles["timestamp"] >= start_ts) & (candles["timestamp"] <= end_ts)]
 
     gap = build_gap_comparison(start=start, end=end)
@@ -492,12 +663,32 @@ def run_retrospective(
 ) -> dict[str, Any]:
     """Replay intermediate cognition detection over a historical window."""
 
-    candles = _prep(safe_read_parquet("candle_structure_memory.parquet"))
-    vol_class = _prep(safe_read_parquet("volume_classification_memory.parquet"))
-    stage2 = _prep(safe_read_parquet("runtime_cognition_memory.parquet"))
+    candles = _prep(
+        safe_read_parquet(CANDLE_SOURCE),
+        source_name=CANDLE_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    vol_class = _prep(
+        safe_read_parquet(VOLUME_CLASS_SOURCE),
+        source_name=VOLUME_CLASS_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    stage2 = _prep(
+        safe_read_parquet(RUNTIME_COGNITION_SOURCE),
+        source_name=RUNTIME_COGNITION_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
 
-    start_ts = pd.Timestamp(start)
-    end_ts = pd.Timestamp(end)
+    start_ts = _utc_timestamp(
+        start,
+        source_name="historical_window.start",
+        naive_timestamps_are_utc=True,
+    )
+    end_ts = _utc_timestamp(
+        end,
+        source_name="historical_window.end",
+        naive_timestamps_are_utc=True,
+    )
 
     candidates = detect_candidates(candles, vol_class, start=start_ts, end=end_ts)
     candidates = enrich_with_anchor(candidates, stage2)
@@ -541,10 +732,26 @@ def run() -> None:
     print("INTERMEDIATE COGNITION ENGINE (Stage 2.5 Phase 1)")
     print()
 
-    candles = _prep(safe_read_parquet("candle_structure_memory.parquet"))
-    vol_class = _prep(safe_read_parquet("volume_classification_memory.parquet"))
-    stage2 = _prep(safe_read_parquet("runtime_cognition_memory.parquet"))
-    existing = _prep(safe_read_parquet(MEMORY_PATH))
+    candles = _prep(
+        safe_read_parquet(CANDLE_SOURCE),
+        source_name=CANDLE_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    vol_class = _prep(
+        safe_read_parquet(VOLUME_CLASS_SOURCE),
+        source_name=VOLUME_CLASS_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    stage2 = _prep(
+        safe_read_parquet(RUNTIME_COGNITION_SOURCE),
+        source_name=RUNTIME_COGNITION_SOURCE,
+        naive_timestamps_are_utc=True,
+    )
+    existing = _prep(
+        safe_read_parquet(MEMORY_PATH),
+        source_name=MEMORY_PATH,
+        naive_timestamps_are_utc=True,
+    )
 
     if len(candles) == 0:
         print("NO CANDLE DATA")
@@ -559,7 +766,16 @@ def run() -> None:
 
     print("CANDIDATES EVALUATED:", len(candidates))
     print("APPENDED:", len(appended))
-    print("MEMORY ROWS:", len(_prep(safe_read_parquet(MEMORY_PATH))))
+    print(
+        "MEMORY ROWS:",
+        len(
+            _prep(
+                safe_read_parquet(MEMORY_PATH),
+                source_name=MEMORY_PATH,
+                naive_timestamps_are_utc=True,
+            )
+        ),
+    )
     if appended:
         latest = appended[-1]
         print("LATEST:", latest["intermediate_state"], latest["timestamp"])

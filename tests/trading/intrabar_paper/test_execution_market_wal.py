@@ -19,6 +19,10 @@ from btc_ml.trading.intrabar_paper.execution_market_processor import (
     normalize_futures_book_ticker,
 )
 from btc_ml.trading.intrabar_paper.execution_market_state import ExecutionMarketState
+from btc_ml.trading.intrabar_paper.execution_market_checkpoint import (
+    RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT,
+    ExecutionMarketCheckpoint,
+)
 
 
 @pytest.fixture
@@ -115,6 +119,20 @@ def test_01_wal_before_dispatch(env):
     assert proc.wal_append_log
     assert proc.dispatch_log
     assert proc.wal_append_log[0] <= proc.dispatch_log[0][1]
+
+
+def test_01b_checkpoint_bounds_recent_ids_without_losing_watermark(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    checkpoint = ExecutionMarketCheckpoint(paper_epoch_id="EPOCH")
+    total = RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT + 25
+    for agg_id in range(1, total + 1):
+        checkpoint.note_processed(aggregate_trade_id=agg_id, wal_offset=agg_id + 10)
+    checkpoint.save(path)
+    loaded = ExecutionMarketCheckpoint.load(path, paper_epoch_id="EPOCH")
+    assert len(loaded.processed_agg_trade_ids) == RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT
+    assert loaded.last_processed_agg_trade_id == total
+    assert loaded.last_processed_wal_offset == total + 10
+    assert min(loaded.processed_agg_trade_ids) == total - RECENT_PROCESSED_AGG_TRADE_IDS_LIMIT + 1
 
 
 def test_02_transient_reconnect_recovers(env):

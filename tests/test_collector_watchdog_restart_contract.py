@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
 import collector_watchdog as cw
+from collector_heartbeat import evaluate_heartbeat_timestamp
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -224,3 +226,117 @@ def test_13_watchdog_only_bounce_preserves_collector_architecture():
     with mock.patch.object(cw.sys, "executable", CELLAR_PY):
         py = cw.resolve_canonical_python(str(ROOT))
     assert "/venv/" in py
+
+
+def test_14_utc_heartbeat_age_is_ten_seconds():
+    result = evaluate_heartbeat_timestamp(
+        "2026-08-08T11:59:50Z",
+        now_utc=datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc),
+    )
+    assert result["valid"] is True
+    assert result["age_seconds"] == 10.0
+
+
+def test_15_timezone_aware_plus_three_represents_same_instant():
+    now = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
+    utc_result = evaluate_heartbeat_timestamp("2026-08-08T11:59:50Z", now_utc=now)
+    plus_three = evaluate_heartbeat_timestamp("2026-08-08T14:59:50+03:00", now_utc=now)
+    assert plus_three["valid"] is True
+    assert plus_three["age_seconds"] == utc_result["age_seconds"] == 10.0
+
+
+def test_16_two_second_future_clock_skew_is_tolerated():
+    now = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
+    result = evaluate_heartbeat_timestamp(now + timedelta(seconds=2), now_utc=now)
+    assert result["valid"] is True
+    assert result["freshness_status"] == "clock_skew_tolerated"
+    assert result["age_seconds"] == 0.0
+
+
+def test_17_three_hour_future_timestamp_is_invalid_not_fresh():
+    now = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
+    result = evaluate_heartbeat_timestamp(now + timedelta(hours=3), now_utc=now)
+    assert result["valid"] is False
+    assert result["freshness_status"] == "future_timestamp"
+    assert result["age_seconds"] is None
+
+
+def test_18_dead_pid_stale_parquet_future_heartbeat_requests_restart():
+    audit = {
+        "collectors": [
+            {
+                "name": "binance_live_feed",
+                "heartbeat_age_seconds": None,
+                "heartbeat_timestamp_valid": False,
+                "heartbeat_timestamp_status": "future_timestamp",
+                "parquet": {"age_seconds": 600},
+                "heartbeat": {"status": "CONNECTED", "event": "kline_tick"},
+            }
+        ]
+    }
+    with mock.patch.object(cw, "classify_process_state", return_value="MISSING"):
+        needs, reason = cw._collector_needs_restart(
+            name="binance_live_feed",
+            spec={"name": "binance_live_feed", "script": "live_binance_feed_v2.py", "required": True},
+            pid=7678,
+            audit=audit,
+        )
+    assert needs is True
+    assert reason == "process_missing"
+
+
+def test_19_running_pid_with_fresh_valid_heartbeat_holds():
+    audit = {
+        "collectors": [
+            {
+                "name": "binance_live_feed",
+                "heartbeat_age_seconds": 10,
+                "heartbeat_timestamp_valid": True,
+                "parquet": {"age_seconds": 600},
+                "heartbeat": {"status": "CONNECTED", "event": "kline_tick"},
+            }
+        ]
+    }
+    with mock.patch.object(cw, "classify_process_state", return_value="RUNNING"):
+        needs, reason = cw._collector_needs_restart(
+            name="binance_live_feed",
+            spec={"name": "binance_live_feed", "script": "live_binance_feed_v2.py", "required": True},
+            pid=42,
+            audit=audit,
+        )
+    assert needs is False
+    assert reason == "ok"
+
+
+def test_20_reset_is_scoped_and_restart_storm_protection_remains():
+    now = 1_000_000.0
+    state = {
+        "collectors": {
+            "binance_live_feed": {
+                "attempts": [now] * cw.RESTART_WINDOW_MAX_ATTEMPTS,
+                "blocked": True,
+                "block_reason": "RESTART_STORM_BLOCKED",
+            },
+            "multi_exchange": {
+                "attempts": [123.0],
+                "blocked": True,
+                "block_reason": "RESTART_STORM_BLOCKED",
+            },
+        }
+    }
+    other_before = dict(state["collectors"]["multi_exchange"])
+    assert cw.reset_collector_restart_state("binance_live_feed", state) is True
+    assert state["collectors"]["multi_exchange"] == other_before
+    allowed, reason, _ = cw.restart_allowed("binance_live_feed", state, now=now)
+    assert allowed is True
+    assert reason == "OK"
+
+    storm = {"collectors": {}}
+    for _ in range(cw.RESTART_WINDOW_MAX_ATTEMPTS):
+        allowed, reason, _ = cw.restart_allowed("binance_live_feed", storm, now=now)
+        assert allowed is True, reason
+        cw.record_restart_attempt("binance_live_feed", storm, now=now)
+        now += cw.RESTART_MAX_DELAY_S + 1
+    allowed, reason, _ = cw.restart_allowed("binance_live_feed", storm, now=now)
+    assert allowed is False
+    assert reason == "RESTART_STORM_BLOCKED"

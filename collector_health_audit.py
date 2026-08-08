@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from collector_heartbeat import read_heartbeat
+from collector_heartbeat import evaluate_heartbeat_timestamp, read_heartbeat
 from collector_registry import COLLECTORS, COLLECTOR_CRITICAL_SECONDS, COLLECTOR_STALE_SECONDS
 from storage.path_registry import resolve_read
 
@@ -78,11 +78,14 @@ def build_collector_audit(running_pids: dict[str, int] | None = None) -> dict[st
     for spec in COLLECTORS:
         hb = read_heartbeat(spec["name"])
         hb_age = None
+        hb_time = {
+            "valid": False,
+            "freshness_status": "missing",
+            "age_seconds": None,
+        }
         if hb and hb.get("timestamp"):
-            try:
-                hb_age = time.time() - pd.to_datetime(hb["timestamp"]).timestamp()
-            except Exception:
-                hb_age = None
+            hb_time = evaluate_heartbeat_timestamp(hb["timestamp"])
+            hb_age = hb_time.get("age_seconds")
 
         parquet = _parquet_freshness(
             spec.get("output_parquet"),
@@ -95,13 +98,24 @@ def build_collector_audit(running_pids: dict[str, int] | None = None) -> dict[st
         if process_alive and parquet.get("freshness") == "LIVE":
             status = "CONNECTED"
             level = "GREEN"
-        elif process_alive and hb and hb_age is not None and hb_age <= COLLECTOR_STALE_SECONDS:
+        elif (
+            process_alive
+            and hb
+            and hb_time.get("valid")
+            and hb_age is not None
+            and hb_age <= COLLECTOR_STALE_SECONDS
+        ):
             status = "CONNECTED"
             level = "GREEN" if spec.get("kind") == "websocket" else "YELLOW"
         elif process_alive and parquet.get("freshness") in ("STALE", "CRITICAL"):
             status = "DEGRADED"
             level = "YELLOW"
-        elif hb and hb_age is not None and hb_age <= COLLECTOR_STALE_SECONDS:
+        elif (
+            hb
+            and hb_time.get("valid")
+            and hb_age is not None
+            and hb_age <= COLLECTOR_STALE_SECONDS
+        ):
             status = "DEGRADED"
             level = "YELLOW"
         else:
@@ -117,6 +131,10 @@ def build_collector_audit(running_pids: dict[str, int] | None = None) -> dict[st
                 "process_alive": process_alive,
                 "heartbeat": hb,
                 "heartbeat_age_seconds": round(hb_age, 1) if hb_age is not None else None,
+                "heartbeat_timestamp_valid": bool(hb_time.get("valid")),
+                "heartbeat_timestamp_status": hb_time.get("freshness_status"),
+                "heartbeat_timestamp_utc": hb_time.get("timestamp_utc"),
+                "heartbeat_future_offset_seconds": hb_time.get("future_offset_seconds"),
                 "parquet": parquet,
             }
         )

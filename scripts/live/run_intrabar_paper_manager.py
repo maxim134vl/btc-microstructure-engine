@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import signal
 import sys
 import threading
@@ -42,14 +43,40 @@ def _start_routed_ws_feed(
     thread_name: str,
     on_connected: Callable[[], None],
     on_disconnected: Callable[[], None],
-    on_payload: Callable[[dict], None],
+    on_payload: Callable[..., None],
     processor: ExecutionMarketProcessor,
+    queued_payloads: bool = False,
+    connection_session_id: Callable[[], str] | None = None,
 ) -> threading.Thread | None:
     try:
         import websocket
     except ImportError:
         processor.engine.errors.append(f"websocket-client missing; {thread_name} feed disabled")
         return None
+
+    payload_queue: queue.Queue[tuple[dict, str | None]] | None = (
+        queue.Queue() if queued_payloads else None
+    )
+
+    if payload_queue is not None:
+        def consume_payloads() -> None:
+            while not STOP:
+                try:
+                    payload, session_id = payload_queue.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                try:
+                    on_payload(payload, session_id)
+                except Exception as exc:  # noqa: BLE001
+                    processor.engine.errors.append(f"{thread_name}_worker:{exc}")
+                finally:
+                    payload_queue.task_done()
+
+        threading.Thread(
+            target=consume_payloads,
+            name=f"{thread_name}-processor",
+            daemon=True,
+        ).start()
 
     def on_open(_ws: object) -> None:
         on_connected()
@@ -60,7 +87,11 @@ def _start_routed_ws_feed(
     def on_message(_ws: object, message: str) -> None:
         try:
             payload = json.loads(message)
-            on_payload(payload)
+            if payload_queue is None:
+                on_payload(payload)
+            else:
+                session_id = connection_session_id() if connection_session_id else None
+                payload_queue.put((payload, session_id))
         except Exception as exc:  # noqa: BLE001
             processor.engine.errors.append(f"{thread_name}_msg:{exc}")
             if len(processor.engine.errors) > 50:
@@ -117,8 +148,13 @@ def _start_execution_market_feeds(
         thread_name="live1b-futures-market",
         on_connected=processor.on_market_websocket_connected,
         on_disconnected=processor.on_market_websocket_disconnected,
-        on_payload=processor.handle_market_ws_payload,
+        on_payload=lambda payload, session_id: processor.handle_market_ws_payload(
+            payload,
+            connection_session_id=session_id,
+        ),
         processor=processor,
+        queued_payloads=True,
+        connection_session_id=lambda: processor.market_connection_session_id,
     )
     if public is not None:
         threads.append(public)

@@ -180,6 +180,23 @@ def _save_restart_state(state: dict[str, Any]) -> None:
     os.replace(temp, RESTART_STATE_FILE)
 
 
+def reset_collector_restart_state(name: str, state: dict[str, Any]) -> bool:
+    """Clear bounded-restart history for exactly one known collector."""
+    if name not in {str(spec["name"]) for spec in COLLECTORS}:
+        raise ValueError(f"unknown collector: {name}")
+    collectors = state.setdefault("collectors", {})
+    if name not in collectors:
+        return False
+    collectors[name] = {
+        "attempts": [],
+        "blocked": False,
+        "block_reason": None,
+        "last_delay_s": 0.0,
+        "reset_at": utc_now_iso(),
+    }
+    return True
+
+
 def _pid_exists(pid: int) -> bool:
     if not pid or pid <= 0:
         return False
@@ -448,6 +465,7 @@ def _collector_needs_restart(
     parquet_age = collector.get("parquet", {}).get("age_seconds")
     hb_status = str((collector.get("heartbeat") or {}).get("status") or "").upper()
     hb_event = str((collector.get("heartbeat") or {}).get("event") or "")
+    heartbeat_timestamp_valid = bool(collector.get("heartbeat_timestamp_valid", True))
     ws_signal_healthy = hb_status in ("CONNECTED", "ALIVE", "STARTING") or hb_event in (
         "candle_saved",
         "kline_tick",
@@ -455,8 +473,15 @@ def _collector_needs_restart(
         "process_start",
     )
     heartbeat_fresh = (
-        hb_age is not None and hb_age <= COLLECTOR_STALE_SECONDS and ws_signal_healthy
+        heartbeat_timestamp_valid
+        and hb_age is not None
+        and 0 <= hb_age <= COLLECTOR_STALE_SECONDS
+        and ws_signal_healthy
     )
+    if not heartbeat_timestamp_valid:
+        timestamp_status = collector.get("heartbeat_timestamp_status") or "invalid_timestamp"
+        if parquet_age is not None and parquet_age > COLLECTOR_STALE_SECONDS:
+            return True, f"heartbeat_{timestamp_status}_stale_parquet_{parquet_age}s"
     if hb_age is not None and hb_age > COLLECTOR_CRITICAL_SECONDS:
         return True, f"heartbeat_stale_{hb_age}s"
     if (
@@ -579,6 +604,11 @@ def main() -> int:
     parser.add_argument("--start-only", action="store_true", help="Start collectors once and exit")
     parser.add_argument("--required-only", action="store_true", help="Manage required collectors only")
     parser.add_argument(
+        "--reset-restart-state",
+        metavar="COLLECTOR",
+        help="Clear persisted restart backoff for exactly one known collector and exit",
+    )
+    parser.add_argument(
         "--python",
         default=None,
         help="Optional interpreter override (must be repo venv; forbidden bare Cellar)",
@@ -587,6 +617,21 @@ def main() -> int:
 
     root = _repo_root()
     os.chdir(root)
+    if args.reset_restart_state:
+        state = _load_restart_state()
+        try:
+            changed = reset_collector_restart_state(args.reset_restart_state, state)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        _save_restart_state(state)
+        print(
+            json.dumps(
+                {"collector": args.reset_restart_state, "restart_state_reset": changed},
+                indent=2,
+            )
+        )
+        return 0
     if args.python:
         if _is_forbidden_interpreter(args.python, root):
             print(f"ERROR: forbidden interpreter: {args.python}", file=sys.stderr)

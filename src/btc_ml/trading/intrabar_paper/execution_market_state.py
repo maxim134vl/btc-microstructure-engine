@@ -33,6 +33,12 @@ class ExecutionMarketStateMachine:
     last_agg_trade_monotonic_ns: int | None = None
     last_book_ticker_monotonic_ns: int | None = None
     last_transition_reason: str | None = None
+    recovery_first_missing_agg_trade_id: int | None = None
+    recovery_last_missing_agg_trade_id: int | None = None
+    recovery_cursor_agg_trade_id: int | None = None
+    backfill_retry_count: int = 0
+    last_backfill_error: str | None = None
+    last_successful_backfill_timestamp: str | None = None
     _history: list[tuple[str, ExecutionMarketState]] = field(default_factory=list)
 
     def _set(self, new_state: ExecutionMarketState, reason: str) -> None:
@@ -92,13 +98,30 @@ class ExecutionMarketStateMachine:
         elif self.state in {ExecutionMarketState.STARTING, ExecutionMarketState.DEGRADED}:
             self._set(ExecutionMarketState.DEGRADED, "ws_connected_awaiting_validation")
 
-    def on_gap_detected(self) -> None:
+    def on_gap_detected(
+        self,
+        *,
+        first_missing: int | None = None,
+        last_missing: int | None = None,
+    ) -> None:
         self.unresolved_gap = True
+        self.recovery_first_missing_agg_trade_id = first_missing
+        self.recovery_last_missing_agg_trade_id = last_missing
+        self.recovery_cursor_agg_trade_id = (
+            first_missing - 1 if first_missing is not None else self.last_confirmed_agg_trade_id
+        )
+        self.last_backfill_error = None
         self._set(ExecutionMarketState.RECOVERING, "agg_trade_gap")
 
     def on_gap_resolved(self, *, last_confirmed: int) -> None:
         self.unresolved_gap = False
         self.last_confirmed_agg_trade_id = last_confirmed
+        self.recovery_cursor_agg_trade_id = last_confirmed
+        self.last_successful_backfill_timestamp = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ",
+            time.gmtime(),
+        )
+        self.last_backfill_error = None
         self._maybe_promote_healthy("gap_resolved")
 
     def on_wal_append_success(self) -> None:
@@ -114,14 +137,23 @@ class ExecutionMarketStateMachine:
         elif self.state != ExecutionMarketState.UNSAFE:
             self._set(ExecutionMarketState.DEGRADED, "wal_transient_failure")
 
-    def on_backfill_failed(self) -> None:
+    def on_backfill_progress(self, *, aggregate_trade_id: int) -> None:
+        self.recovery_cursor_agg_trade_id = int(aggregate_trade_id)
+
+    def on_backfill_failed(self, error: str | None = None) -> None:
         self.unresolved_gap = True
+        self.backfill_retry_count += 1
+        self.last_backfill_error = error
         self._set(ExecutionMarketState.UNSAFE, "backfill_failed")
 
     def note_agg_trade(self, *, aggregate_trade_id: int, receive_monotonic_ns: int) -> None:
         self.last_confirmed_agg_trade_id = aggregate_trade_id
         self.last_agg_trade_monotonic_ns = receive_monotonic_ns
-        if self.state == ExecutionMarketState.RECOVERING and not self.unresolved_gap:
+        if self.state in {
+            ExecutionMarketState.STARTING,
+            ExecutionMarketState.DEGRADED,
+            ExecutionMarketState.RECOVERING,
+        } and not self.unresolved_gap:
             self._maybe_promote_healthy("agg_trade_processed")
 
     def note_book_ticker(self, *, receive_monotonic_ns: int) -> None:
@@ -156,9 +188,24 @@ class ExecutionMarketStateMachine:
         self._set(ExecutionMarketState.HEALTHY, reason)
 
     def execution_market_ready_for_entry(self) -> bool:
+        self._refresh_freshness_state()
         return self.state == ExecutionMarketState.HEALTHY
 
+    def _refresh_freshness_state(self) -> None:
+        if self.state != ExecutionMarketState.HEALTHY:
+            return
+        agg_age = self._age_ms(self.last_agg_trade_monotonic_ns)
+        if agg_age is None or agg_age > self.max_agg_trade_age_ms:
+            self._set(ExecutionMarketState.DEGRADED, "agg_trade_stale")
+            return
+        book_age = self._age_ms(self.last_book_ticker_monotonic_ns)
+        if book_age is None or book_age > self.max_bbo_age_ms:
+            self._set(ExecutionMarketState.DEGRADED, "book_ticker_stale")
+
     def snapshot(self) -> dict[str, Any]:
+        self._refresh_freshness_state()
+        agg_age = self._age_ms(self.last_agg_trade_monotonic_ns)
+        book_age = self._age_ms(self.last_book_ticker_monotonic_ns)
         return {
             "state": self.state.value,
             "public_ws_connected": self.public_ws_connected,
@@ -167,8 +214,22 @@ class ExecutionMarketStateMachine:
             "unresolved_gap": self.unresolved_gap,
             "wal_write_failures": self.wal_write_failures,
             "last_confirmed_agg_trade_id": self.last_confirmed_agg_trade_id,
-            "last_agg_trade_age_ms": self._age_ms(self.last_agg_trade_monotonic_ns),
-            "last_book_ticker_age_ms": self._age_ms(self.last_book_ticker_monotonic_ns),
+            "market_transport_connected": self.market_ws_connected,
+            "public_transport_connected": self.public_ws_connected,
+            "agg_trade_stream_fresh": (
+                agg_age is not None and agg_age <= self.max_agg_trade_age_ms
+            ),
+            "book_ticker_stream_fresh": (
+                book_age is not None and book_age <= self.max_bbo_age_ms
+            ),
+            "last_agg_trade_age_ms": agg_age,
+            "last_book_ticker_age_ms": book_age,
+            "recovery_first_missing_agg_trade_id": self.recovery_first_missing_agg_trade_id,
+            "recovery_last_missing_agg_trade_id": self.recovery_last_missing_agg_trade_id,
+            "recovery_cursor_agg_trade_id": self.recovery_cursor_agg_trade_id,
+            "backfill_retry_count": self.backfill_retry_count,
+            "last_backfill_error": self.last_backfill_error,
+            "last_successful_backfill_timestamp": self.last_successful_backfill_timestamp,
             "last_transition_reason": self.last_transition_reason,
             "entry_allowed": self.execution_market_ready_for_entry(),
         }

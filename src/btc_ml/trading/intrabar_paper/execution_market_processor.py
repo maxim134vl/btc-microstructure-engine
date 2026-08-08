@@ -182,7 +182,11 @@ class ExecutionMarketProcessor:
         )
         return [self._process_book_ticker(event)]
 
-    def handle_market_ws_payload(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def handle_market_ws_payload(
+        self,
+        payload: dict[str, Any],
+        connection_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         data = payload.get("data") or payload
         stream = str(payload.get("stream") or "")
         if "aggTrade" not in stream and data.get("e") != "aggTrade":
@@ -192,7 +196,7 @@ class ExecutionMarketProcessor:
         event = normalize_futures_agg_trade(
             data,
             symbol=self.symbol,
-            connection_session_id=self.market_connection_session_id,
+            connection_session_id=connection_session_id or self.market_connection_session_id,
             receive_monotonic_ns=mono,
             receive_timestamp=ts,
         )
@@ -242,27 +246,50 @@ class ExecutionMarketProcessor:
             return [{"status": "DUPLICATE_AGG_TRADE_SKIPPED", "aggregate_trade_id": agg_id}]
         expected = self.state.last_confirmed_agg_trade_id
         if expected is not None and agg_id > expected + 1:
-            missing = list(range(expected + 1, agg_id))
-            return self._recover_gap_then_process(event, missing_ids=missing)
+            return self._recover_gap_then_process(
+                event,
+                first_missing_id=expected + 1,
+                last_missing_id=agg_id - 1,
+            )
         if expected is not None and agg_id <= expected:
             return [{"status": "DUPLICATE_AGG_TRADE_SKIPPED", "aggregate_trade_id": agg_id}]
         return [self._persist_and_dispatch_agg_trade(event)]
 
-    def _recover_gap_then_process(self, live_event: dict[str, Any], *, missing_ids: list[int]) -> list[dict[str, Any]]:
-        self.state.on_gap_detected()
+    def _recover_gap_then_process(
+        self,
+        live_event: dict[str, Any],
+        *,
+        first_missing_id: int,
+        last_missing_id: int,
+    ) -> list[dict[str, Any]]:
+        self.state.on_gap_detected(
+            first_missing=first_missing_id,
+            last_missing=last_missing_id,
+        )
         actions: list[dict[str, Any]] = []
-        if not missing_ids:
+        if first_missing_id > last_missing_id:
             actions.append(self._persist_and_dispatch_agg_trade(live_event))
             return actions
         try:
-            rows = self.fetch_agg_trades(self.symbol, missing_ids[0], missing_ids[-1])
+            rows = self.fetch_agg_trades(self.symbol, first_missing_id, last_missing_id)
         except Exception as exc:  # noqa: BLE001
-            self.state.on_backfill_failed()
+            self.state.on_backfill_failed(str(exc))
             return [{"status": "BACKFILL_FAILED", "error": str(exc)}]
-        fetched_ids = sorted(int(r["a"]) for r in rows)
-        if fetched_ids != missing_ids:
-            self.state.on_backfill_failed()
-            return [{"status": "BACKFILL_INCOMPLETE", "expected": missing_ids, "got": fetched_ids}]
+        rows = sorted(rows, key=lambda row: int(row["a"]))
+        expected_count = last_missing_id - first_missing_id + 1
+        fetched_ids = [int(row["a"]) for row in rows]
+        complete = len(fetched_ids) == expected_count and all(
+            agg_id == first_missing_id + index
+            for index, agg_id in enumerate(fetched_ids)
+        )
+        if not complete:
+            error = (
+                f"expected={first_missing_id}-{last_missing_id} count={expected_count}; "
+                f"got_count={len(fetched_ids)} first={fetched_ids[0] if fetched_ids else None} "
+                f"last={fetched_ids[-1] if fetched_ids else None}"
+            )
+            self.state.on_backfill_failed(error)
+            return [{"status": "BACKFILL_INCOMPLETE", "error": error}]
         for row in rows:
             backfill_event = normalize_rest_agg_trade(
                 row,
@@ -271,9 +298,24 @@ class ExecutionMarketProcessor:
                 receive_monotonic_ns=int(live_event["local_receive_monotonic_ns"]),
                 receive_timestamp=str(live_event["local_receive_timestamp"]),
             )
-            actions.append(self._persist_and_dispatch_agg_trade(backfill_event))
-        actions.append(self._persist_and_dispatch_agg_trade(live_event))
-        self.state.on_gap_resolved(last_confirmed=int(live_event["aggregate_trade_id"]))
+            action = self._persist_and_dispatch_agg_trade(backfill_event)
+            actions.append(action)
+            if action.get("status") != "AGG_TRADE_DISPATCHED":
+                self.state.on_backfill_failed(
+                    f"durable_acceptance_failed:{backfill_event['aggregate_trade_id']}"
+                )
+                return actions
+            self.state.on_backfill_progress(
+                aggregate_trade_id=int(backfill_event["aggregate_trade_id"])
+            )
+        live_action = self._persist_and_dispatch_agg_trade(live_event)
+        actions.append(live_action)
+        if live_action.get("status") == "AGG_TRADE_DISPATCHED":
+            self.state.on_gap_resolved(last_confirmed=int(live_event["aggregate_trade_id"]))
+        else:
+            self.state.on_backfill_failed(
+                f"live_durable_acceptance_failed:{live_event['aggregate_trade_id']}"
+            )
         return actions
 
     def _persist_and_dispatch_agg_trade(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -336,9 +378,10 @@ class ExecutionMarketProcessor:
             market_provenance=provenance,
         )
         agg_id = int(event["aggregate_trade_id"])
-        self.checkpoint.last_processed_wal_offset = int(wal_offset or self.checkpoint.last_processed_wal_offset)
-        self.checkpoint.last_processed_agg_trade_id = agg_id
-        self.checkpoint.processed_agg_trade_ids.add(agg_id)
+        self.checkpoint.note_processed(
+            aggregate_trade_id=agg_id,
+            wal_offset=int(wal_offset or self.checkpoint.last_processed_wal_offset),
+        )
         self.checkpoint.save(self.checkpoint_path)
         self.state.note_agg_trade(
             aggregate_trade_id=agg_id,

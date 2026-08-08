@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from scripts.live.run_intrabar_paper_manager import (
+    FUTURES_MARKET_WS_URL,
+    FUTURES_PUBLIC_WS_URL,
+)
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
 from btc_ml.trading.intrabar_paper.epoch import activate_epoch, create_epoch
@@ -67,6 +71,15 @@ def _market_agg_payload(agg_id: int, price: float = 100.0) -> dict:
     }
 
 
+def test_00_futures_route_contract_is_public_book_and_market_aggtrade():
+    assert FUTURES_PUBLIC_WS_URL.format(symbol="btcusdt") == (
+        "wss://fstream.binance.com/public/stream?streams=btcusdt@bookTicker"
+    )
+    assert FUTURES_MARKET_WS_URL.format(symbol="btcusdt") == (
+        "wss://fstream.binance.com/market/stream?streams=btcusdt@aggTrade"
+    )
+
+
 def test_a_public_bookticker_route(env):
     proc = _processor(env)
     proc.on_public_websocket_connected()
@@ -99,6 +112,39 @@ def test_c_public_connected_market_disconnected_not_healthy(env):
     proc.handle_market_ws_payload(_market_agg_payload(100))
     assert proc.state.state != ExecutionMarketState.HEALTHY
     assert proc.execution_market_ready_for_entry() is False
+
+
+def test_c2_market_transport_open_without_aggtrade_is_not_stream_fresh(env):
+    proc = _processor(env)
+    proc.on_public_websocket_connected()
+    proc.on_market_websocket_connected()
+    proc.handle_public_ws_payload(_public_book_payload())
+    state = proc.state.snapshot()
+    assert state["market_transport_connected"] is True
+    assert state["agg_trade_stream_fresh"] is False
+    assert state["book_ticker_stream_fresh"] is True
+    assert state["entry_allowed"] is False
+
+
+def test_c3_stale_aggtrade_demotes_health_even_when_transport_stays_open(env, monkeypatch):
+    proc = _processor(env)
+    proc.on_public_websocket_connected()
+    proc.on_market_websocket_connected()
+    proc.handle_public_ws_payload(_public_book_payload())
+    proc.handle_market_ws_payload(_market_agg_payload(100))
+    assert proc.state.state == ExecutionMarketState.HEALTHY
+    stale_now = int(proc.state.last_agg_trade_monotonic_ns or 0) + int(
+        (proc.state.max_agg_trade_age_ms + 1) * 1_000_000
+    )
+    monkeypatch.setattr(
+        "btc_ml.trading.intrabar_paper.execution_market_state.time.monotonic_ns",
+        lambda: stale_now,
+    )
+    state = proc.state.snapshot()
+    assert state["market_transport_connected"] is True
+    assert state["agg_trade_stream_fresh"] is False
+    assert state["state"] == "DEGRADED"
+    assert state["entry_allowed"] is False
 
 
 def test_d_market_connected_public_disconnected_protective_still_works(env):
@@ -173,3 +219,22 @@ def test_f_market_reconnect_gap_triggers_backfill(env):
     assert any(a.get("status") == "AGG_TRADE_DISPATCHED" for a in actions)
     assert proc.wal.last_confirmed_agg_trade_id == 105
     assert proc.state.state == ExecutionMarketState.HEALTHY
+
+
+def test_g_gap_recovery_exposes_progress_and_clears_only_when_complete(env):
+    def fetch(_symbol: str, start: int, end: int):
+        return [{"a": i, "p": "100.0", "q": "0.01", "T": i, "m": False} for i in range(start, end + 1)]
+
+    proc = _processor(env, fetch_agg_trades=fetch)
+    proc.on_public_websocket_connected()
+    proc.on_market_websocket_connected()
+    proc.handle_public_ws_payload(_public_book_payload())
+    proc.handle_market_ws_payload(_market_agg_payload(100))
+    actions = proc.handle_market_ws_payload(_market_agg_payload(105))
+    state = proc.state.snapshot()
+    assert [a["status"] for a in actions] == ["AGG_TRADE_DISPATCHED"] * 5
+    assert state["unresolved_gap"] is False
+    assert state["recovery_first_missing_agg_trade_id"] == 101
+    assert state["recovery_last_missing_agg_trade_id"] == 104
+    assert state["recovery_cursor_agg_trade_id"] == 105
+    assert state["last_successful_backfill_timestamp"] is not None
