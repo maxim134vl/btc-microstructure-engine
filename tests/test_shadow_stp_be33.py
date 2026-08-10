@@ -11,6 +11,8 @@ import pytest
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.economics import closed_trade_economics
 from btc_ml.trading.shadow_structural_protection.be33 import (
+    ReadOnlyWal,
+    JsonStore,
     STATE_BE_PROTECTED,
     STATE_CLOSED,
     STATE_CLOSED_WITHOUT_PARTIAL,
@@ -319,3 +321,86 @@ def test_14_late_canonical_close_appends_comparison_without_replacing_outcome(re
 def test_formula_examples_are_exact() -> None:
     assert partial_trigger_price(side="LONG", entry_price=100.0, take_price=130.0) == 110.0
     assert partial_trigger_price(side="SHORT", entry_price=100.0, take_price=70.0) == 90.0
+
+
+def test_streaming_reader_near_tail_is_bounded_on_large_logical_wal(tmp_path: Path) -> None:
+    root = tmp_path / "wal"
+    root.mkdir()
+    path = root / "events.jsonl"
+    prefix = json.dumps({"wal_offset": 1, "event_type": "HEARTBEAT"}).encode() + b"\n"
+    with path.open("wb") as handle:
+        handle.write(prefix)
+        handle.seek(256 * 1024 * 1024)
+        # The sparse region models old history; the checkpoint is in the valid
+        # near-tail suffix, so startup must never touch or parse that prefix.
+        for offset in range(900, 906):
+            handle.write(json.dumps({"wal_offset": offset, "event_type": "HEARTBEAT"}).encode() + b"\n")
+    wal = ReadOnlyWal(root)
+    rows = list(wal.iter_from_offset(902))
+    assert [row["wal_offset"] for row in rows] == [903, 904, 905]
+    assert wal.bytes_scanned < 3 * 1024 * 1024
+
+
+def test_streaming_reader_tolerates_torn_tail_and_preserves_order(tmp_path: Path) -> None:
+    root = tmp_path / "wal"
+    root.mkdir()
+    path = root / "events.jsonl"
+    path.write_bytes(
+        b'{"wal_offset": 10}\n'
+        b'{"wal_offset": 11}\n'
+        b'{"wal_offset": 12}\n'
+        b'{"wal_offset": 13'
+    )
+    wal = ReadOnlyWal(root)
+    assert [row["wal_offset"] for row in wal.iter_from_offset(10)] == [11, 12]
+    assert wal.last_offset == 12
+
+
+def test_initial_health_tail_lookup_does_not_replay_wal(tmp_path: Path) -> None:
+    root = tmp_path / "wal"
+    root.mkdir()
+    path = root / "events.jsonl"
+    with path.open("wb") as handle:
+        handle.write(json.dumps({"wal_offset": 1}).encode() + b"\n")
+        handle.seek(256 * 1024 * 1024)
+        handle.write(b"\n")
+        handle.write(json.dumps({"wal_offset": 900}).encode() + b"\n")
+    wal = ReadOnlyWal(root)
+    assert wal.last_offset == 900
+    assert wal.rows_replayed == 0
+    assert wal.bytes_scanned < 3 * 1024 * 1024
+
+
+def test_stp_startup_never_uses_full_file_read_for_execution_wal(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _opened(repo)
+    _agg(repo, offset=1, agg_id=1601, price=105.0, timestamp="2026-08-08T00:02:00Z")
+    engine.poll_once()
+    original = Path.read_text
+
+    def guarded(path: Path, *args: object, **kwargs: object) -> str:
+        if path.name == "events.jsonl" and path.parent.name == "execution_market_wal":
+            raise AssertionError("full execution WAL read is forbidden")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded)
+    restarted = _engine(repo)
+    restarted.poll_once()
+    assert restarted.last_processed_wal_offset == 1
+
+
+def test_checkpoint_advances_only_after_durable_event_processing(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _opened(repo)
+    checkpoint_before = engine.store.checkpoint_path.read_bytes()
+    _agg(repo, offset=1, agg_id=1701, price=110.0, timestamp="2026-08-08T00:02:00Z")
+
+    def crash(*_args: object, **_kwargs: object) -> dict:
+        raise OSError("simulated durable append failure")
+
+    monkeypatch.setattr(JsonStore, "append_jsonl", crash)
+    with pytest.raises(OSError, match="durable append failure"):
+        engine.poll_once()
+    assert engine.store.checkpoint_path.read_bytes() == checkpoint_before

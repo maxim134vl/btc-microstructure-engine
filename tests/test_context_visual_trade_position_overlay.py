@@ -195,3 +195,14 @@ def test_refresher_once_writes_visual_only(tmp_path, monkeypatch):
     assert after == before
     if ctrl_before is not None:
         assert CTRL_PID.read_text(encoding="utf-8") == ctrl_before
+
+
+def test_closed_trade_connector_contract_is_visual_only():
+    js = _read(APP_JS)
+    assert "function closedTradeConnectorColor(entity, colors)" in js
+    assert '.toUpperCase() !== "CLOSED"' in js
+    assert "entity.net_realised_pnl_usd" in js
+    assert "return pnl > 0 ? colors.positive : colors.negative" in js
+    assert "ctx.moveTo(x1, yEntry);" in js
+    assert "ctx.lineTo(x2, yExit);" in js
+    assert 'kind === "closed" && exitPx != null' in js

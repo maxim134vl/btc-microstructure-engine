@@ -3,6 +3,7 @@ import {
   TRADING_METRIC_DEFS,
   formatTradingMetricValue,
   resolveTradingMetricRawValues,
+  type TradingCapitalSnapshot,
   type TradingOperationsPerformance,
 } from "./tradingMetricsDisplay";
 
@@ -17,32 +18,32 @@ function unavailableCaption(lastKnownAt?: string | null): string {
 }
 
 /**
- * Trading Metrics — display-only grid for the 18 OPS performance fields.
- * Data source: `runtime_truth.trading_operations.performance` (active paper epoch).
+ * Trading Metrics — display-only grid for canonical OPS performance and capital fields.
+ * Data sources: canonical performance plus active-epoch master capital from timeframe traders.
  */
 export function TradingMetricsPanel({
   performance,
   liveConnected,
   generatedAt,
+  capital,
 }: {
   performance?: TradingOperationsPerformance | null;
   liveConnected: boolean;
   generatedAt?: string | null;
+  capital?: TradingCapitalSnapshot | null;
 }) {
-  const raw = resolveTradingMetricRawValues(performance);
-  const sourceUnavailable =
-    !liveConnected ||
-    !performance ||
-    performance.status === "UNKNOWN" ||
-    Boolean(performance.error);
+  const raw = resolveTradingMetricRawValues(performance, capital);
+  const sourceUnavailable = !liveConnected;
+  const performanceUnavailable =
+    !performance || performance.status === "UNKNOWN" || Boolean(performance.error);
 
   return (
     <Card className="overflow-hidden" data-panel="trading-metrics">
       <div className="flex items-center justify-between gap-3 border-b border-ds-border/35 px-3.5 py-3">
         <h3 className="text-[14px] font-semibold text-ds-text-primary">Trading Metrics</h3>
-        {sourceUnavailable ? (
+        {sourceUnavailable || performanceUnavailable ? (
           <span className="text-[11px] text-ds-text-tertiary">
-            {!liveConnected ? unavailableCaption(generatedAt) : performance?.error || "Unavailable"}
+            {!liveConnected ? unavailableCaption(generatedAt) : performance?.error || "Performance unavailable"}
           </span>
         ) : null}
       </div>

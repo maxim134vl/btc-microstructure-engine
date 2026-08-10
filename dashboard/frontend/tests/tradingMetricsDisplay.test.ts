@@ -3,14 +3,15 @@ import test from "node:test";
 import {
   TRADING_METRIC_DEFS,
   TRADING_METRIC_LABELS,
+  calculateCapitalReturns,
   formatTradingMetricValue,
   resolveTradingMetricRawValues,
   unwrapMetricNumber,
 } from "../src/components/ops/tradingMetricsDisplay.ts";
 
-test("trading metrics exposes exactly 18 labels", () => {
-  assert.equal(TRADING_METRIC_LABELS.length, 18);
-  assert.equal(TRADING_METRIC_DEFS.length, 18);
+test("trading metrics exposes exactly 20 labels", () => {
+  assert.equal(TRADING_METRIC_LABELS.length, 20);
+  assert.equal(TRADING_METRIC_DEFS.length, 20);
   assert.deepEqual(
     TRADING_METRIC_DEFS.map((d) => d.label),
     [...TRADING_METRIC_LABELS],
@@ -115,4 +116,41 @@ test("preliminary equity-curve values render; drawdown duration uses hours", () 
   assert.equal(formatTradingMetricValue(raw["Maximum drawdown"], "percent"), "1.25%");
   assert.equal(formatTradingMetricValue(raw["Drawdown duration"], "duration"), "1d 7.50h");
   assert.equal(formatTradingMetricValue(12.5, "duration"), "12.50h");
+});
+
+
+test("master capital returns use epoch elapsed days and signed display", () => {
+  const capital = {
+    currentMasterEquity: 403944.14,
+    initialMasterCapital: 400000,
+    epochStartedAt: "2025-08-10T12:00:00Z",
+    currentTimestamp: "2026-08-10T12:00:00Z",
+  };
+  const returns = calculateCapitalReturns(capital);
+  assert.ok(returns.currentReturnPct != null);
+  assert.ok(returns.annualizedReturnPct != null);
+  assert.equal(returns.currentReturnPct.toFixed(6), "0.986035");
+  assert.equal(returns.annualizedReturnPct.toFixed(6), "0.986035");
+  assert.equal(formatTradingMetricValue(returns.currentReturnPct, "signed_percent"), "+0.99%");
+  assert.equal(formatTradingMetricValue(-0.42, "signed_percent"), "-0.42%");
+
+  const raw = resolveTradingMetricRawValues({ status: "AVAILABLE" }, capital);
+  assert.equal(raw["Current return"], returns.currentReturnPct);
+  assert.equal(raw["Annualized return"], returns.annualizedReturnPct);
+});
+
+test("annualized return is unavailable without a positive epoch duration", () => {
+  const noDuration = calculateCapitalReturns({
+    currentMasterEquity: 403944.14,
+    initialMasterCapital: 400000,
+    epochStartedAt: "2026-08-10T12:00:00Z",
+    currentTimestamp: "2026-08-10T12:00:00Z",
+  });
+  assert.ok(noDuration.currentReturnPct != null);
+  assert.equal(noDuration.annualizedReturnPct, null);
+  assert.equal(
+    calculateCapitalReturns({ currentMasterEquity: null, initialMasterCapital: 400000 })
+      .currentReturnPct,
+    null,
+  );
 });

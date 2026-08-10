@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from btc_ml.trading.intrabar_paper.config import IntrabarPaperConfig, load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.economics import closed_trade_economics
@@ -221,13 +221,79 @@ class ReadOnlyWal:
 
     def __init__(self, root: Path) -> None:
         self.events_path = Path(root) / "events.jsonl"
-        self._cursor_bytes = 0
+        self._cursor_bytes: int | None = None
         self._cached_last_offset = 0
+        self.bytes_scanned = 0
+        self.rows_replayed = 0
 
-    def _read_from_cursor(self) -> list[dict[str, Any]]:
+    def _complete_size(self) -> int:
+        """Return the byte end of the last newline-terminated WAL record."""
         if not self.events_path.exists():
-            return []
-        rows: list[dict[str, Any]] = []
+            return 0
+        size = self.events_path.stat().st_size
+        if not size:
+            return 0
+        chunk_size = 64 * 1024
+        with self.events_path.open("rb") as handle:
+            end = size
+            while end:
+                start = max(0, end - chunk_size)
+                handle.seek(start)
+                chunk = handle.read(end - start)
+                self.bytes_scanned += len(chunk)
+                index = chunk.rfind(b"\n")
+                if index >= 0:
+                    return start + index + 1
+                end = start
+        return 0
+
+    def _reverse_lines(self, complete_size: int, *, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+        """Yield complete records newest-first with bounded memory."""
+        carry = b""
+        end = complete_size
+        with self.events_path.open("rb") as handle:
+            while end:
+                start = max(0, end - chunk_size)
+                handle.seek(start)
+                chunk = handle.read(end - start)
+                self.bytes_scanned += len(chunk)
+                parts = (chunk + carry).split(b"\n")
+                carry = parts[0]
+                for line in reversed(parts[1:]):
+                    if line:
+                        yield line
+                end = start
+            if carry:
+                yield carry
+
+    @staticmethod
+    def _decode(line: bytes) -> dict[str, Any] | None:
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            return None
+        return row if isinstance(row, dict) else None
+
+    def _byte_after_offset(self, requested: int) -> int:
+        """Locate a near-tail checkpoint without reading the WAL prefix."""
+        complete_size = self._complete_size()
+        if not complete_size or requested <= 0:
+            return 0
+        suffix_bytes = 0
+        for line in self._reverse_lines(complete_size):
+            suffix_bytes += len(line) + 1
+            row = self._decode(line)
+            if row is None:
+                raise RuntimeError("STP_BE33_WAL_MALFORMED_COMPLETE_RECORD")
+            if int(row.get("wal_offset") or 0) <= requested:
+                return max(0, complete_size - suffix_bytes + len(line) + 1)
+        raise RuntimeError("STP_BE33_WAL_CHECKPOINT_CONTINUITY_UNPROVEN")
+
+    def _read_from_cursor(self) -> Iterator[dict[str, Any]]:
+        if not self.events_path.exists():
+            return
+        if self._cursor_bytes is None:
+            self._cursor_bytes = 0
         with self.events_path.open("rb") as handle:
             handle.seek(self._cursor_bytes)
             while True:
@@ -236,37 +302,51 @@ class ReadOnlyWal:
                 if not line:
                     break
                 if not line.endswith(b"\n"):
-                    handle.seek(line_start)
+                    self._cursor_bytes = line_start
                     break
-                try:
-                    row = json.loads(line)
-                except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-                    continue
-                if isinstance(row, dict):
-                    rows.append(row)
-                    self._cached_last_offset = max(
-                        self._cached_last_offset,
-                        int(row.get("wal_offset") or 0),
-                    )
-            self._cursor_bytes = handle.tell()
-        return rows
+                self.bytes_scanned += len(line)
+                row = self._decode(line)
+                if row is None:
+                    raise RuntimeError("STP_BE33_WAL_MALFORMED_COMPLETE_RECORD")
+                current = int(row.get("wal_offset") or 0)
+                if current <= self._cached_last_offset:
+                    raise RuntimeError("STP_BE33_WAL_OFFSET_ORDER_VIOLATION")
+                self._cached_last_offset = current
+                self._cursor_bytes = handle.tell()
+                self.rows_replayed += 1
+                yield row
 
     def iter_from_offset(self, offset: int) -> Iterable[dict[str, Any]]:
         requested = int(offset)
-        if requested >= self._cached_last_offset:
-            rows = self._read_from_cursor()
-        else:
-            # Historical causal lookup must not rewind the hot tail cursor.
-            rows = JsonStore.read_jsonl(self.events_path)
-        return iter(sorted(
-            (row for row in rows if int(row.get("wal_offset") or 0) > requested),
-            key=lambda row: int(row.get("wal_offset") or 0),
-        ))
+        if self._cursor_bytes is None or requested < self._cached_last_offset:
+            self._cursor_bytes = self._byte_after_offset(requested)
+            self._cached_last_offset = requested
+        return (row for row in self._read_from_cursor() if int(row.get("wal_offset") or 0) > requested)
+
+    def offset_before_timestamp(self, timestamp: datetime) -> int:
+        """Find the causal predecessor for a new position from the WAL tail."""
+        complete_size = self._complete_size()
+        for line in self._reverse_lines(complete_size):
+            row = self._decode(line)
+            if row is None:
+                raise RuntimeError("STP_BE33_WAL_MALFORMED_COMPLETE_RECORD")
+            row_timestamp = event_timestamp(row)
+            if row_timestamp is not None and row_timestamp < timestamp:
+                return int(row.get("wal_offset") or 0)
+        return 0
 
     @property
     def last_offset(self) -> int:
-        # Consume only bytes appended since the prior read.
-        list(self.iter_from_offset(self._cached_last_offset))
+        # The real runner writes health before its first poll. Read only the
+        # newest complete record and leave the replay cursor untouched.
+        complete_size = self._complete_size()
+        if not complete_size:
+            return self._cached_last_offset
+        for line in self._reverse_lines(complete_size):
+            row = self._decode(line)
+            if row is None:
+                raise RuntimeError("STP_BE33_WAL_MALFORMED_COMPLETE_RECORD")
+            return int(row.get("wal_offset") or 0)
         return self._cached_last_offset
 
 
@@ -310,6 +390,7 @@ class StpBe33Engine:
         self.outcome_ids: set[str] = set()
         self.ignored_position_ids: set[str] = set()
         self.last_processed_wal_offset = 0
+        self.startup_started_monotonic = time.monotonic()
         self._rebuild()
 
     def _active_epoch_id(self) -> str:
@@ -346,6 +427,14 @@ class StpBe33Engine:
             if outcome.get("outcome_id"):
                 self.outcome_ids.add(str(outcome["outcome_id"]))
         checkpoint = self.store.read_checkpoint()
+        if self.event_ids and not checkpoint:
+            raise RuntimeError("STP_BE33_CHECKPOINT_MISSING_OR_CORRUPT")
+        if checkpoint and (
+            checkpoint.get("policy_id") != POLICY_ID
+            or checkpoint.get("policy_version") != POLICY_VERSION
+            or checkpoint.get("paper_epoch_id") != self.epoch_id
+        ):
+            raise RuntimeError("STP_BE33_CHECKPOINT_CONTRACT_MISMATCH")
         self.last_processed_wal_offset = int(checkpoint.get("last_processed_wal_offset") or 0)
         self.ignored_position_ids = set(checkpoint.get("ignored_position_ids") or [])
         # Do not derive the global checkpoint from a single position event: replay
@@ -415,13 +504,7 @@ class StpBe33Engine:
         return closes
 
     def _offset_before(self, opened_at: datetime) -> int:
-        prior = 0
-        for event in self.wal.iter_from_offset(0):
-            timestamp = event_timestamp(event)
-            if timestamp is not None and timestamp >= opened_at:
-                return max(0, int(event.get("wal_offset") or 0) - 1)
-            prior = int(event.get("wal_offset") or prior)
-        return prior
+        return self.wal.offset_before_timestamp(opened_at)
 
     def discover_new_positions(self) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
@@ -780,6 +863,7 @@ class StpBe33Engine:
     def write_health(self) -> dict[str, Any]:
         health = {
             "status": "STP_BE33_RUNNING_SHADOW_ONLY",
+            "pid": os.getpid(),
             "updated_at": utc_now(),
             "policy_id": POLICY_ID,
             "policy_version": POLICY_VERSION,
@@ -788,6 +872,9 @@ class StpBe33Engine:
             "paper_epoch_id": self.epoch_id,
             "last_processed_wal_offset": self.last_processed_wal_offset,
             "wal_last_offset": self.wal.last_offset,
+            "startup_elapsed_seconds": time.monotonic() - self.startup_started_monotonic,
+            "startup_wal_bytes_scanned": self.wal.bytes_scanned,
+            "startup_wal_rows_replayed": self.wal.rows_replayed,
             "canonical_write_capability": False,
             "live1b_command_capability": False,
             "real_execution_capability": False,

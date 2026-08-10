@@ -107,6 +107,7 @@ class IntrabarPaperEngine:
         self._command_seq = 0
         self.execution_market: Any | None = None
         self.health_path = epoch_root / "health.json"
+        self.last_health_write_error: str | None = None
         self.trading_contract = self._load_trading_contract(epoch_root)
         self.sleeves = SleeveLedger.load(epoch_root)
         self.capital_model = str(
@@ -650,13 +651,18 @@ class IntrabarPaperEngine:
 
         trigger_u = str(trigger_type).upper()
 
-        protective_exit_price: float | None = None
+        protective_level: float | None = None
         if trigger_u in {"SL", "STOP", "STOP_LOSS"}:
-            protective_exit_price = float(pos.stop_loss_price)
+            protective_level = float(pos.stop_loss_price)
         elif trigger_u in {"TP", "TAKE_PROFIT"}:
-            protective_exit_price = float(pos.take_profit_price)
+            protective_level = float(pos.take_profit_price)
 
-        if protective_exit_price is not None:
+        if protective_level is not None:
+            event_price = (
+                float(trigger_price)
+                if trigger_price is not None
+                else protective_level
+            )
             return self._complete_exit(
                 pos=pos,
                 key=key,
@@ -666,10 +672,10 @@ class IntrabarPaperEngine:
                 trigger_event_id=trigger_event_id,
                 trigger_timestamp=trigger_timestamp,
                 trigger_monotonic_ns=trigger_monotonic_ns,
-                trigger_price=protective_exit_price,
+                trigger_price=event_price,
                 context_event_id=context_event_id,
                 episode_id=episode_id or pos.lifecycle_episode_id,
-                execution_price_override=protective_exit_price,
+                execution_price_override=event_price,
                 market_provenance=market_provenance,
             )
 
@@ -767,6 +773,17 @@ class IntrabarPaperEngine:
             if execution_price_override is not None
             else fill_price_for(side=pos.side, action="EXIT", bbo=bbo)
         )
+        trigger_u = str(trigger_type).upper()
+        protective_level: float | None = None
+        if trigger_u in {"SL", "STOP", "STOP_LOSS"}:
+            protective_level = float(pos.stop_loss_price)
+        elif trigger_u in {"TP", "TAKE_PROFIT"}:
+            protective_level = float(pos.take_profit_price)
+        protective_slippage = (
+            fill_px - protective_level
+            if protective_level is not None
+            else None
+        )
         econ = closed_trade_economics(
             cfg=self.cfg,
             side=pos.side,
@@ -804,6 +821,12 @@ class IntrabarPaperEngine:
             "paper_fill_price": fill_px,
             "ts": now,
         }
+        if protective_level is not None:
+            command_payload.update(
+                execution_price=fill_px,
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+            )
         if market_provenance:
             command_payload.update(market_provenance)
         command = self.books.append("commands", command_payload)
@@ -839,49 +862,68 @@ class IntrabarPaperEngine:
             "trigger_price": trigger_price,
             "ts": now,
         }
+        if protective_level is not None:
+            fill_payload.update(
+                execution_price=fill_px,
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+            )
         if market_provenance:
             fill_payload.update(market_provenance)
         fill = self.books.append("fills", fill_payload)
-        trade = self.books.append(
-            "trades",
-            {
-                "trade_id": trade_id,
-                "position_id": pos.position_id,
-                "timeframe": pos.timeframe,
-                "side": pos.side,
-                "quantity": pos.quantity,
-                "entry_price": pos.entry_price,
-                "exit_price": fill_px,
-                "gross_pnl_usd": econ["gross_pnl_usd"],
-                "net_pnl_usd": econ["net_pnl_usd"],
-                "fees_usd": econ["fees_usd"],
-                "slippage_usd": econ["slippage_usd"],
-                "entry_fee_usd": econ["entry_fee_usd"],
-                "exit_fee_usd": econ["exit_fee_usd"],
-                "risk_amount_usd": pos.risk_amount_usd,
-                "exit_reason": trigger_type,
-                "lifecycle_episode_id": episode_id,
-                "entry_ts": None,
-                "exit_ts": now,
-                "status": "CLOSED",
-            },
-        )
+        trade_payload: dict[str, Any] = {
+            "trade_id": trade_id,
+            "position_id": pos.position_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "quantity": pos.quantity,
+            "entry_price": pos.entry_price,
+            "exit_price": fill_px,
+            "gross_pnl_usd": econ["gross_pnl_usd"],
+            "net_pnl_usd": econ["net_pnl_usd"],
+            "fees_usd": econ["fees_usd"],
+            "slippage_usd": econ["slippage_usd"],
+            "entry_fee_usd": econ["entry_fee_usd"],
+            "exit_fee_usd": econ["exit_fee_usd"],
+            "risk_amount_usd": pos.risk_amount_usd,
+            "exit_reason": trigger_type,
+            "lifecycle_episode_id": episode_id,
+            "entry_ts": None,
+            "exit_ts": now,
+            "status": "CLOSED",
+        }
+        if protective_level is not None:
+            trade_payload.update(
+                trigger_price=float(trigger_price),
+                execution_price=fill_px,
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+                stop_loss_price=pos.stop_loss_price,
+                take_profit_price=pos.take_profit_price,
+            )
+        trade = self.books.append("trades", trade_payload)
         # Mark position closed via append of closed row (open filter uses status)
-        self.books.append(
-            "positions",
-            {
-                "position_id": pos.position_id,
-                "timeframe": pos.timeframe,
-                "side": pos.side,
-                "status": "CLOSED",
-                "quantity": pos.quantity,
-                "entry_price": pos.entry_price,
-                "exit_price": fill_px,
-                "closed_at": now,
-                "exit_reason": trigger_type,
-                "lifecycle_episode_id": episode_id,
-            },
-        )
+        closed_position_payload: dict[str, Any] = {
+            "position_id": pos.position_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "status": "CLOSED",
+            "quantity": pos.quantity,
+            "entry_price": pos.entry_price,
+            "exit_price": fill_px,
+            "closed_at": now,
+            "exit_reason": trigger_type,
+            "lifecycle_episode_id": episode_id,
+        }
+        if protective_level is not None:
+            closed_position_payload.update(
+                execution_price=fill_px,
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+                stop_loss_price=pos.stop_loss_price,
+                take_profit_price=pos.take_profit_price,
+            )
+        self.books.append("positions", closed_position_payload)
         del self.positions[pos.timeframe]
         if self._uses_sleeves() and self.sleeves is not None:
             sleeve = self.sleeves.apply_realized_net_pnl(
@@ -953,19 +995,13 @@ class IntrabarPaperEngine:
             else:
                 continue
 
-            protective_price = (
-                pos.take_profit_price
-                if trigger == "TP"
-                else pos.stop_loss_price
-            )
-
             act = self._exit_position(
                 tf=tf,
                 trigger_type=trigger,
                 trigger_event_id=trigger_event_id,
                 trigger_timestamp=trigger_timestamp,
                 trigger_monotonic_ns=trigger_monotonic_ns,
-                trigger_price=protective_price,
+                trigger_price=px,
                 context_event_id=trigger_event_id,
                 use_local_bbo=False,
                 market_provenance=market_provenance,
@@ -1067,6 +1103,7 @@ class IntrabarPaperEngine:
             "initial_equity_usd": self.epoch.initial_equity_usd,
             "capital_model": self.capital_model,
             "updated_at": _utc_iso(),
+            "health_write_error": self.last_health_write_error,
         }
         if self.execution_market is not None:
             payload["execution_market"] = self.execution_market.snapshot()
@@ -1091,12 +1128,19 @@ class IntrabarPaperEngine:
 
     def write_health(self) -> Path:
         payload = self.health()
-        self.health_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.health_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-        tmp.replace(self.health_path)
-        # Also publish to runtime for OPS
-        runtime = Path("data/runtime/intrabar_paper_health.json")
-        runtime.parent.mkdir(parents=True, exist_ok=True)
-        runtime.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+        encoded = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+        failures: list[str] = []
+        for target in (self.health_path, Path("data/runtime/intrabar_paper_health.json")):
+            tmp = target.with_suffix(".tmp")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp.write_text(encoded, encoding="utf-8")
+                tmp.replace(target)
+            except OSError as exc:
+                failures.append(f"{target}:{type(exc).__name__}:{exc}")
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        self.last_health_write_error = "; ".join(failures) or None
         return self.health_path

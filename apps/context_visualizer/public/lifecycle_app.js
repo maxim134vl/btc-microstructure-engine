@@ -690,6 +690,19 @@ function drawExitMarker(ctx, x, y, selected, colors) {
   ctx.lineWidth = 1;
 }
 
+function closedTradeConnectorColor(entity, colors) {
+  if (String(entity && entity.status || "").toUpperCase() !== "CLOSED") return null;
+  const pnl = finitePrice(
+    entity.net_realised_pnl_usd
+      ?? entity.net_realized_pnl_usd
+      ?? entity.net_pnl_usd
+      ?? entity.realized_pnl
+      ?? entity.realised_pnl_usd,
+  );
+  if (pnl == null || Math.abs(pnl) <= 1e-9) return colors.muted;
+  return pnl > 0 ? colors.positive : colors.negative;
+}
+
 function drawZoneRect(ctx, x1, x2, yA, yB, fill) {
   const top = Math.min(yA, yB);
   const height = Math.max(1, Math.abs(yB - yA));
@@ -826,6 +839,23 @@ function drawOverlays(chart, tfBlock, g) {
         ctx.textAlign = "left";
         ctx.fillText("Стоп", x2 + 3, g.yAt(stop) + 3);
       }
+    }
+
+    const connectorColor =
+      kind === "closed" && exitPx != null
+        ? closedTradeConnectorColor(entity, colors)
+        : null;
+    if (connectorColor) {
+      const yExit = g.yAt(exitPx);
+      ctx.save();
+      ctx.globalAlpha = dim ? 0.12 : 0.42;
+      ctx.strokeStyle = connectorColor;
+      ctx.lineWidth = isSel ? 1.5 : 1;
+      ctx.beginPath();
+      ctx.moveTo(x1, yEntry);
+      ctx.lineTo(x2, yExit);
+      ctx.stroke();
+      ctx.restore();
     }
 
     ctx.strokeStyle = colors.tradeEntry;

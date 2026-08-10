@@ -378,7 +378,7 @@ def test_sl_executes_from_aggtrade_without_any_bbo(cfg):
     Regression: protective SL must not depend on BBO availability.
 
     Once a position is open, an aggTrade crossing the fixed stop level
-    must close the position immediately at stop_loss_price.
+    must close the position immediately at the event price.
     """
     c, repo = cfg
     eng = _engine(c, repo)
@@ -403,8 +403,9 @@ def test_sl_executes_from_aggtrade_without_any_bbo(cfg):
     eng.bbo._latest_local = None
 
     # Actual market trade crosses the protective stop.
+    event_price = stop - 0.01
     eng.update_from_trade(
-        price=stop - 0.01,
+        price=event_price,
         receive_monotonic_ns=3_000_000,
         receive_timestamp="2026-08-07T00:00:00Z",
         source_event_id="agg_sl_no_bbo",
@@ -415,9 +416,95 @@ def test_sl_executes_from_aggtrade_without_any_bbo(cfg):
     assert eng.last_command is not None
     assert eng.last_command["trigger_type"] == "SL"
     assert eng.last_command["trigger_event_id"] == "agg_sl_no_bbo"
-    assert eng.last_command["trigger_price"] == pytest.approx(stop)
-    assert eng.last_command["paper_fill_price"] == pytest.approx(stop)
+    assert eng.last_command["trigger_price"] == pytest.approx(event_price)
+    assert eng.last_command["paper_fill_price"] == pytest.approx(event_price)
+    assert eng.last_command["execution_price"] == pytest.approx(event_price)
+    assert eng.last_command["protective_level"] == pytest.approx(stop)
+    assert eng.last_command["protective_slippage"] == pytest.approx(-0.01)
 
     # Protective execution must not fabricate BBO metadata.
     assert eng.last_command["best_bid"] is None
     assert eng.last_command["best_ask"] is None
+
+
+@pytest.mark.parametrize(
+    ("side", "trigger", "level", "pre_price", "event_price", "expected_slippage"),
+    [
+        ("LONG", "SL", 95.0, 96.0, 94.0, -1.0),
+        ("SHORT", "SL", 105.0, 104.0, 106.0, 1.0),
+        ("LONG", "TP", 110.0, 109.0, 113.0, 3.0),
+        ("SHORT", "TP", 90.0, 91.0, 87.0, -3.0),
+    ],
+)
+def test_protective_gap_and_overshoot_fill_at_event_price(
+    cfg, side, trigger, level, pre_price, event_price, expected_slippage
+):
+    c, repo = cfg
+    eng = _engine(c, repo)
+    tf = "M15"
+    eng.process_context_event(
+        _ctx(
+            eid=f"{side}_{trigger}_start",
+            etype="CONTEXT_START",
+            tf=tf,
+            prev="OBSERVE",
+            new=f"{side}_CONTEXT",
+            mono=2_000_000,
+        )
+    )
+    pos = eng.positions[tf]
+    pos.entry_price = 100.0
+    if trigger == "SL":
+        pos.stop_loss_price = level
+        pos.take_profit_price = 110.0 if side == "LONG" else 90.0
+    else:
+        pos.take_profit_price = level
+        pos.stop_loss_price = 95.0 if side == "LONG" else 105.0
+
+    assert eng.update_from_trade(
+        price=pre_price,
+        receive_monotonic_ns=3_000_000,
+        source_event_id=f"{side}_{trigger}_pre",
+    ) == []
+    actions = eng.update_from_trade(
+        price=event_price,
+        receive_monotonic_ns=4_000_000,
+        source_event_id=f"{side}_{trigger}_hit",
+    )
+    assert len(actions) == 1
+    assert actions[0]["status"] == "EXITED"
+    assert actions[0]["trade"]["exit_price"] == pytest.approx(event_price)
+    assert actions[0]["trade"]["execution_price"] == pytest.approx(event_price)
+    assert actions[0]["trade"]["trigger_price"] == pytest.approx(event_price)
+    assert actions[0]["trade"]["protective_level"] == pytest.approx(level)
+    assert actions[0]["trade"]["protective_slippage"] == pytest.approx(expected_slippage)
+    assert actions[0]["fill"]["trigger_price"] == pytest.approx(event_price)
+    assert actions[0]["fill"]["paper_fill_price"] == pytest.approx(event_price)
+    assert actions[0]["trade"]["stop_loss_price"] == pytest.approx(pos.stop_loss_price)
+    assert actions[0]["trade"]["take_profit_price"] == pytest.approx(pos.take_profit_price)
+
+    # The first crossing closes exactly once; subsequent ticks cannot duplicate it.
+    assert eng.update_from_trade(
+        price=event_price - 1.0 if side == "LONG" else event_price + 1.0,
+        receive_monotonic_ns=5_000_000,
+        source_event_id=f"{side}_{trigger}_later",
+    ) == []
+    assert len(eng.books.read_all("trades")) == 1
+
+
+def test_health_write_oserror_is_nonfatal(cfg, monkeypatch: pytest.MonkeyPatch) -> None:
+    c, repo = cfg
+    monkeypatch.chdir(repo)
+    eng = _engine(c, repo)
+    blocked_tmp = eng.health_path.with_suffix(".tmp")
+    original_write_text = Path.write_text
+
+    def fail_one_health_target(self: Path, *args, **kwargs):
+        if self == blocked_tmp:
+            raise OSError(28, "No space left on device")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_one_health_target)
+    assert eng.write_health() == eng.health_path
+    assert "No space left on device" in str(eng.last_health_write_error)
+    assert (repo / "data/runtime/intrabar_paper_health.json").exists()

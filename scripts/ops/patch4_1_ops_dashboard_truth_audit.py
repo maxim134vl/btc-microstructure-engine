@@ -159,7 +159,7 @@ def parse_pipeline_list(path: Path) -> list[str]:
 def process_rows() -> list[dict[str, Any]]:
     ps = subprocess.check_output(["ps", "-axo", "pid=,ppid=,etime=,lstart=,command="], text=True)
     wanted = {
-        "FEED": ("live_binance_intrabar_feed.py",),
+        "FEED": ("live_binance_feed_v2.py",),
         "PIPELINE": ("run.py",),
         "CONTEXT_REFRESHER": ("run_context_refresh_daemon.py",),
         "PAPER_CONTROLLER": ("bounded_paper_trading_controller_auto_ledger",),
@@ -909,14 +909,7 @@ def compute_overall_health(processes: list[dict], datasets_status: dict, mtf: di
         alerts.append({"alert_id": "FEED_DOWN", "severity": "CRITICAL", "message": "live feed process not running"})
     if not pipe or pipe["health"] != "RUNNING":
         alerts.append({"alert_id": "PIPELINE_DOWN", "severity": "CRITICAL", "message": "pipeline run.py not running"})
-    if not ctx or ctx["health"] != "RUNNING":
-        alerts.append(
-            {
-                "alert_id": "CONTEXT_REFRESHER_DOWN",
-                "severity": "ERROR",
-                "message": "context refresher not running",
-            }
-        )
+    # The legacy context refresh daemon is not a required runtime component.
     if not paper_p or paper_p["health"] != "RUNNING":
         alerts.append({"alert_id": "PAPER_PROCESS_DOWN", "severity": "ERROR", "message": "paper controller not running"})
 

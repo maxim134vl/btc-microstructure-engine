@@ -201,6 +201,7 @@ export interface RuntimeTruthPortfolio {
 
 export interface RuntimeTruthTimeframeTraders {
   activated?: boolean;
+  activation_timestamp?: string | null;
   d1_trader?: boolean;
   command_bus?: RuntimeTruthCommandBus;
   portfolio?: RuntimeTruthPortfolio;
@@ -265,6 +266,7 @@ export interface RuntimeTruthSnapshot {
   trading_operations?: RuntimeTruthTradingOperations | null;
   shadow_economic_correlation?: Record<string, unknown> | null;
   shadow_structural_protection?: Record<string, unknown> | null;
+  shadow_stp_be33?: Record<string, unknown> | null;
   cross_layer_outcome_reconciliation?: Record<string, unknown> | null;
 }
 

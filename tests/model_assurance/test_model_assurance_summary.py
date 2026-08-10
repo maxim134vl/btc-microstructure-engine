@@ -76,7 +76,7 @@ def _base_overrides(now: datetime) -> dict:
             "context_confirmed_events": 0,
             "trade_toxic_candidates": 0,
             "trade_confirmed_events": 0,
-            "not_evaluable_checks": 0,
+            "not_evaluable_checks": {"NO_OUTCOME": 2, "BBO_MISSING": 3},
             "updated_at": ts,
         },
         "tox_health": {"alive": True, "status": "NO_ELIGIBLE_EVENTS_YET", "updated_at": ts},

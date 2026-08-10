@@ -28,6 +28,7 @@ DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
 NON_DIRECTIONAL_CONTEXTS = frozenset({"", "OBSERVE", "NO_ACTIVE_CONTEXT", "STAND_ASIDE", "NONE", "NAN", "NAT"})
 DELIVERY_MODE_LIVE = "LIVE"
 DELIVERY_MODE_RECOVERY = "RECOVERY"
+LIVE_PUBLICATION_RACE_GRACE_SECONDS = 5.0
 RECOVERY_DECISION_LOOKBACK_ROWS = 4096
 SUPPORTED_RECOVERY_TIMEFRAMES = frozenset({"M15", "M30", "H1", "H4"})
 
@@ -340,8 +341,11 @@ def _classify_delivery_mode(
     """Classify whether an entry event is live or recovery delivery.
 
     Recovery is deterministic from explicit materialization markers and the
-    durable previous-bridge-invocation watermark. It does not depend on batch
-    cardinality, timeframe count, or consumer-side age thresholds.
+    durable previous-bridge-invocation watermark. A small publication grace is
+    required because ``decision_written_at_utc`` is captured before the atomic
+    Parquet replacement becomes visible to the bridge. Without it, a decision
+    published immediately after one poll is misclassified as recovery by the
+    next poll. It does not depend on batch cardinality or timeframe count.
     """
     if str(event_type or "").upper() not in ENTRY_EVENT_TYPES:
         return DELIVERY_MODE_LIVE
@@ -358,7 +362,8 @@ def _classify_delivery_mode(
         return DELIVERY_MODE_RECOVERY
 
     watermark = previous_bridge_invocation_at or bridge_activated_at
-    if decision_available < watermark:
+    recovery_cutoff = watermark - pd.Timedelta(seconds=LIVE_PUBLICATION_RACE_GRACE_SECONDS)
+    if decision_available < recovery_cutoff:
         return DELIVERY_MODE_RECOVERY
 
     return DELIVERY_MODE_LIVE

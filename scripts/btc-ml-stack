@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+case "${1:-status}" in
+  start)
+    patterns=(
+      "scripts/live/live_binance_intrabar_feed.py"
+      "scripts/live/intrabar_feed_supervisor.py"
+      "scripts/live/run_intrabar_cognition_service.py"
+      "scripts/live/run_intrabar_paper_manager.py"
+      "scripts/live/intrabar_process_supervisor.py"
+      "scripts/live/run_shadow_stp_be33.py"
+      "python3 run.py"
+    )
+    active=()
+    for pattern in "${patterns[@]}"; do
+      if pgrep -f "$pattern" >/dev/null 2>&1; then active+=("$pattern"); fi
+    done
+    if (( ${#active[@]} )); then
+      echo "Refusing start: host-era BTC-ML processes are still running:" >&2
+      printf '  - %s\n' "${active[@]}" >&2
+      echo "Stop the old host runtime before the first Docker cold-start." >&2
+      exit 10
+    fi
+    python3 - <<'PY'
+import json
+from pathlib import Path
+cfg = json.loads(Path("config/intrabar_paper_execution.json").read_text())
+assert cfg.get("paper_only") is True, "paper_only must remain true"
+assert cfg.get("real_execution_enabled") is False, "real_execution_enabled must remain false"
+PY
+    docker compose up -d --build --remove-orphans
+    ;;
+  stop) docker compose stop ;;
+  down) docker compose down ;;
+  status) docker compose ps ;;
+  logs)
+    if [[ -n "${2:-}" ]]; then
+      docker compose logs -f --tail=200 "$2"
+    else
+      docker compose logs -f --tail=200
+    fi
+    ;;
+  *) echo "usage: scripts/btc-ml-stack {start|stop|down|status|logs [service]}" >&2; exit 2 ;;
+esac

@@ -51,6 +51,13 @@ export type TradingOperationsPerformance = {
   risk_adjusted_metrics?: TradingRiskAdjustedMetrics | null;
 };
 
+export type TradingCapitalSnapshot = {
+  currentMasterEquity?: number | null;
+  initialMasterCapital?: number | null;
+  epochStartedAt?: string | null;
+  currentTimestamp?: string | null;
+};
+
 /** Exact operator-facing labels — order matches OPS1.3 target block. */
 export const TRADING_METRIC_LABELS = [
   "Closed trades",
@@ -58,6 +65,8 @@ export const TRADING_METRIC_LABELS = [
   "Winning trades",
   "Losing trades",
   "Win rate",
+  "Current return",
+  "Annualized return",
   "Average win",
   "Average loss",
   "Best trade",
@@ -75,7 +84,13 @@ export const TRADING_METRIC_LABELS = [
 
 export type TradingMetricLabel = (typeof TRADING_METRIC_LABELS)[number];
 
-export type TradingMetricKind = "count" | "usd" | "percent" | "ratio" | "duration";
+export type TradingMetricKind =
+  | "count"
+  | "usd"
+  | "percent"
+  | "signed_percent"
+  | "ratio"
+  | "duration";
 
 export type TradingMetricDef = {
   label: TradingMetricLabel;
@@ -90,6 +105,8 @@ export const TRADING_METRIC_DEFS: readonly TradingMetricDef[] = [
   { label: "Winning trades", kind: "count", zeroIsValid: true },
   { label: "Losing trades", kind: "count", zeroIsValid: true },
   { label: "Win rate", kind: "percent", zeroIsValid: true },
+  { label: "Current return", kind: "signed_percent", zeroIsValid: true },
+  { label: "Annualized return", kind: "signed_percent", zeroIsValid: true },
   { label: "Average win", kind: "usd", zeroIsValid: true },
   { label: "Average loss", kind: "usd", zeroIsValid: true },
   { label: "Best trade", kind: "usd", zeroIsValid: true },
@@ -138,6 +155,11 @@ function formatPercent(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
+function formatSignedPercent(value: number): string {
+  const sign = value >= 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
 function formatRatio(value: number): string {
   return value.toFixed(4);
 }
@@ -163,6 +185,8 @@ export function formatTradingMetricValue(
       return formatUsd(value);
     case "percent":
       return formatPercent(value);
+    case "signed_percent":
+      return formatSignedPercent(value);
     case "ratio":
       return formatRatio(value);
     case "duration":
@@ -172,12 +196,48 @@ export function formatTradingMetricValue(
   }
 }
 
+export function calculateCapitalReturns(
+  capital: TradingCapitalSnapshot | null | undefined,
+): { currentReturnPct: number | null; annualizedReturnPct: number | null } {
+  const current = capital?.currentMasterEquity;
+  const initial = capital?.initialMasterCapital;
+  if (
+    typeof current !== "number" ||
+    !Number.isFinite(current) ||
+    typeof initial !== "number" ||
+    !Number.isFinite(initial) ||
+    initial <= 0
+  ) {
+    return { currentReturnPct: null, annualizedReturnPct: null };
+  }
+
+  const capitalRatio = current / initial;
+  const currentReturnPct = (capitalRatio - 1) * 100;
+  const startMs = Date.parse(capital?.epochStartedAt || "");
+  const currentMs = Date.parse(capital?.currentTimestamp || "");
+  const elapsedDays = (currentMs - startMs) / 86_400_000;
+  if (
+    !Number.isFinite(startMs) ||
+    !Number.isFinite(currentMs) ||
+    elapsedDays <= 0 ||
+    capitalRatio <= 0
+  ) {
+    return { currentReturnPct, annualizedReturnPct: null };
+  }
+  const annualizedReturnPct = (capitalRatio ** (365 / elapsedDays) - 1) * 100;
+  return {
+    currentReturnPct,
+    annualizedReturnPct: Number.isFinite(annualizedReturnPct) ? annualizedReturnPct : null,
+  };
+}
+
 /**
- * Pull the 18 display values from the existing performance payload.
- * Missing backend fields stay null (render as —) — never invent or sum.
+ * Pull display values from canonical performance and master-capital payloads.
+ * Missing backend fields stay null (render as —) — never invent or sum PnL.
  */
 export function resolveTradingMetricRawValues(
   performance: TradingOperationsPerformance | null | undefined,
+  capital?: TradingCapitalSnapshot | null,
 ): Record<TradingMetricLabel, number | null> {
   const portfolio = performance?.portfolio ?? {};
   const descriptive = performance?.descriptive_metrics ?? {};
@@ -198,6 +258,8 @@ export function resolveTradingMetricRawValues(
     unwrapMetricNumber(descriptive.worst_trade) ??
     (typeof portfolio.worst_trade_usd === "number" ? portfolio.worst_trade_usd : null);
 
+  const returns = calculateCapitalReturns(capital);
+
   const totalCosts =
     typeof portfolio.total_trading_costs_usd === "number" &&
     Number.isFinite(portfolio.total_trading_costs_usd)
@@ -212,6 +274,8 @@ export function resolveTradingMetricRawValues(
     "Winning trades": typeof descriptive.wins === "number" ? descriptive.wins : null,
     "Losing trades": typeof descriptive.losses === "number" ? descriptive.losses : null,
     "Win rate": unwrapMetricNumber(descriptive.win_rate),
+    "Current return": returns.currentReturnPct,
+    "Annualized return": returns.annualizedReturnPct,
     "Average win": typeof descriptive.average_win === "number" ? descriptive.average_win : null,
     "Average loss": typeof descriptive.average_loss === "number" ? descriptive.average_loss : null,
     "Best trade": bestTrade,

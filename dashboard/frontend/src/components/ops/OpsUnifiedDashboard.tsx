@@ -615,6 +615,14 @@ export function OpsUnifiedDashboard({
               performance={tradingPerformance}
               liveConnected={liveConnected}
               generatedAt={generatedAt}
+              capital={{
+                currentMasterEquity:
+                  portfolio?.master_current_equity_usd ?? portfolio?.closed_equity_usd,
+                initialMasterCapital:
+                  portfolio?.master_initial_equity_usd ?? portfolio?.initial_equity_usd,
+                epochStartedAt: traders?.activation_timestamp,
+                currentTimestamp: generatedAt,
+              }}
             />
           </SectionCard>
         </section>
@@ -782,6 +790,51 @@ export function OpsUnifiedDashboard({
                     </p>
                   </>
                 );
+              })()}
+            </Panel>
+          </SectionCard>
+        </section>
+
+        {/* STP_BE33: independent observe-only partial-take / break-even shadow */}
+        <section className="space-y-2.5" data-section="shadow-stp-be33">
+          <SectionLabel>STP_BE33 Shadow</SectionLabel>
+          <SectionCard>
+            <Panel title="1/3 partial take + economic break-even research">
+              {(() => {
+                const sh = (snapshot as { shadow_stp_be33?: Record<string, unknown> }).shadow_stp_be33;
+                const metrics = (sh?.metrics || {}) as Record<string, unknown>;
+                const manifest = (sh?.policy_manifest || {}) as Record<string, unknown>;
+                const eventCounts = (sh?.event_counts || {}) as Record<string, unknown>;
+                const eventsByTf = (sh?.events_by_timeframe || {}) as Record<string, unknown>;
+                const outcomesByTf = (sh?.outcomes_by_timeframe || {}) as Record<string, unknown>;
+                const latestEvent = (sh?.latest_event || {}) as Record<string, unknown>;
+                const violations = (sh?.violations || []) as unknown[];
+                const tf = (values: Record<string, unknown>) =>
+                  `M15 ${values.M15 ?? 0} · M30 ${values.M30 ?? 0} · H1 ${values.H1 ?? 0} · H4 ${values.H4 ?? 0}`;
+                const fp = String(sh?.policy_fingerprint || "—");
+                return <>
+                  <MetricLine label="Mode" value={String(sh?.mode || "SHADOW_OBSERVE_ONLY")} />
+                  <MetricLine label="Process / ownership" value={`${String(sh?.process_health || "STOPPED")} · ${String(sh?.ownership || "INDEPENDENT_RUNNER")}${sh?.pid != null ? ` · PID ${String(sh.pid)}` : ""}`} />
+                  <MetricLine label="Binding" value={`${String(sh?.binding_status || "—")} · epoch ${sh?.epoch_match === true ? "MATCH" : "MISMATCH"} · policy fp ${sh?.policy_fingerprint_match === true ? "MATCH" : "MISMATCH"}`} />
+                  <MetricLine label="Epoch" value={String(sh?.source_epoch_id || "—")} />
+                  <MetricLine label="Generation / version" value={`${String(sh?.policy_id || "—")} / ${String(sh?.policy_version || "—")}`} />
+                  <MetricLine label="Policy fingerprint" value={fp === "—" ? fp : `${fp.slice(0, 16)}…`} />
+                  <MetricLine label="Effective since" value={String(sh?.policy_effective_at || "—")} />
+                  <MetricLine label="Trigger rule" value="At 1/3 of entry→TP distance" />
+                  <MetricLine label="Partial / remaining" value={`${String(manifest.partial_fraction || "—")} close / ${String(manifest.remaining_fraction || "—")} moved to economic BE`} />
+                  <MetricLine label="Intrabar / WAL provenance" value={`${String(sh?.trigger_source || "—")} · processed ${String(sh?.last_processed_wal_offset ?? "—")} / WAL ${String(sh?.wal_last_offset ?? "—")}`} />
+                  <MetricLine label="Observed / partial / BE stops / TP after partial" value={`${metrics.positions_observed ?? "—"} / ${metrics.partial_trigger_reached ?? "—"} / ${metrics.be_stops_hit ?? "—"} / ${metrics.tp_after_partial ?? "—"}`} />
+                  <MetricLine label="Events / outcomes" value={`${String(sh?.event_count ?? 0)} / ${String(sh?.outcome_count ?? 0)}`} />
+                  <MetricLine label="Events by TF" value={tf(eventsByTf)} />
+                  <MetricLine label="Outcomes by TF" value={tf(outcomesByTf)} />
+                  <MetricLine label="Partial + stop-move events" value={String(eventCounts.STP_BE33_STOP_MOVED ?? 0)} />
+                  <MetricLine label="Last event / update" value={`${String(latestEvent.event_type || "—")} · ${String(latestEvent.recorded_at || sh?.updated_at || "—")}`} />
+                  <MetricLine label="Errors / violations" value={violations.length ? violations.join(", ") : "none"} />
+                  <MetricLine label="Research / safety" value={String(sh?.research_safety_status || "—")} />
+                  <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
+                    Observe-only: canonical writes, LIVE1B commands and real execution are disabled by the runtime policy manifest and health state.
+                  </p>
+                </>;
               })()}
             </Panel>
           </SectionCard>

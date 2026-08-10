@@ -1,0 +1,119 @@
+name: btc-ml
+
+x-runtime: &runtime
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.runtime
+  image: btc-ml-runtime:local
+  init: true
+  restart: unless-stopped
+  working_dir: /app
+  environment:
+    BTC_ML_ROOT: /app
+    BTC_ML_DATA_ROOT: /app/data
+    PYTHONPATH: /app:/app/src
+    PAPER_ONLY: "true"
+    REAL_EXECUTION: "false"
+  volumes:
+    - .:/app
+    - ./data:/app/data
+    - ./run:/app/run
+    - ./logs:/app/logs
+
+services:
+  model-runtime:
+    <<: *runtime
+    restart: "on-failure:3"
+    mem_limit: 2g
+    memswap_limit: 2g
+    environment:
+      BTC_ML_ROOT: /app
+      BTC_ML_DATA_ROOT: /app/data
+      PYTHONPATH: /app:/app/src
+      PAPER_ONLY: "true"
+      REAL_EXECUTION: "false"
+      LIVE1B_INITIAL_GRACE_S: "180"
+      LIVE1B_STALL_TIMEOUT_S: "180"
+      LIVE1B_HARD_TIMEOUT_S: "3600"
+      STP_INITIAL_GRACE_S: "30"
+      STP_STALL_TIMEOUT_S: "30"
+      STP_HARD_TIMEOUT_S: "120"
+    healthcheck:
+      test: ["CMD", "python", "scripts/docker/healthcheck.py"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 3660s
+
+  dashboard-api:
+    <<: *runtime
+    command: ["python", "dashboard/backend/run_api.py"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    volumes:
+      - .:/app:ro
+      - ./data:/app/data:ro
+      - ./run:/app/run:ro
+      - ./logs:/app/logs:ro
+    depends_on:
+      model-runtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    ports: ["8080:8080"]
+    networks:
+      default:
+        aliases: ["ops-api"]
+
+  dashboard-ui:
+    build:
+      context: dashboard/frontend
+      dockerfile: Dockerfile.prod
+    image: btc-ml-dashboard-ui:local
+    restart: unless-stopped
+    depends_on:
+      dashboard-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    ports: ["5173:80"]
+
+  context-refresher:
+    <<: *runtime
+    command: ["python", "scripts/live/run_market_context_visual_refresher.py"]
+    environment:
+      CONTEXT_REFRESHER_PID_PATH: /app/run/runtime_context_visual_refresher.pid
+      CONTEXT_REFRESHER_LOCK_PATH: /app/run/runtime_context_visual_refresher.lock
+    depends_on:
+      model-runtime:
+        condition: service_healthy
+    volumes:
+      - .:/app:ro
+      - ./data:/app/data
+      - ./run:/app/run
+      - ./logs:/app/logs
+      - ./apps/context_visualizer/public/data:/app/apps/context_visualizer/public/data
+
+  trade-chart:
+    <<: *runtime
+    command: ["python", "scripts/live/run_context_visual_viewer_server.py", "--host", "0.0.0.0", "--port", "8765"]
+    tmpfs: ["/tmp"]
+    volumes:
+      - ./apps/context_visualizer/public:/app/apps/context_visualizer/public:ro
+      - ./run:/app/run
+      - ./logs:/app/logs
+    depends_on:
+      context-refresher:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    ports: ["8765:8765"]

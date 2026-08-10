@@ -330,6 +330,9 @@ def build_unified_summary(
     tox_status = (tox or {}).get("status") if tox else ("MISSING_SOURCE" if "current_toxicity" in missing_sources else None)
     if tox_status in NOT_APPLICABLE_STATUSES:
         informational.append(f"current_toxicity={tox_status}")
+    not_evaluable_checks = (tox or {}).get("not_evaluable_checks") or 0
+    if isinstance(not_evaluable_checks, dict):
+        not_evaluable_checks = sum(int(value or 0) for value in not_evaluable_checks.values())
     current_toxicity = _module_envelope(
         module_id="MODEL-4",
         status=tox_status,
@@ -340,7 +343,7 @@ def build_unified_summary(
             "context_confirmed_events": int((tox or {}).get("context_confirmed_events") or 0),
             "trade_toxic_candidates": int((tox or {}).get("trade_toxic_candidates") or 0),
             "trade_confirmed_events": int((tox or {}).get("trade_confirmed_events") or 0),
-            "not_evaluable_checks": int((tox or {}).get("not_evaluable_checks") or 0),
+            "not_evaluable_checks": int(not_evaluable_checks),
         },
         updated_at=(tox_h or {}).get("updated_at"),
         source_path=_rel(paths["tox_summary"], root),

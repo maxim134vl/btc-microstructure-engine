@@ -157,6 +157,7 @@ def build_promotion_evidence_snapshot(
         ),
         "behavioral_validation_status": behavioral.get("status"),
         "economic_validation_status": economic.get("status"),
+        "closed_trades": int(economic.get("closed_trades") or 0),
         "pnl_reconciliation_mismatches": int(
             economic.get("pnl_reconciliation_mismatches")
             or (economic.get("counts_by_reconciliation") or {}).get("MISMATCH")

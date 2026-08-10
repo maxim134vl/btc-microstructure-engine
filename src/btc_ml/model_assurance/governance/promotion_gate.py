@@ -144,6 +144,10 @@ def evaluate_promotion_eligibility(
     if not evidence.get("candidate_adapter_module") or not evidence.get("candidate_adapter_class"):
         blockers.append("CANDIDATE_ADAPTER_UNAVAILABLE")
 
+    minimum_closed_trades = int(config.get("minimum_closed_trades", 400))
+    if int(evidence.get("closed_trades") or 0) < minimum_closed_trades:
+        blockers.append("CLOSED_TRADES_INSUFFICIENT")
+
     shadow_status = str(evidence.get("shadow_status") or "")
     if shadow_status in {"NOT_APPLICABLE_NO_CANDIDATE", "NO_CANDIDATE_REGISTERED", ""}:
         blockers.append("SHADOW_NOT_RUNNING")

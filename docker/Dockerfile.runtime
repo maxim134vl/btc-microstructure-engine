@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/src
+
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl procps tini \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/requirements-runtime.txt pyproject.toml README_RUNTIME.md /app/
+RUN pip install --no-cache-dir -r requirements-runtime.txt
+COPY . /app
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python", "scripts/docker/model_runtime.py"]

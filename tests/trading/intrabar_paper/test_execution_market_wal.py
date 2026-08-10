@@ -340,3 +340,47 @@ def test_12_duplicate_agg_trade_prevented(env):
         )
     )
     assert dup[0]["status"] == "DUPLICATE_AGG_TRADE_SKIPPED"
+
+
+def test_13_protective_event_price_survives_wal_replay_without_duplicate(env):
+    cfg, _repo, engine, epoch_root, ep = env
+    engine.bbo.update_from_book_ticker(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=2_000_000,
+        domain="context",
+    )
+    engine.process_context_event(_ctx_start(env, engine, mono=2_000_000))
+    proc = _processor(env)
+    pos = engine.positions["M15"]
+    pos.stop_loss_price = 95.0
+    pos.take_profit_price = 110.0
+
+    _agg(proc, 400, 94.0)
+    trade = engine.books.read_all("trades")[-1]
+    assert trade["exit_price"] == pytest.approx(94.0)
+    assert trade["protective_level"] == pytest.approx(95.0)
+    assert trade["protective_slippage"] == pytest.approx(-1.0)
+
+    trade_count = len(engine.books.read_all("trades"))
+    checkpoint_path = epoch_root / "execution_market_checkpoint.json"
+    checkpoint = ExecutionMarketCheckpoint.load(
+        checkpoint_path,
+        paper_epoch_id=ep.paper_epoch_id,
+    )
+    checkpoint.last_processed_wal_offset -= 1
+    checkpoint.processed_agg_trade_ids.discard(400)
+    checkpoint.save(checkpoint_path)
+
+    restarted_engine = IntrabarPaperEngine(cfg=cfg, epoch=ep)
+    restarted = ExecutionMarketProcessor.create(
+        engine=restarted_engine,
+        epoch_root=epoch_root,
+        paper_epoch_id=ep.paper_epoch_id,
+        max_bbo_age_ms=cfg.max_bbo_age_ms,
+        max_agg_trade_age_ms=cfg.max_agg_trade_age_ms,
+    )
+    assert restarted.checkpoint.last_processed_wal_offset == proc.wal.last_offset
+    replayed_trades = restarted_engine.books.read_all("trades")
+    assert len(replayed_trades) == trade_count
+    assert replayed_trades[-1]["exit_price"] == pytest.approx(94.0)

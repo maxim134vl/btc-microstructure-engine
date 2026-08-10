@@ -88,6 +88,9 @@ SAFE_PIPELINE_BUILDERS = frozenset(
 S4_ACTIVATION_PATH = ROOT / "data/trading/manager/activation.json"
 S4_TIMEFRAMES = ("M15", "M30", "H1", "H4")
 MANAGER_PORTFOLIO_SUMMARY_PATH = ROOT / "data/trading/manager/portfolio_summary.json"
+REQUIRED_RUNTIME_COMPONENTS_PATH = ROOT / "config/required_runtime_components.yaml"
+COLLECTOR_PID_REGISTRY_PATH = ROOT / "data/live/collector_pids.json"
+COLLECTOR_HEARTBEAT_DIR = ROOT / "data/live/collector_heartbeats"
 
 
 def _json_safe(value: Any) -> Any:
@@ -433,13 +436,84 @@ def s4_activated() -> bool:
     return S4_ACTIVATION_PATH.exists()
 
 
+def _required_runtime_components(path: Path | None = None) -> dict[str, Any]:
+    """Load the small health manifest without importing dashboard services."""
+
+    manifest_path = path or REQUIRED_RUNTIME_COMPONENTS_PATH
+    data: dict[str, Any] = {}
+    if manifest_path.exists():
+        try:
+            import yaml
+
+            data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            current: str | None = None
+            for raw in manifest_path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if not raw.startswith(" ") and line.endswith(":"):
+                    current = line[:-1]
+                    data[current] = {} if current == "THRESHOLDS" else []
+                elif current == "THRESHOLDS" and ":" in line:
+                    key, value = line.split(":", 1)
+                    data[current][key.strip()] = int(value.split("#", 1)[0].strip())
+                elif current and line.startswith("- "):
+                    data[current].append(line[2:].strip())
+    return {
+        "required_collectors": frozenset(data.get("REQUIRED_COLLECTORS", [])),
+        "required_engines": frozenset(data.get("REQUIRED_ENGINES", [])),
+        "thresholds": dict(data.get("THRESHOLDS", {})),
+    }
+
+
+def _collector_process_line(
+    lines: list[str],
+    collector_name: str,
+) -> tuple[str | None, str | None, str]:
+    """Resolve a collector through its registry and UTC heartbeat contract."""
+
+    registry = _read_json(COLLECTOR_PID_REGISTRY_PATH) or {}
+    heartbeat = _read_json(COLLECTOR_HEARTBEAT_DIR / f"{collector_name}.json") or {}
+    heartbeat_ts = heartbeat.get("timestamp")
+    if str(heartbeat.get("status") or "").upper() != "CONNECTED":
+        return None, heartbeat_ts, "collector_heartbeat_not_connected"
+    try:
+        observed = datetime.fromisoformat(str(heartbeat_ts).replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            return None, heartbeat_ts, "collector_heartbeat_timestamp_naive"
+        age = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
+        threshold = float(
+            _required_runtime_components()["thresholds"].get("collector_ws", 120)
+        )
+        if age < -5:
+            return None, heartbeat_ts, "collector_heartbeat_timestamp_future"
+        if age > threshold:
+            return None, heartbeat_ts, "collector_heartbeat_stale"
+    except Exception:
+        return None, heartbeat_ts, "collector_heartbeat_timestamp_invalid"
+    try:
+        pid = int(registry[collector_name])
+    except Exception:
+        return None, heartbeat_ts, "collector_pid_not_registered"
+    for line in lines:
+        text = line.strip()
+        parts = text.split(None, 1)
+        if parts and parts[0] == str(pid) and "live_binance_feed_v2.py" in text:
+            return text, heartbeat_ts, "collector_registry_pid_and_heartbeat_healthy"
+    return None, heartbeat_ts, "collector_registered_pid_not_alive_or_identity_mismatch"
+
+
 def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
     live1b = live1b_paper_active()
     activated = s4_activated() and not live1b
+    required = _required_runtime_components()
+    required_collectors = required["required_collectors"]
+    pipeline_required = bool(required["required_engines"])
     specs: list[tuple[str, tuple[str, ...], bool]] = [
-        ("live_feed", ("live_binance_intrabar_feed.py",), True),
-        ("canonical_pipeline", ("run.py",), True),
-        ("context_refresher", ("run_context_refresh_daemon.py",), True),
+        ("live_feed", ("binance_live_feed",), "binance_live_feed" in required_collectors),
+        ("canonical_pipeline", ("run.py",), pipeline_required),
+        ("context_refresher", ("run_context_refresh_daemon.py",), False),
         # Legacy global controller is required only until the S4.1 cutover.
         ("paper_controller", ("bounded_paper_trading_controller_auto_ledger",), not activated and not live1b),
         ("ops_backend", ("run_api.py", "dashboard/backend"), False),
@@ -452,6 +526,11 @@ def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
         (
             "shadow_economic_correlation",
             ("run_shadow_economic_correlation.py",),
+            False,
+        ),
+        (
+            "shadow_stp_be33",
+            ("run_shadow_stp_be33.py",),
             False,
         ),
     ]
@@ -772,19 +851,26 @@ def inspect_processes() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for process_id, tokens, required in _process_specs():
         matched = None
-        for line in lines:
-            text = line.strip()
-            if not text or "rg " in text or "zsh -c" in text or "pytest" in text:
-                continue
-            if process_id == "canonical_pipeline":
-                if not (text.endswith("run.py") or " run.py" in f" {text}" or text.endswith("/run.py")):
+        heartbeat_ts = None
+        missing_reason = "process_not_found_in_ps"
+        if process_id == "live_feed":
+            matched, heartbeat_ts, missing_reason = _collector_process_line(
+                lines, "binance_live_feed"
+            )
+        else:
+            for line in lines:
+                text = line.strip()
+                if not text or "rg " in text or "zsh -c" in text or "pytest" in text:
                     continue
-            if process_id == "ops_backend":
-                if "run_api.py" not in text and "uvicorn" not in text:
-                    continue
-            if any(tok in text for tok in tokens):
-                matched = text
-                break
+                if process_id == "canonical_pipeline":
+                    if not (text.endswith("run.py") or " run.py" in f" {text}" or text.endswith("/run.py")):
+                        continue
+                if process_id == "ops_backend":
+                    if "run_api.py" not in text and "uvicorn" not in text:
+                        continue
+                if any(tok in text for tok in tokens):
+                    matched = text
+                    break
         if matched is None:
             out.append(
                 {
@@ -802,11 +888,11 @@ def inspect_processes() -> list[dict[str, Any]]:
                     "create_time": None,
                     "uptime_seconds": None,
                     "uptime_reason": "PROCESS_NOT_FOUND",
-                    "last_heartbeat": utc_now(),
+                    "last_heartbeat": heartbeat_ts,
                     "restart_count": None,
                     "owner": process_id,
                     "health": "STOPPED",
-                    "health_reason": "process_not_found_in_ps",
+                    "health_reason": missing_reason,
                     "required": required,
                     "entity_type": "PROCESS",
                 }
@@ -819,7 +905,11 @@ def inspect_processes() -> list[dict[str, Any]]:
         interpreter = command.split()[0] if command else None
         proc_state = "RUNNING"
         health = "RUNNING"
-        reason = "process_alive_identity_matched"
+        reason = (
+            "collector_registry_pid_and_heartbeat_healthy"
+            if process_id == "live_feed"
+            else "process_alive_identity_matched"
+        )
         try:
             state_out = subprocess.check_output(
                 ["ps", "-p", str(pid), "-o", "state="],
@@ -871,7 +961,7 @@ def inspect_processes() -> list[dict[str, Any]]:
                 "create_time": created,
                 "uptime_seconds": uptime,
                 "uptime_reason": uptime_reason,
-                "last_heartbeat": utc_now(),
+                "last_heartbeat": heartbeat_ts or utc_now(),
                 "restart_count": None,
                 "owner": process_id,
                 "health": health,
@@ -2127,8 +2217,10 @@ def compute_overall_health(
     alerts: list[dict[str, Any]] = []
     by_id = {p["process_id"]: p for p in processes}
 
-    def down(pid: str, alert_id: str, severity: str) -> None:
+    def down(pid: str, alert_id: str, severity: str, *, required_only: bool = False) -> None:
         proc = by_id.get(pid)
+        if required_only and proc is not None and proc.get("required") is False:
+            return
         if not proc or proc.get("health") != "RUNNING":
             alerts.append(
                 {
@@ -2143,9 +2235,9 @@ def compute_overall_health(
                 }
             )
 
-    down("live_feed", "FEED_DOWN", "CRITICAL")
-    down("canonical_pipeline", "PIPELINE_DOWN", "CRITICAL")
-    down("context_refresher", "CONTEXT_CHAIN_STALE", "ERROR")
+    down("live_feed", "FEED_DOWN", "CRITICAL", required_only=True)
+    down("canonical_pipeline", "PIPELINE_DOWN", "CRITICAL", required_only=True)
+    down("context_refresher", "CONTEXT_CHAIN_STALE", "ERROR", required_only=True)
     # A snapshot carries the S4.1 roles only once the cutover happened, so the
     # process list itself decides which controller contract applies.
     s4_roles_tracked = any(
@@ -2560,24 +2652,73 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         (live1b_epoch or {}).get("trading_contract_fingerprint") or ""
     )
 
+    # STP_BE33 is an independent runner.  Its epoch-scoped health remains the
+    # authoritative observability source even when the dashboard cannot read
+    # the LIVE1B process table (for example under a restricted service user).
+    stp_be33_root = ROOT / "data/trading/shadow_structural_protection/stp_be33"
+    stp_be33_manifest = _read_json(stp_be33_root / "policy_manifest.json") or {}
+    stp_be33_epoch_id = active_shadow_epoch_id
+    if not stp_be33_epoch_id:
+        candidates: list[tuple[float, str]] = []
+        for health_path in (stp_be33_root / "epochs").glob("*/health.json"):
+            candidate = _read_json(health_path) or {}
+            candidate_epoch = str(candidate.get("paper_epoch_id") or health_path.parent.name)
+            if candidate_epoch != health_path.parent.name:
+                continue
+            manifest_fp = str(stp_be33_manifest.get("policy_fingerprint") or "")
+            candidate_fp = str(candidate.get("policy_fingerprint") or "")
+            if manifest_fp and candidate_fp == manifest_fp:
+                candidates.append((health_path.stat().st_mtime, candidate_epoch))
+        if candidates:
+            stp_be33_epoch_id = max(candidates)[1]
+
     process_by_id = {
         str(p.get("process_id")): p
         for p in processes
         if isinstance(p, dict)
     }
 
-    def _shadow_process_truth(process_id: str) -> dict[str, Any]:
+    def _shadow_process_truth(
+        process_id: str,
+        health: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         proc = process_by_id.get(process_id) or {}
+        health = health or {}
+        pid = proc.get("pid") or health.get("pid")
+        process_health = proc.get("health") or "STOPPED"
+        process_state = proc.get("process_state") or "STOPPED"
+        reason = proc.get("health_reason")
+        # A denied process listing is not proof that an independently-owned
+        # runner stopped.  Accept a fresh health heartbeat plus a live PID;
+        # PermissionError from kill(0) itself means the host says it exists.
+        if process_health == "STOPPED" and pid is not None and health.get("updated_at"):
+            try:
+                updated = datetime.fromisoformat(str(health["updated_at"]).replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - updated.astimezone(timezone.utc)).total_seconds()
+                if -5 <= age <= 120:
+                    try:
+                        os.kill(int(pid), 0)
+                        alive_from_pid = True
+                    except PermissionError:
+                        alive_from_pid = True
+                    except (ProcessLookupError, ValueError, TypeError):
+                        alive_from_pid = False
+                    if alive_from_pid:
+                        process_health = "RUNNING"
+                        process_state = "RUNNING"
+                        reason = "fresh_health_and_live_pid"
+            except (ValueError, TypeError):
+                pass
         return {
             "process_id": process_id,
-            "pid": proc.get("pid"),
-            "alive": bool(proc.get("alive")),
-            "process_health": proc.get("health") or "STOPPED",
-            "process_state": proc.get("process_state") or "STOPPED",
+            "pid": pid,
+            "alive": bool(proc.get("alive")) or process_health == "RUNNING",
+            "process_health": process_health,
+            "process_state": process_state,
             "uptime_seconds": proc.get("uptime_seconds"),
             "started_at": proc.get("started_at"),
             "command": proc.get("command"),
-            "health_reason": proc.get("health_reason"),
+            "health_reason": reason,
         }
 
     def _epoch_shadow_health(
@@ -2674,6 +2815,87 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         "shadow_economic_correlation",
         "shadow_economic_correlation",
     )
+
+    def _stp_be33_truth() -> dict[str, Any]:
+        """Expose the independent STP_BE33 store without mutating its runtime."""
+        root = stp_be33_root
+        manifest = stp_be33_manifest
+        epoch_root = root / "epochs" / stp_be33_epoch_id
+        health = _read_json(epoch_root / "health.json") or {}
+        proc = _shadow_process_truth("shadow_stp_be33", health)
+        checkpoint = _read_json(epoch_root / "checkpoint.json") or {}
+        events = _read_jsonl_rows(epoch_root / "events.jsonl")
+        outcomes = _read_jsonl_rows(epoch_root / "outcomes.jsonl")
+
+        epoch_match = bool(stp_be33_epoch_id) and str(
+            health.get("paper_epoch_id") or checkpoint.get("paper_epoch_id") or ""
+        ) == stp_be33_epoch_id
+        manifest_fingerprint = str(manifest.get("policy_fingerprint") or "")
+        health_fingerprint = str(health.get("policy_fingerprint") or "")
+        fingerprint_match = bool(manifest_fingerprint) and health_fingerprint == manifest_fingerprint
+        violations: list[str] = []
+        if not epoch_match:
+            violations.append("ACTIVE_EPOCH_MISMATCH")
+        if not fingerprint_match:
+            violations.append("POLICY_FINGERPRINT_MISMATCH")
+        for capability in (
+            "canonical_write_capability",
+            "live1b_command_capability",
+            "real_execution_capability",
+        ):
+            if health.get(capability) is not False or manifest.get(capability) is not False:
+                violations.append(f"{capability.upper()}_NOT_FALSE")
+
+        event_counts: dict[str, int] = {}
+        events_by_timeframe: dict[str, int] = {}
+        for row in events:
+            event_type = str(row.get("event_type") or "UNKNOWN")
+            event_counts[event_type] = event_counts.get(event_type, 0) + 1
+            tf = str((row.get("position_after") or {}).get("timeframe") or row.get("timeframe") or "")
+            if tf:
+                events_by_timeframe[tf] = events_by_timeframe.get(tf, 0) + 1
+        outcomes_by_timeframe: dict[str, int] = {}
+        for row in outcomes:
+            tf = str(row.get("timeframe") or "")
+            if tf:
+                outcomes_by_timeframe[tf] = outcomes_by_timeframe.get(tf, 0) + 1
+
+        latest_event = events[-1] if events else None
+        latest_outcome = outcomes[-1] if outcomes else None
+        return {
+            **health,
+            **proc,
+            "mode": "SHADOW_OBSERVE_ONLY",
+            "read_only": True,
+            "enforcement_enabled": False,
+            "ownership": "INDEPENDENT_RUNNER",
+            "source_epoch_id": health.get("paper_epoch_id") or checkpoint.get("paper_epoch_id"),
+            "active_paper_epoch_id": stp_be33_epoch_id,
+            "active_trading_fingerprint": active_shadow_fingerprint,
+            "epoch_match": epoch_match,
+            "policy_fingerprint_match": fingerprint_match,
+            "binding_status": "BOUND_CURRENT" if epoch_match and fingerprint_match else "BINDING_VIOLATION",
+            "policy_manifest": manifest,
+            "checkpoint": checkpoint,
+            "event_count": len(events),
+            "outcome_count": len(outcomes),
+            "event_counts": event_counts,
+            "events_by_timeframe": events_by_timeframe,
+            "outcomes_by_timeframe": outcomes_by_timeframe,
+            "latest_event": latest_event,
+            "latest_outcome": latest_outcome,
+            "violations": violations,
+            "research_safety_status": "ISOLATED" if not violations else "VIOLATION",
+            "source_paths": {
+                "manifest": str((root / "policy_manifest.json").relative_to(ROOT)),
+                "health": str((epoch_root / "health.json").relative_to(ROOT)),
+                "checkpoint": str((epoch_root / "checkpoint.json").relative_to(ROOT)),
+                "events": str((epoch_root / "events.jsonl").relative_to(ROOT)),
+                "outcomes": str((epoch_root / "outcomes.jsonl").relative_to(ROOT)),
+            },
+        }
+
+    shadow_stp_be33 = _stp_be33_truth()
 
     # Read-only cross-layer outcome reconciliation diagnostics (TRD-OUTCOME2)
     cross_layer = _read_json(ROOT / "output/audits/trd_outcome2/latest.json") or {}
@@ -2794,6 +3016,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "status": "NOT_STARTED",
             "exact_intrabar_data": "UNKNOWN",
         },
+        "shadow_stp_be33": shadow_stp_be33,
         "cross_layer_outcome_reconciliation": cross_layer_block or {
             "read_only": True,
             "status": "NO_AUDIT_YET",

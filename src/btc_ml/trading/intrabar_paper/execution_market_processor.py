@@ -106,9 +106,26 @@ class ExecutionMarketProcessor:
         max_agg_trade_age_ms: float,
         symbol: str = "BTCUSDT",
         fetch_agg_trades: FetchAggTradesFn | None = None,
+        enable_segmented_wal: bool = False,
+        wal_segment_max_bytes: int = 64 * 1024 * 1024,
+        wal_archive_batch_rows: int = 65_536,
+        wal_delete_verified_plaintext: bool = False,
+        wal_plaintext_retention_hours: float = 0.0,
+        wal_warning_size_bytes: int = 10 * 1024**3,
+        wal_critical_size_bytes: int = 20 * 1024**3,
     ) -> "ExecutionMarketProcessor":
         wal_root = epoch_root / "execution_market_wal"
-        wal = ExecutionMarketWAL(wal_root, paper_epoch_id=paper_epoch_id)
+        wal = ExecutionMarketWAL(
+            wal_root,
+            paper_epoch_id=paper_epoch_id,
+            enable_segmented_storage=enable_segmented_wal,
+            segment_max_bytes=wal_segment_max_bytes,
+            archive_batch_rows=wal_archive_batch_rows,
+            delete_verified_plaintext=wal_delete_verified_plaintext,
+            plaintext_retention_hours=wal_plaintext_retention_hours,
+            warning_size_bytes=wal_warning_size_bytes,
+            critical_size_bytes=wal_critical_size_bytes,
+        )
         ck_path = epoch_root / "execution_market_checkpoint.json"
         checkpoint = ExecutionMarketCheckpoint.load(ck_path, paper_epoch_id=paper_epoch_id)
         state = ExecutionMarketStateMachine(
@@ -125,6 +142,7 @@ class ExecutionMarketProcessor:
             fetch_agg_trades=fetch_agg_trades or default_fetch_agg_trades,
         )
         proc.replay_from_checkpoint()
+        wal.start_background_compaction()
         if wal.last_confirmed_agg_trade_id is not None:
             state.last_confirmed_agg_trade_id = wal.last_confirmed_agg_trade_id
         return proc
@@ -427,8 +445,18 @@ class ExecutionMarketProcessor:
             "market_connection_session_id": self.market_connection_session_id,
             "wal": {
                 "root": str(self.wal.root),
+                "storage_mode": self.wal.storage_mode,
                 "last_offset": self.wal.last_offset,
                 "last_confirmed_agg_trade_id": self.wal.last_confirmed_agg_trade_id,
+                "active_segment_start_offset": self.wal.active_start_offset,
+                "closed_segment_count": self.wal.closed_segment_count,
+                "archive_count": self.wal.archive_count,
+                "archive_error": self.wal.archive_error,
+                "retention_error": self.wal.retention_error,
+                "wal_size_bytes": self.wal.wal_size_bytes,
+                "wal_segments_count": self.wal.wal_segments_count,
+                "wal_oldest_event_timestamp": self.wal.wal_oldest_event_timestamp,
+                "wal_retention_status": self.wal.wal_retention_status,
             },
             "checkpoint": self.checkpoint.to_dict(),
             "state": self.state.snapshot(),

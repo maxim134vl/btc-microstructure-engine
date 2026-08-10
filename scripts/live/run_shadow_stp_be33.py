@@ -38,7 +38,8 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
 
     engine = StpBe33Engine(repo=REPO)
-    print(json.dumps({"status": "STP_BE33_STARTED", "pid": os.getpid(), "health": engine.write_health()}), flush=True)
+    initial = engine.poll_once()
+    print(json.dumps({"status": "STP_BE33_STARTED", "pid": os.getpid(), "health": initial["health"]}), flush=True)
     while not STOP:
         try:
             active_epoch = _active_epoch_id()

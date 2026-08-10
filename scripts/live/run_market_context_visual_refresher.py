@@ -65,8 +65,8 @@ FINAL_CONTEXT = ROOT / "data" / "cognition" / "final_market_context_memory.parqu
 LIFECYCLE_MEMORY = ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
 LIFECYCLE_EPISODES = ROOT / "data" / "cognition" / "market_context_lifecycle_episodes.parquet"
 
-PID_PATH = ROOT / "runtime_context_visual_refresher.pid"
-LOCK_PATH = ROOT / "runtime_context_visual_refresher.lock"
+PID_PATH = Path(os.environ.get("CONTEXT_REFRESHER_PID_PATH", ROOT / "runtime_context_visual_refresher.pid"))
+LOCK_PATH = Path(os.environ.get("CONTEXT_REFRESHER_LOCK_PATH", ROOT / "runtime_context_visual_refresher.lock"))
 LOG_PATH = ROOT / "logs" / "context_visual_refresher.log"
 
 CONTEXT_VISUAL_OUT = PUBLIC_DATA / "context_visual.json"

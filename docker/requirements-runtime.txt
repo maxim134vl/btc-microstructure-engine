@@ -1,0 +1,16 @@
+aiohttp>=3.10,<4
+ccxt>=4,<5
+fastapi>=0.115,<1
+joblib>=1.4,<2
+matplotlib>=3.9,<4
+numpy>=1.26,<3
+openpyxl>=3.1,<4
+pandas>=2.2,<4
+psutil>=6,<8
+pyarrow>=17,<25
+python-dotenv>=1,<2
+PyYAML>=6,<7
+requests>=2.32,<3
+uvicorn[standard]>=0.32,<1
+websocket-client>=1.7,<2
+websockets>=13,<17

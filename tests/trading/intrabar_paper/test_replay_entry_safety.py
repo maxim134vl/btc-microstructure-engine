@@ -184,6 +184,38 @@ def test_a_m15_8_bridge_classifies_recovery_via_prior_poll_watermark():
     assert emitted["decision_available_at"] == "2026-08-05T18:01:52.335375Z"
 
 
+@pytest.mark.parametrize("current", ["LONG_CONTEXT", "SHORT_CONTEXT"])
+def test_decision_published_between_bridge_polls_stays_live(current: str):
+    """A just-published decision must not become replay solely due to poll timing."""
+    journal = FakeJournal()
+    row = _bridge_row(
+        candle="2026-08-05T18:00:00Z",
+        written="2026-08-05T18:14:59.250000Z",
+        episode=f"poll-race-{current}",
+        decision_id=f"poll-race-{current}",
+        current=current,
+    )
+    result = materialize_closed_bar_events(
+        [row],
+        journal=journal,
+        provider_id="TEST",
+        epoch_id="TEST_EPOCH",
+        current_bbo={
+            "best_bid": 64796.0,
+            "best_ask": 64796.01,
+            "book_update_id": "test",
+            "bbo_receive_monotonic_ns": 9_000_000_000,
+            "bbo_receive_timestamp": "2026-08-05T18:15:01Z",
+        },
+        bridge_activated_at="2026-08-05T01:00:00Z",
+        previous_bridge_invocation_at="2026-08-05T18:15:00Z",
+        active_positions_by_timeframe=set(),
+        traded_episodes=set(),
+    )
+    assert result.emitted_count == 1
+    assert result.emitted[0]["delivery_mode"] == DELIVERY_MODE_LIVE
+
+
 def test_a_m15_8_replay_context_start_blocked_despite_fresh_age(cfg):
     """Test A (consumer) — recovery START inside stale window must not open."""
     c, _ = cfg

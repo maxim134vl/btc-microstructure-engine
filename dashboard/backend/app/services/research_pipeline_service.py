@@ -2039,11 +2039,7 @@ def load_model_assurance_payload() -> dict[str, Any]:
                 actual_alive = False
                 command = ""
 
-        current_status = (
-            "RUNNING_UNEXPECTED_BEFORE_400_TRADES"
-            if actual_alive
-            else "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES"
-        )
+        current_status = "RUNNING" if actual_alive else "STOPPED"
 
         legacy_section = safe.get(name)
         legacy_section = (
@@ -2076,12 +2072,11 @@ def load_model_assurance_payload() -> dict[str, Any]:
         service_health[name] = current_status
 
         if name != "summary":
-            # CURRENT service cards are rebuilt from operational truth only.
-            # Never merge legacy MODEL-9 fields (ALIVE_FRESH, source_path,
-            # old summary, updated_at, old PAPER epoch) into CURRENT.
             safe[name] = {
-                "status": current_status,
+                **legacy_section,
+                "status": legacy_section.get("status") or "MISSING_SOURCE",
                 "operational_status": current_status,
+                "evidence_status": legacy_section.get("status"),
                 "pid": pid,
                 "alive": actual_alive,
                 "runtime_impact": (
@@ -2091,9 +2086,17 @@ def load_model_assurance_payload() -> dict[str, Any]:
                 ),
             }
 
-    unexpected_running = [
-        name for name, truth in process_truth.items() if truth.get("alive") is True
-    ]
+    evidence_services = {
+        "behavioral_validation",
+        "drift_monitoring",
+        "economic_validation",
+        "current_toxicity",
+        "external_data",
+        "incident_correlation",
+    }
+    running_evidence = sorted(
+        name for name in evidence_services if process_truth[name].get("alive") is True
+    )
 
     now = _dt.now(_tz.utc).isoformat()
 
@@ -2151,22 +2154,21 @@ def load_model_assurance_payload() -> dict[str, Any]:
     if not binding_ok:
         safe["overall_assurance_status"] = "CURRENT_CRITICAL_REGISTRY_BINDING_MISMATCH"
         safe["overall_cause"] = safe["active_runtime_binding_status"]
-    elif unexpected_running:
-        safe["overall_assurance_status"] = "CURRENT_WARNING_MODEL_ASSURANCE_RUNNING_BEFORE_400_TRADES"
-        safe["overall_cause"] = "UNEXPECTED_MODEL_ASSURANCE_PROCESS_RUNNING"
+    elif running_evidence:
+        safe["overall_assurance_status"] = safe.get("overall_assurance_status") or "COLLECTING_EVIDENCE"
+        safe["overall_cause"] = "EVIDENCE_COLLECTION_ACTIVE"
     else:
-        safe["overall_assurance_status"] = "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES"
-        safe["overall_cause"] = "MODEL_ASSURANCE_SERVICES_STOPPED_BY_POLICY_UNTIL_400_CLOSED_TRADES"
+        safe["overall_assurance_status"] = "DEGRADED_EVIDENCE_SERVICES_STOPPED"
+        safe["overall_cause"] = "MODEL_ASSURANCE_EVIDENCE_SERVICES_NOT_RUNNING"
 
     safe["service_health"] = service_health
     safe["service_process_truth"] = process_truth
     safe["historical_service_snapshots"] = historical_service_snapshots
     safe["model_assurance_operational_status"] = (
-        "STOPPED_NOT_REQUIRED_BEFORE_400_TRADES"
-        if not unexpected_running
-        else "RUNNING_UNEXPECTED_BEFORE_400_TRADES"
+        "COLLECTING_EVIDENCE" if running_evidence else "DEGRADED_EVIDENCE_SERVICES_STOPPED"
     )
     safe["required_closed_trade_threshold"] = 400
+    safe["closed_trade_threshold_scope"] = "STATISTICAL_SUFFICIENCY_AND_PROMOTION_ONLY"
 
     # Old MODEL-9 current-state arrays belong to the historical snapshot.
     safe["historical_environment_blockers"] = list(safe.get("environment_blockers") or [])
@@ -2185,7 +2187,7 @@ def load_model_assurance_payload() -> dict[str, Any]:
     safe["stale_sources"] = stale_sources
 
     info = list(safe.get("informational_conditions") or [])
-    marker = "MODEL_ASSURANCE_NOT_REQUIRED_BEFORE_400_CLOSED_TRADES"
+    marker = "PROMOTION_NOT_ELIGIBLE_BEFORE_400_CLOSED_TRADES"
     if marker not in info:
         info.append(marker)
     safe["informational_conditions"] = info

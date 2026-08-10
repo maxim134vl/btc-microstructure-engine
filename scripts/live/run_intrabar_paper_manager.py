@@ -21,6 +21,7 @@ from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
 from btc_ml.trading.intrabar_paper.epoch import load_active_epoch
 from btc_ml.trading.intrabar_paper.execution_market_processor import ExecutionMarketProcessor
+from btc_ml.trading.intrabar_paper.execution_market_wal_config import load_execution_market_wal_config
 
 STOP = False
 
@@ -167,12 +168,18 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--poll-ms", type=int, default=250)
     ap.add_argument("--health-every-s", type=float, default=2.0)
+    ap.add_argument(
+        "--wal-storage-config",
+        type=Path,
+        default=REPO / "config" / "execution_market_wal_storage.json",
+    )
     args = ap.parse_args()
 
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
 
     cfg = load_intrabar_paper_config(repo_root=REPO)
+    wal_cfg = load_execution_market_wal_config(args.wal_storage_config)
     epoch = load_active_epoch(cfg.epochs_root)
     if epoch is None or epoch.epoch_status != "ACTIVE":
         print(json.dumps({"error": "no_active_epoch", "epoch": None if epoch is None else epoch.to_dict()}))
@@ -189,6 +196,13 @@ def main() -> int:
         paper_epoch_id=epoch.paper_epoch_id,
         max_bbo_age_ms=cfg.max_bbo_age_ms,
         max_agg_trade_age_ms=cfg.max_agg_trade_age_ms,
+        enable_segmented_wal=wal_cfg.segmented_enabled,
+        wal_segment_max_bytes=wal_cfg.segment_max_bytes,
+        wal_archive_batch_rows=wal_cfg.archive_batch_rows,
+        wal_delete_verified_plaintext=wal_cfg.delete_verified_plaintext,
+        wal_plaintext_retention_hours=wal_cfg.plaintext_retention_hours,
+        wal_warning_size_bytes=wal_cfg.warning_size_bytes,
+        wal_critical_size_bytes=wal_cfg.critical_size_bytes,
     )
     engine.attach_execution_market(processor)
     _start_execution_market_feeds(processor)
@@ -209,6 +223,7 @@ def main() -> int:
                 "max_bbo_age_ms": cfg.max_bbo_age_ms,
                 "max_agg_trade_age_ms": cfg.max_agg_trade_age_ms,
                 "execution_market_wal": str(epoch_root / "execution_market_wal"),
+                "execution_market_wal_storage_mode": wal_cfg.mode,
                 "futures_public_ws_url": FUTURES_PUBLIC_WS_URL.format(symbol="btcusdt"),
                 "futures_market_ws_url": FUTURES_MARKET_WS_URL.format(symbol="btcusdt"),
                 "pid": __import__("os").getpid(),

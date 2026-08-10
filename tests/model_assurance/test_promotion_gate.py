@@ -38,6 +38,7 @@ CANDIDATE = {
 GOV_CFG = {
     "promotion_execution_enabled": False,
     "required_manual_approvals": 1,
+    "minimum_closed_trades": 400,
     "shadow": {
         "minimum_predictions": 1000,
         "minimum_comparisons": 1000,
@@ -83,7 +84,11 @@ def _healthy_snaps(**overrides) -> dict:
         "toxicity_current": {"status": "CURRENT_HEALTHY", "context_confirmed_events": 0, "trade_confirmed_events": 0},
         "incidents": {"status": "NO_OPEN_INCIDENTS", "open_incidents": 0, "critical_incidents": 0},
         "behavioral": {"status": "NO_ELIGIBLE_CONTEXTS_YET"},
-        "economic": {"status": "NO_ELIGIBLE_TRADES_YET", "pnl_reconciliation_mismatches": 0},
+        "economic": {
+            "status": "CURRENT",
+            "closed_trades": 400,
+            "pnl_reconciliation_mismatches": 0,
+        },
     }
     for k, v in overrides.items():
         if isinstance(v, dict) and isinstance(base.get(k), dict):
@@ -309,3 +314,28 @@ def test_5_evidence_change_makes_approval_stale_no_duplicate_eval(
     assert eval_count_3 == eval_count_1 + 1
     mon.run_once(repo_root=tmp_path)
     assert len(read_jsonl(p["evaluations"])) == eval_count_3
+
+
+@pytest.mark.parametrize("closed_trades", [0, 19, 399])
+def test_pre_400_closed_trades_block_promotion_only(tmp_path: Path, closed_trades: int):
+    snaps = _healthy_snaps(
+        behavioral={"status": "COLLECTING_OUTCOMES"},
+        economic={"status": "COLLECTING_TRADES", "closed_trades": closed_trades},
+        drift={
+            "input_drift_status": "COLLECTING_BASELINE",
+            "feature_drift_status": "COLLECTING_BASELINE",
+            "context_drift_status": "COLLECTING_BASELINE",
+            "performance_drift_status": "COLLECTING_BASELINE",
+        },
+    )
+    evidence = ev.build_promotion_evidence_snapshot(
+        repo_root=tmp_path, active=ACTIVE, candidate=CANDIDATE, snapshots=snaps
+    )
+    eligibility = gate.evaluate_promotion_eligibility(evidence=evidence, config=GOV_CFG)
+
+    assert evidence["behavioral_validation_status"] == "COLLECTING_OUTCOMES"
+    assert evidence["economic_validation_status"] == "COLLECTING_TRADES"
+    assert evidence["closed_trades"] == closed_trades
+    assert eligibility["gate_status"] == "BLOCKED"
+    assert "CLOSED_TRADES_INSUFFICIENT" in eligibility["blockers"]
+    assert eligibility["promotion_execution_enabled"] is False

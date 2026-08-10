@@ -139,9 +139,9 @@ def inspect_processes() -> dict[str, Any]:
     except Exception:
         lines = []
     specs = {
-        "live_feed": ("live_binance_intrabar_feed.py",),
+        "live_feed": ("live_binance_feed_v2.py",),
         "canonical_pipeline": ("run.py",),
-        "context_refresher": ("run_context_refresh_daemon.py",),
+        "context_refresher": ("run_context_refresh_daemon.py",),  # optional legacy observer
         "paper_controller": ("bounded_paper_trading_controller_auto_ledger",),
         "ops_backend": ("run_api.py",),
         "dashboard_refresher": ("run_market_context_visual_refresher.py",),

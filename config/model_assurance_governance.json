@@ -2,6 +2,7 @@
   "schema_version": "model_assurance_governance_v1",
   "promotion_execution_enabled": false,
   "required_manual_approvals": 1,
+  "minimum_closed_trades": 400,
   "shadow": {
     "minimum_predictions": 1000,
     "minimum_comparisons": 1000,
