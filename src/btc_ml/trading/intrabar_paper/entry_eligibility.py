@@ -31,12 +31,9 @@ def _to_utc_ts(value: Any) -> pd.Timestamp | None:
 
 def decision_timestamp(event: dict[str, Any]) -> pd.Timestamp | None:
     """Causal availability timestamp for entry-age checks."""
-    if is_restart_backfill_event(event):
-        return _to_utc_ts(event.get("decision_available_at"))
-    decision_ts = _to_utc_ts(event.get("decision_available_at"))
-    if decision_ts is not None:
-        return decision_ts
-    return _to_utc_ts(event.get("event_timestamp")) or _to_utc_ts(event.get("timestamp"))
+    from btc_ml.live.intrabar.context_event_freshness import causal_decision_timestamp
+
+    return causal_decision_timestamp(event)
 
 
 def entry_signal_age_seconds(
@@ -93,17 +90,16 @@ def is_stale_entry_signal(
     consumption_time: datetime | None = None,
 ) -> bool:
     """True when an entry leg must be blocked due to signal age."""
+    from btc_ml.live.intrabar.context_event_freshness import is_entry_execution_eligible
+
     etype = str(event.get("event_type") or event.get("type") or "").upper()
     if etype not in ENTRY_EVENT_TYPES:
         return False
-    age = entry_signal_age_seconds(event, consumption_time=consumption_time)
-    if age is None:
-        return True
-    if age > float(max_age_seconds):
-        return True
-    if is_restart_backfill_event(event) and age > 0:
-        return True
-    return False
+    return not is_entry_execution_eligible(
+        event,
+        max_age_seconds=max_age_seconds,
+        consumption_time=consumption_time,
+    )
 
 
 def stale_entry_block_reason(
@@ -112,6 +108,15 @@ def stale_entry_block_reason(
     max_age_seconds: float,
     consumption_time: datetime | None = None,
 ) -> str | None:
+    from btc_ml.live.intrabar.context_event_freshness import entry_freshness_block_reason
+
+    freshness_reason = entry_freshness_block_reason(
+        event,
+        max_age_seconds=max_age_seconds,
+        consumption_time=consumption_time,
+    )
+    if freshness_reason:
+        return freshness_reason
     if not is_stale_entry_signal(
         event,
         max_age_seconds=max_age_seconds,

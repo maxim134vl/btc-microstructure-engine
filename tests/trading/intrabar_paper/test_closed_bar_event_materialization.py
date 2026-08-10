@@ -207,7 +207,8 @@ def test_live1b_uses_causal_bbo_not_source_bar_close(tmp_path: Path):
 
     fresh_decision = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
     fresh_bbo = (datetime.now(timezone.utc) - timedelta(seconds=25)).isoformat().replace("+00:00", "Z")
-    row = _row(current="LONG_CONTEXT", decision_at=fresh_decision)
+    fresh_bar = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    row = _row(current="LONG_CONTEXT", decision_at=fresh_decision, source_bar=fresh_bar, origin=fresh_bar)
     _, result = _materialize(tmp_path, [row], current_bbo=_bbo(ts=fresh_bbo, mono=2_000_000))
     ev = result.emitted[0]
     assert ev["source_bar_close"] == 90.0

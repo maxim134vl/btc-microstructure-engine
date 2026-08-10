@@ -18,6 +18,7 @@
     "max_bbo_age_ms": 2000.0,
     "max_agg_trade_age_ms": 5000.0,
     "max_entry_signal_age_seconds": 900.0,
+    "context_event_max_age_seconds": 300.0,
   "max_open_positions_per_timeframe": 1,
   "timeframes": ["M15", "M30", "H1", "H4"],
   "context_journal_root": "data/cognition/intrabar_context_events",

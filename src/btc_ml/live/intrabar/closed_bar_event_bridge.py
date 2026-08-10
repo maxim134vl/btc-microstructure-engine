@@ -17,6 +17,11 @@ from typing import Any, Iterable, Mapping
 import pandas as pd
 
 from btc_ml.live.intrabar.context_event_journal import ContextEventJournal
+from btc_ml.live.intrabar.context_event_freshness import (
+    FRESHNESS_FRESH,
+    annotate_event_provenance,
+    resolve_context_event_max_age_seconds,
+)
 
 
 PROVIDER_ID = "LIVE1A_CANONICAL_INTRABAR_CONTEXT"
@@ -35,6 +40,19 @@ SUPPORTED_RECOVERY_TIMEFRAMES = frozenset({"M15", "M30", "H1", "H4"})
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _load_context_event_max_age_seconds(repo_root: Path) -> float:
+    cfg_path = repo_root / "config" / "intrabar_paper_execution.json"
+    configured: float | None = None
+    if cfg_path.exists():
+        try:
+            raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if raw.get("context_event_max_age_seconds") is not None:
+                configured = float(raw["context_event_max_age_seconds"])
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            configured = None
+    return resolve_context_event_max_age_seconds(configured=configured)
 
 
 def _to_ts(value: Any) -> pd.Timestamp | None:
@@ -472,11 +490,17 @@ def materialize_closed_bar_events(
     recovery_watermarks: Mapping[str, PerTfRecoveryWatermark] | None = None,
     active_positions_by_timeframe: set[str] | None = None,
     traded_episodes: set[str] | None = None,
+    context_event_max_age_seconds: float | None = None,
 ) -> MaterializationResult:
     result = MaterializationResult()
     activation_ts = _to_ts(bridge_activated_at)
     if activation_ts is None:
         raise ValueError("bridge_activated_at must be a valid UTC timestamp")
+    max_age_seconds = float(
+        context_event_max_age_seconds
+        if context_event_max_age_seconds is not None
+        else resolve_context_event_max_age_seconds()
+    )
     previous_invocation_ts = _to_ts(previous_bridge_invocation_at)
     open_tfs = {str(x).upper() for x in (active_positions_by_timeframe or set())}
     traded = {str(x) for x in (traded_episodes or set())}
@@ -717,6 +741,27 @@ def materialize_closed_bar_events(
             previous_bridge_invocation_at=previous_invocation_ts,
             bridge_activated_at=activation_ts,
         )
+        provenance = annotate_event_provenance(
+            event,
+            materialization_source="closed_bar_context_decision",
+            max_age_seconds=max_age_seconds,
+            materialized_timestamp=utc_now_iso(),
+        )
+        event.update(provenance)
+        if (
+            str(event_type or "").upper() in ENTRY_EVENT_TYPES
+            and provenance.get("freshness_status") != FRESHNESS_FRESH
+        ):
+            result.skipped.append(
+                {
+                    "reason": "NON_EXECUTABLE_CONTEXT_EVENT",
+                    "freshness_status": provenance.get("freshness_status"),
+                    "event_age_seconds": provenance.get("event_age_seconds"),
+                    "timeframe": tf,
+                    "source_bar_timestamp": _iso(source_bar_ts),
+                    "context_event_id": event.get("context_event_id"),
+                }
+            )
         if is_recovery_delivery:
             result.recovery["transitions_reconstructed"] += 1
             result.recovery["last_recovered_source_decision_id"] = _clean(row.get("decision_id")) or None
@@ -773,6 +818,7 @@ class ClosedBarContextEventBridge:
         self.bridge_activated_at = bridge_activated_at or utc_now_iso()
         self.decision_log_path = decision_log_path or self.repo_root / "data" / "live" / "context_decision_log.parquet"
         self.epoch_path = epoch_path or self.repo_root / "data" / "trading" / "paper_epochs" / "active.json"
+        self.context_event_max_age_seconds = _load_context_event_max_age_seconds(self.repo_root)
         self.last_result = MaterializationResult()
         self.last_run_at: str | None = None
 
@@ -860,6 +906,7 @@ class ClosedBarContextEventBridge:
             recovery_watermarks=recovery_watermarks,
             active_positions_by_timeframe=open_tfs,
             traded_episodes=traded,
+            context_event_max_age_seconds=self.context_event_max_age_seconds,
         )
         self.last_run_at = utc_now_iso()
         return self.last_result

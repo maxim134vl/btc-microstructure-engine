@@ -265,7 +265,7 @@ def test_b_live_context_start_within_stale_window_can_enter(cfg):
     """Test B — live delivery applies normal eligibility."""
     c, _ = cfg
     eng = _engine(c)
-    decision_at = datetime.now(timezone.utc) - timedelta(seconds=791)
+    decision_at = datetime.now(timezone.utc) - timedelta(seconds=120)
     event = _ctx(
         eid="live_start",
         etype="CONTEXT_START",
@@ -384,7 +384,7 @@ def test_f_stale_live_signal_still_blocked_by_age(cfg):
     )
     _append_journal(c, stale)
     acts = eng.poll_context_journal()
-    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_SIGNAL"
+    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_CONTEXT_EVENT"
     assert eng.positions == {}
 
 

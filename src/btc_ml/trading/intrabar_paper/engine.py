@@ -21,6 +21,7 @@ from .consumer import (
 )
 from .economics import closed_trade_economics, resolve_risk_sizing
 from .entry_eligibility import replay_entry_block_reason, stale_entry_block_reason
+from btc_ml.live.intrabar.context_event_freshness import entry_freshness_block_reason
 from .epoch import PaperEpoch
 from .sleeves import SleeveLedger
 
@@ -331,7 +332,7 @@ class IntrabarPaperEngine:
     def poll_context_journal(self) -> list[dict[str, Any]]:
         all_actions: list[dict[str, Any]] = []
         for ev in self.consumer.iter_new_events(
-            max_entry_signal_age_seconds=self.cfg.max_entry_signal_age_seconds,
+            max_entry_signal_age_seconds=self.cfg.context_event_max_age_seconds,
         ):
             actions = self.process_context_event(ev)
             eid = str(ev.get("context_event_id") or ev.get("event_id") or "")
@@ -412,9 +413,33 @@ class IntrabarPaperEngine:
                 event_monotonic_ns=event_monotonic_ns,
             )
             return {"status": replay_reason, "timeframe": tf, "context_event_id": context_event_id}
+        if event.get("execution_eligible") is False:
+            provenance_reason = entry_freshness_block_reason(
+                event,
+                max_age_seconds=self.cfg.context_event_max_age_seconds,
+            ) or "ENTRY_BLOCKED_INVALID_CONTEXT_PROVENANCE"
+            self._block(provenance_reason, tf, context_event_id, side, event=event)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {"status": provenance_reason, "timeframe": tf, "context_event_id": context_event_id}
+        freshness_reason = entry_freshness_block_reason(
+            event,
+            max_age_seconds=self.cfg.context_event_max_age_seconds,
+        )
+        if freshness_reason:
+            self._block(freshness_reason, tf, context_event_id, side, event=event)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {"status": freshness_reason, "timeframe": tf, "context_event_id": context_event_id}
         stale_reason = stale_entry_block_reason(
             event,
-            max_age_seconds=self.cfg.max_entry_signal_age_seconds,
+            max_age_seconds=self.cfg.context_event_max_age_seconds,
         )
         if stale_reason:
             self._block(stale_reason, tf, context_event_id, side, event=event)

@@ -139,7 +139,7 @@ def test_pre_activation_stale_context_start_yielded_blocked_checkpointed(cfg):
     assert yielded[0]["_materialized_before_manager_activation"] is True
     assert yielded[0]["_monotonic_before_manager_activation"] is True
     acts = eng.poll_context_journal()
-    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_SIGNAL"
+    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_CONTEXT_EVENT"
     assert eng.positions == {}
     assert eng.consumer.checkpoint.last_event_monotonic_ns == 2_000_000
 
@@ -203,7 +203,7 @@ def test_pre_activation_stale_context_flip_exits_but_blocks_reverse_entry(cfg):
     )
     _append_journal(c, stale_flip, ingested_at=_stale_ts(hours_ago=7))
     acts = eng.poll_context_journal()
-    assert [a["status"] for a in acts] == ["EXITED", "ENTRY_BLOCKED_STALE_SIGNAL"]
+    assert [a["status"] for a in acts] == ["EXITED", "ENTRY_BLOCKED_STALE_CONTEXT_EVENT"]
     assert "M15" not in eng.positions
     ck = eng.consumer.checkpoint
     assert ck.last_consumed_context_event_id == "pre_act_flip"
@@ -318,7 +318,7 @@ def test_stale_signal_age_blocks_without_restart_flag(cfg):
     )
     _append_journal(c, stale)
     acts = eng.poll_context_journal()
-    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_SIGNAL"
+    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_CONTEXT_EVENT"
     assert eng.positions == {}
 
 
@@ -391,7 +391,7 @@ def test_entry_eligibility_uses_decision_available_at_not_ingested_at():
     }
     assert decision_timestamp(event) == pd.Timestamp("2026-08-03T06:00:00Z", tz="UTC")
     assert is_stale_entry_signal(event, max_age_seconds=900.0, consumption_time=now)
-    assert stale_entry_block_reason(event, max_age_seconds=900.0, consumption_time=now) == "ENTRY_BLOCKED_STALE_SIGNAL"
+    assert stale_entry_block_reason(event, max_age_seconds=900.0, consumption_time=now) == "ENTRY_BLOCKED_STALE_CONTEXT_EVENT"
 
 
 def test_restart_backfill_ignores_execution_not_before_for_age():

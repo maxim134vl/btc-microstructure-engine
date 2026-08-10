@@ -162,7 +162,7 @@ def test_pre_activation_stale_start_is_yielded_blocked_and_checkpointed(cfg):
     )
     acts = eng.poll_context_journal()
     assert len(acts) == 1
-    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_SIGNAL"
+    assert acts[0]["status"] == "ENTRY_BLOCKED_STALE_CONTEXT_EVENT"
     assert eng.positions == {}
     assert eng.consumer.checkpoint.last_event_monotonic_ns == 2_000_000
 

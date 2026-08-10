@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from btc_ml.live.intrabar.context_event_freshness import resolve_context_event_max_age_seconds
+
 
 @dataclass(frozen=True)
 class IntrabarPaperConfig:
@@ -29,6 +31,7 @@ class IntrabarPaperConfig:
     max_bbo_age_ms: float
     max_agg_trade_age_ms: float
     max_entry_signal_age_seconds: float
+    context_event_max_age_seconds: float
     max_open_positions_per_timeframe: int
     timeframes: tuple[str, ...]
     context_journal_root: Path
@@ -87,6 +90,9 @@ def load_intrabar_paper_config(
         max_bbo_age_ms=float(raw["max_bbo_age_ms"]),
         max_agg_trade_age_ms=float(raw.get("max_agg_trade_age_ms", raw["max_bbo_age_ms"] * 2.5)),
         max_entry_signal_age_seconds=float(raw["max_entry_signal_age_seconds"]),
+        context_event_max_age_seconds=resolve_context_event_max_age_seconds(
+            configured=raw.get("context_event_max_age_seconds"),
+        ),
         max_open_positions_per_timeframe=int(raw["max_open_positions_per_timeframe"]),
         timeframes=tuple(str(x) for x in raw["timeframes"]),
         context_journal_root=(root / str(raw["context_journal_root"])).resolve(),
