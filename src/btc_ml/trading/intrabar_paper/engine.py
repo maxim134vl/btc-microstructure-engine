@@ -611,6 +611,7 @@ class IntrabarPaperEngine:
                 "risk_amount_usd": sizing.risk_amount_usd,
                 "lifecycle_episode_id": episode_id,
                 "entry_context_event_id": context_event_id,
+                "context_event_age_seconds": event.get("event_age_seconds"),
                 "entry_fill_id": fill_id,
                 "entry_command_id": cmd_id,
                 "entry_monotonic_ns": cmd_mono,
