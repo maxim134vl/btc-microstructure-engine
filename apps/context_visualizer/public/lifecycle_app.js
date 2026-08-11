@@ -601,6 +601,68 @@ function drawContextOverlays(chart, tfBlock, g) {
   // Trade OPEN/CLOSE events are rendered by the separate paper-trade overlay.
 }
 
+
+function drawVolumeBars(chart, tfBlock, g) {
+  const ctx = chart.ctx;
+  const rows = chart.visible;
+  if (!ctx || !rows.length) return;
+
+  const volumes = rows.map((c) => {
+    const n = Number(c.volume);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  });
+  const maxVolume = Math.max(...volumes, 0);
+  if (!(maxVolume > 0)) return;
+
+  // Compact volume histogram inside the bottom of the existing plot.
+  // It does not participate in the price scale.
+  const volumeH = Math.max(28, g.plotH * 0.18);
+  const baseline = g.pad.top + g.plotH;
+  const barSlot = g.plotW / rows.length;
+  const barW = Math.max(1, barSlot * 0.64);
+
+  ctx.save();
+
+  rows.forEach((c, i) => {
+    const volume = volumes[i];
+    if (!(volume > 0)) return;
+
+    const height = Math.max(1, (volume / maxVolume) * volumeH);
+    const x = g.xAt(i);
+    const y = baseline - height;
+    const event = String(c.volume_event || "").toUpperCase();
+
+    // Ordinary volume remains deliberately subdued.
+    let fill = "rgba(96, 118, 145, 0.25)";
+
+    // Existing model semantics — no new classification.
+    if (event === "STOPPING_VOLUME") {
+      fill = "rgba(45, 145, 255, 0.95)";
+    } else if (event === "BUYING_CLIMAX") {
+      fill = "rgba(45, 205, 110, 0.98)";
+    } else if (event === "SELLING_CLIMAX") {
+      fill = "rgba(235, 70, 80, 0.98)";
+    }
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(x - barW / 2, y, barW, height);
+
+    // Small cap makes special volume events immediately readable,
+    // without adding text over the price chart.
+    if (
+      event === "STOPPING_VOLUME" ||
+      event === "BUYING_CLIMAX" ||
+      event === "SELLING_CLIMAX"
+    ) {
+      ctx.globalAlpha = 0.95;
+      ctx.fillRect(x - barW / 2, y, barW, 2);
+      ctx.globalAlpha = 1;
+    }
+  });
+
+  ctx.restore();
+}
+
 function drawCandles(chart, tfBlock) {
   const ctx = chart.ctx;
   const colors = chartColors();
@@ -613,6 +675,7 @@ function drawCandles(chart, tfBlock) {
   if (!rows.length) return;
   const g = geometry(chart, collectVisiblePriceExtras(chart, tfBlock));
   drawContextBands(chart, tfBlock, g);
+  drawVolumeBars(chart, tfBlock, g);
   ctx.strokeStyle = colors.grid;
   ctx.lineWidth = 1;
   for (let i = 0; i < 4; i += 1) {
@@ -856,20 +919,6 @@ function drawOverlays(chart, tfBlock, g) {
       ctx.lineTo(x2, yExit);
       ctx.stroke();
       ctx.restore();
-    }
-
-    ctx.strokeStyle = colors.tradeEntry;
-    ctx.lineWidth = isSel ? 2.25 : 1.5;
-    ctx.beginPath();
-    ctx.moveTo(x1, yEntry);
-    ctx.lineTo(x2, yEntry);
-    ctx.stroke();
-    ctx.lineWidth = 1;
-    if (isSel || !selected) {
-      ctx.fillStyle = colors.tradeEntry;
-      ctx.font = `9px ${colors.mono}`;
-      ctx.textAlign = "left";
-      ctx.fillText("Вход", x2 + 3, yEntry + 3);
     }
 
     // Compact entry marker only (no text on marker)

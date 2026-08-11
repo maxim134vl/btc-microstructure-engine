@@ -142,21 +142,160 @@ def load_candles(feed_path: Path) -> pd.DataFrame:
 
 
 def load_volume_events() -> pd.DataFrame | None:
-    """Load per-bar volume classification (bar_event) verbatim from auction memory.
+    """Build real per-M15 special-volume events for display only.
 
-    Display-only. Does not alter any parquet or volume classification logic — it only
-    surfaces the existing ``bar_event`` column so the viewer can highlight climax bars.
-    Returns None when the source or column is unavailable (viewer degrades gracefully).
+    A bar is eligible only when volume_response itself marks that M15 bar
+    as climax/stopping. Cognition may provide BUYING/SELLING/STOPPING
+    direction only inside the same containing M15 bar.
+
+    Nothing is carried forward from neighbouring bars.
     """
-    if not AUCTION_MEMORY_PATH.exists():
+    import importlib.util
+
+    repo_root = Path(__file__).resolve().parents[2]
+    builder_path = repo_root / "scripts/research/build_auction_episode_memory.py"
+
+    spec = importlib.util.spec_from_file_location(
+        "_visual_auction_builder",
+        builder_path,
+    )
+    if spec is None or spec.loader is None:
         return None
-    frame = pd.read_parquet(AUCTION_MEMORY_PATH)
-    if "timestamp" not in frame.columns or "bar_event" not in frame.columns:
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    vol_paths = module.INPUT_SPECS.get("volume_response")
+    cog_paths = module.INPUT_SPECS.get("cognition")
+    if not vol_paths:
         return None
-    work = frame[["timestamp", "bar_event"]].copy()
-    work["timestamp"] = _to_utc_ts(work["timestamp"])
-    work = work.dropna(subset=["timestamp"]).drop_duplicates(subset=["timestamp"], keep="last")
-    return work.sort_values("timestamp")
+
+    vol = module._normalize_timestamp_column(
+        module._read_parquet_optional(vol_paths)
+    )
+    cog = module._normalize_timestamp_column(
+        module._read_parquet_optional(cog_paths)
+    ) if cog_paths else pd.DataFrame()
+
+    if vol is None or len(vol) == 0 or "timestamp" not in vol.columns:
+        return None
+
+    # --------------------------------------------------------
+    # Real special-volume bars from volume_response.
+    # --------------------------------------------------------
+    work = vol.copy()
+    work["source_ts"] = _to_utc_ts(work["timestamp"])
+    work = work.dropna(subset=["source_ts"])
+    work["timestamp"] = work["source_ts"].dt.floor("15min")
+
+    vclass = (
+        work["volume_class"].fillna("UNKNOWN").astype(str).str.strip().str.lower()
+        if "volume_class" in work.columns
+        else pd.Series("unknown", index=work.index)
+    )
+    climax = (
+        work["climax_state"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
+        if "climax_state" in work.columns
+        else pd.Series("UNKNOWN", index=work.index)
+    )
+    vevent = (
+        work["volume_event"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
+        if "volume_event" in work.columns
+        else pd.Series("UNKNOWN", index=work.index)
+    )
+
+    work["volume_special_kind"] = pd.NA
+
+    stopping_mask = (
+        vclass.eq("stopping")
+        | vevent.eq("STOPPING_VOLUME")
+    )
+    climax_mask = (
+        vclass.eq("climax")
+        | climax.eq("CLIMAX_EXHAUSTION")
+    )
+
+    work.loc[climax_mask, "volume_special_kind"] = "CLIMAX"
+    work.loc[stopping_mask, "volume_special_kind"] = "STOPPING_VOLUME"
+
+    work = work[work["volume_special_kind"].notna()].copy()
+    if len(work) == 0:
+        return None
+
+    # One actual volume observation per containing M15 bar.
+    work = (
+        work.sort_values("source_ts")
+        .drop_duplicates(subset=["timestamp"], keep="last")
+    )
+
+    # --------------------------------------------------------
+    # Directional event from cognition, same M15 bar only.
+    # --------------------------------------------------------
+    cog_by_bar = None
+
+    if cog is not None and len(cog) and "timestamp" in cog.columns and "trigger_event" in cog.columns:
+        c = cog[["timestamp", "trigger_event"]].copy()
+        c["source_ts"] = _to_utc_ts(c["timestamp"])
+        c = c.dropna(subset=["source_ts"])
+        c["timestamp"] = c["source_ts"].dt.floor("15min")
+        c["trigger_event"] = (
+            c["trigger_event"]
+            .fillna("UNKNOWN")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+        c = c[
+            c["trigger_event"].isin({
+                "BUYING_CLIMAX",
+                "SELLING_CLIMAX",
+                "STOPPING_VOLUME",
+            })
+        ]
+
+        cog_by_bar = (
+            c.sort_values("source_ts")
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            [["timestamp", "trigger_event"]]
+        )
+
+    if cog_by_bar is not None and len(cog_by_bar):
+        work = work.merge(cog_by_bar, on="timestamp", how="left")
+    else:
+        work["trigger_event"] = pd.NA
+
+    # Directional cognition wins only because the volume bar itself
+    # has already been independently proven special.
+    work["bar_event"] = work["trigger_event"]
+
+    # A genuine stopping-class volume bar does not require cognition
+    # to repeat the label.
+    missing = ~work["bar_event"].isin({
+        "BUYING_CLIMAX",
+        "SELLING_CLIMAX",
+        "STOPPING_VOLUME",
+    })
+    stopping = work["volume_special_kind"].eq("STOPPING_VOLUME")
+    work.loc[missing & stopping, "bar_event"] = "STOPPING_VOLUME"
+
+    # A climax without a proven BUYING/SELLING direction is not painted.
+    work = work[
+        work["bar_event"].isin({
+            "BUYING_CLIMAX",
+            "SELLING_CLIMAX",
+            "STOPPING_VOLUME",
+        })
+    ]
+
+    if len(work) == 0:
+        return None
+
+    return (
+        work[["timestamp", "bar_event"]]
+        .drop_duplicates(subset=["timestamp"], keep="last")
+        .sort_values("timestamp")
+    )
 
 
 def build_candle_rows(

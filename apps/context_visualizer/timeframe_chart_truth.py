@@ -204,6 +204,83 @@ def bars_to_candles(bars: pd.DataFrame, timeframe: str) -> list[dict[str, Any]]:
     return rows
 
 
+
+def _load_visual_volume_events(timeframe: str) -> dict[pd.Timestamp, str]:
+    """Load already-classified volume events for chart rendering only.
+
+    Legacy lifecycle_candles rows without an explicit timeframe are treated
+    conservatively as M15 only. They must never be copied onto M30/H1/H4.
+    """
+    import json
+
+    path = PUBLIC_DATA / "lifecycle_candles.json"
+    if not path.exists():
+        return {}
+
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return {}
+
+    rows = payload.get("rows") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return {}
+
+    target_tf = str(timeframe or "").upper()
+    events: dict[pd.Timestamp, str] = {}
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        row_tf = str(row.get("timeframe") or row.get("tf") or "").upper()
+
+        # Explicit TF must match.
+        if row_tf and row_tf != target_tf:
+            continue
+
+        # Legacy rows have no TF. Do not contaminate senior timeframes.
+        if not row_tf and target_tf != "M15":
+            continue
+
+        event = str(row.get("volume_event") or "").strip().upper()
+        if not event:
+            continue
+
+        raw_ts = (
+            row.get("bar_open")
+            or row.get("bar_open_timestamp")
+            or row.get("timestamp")
+        )
+        ts = pd.to_datetime(raw_ts, utc=True, errors="coerce")
+        if pd.isna(ts):
+            continue
+
+        events[ts] = event
+
+    return events
+
+
+def _attach_volume_events(candles: list[dict[str, Any]], timeframe: str) -> None:
+    events = _load_visual_volume_events(timeframe)
+    if not events:
+        return
+
+    for candle in candles:
+        raw_ts = (
+            candle.get("bar_open")
+            or candle.get("bar_open_timestamp")
+            or candle.get("timestamp")
+        )
+        ts = pd.to_datetime(raw_ts, utc=True, errors="coerce")
+        if pd.isna(ts):
+            continue
+
+        event = events.get(ts)
+        if event:
+            candle["volume_event"] = event
+
+
 def build_tf_candles(
     m15: pd.DataFrame,
     timeframe: str,
@@ -249,6 +326,7 @@ def build_tf_candles(
         bars = bars.loc[mask].copy()
 
     candles = bars_to_candles(bars, timeframe)
+    _attach_volume_events(candles, timeframe)
     latest_open = candles[-1]["bar_open"] if candles else None
     latest_close = candles[-1]["bar_close"] if candles else None
     source = "data/live/live_market_feed.parquet"
