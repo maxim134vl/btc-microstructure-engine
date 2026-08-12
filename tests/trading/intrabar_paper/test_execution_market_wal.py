@@ -102,6 +102,9 @@ def _ctx_start(env, engine: IntrabarPaperEngine, mono: int = 2_000_000):
         "event_monotonic_ns": mono,
         "event_timestamp": ts,
         "decision_available_at": ts,
+        "context_event_price": 100.1,
+        "price": 100.1,
+        "context_event_price_source": "test_context_occurrence_price",
         "best_bid": 100.0,
         "best_ask": 100.2,
         "bbo_receive_monotonic_ns": mono - 1000,
@@ -259,6 +262,7 @@ def test_08_open_position_wal_failure_sl_still_executes(env):
     engine.process_context_event(_ctx_start(env, engine, mono=2_000_000))
     proc = _processor(env)
     pos = engine.positions["M15"]
+    assert pos.entry_price == pytest.approx(100.1)
     proc.wal.inject_fail_next_appends(10)
     result = _agg(proc, 200, float(pos.stop_loss_price) - 1.0)
     assert result["status"] == "PROTECTIVE_EXIT_DURABILITY_DEGRADED"
@@ -277,6 +281,7 @@ def test_09_sl_normal_path_records_wal_provenance(env):
     engine.process_context_event(_ctx_start(env, engine, mono=2_000_000))
     proc = _processor(env)
     pos = engine.positions["M15"]
+    assert pos.entry_price == pytest.approx(100.1)
     _book(proc)
     _agg(proc, 300, float(pos.stop_loss_price) - 1.0)
     cmd = engine.last_command
@@ -298,6 +303,7 @@ def test_10_book_ticker_alone_does_not_trigger_sl(env):
     engine.process_context_event(_ctx_start(env, engine, mono=2_000_000))
     proc = _processor(env)
     pos = engine.positions["M15"]
+    assert pos.entry_price == pytest.approx(100.1)
     _book(proc)
     assert "M15" in engine.positions
     event = normalize_futures_book_ticker(
@@ -353,6 +359,7 @@ def test_13_protective_event_price_survives_wal_replay_without_duplicate(env):
     engine.process_context_event(_ctx_start(env, engine, mono=2_000_000))
     proc = _processor(env)
     pos = engine.positions["M15"]
+    assert pos.entry_price == pytest.approx(100.1)
     pos.stop_loss_price = 95.0
     pos.take_profit_price = 110.0
 

@@ -170,6 +170,9 @@ def test_d_market_connected_public_disconnected_protective_still_works(env):
             "event_monotonic_ns": 2_000_000,
             "event_timestamp": ts,
             "decision_available_at": ts,
+            "context_event_price": 100.1,
+            "price": 100.1,
+            "context_event_price_source": "test_context_occurrence_price",
             "best_bid": 100.0,
             "best_ask": 100.2,
             "bbo_receive_monotonic_ns": 1_999_000,
@@ -180,6 +183,7 @@ def test_d_market_connected_public_disconnected_protective_still_works(env):
     proc = _processor(env)
     proc.on_market_websocket_connected()
     pos = engine.positions["M15"]
+    assert pos.entry_price == pytest.approx(100.1)
     actions = proc.handle_market_ws_payload(_market_agg_payload(200, float(pos.stop_loss_price) - 1.0))
     assert actions[0]["status"] == "AGG_TRADE_DISPATCHED"
     assert "M15" not in engine.positions
