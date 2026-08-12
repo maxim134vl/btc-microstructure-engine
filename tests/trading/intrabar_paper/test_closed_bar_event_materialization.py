@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,9 @@ def _materialize(tmp_path: Path, rows: list[dict], **kwargs):
         bridge_activated_at=kwargs.pop("bridge_activated_at", "2026-08-02T12:00:00Z"),
         active_positions_by_timeframe=kwargs.pop("active_positions_by_timeframe", set()),
         traded_episodes=kwargs.pop("traded_episodes", set()),
+        context_event_max_age_seconds=kwargs.pop("context_event_max_age_seconds", 300.0),
+        previous_bridge_invocation_at=kwargs.pop("previous_bridge_invocation_at", None),
+        recovery_watermarks=kwargs.pop("recovery_watermarks", None),
     )
     assert not kwargs
     return journal, result
@@ -317,3 +321,255 @@ def test_revalidation_uses_existing_live1b_entry_contract():
     assert "CONTEXT_REVALIDATED_START" not in ENTRY_EVENTS
     manifest = build_trading_contract_manifest(CANONICAL_SOURCE_EPOCH)
     assert trading_contract_fingerprint(manifest) == EXPECTED_SOURCE_FINGERPRINT
+
+
+def _iso_z(ts: datetime) -> str:
+    return ts.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def test_stale_blocked_live_flip_retries_once_when_unfilled(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    activated = _iso_z(now - timedelta(hours=2))
+    origin = _iso_z(now - timedelta(hours=1, minutes=32))
+    stale_bar = _iso_z(now - timedelta(hours=1, minutes=15))
+    stale_decision = _iso_z(now - timedelta(hours=1))
+    stale_bbo = _iso_z(now - timedelta(hours=1) + timedelta(seconds=2))
+    fresh_bar = _iso_z(now - timedelta(minutes=15))
+    fresh_decision = _iso_z(now - timedelta(seconds=1))
+    fresh_bbo = _iso_z(now)
+    later_bar = _iso_z(now)
+    later_decision = _iso_z(now + timedelta(seconds=2))
+    later_bbo = _iso_z(now + timedelta(seconds=3))
+
+    journal = _journal(tmp_path)
+    first_row = _row(
+        current="LONG_CONTEXT",
+        previous="OBSERVE",
+        source_bar=stale_bar,
+        decision_at=stale_decision,
+        origin=origin,
+        episode="ep_sticky",
+    )
+    _, first = _materialize(
+        tmp_path,
+        [first_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=stale_bbo, mono=2_000_000),
+    )
+    assert first.emitted_count == 1
+    assert first.emitted[0]["freshness_status"] == "STALE_AGE"
+    assert first.emitted[0]["execution_eligible"] is False
+    assert first.emitted[0].get("stale_blocked_entry_retry") in {None, False}
+
+    # Production sticky shape: ACTIVE episode, action_allowed=False, still directional.
+    second_row = _row(
+        current="LONG_CONTEXT",
+        previous="LONG_CONTEXT",
+        source_bar=fresh_bar,
+        decision_at=fresh_decision,
+        origin=origin,
+        episode="ep_sticky",
+        action_allowed=False,
+        intent="NO_TRADE_OBSERVE",
+    )
+    _, second = _materialize(
+        tmp_path,
+        [second_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=fresh_bbo, mono=3_000_000),
+    )
+    assert second.emitted_count == 1
+    retry = second.emitted[0]
+    assert retry["stale_blocked_entry_retry"] is True
+    assert retry["retry_reason"] == "STALE_BLOCKED_LIVE_ENTRY_UNFILLED"
+    assert retry["freshness_status"] == "FRESH"
+    assert retry["execution_eligible"] is True
+    assert retry["lifecycle_episode_id"] == "ep_sticky"
+
+    third_row = _row(
+        current="LONG_CONTEXT",
+        previous="LONG_CONTEXT",
+        source_bar=later_bar,
+        decision_at=later_decision,
+        origin=origin,
+        episode="ep_sticky",
+        action_allowed=False,
+        intent="NO_TRADE_OBSERVE",
+    )
+    _, third = _materialize(
+        tmp_path,
+        [third_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=later_bbo, mono=4_000_000),
+    )
+    assert third.emitted_count == 0
+    assert third.skipped[-1]["reason"] in {"SAME_CONTEXT_CONTINUATION", "ACTION_NOT_ALLOWED"}
+
+
+def test_stale_blocked_retry_not_emitted_for_already_traded_episode(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    activated = _iso_z(now - timedelta(hours=2))
+    origin = _iso_z(now - timedelta(hours=1, minutes=32))
+    stale_bar = _iso_z(now - timedelta(hours=1, minutes=15))
+    stale_decision = _iso_z(now - timedelta(hours=1))
+    stale_bbo = _iso_z(now - timedelta(hours=1) + timedelta(seconds=2))
+    fresh_bar = _iso_z(now - timedelta(minutes=15))
+    fresh_decision = _iso_z(now - timedelta(seconds=1))
+    fresh_bbo = _iso_z(now)
+
+    journal = _journal(tmp_path)
+    first_row = _row(
+        current="LONG_CONTEXT",
+        previous="OBSERVE",
+        source_bar=stale_bar,
+        decision_at=stale_decision,
+        origin=origin,
+        episode="ep_traded",
+    )
+    _, first = _materialize(
+        tmp_path,
+        [first_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=stale_bbo, mono=2_000_000),
+    )
+    assert first.emitted_count == 1
+    assert first.emitted[0]["execution_eligible"] is False
+
+    second_row = _row(
+        current="LONG_CONTEXT",
+        previous="LONG_CONTEXT",
+        source_bar=fresh_bar,
+        decision_at=fresh_decision,
+        origin=origin,
+        episode="ep_traded",
+        action_allowed=False,
+        intent="NO_TRADE_OBSERVE",
+    )
+    _, second = _materialize(
+        tmp_path,
+        [second_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=fresh_bbo, mono=3_000_000),
+        traded_episodes={"ep_traded"},
+    )
+    assert second.emitted_count == 0
+    assert second.skipped[-1]["reason"] in {
+        "SAME_CONTEXT_CONTINUATION",
+        "EPISODE_ALREADY_TRADED",
+        "ACTION_NOT_ALLOWED",
+    }
+    assert not any(bool(ev.get("stale_blocked_entry_retry")) for ev in second.emitted)
+
+
+def test_stale_blocked_retry_not_emitted_with_open_position(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    activated = _iso_z(now - timedelta(hours=2))
+    origin = _iso_z(now - timedelta(hours=1, minutes=32))
+    stale_bar = _iso_z(now - timedelta(hours=1, minutes=15))
+    stale_decision = _iso_z(now - timedelta(hours=1))
+    stale_bbo = _iso_z(now - timedelta(hours=1) + timedelta(seconds=2))
+    fresh_bar = _iso_z(now - timedelta(minutes=15))
+    fresh_decision = _iso_z(now - timedelta(seconds=1))
+    fresh_bbo = _iso_z(now)
+
+    journal = _journal(tmp_path)
+    first_row = _row(
+        current="LONG_CONTEXT",
+        previous="OBSERVE",
+        source_bar=stale_bar,
+        decision_at=stale_decision,
+        origin=origin,
+        episode="ep_open",
+    )
+    _, first = _materialize(
+        tmp_path,
+        [first_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=stale_bbo, mono=2_000_000),
+    )
+    assert first.emitted_count == 1
+
+    second_row = _row(
+        current="LONG_CONTEXT",
+        previous="LONG_CONTEXT",
+        source_bar=fresh_bar,
+        decision_at=fresh_decision,
+        origin=origin,
+        episode="ep_open",
+        action_allowed=False,
+        intent="NO_TRADE_OBSERVE",
+    )
+    _, second = _materialize(
+        tmp_path,
+        [second_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=fresh_bbo, mono=3_000_000),
+        active_positions_by_timeframe={"M15"},
+    )
+    assert second.emitted_count == 0
+    assert not any(bool(ev.get("stale_blocked_entry_retry")) for ev in second.emitted)
+
+
+def test_stale_blocked_retry_not_emitted_for_restart_backfill_prior(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    activated = _iso_z(now - timedelta(minutes=30))
+    origin = _iso_z(now - timedelta(hours=2))
+    reval_bar = _iso_z(now - timedelta(minutes=20))
+    reval_decision = _iso_z(now - timedelta(minutes=19))
+    reval_bbo = _iso_z(now - timedelta(minutes=19) + timedelta(seconds=2))
+    fresh_bar = _iso_z(now - timedelta(minutes=5))
+    fresh_decision = _iso_z(now - timedelta(seconds=1))
+    fresh_bbo = _iso_z(now)
+
+    journal = _journal(tmp_path)
+    first_row = _row(
+        current="LONG_CONTEXT",
+        previous="LONG_CONTEXT",
+        source_bar=reval_bar,
+        decision_at=reval_decision,
+        origin=origin,
+        episode="ep_restart",
+    )
+    _, first = _materialize(
+        tmp_path,
+        [first_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=reval_bbo, mono=2_000_000),
+    )
+    assert first.emitted_count == 1
+    assert first.emitted[0].get("restart_backfill") is True
+
+    second_row = _row(
+        current="LONG_CONTEXT",
+        previous="LONG_CONTEXT",
+        source_bar=fresh_bar,
+        decision_at=fresh_decision,
+        origin=origin,
+        episode="ep_restart",
+        action_allowed=False,
+        intent="NO_TRADE_OBSERVE",
+    )
+    _, second = _materialize(
+        tmp_path,
+        [second_row],
+        journal=journal,
+        bridge_activated_at=activated,
+        current_bbo=_bbo(ts=fresh_bbo, mono=3_000_000),
+    )
+    assert second.emitted_count == 0
+    assert not any(bool(ev.get("stale_blocked_entry_retry")) for ev in second.emitted)
+
+
+def test_normal_start_still_requires_action_allowed(tmp_path: Path):
+    row = _row(current="LONG_CONTEXT", action_allowed=False, intent="NO_TRADE_OBSERVE")
+    _, result = _materialize(tmp_path, [row])
+    assert result.emitted_count == 0
+    assert result.skipped[-1]["reason"] == "ACTION_NOT_ALLOWED"

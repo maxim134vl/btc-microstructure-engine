@@ -19,7 +19,11 @@ import pandas as pd
 from btc_ml.live.intrabar.context_event_journal import ContextEventJournal
 from btc_ml.live.intrabar.context_event_freshness import (
     FRESHNESS_FRESH,
+    FRESHNESS_STALE_AGE,
     annotate_event_provenance,
+    evaluate_entry_freshness,
+    is_recovery_delivery_event,
+    is_restart_backfill_event,
     resolve_context_event_max_age_seconds,
 )
 
@@ -478,6 +482,129 @@ class MaterializationResult:
         }
 
 
+def _journal_events(journal: ContextEventJournal) -> list[dict[str, Any]]:
+    path = getattr(journal, "path", None)
+    if path is None or not Path(path).exists():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def _episode_entry_key(timeframe: str, episode_id: str) -> tuple[str, str]:
+    return (str(timeframe).upper(), str(episode_id))
+
+
+def _is_stale_blocked_live_unfilled_entry(event: Mapping[str, Any]) -> bool:
+    etype = str(event.get("event_type") or "").upper()
+    if etype not in ENTRY_EVENT_TYPES:
+        return False
+    if is_restart_backfill_event(event) or is_recovery_delivery_event(event):
+        return False
+    if str(event.get("delivery_mode") or "").upper() == DELIVERY_MODE_RECOVERY:
+        return False
+    if str(event.get("delivery_mode") or "LIVE").upper() != DELIVERY_MODE_LIVE:
+        return False
+    freshness = str(event.get("freshness_status") or "").upper()
+    if event.get("execution_eligible") is False or freshness == FRESHNESS_STALE_AGE:
+        return True
+    return False
+
+
+def _index_episode_entry_states(
+    events: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Track last LIVE entry and whether a stale-blocked retry already fired."""
+    states: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in events:
+        tf = _timeframe(event.get("timeframe"))
+        episode_id = _clean(event.get("lifecycle_episode_id") or event.get("episode_id"))
+        if not tf or not episode_id:
+            continue
+        key = _episode_entry_key(tf, episode_id)
+        state = states.setdefault(key, {"last_entry": None, "retry_emitted": False})
+        if bool(event.get("stale_blocked_entry_retry")):
+            state["retry_emitted"] = True
+        if str(event.get("event_type") or "").upper() in ENTRY_EVENT_TYPES:
+            state["last_entry"] = dict(event)
+    return states
+
+
+def _stale_blocked_retry_extra(
+    *,
+    row: Mapping[str, Any],
+    timeframe: str,
+    episode_id: str,
+    decision_available: pd.Timestamp,
+    context_origin: str | None,
+    source_bar_ts: pd.Timestamp,
+    max_age_seconds: float,
+    is_recovery_delivery: bool,
+    open_tfs: set[str],
+    traded: set[str],
+    episode_states: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any] | None:
+    """One LIVE retry for a stale-blocked unfilled episode; never a START flood.
+
+    Does not require ``action_allowed``: production sticky episodes stay ACTIVE with
+    ``action_allowed=False`` after a stale-blocked LIVE FLIP, and that gate would
+    permanently freeze the unfilled episode.
+    """
+    if is_recovery_delivery:
+        return None
+    current = _context(row.get("active_market_context") or row.get("candidate_context"))
+    if current not in DIRECTIONAL_CONTEXTS:
+        return None
+    if timeframe in open_tfs:
+        return None
+    if episode_id in traded:
+        return None
+    state = episode_states.get(_episode_entry_key(timeframe, episode_id))
+    if not state or state.get("retry_emitted"):
+        return None
+    prior = state.get("last_entry")
+    if not isinstance(prior, Mapping) or not _is_stale_blocked_live_unfilled_entry(prior):
+        return None
+    probe = {
+        "event_type": str(prior.get("event_type") or "CONTEXT_FLIP"),
+        "evaluation_mode": "CLOSED_BAR_CONTEXT_DECISION",
+        "materialization_source": "closed_bar_context_decision",
+        "decision_available_at": _iso(decision_available),
+        "event_timestamp": _iso(decision_available),
+        "original_context_timestamp": context_origin,
+        "context_origin_timestamp": context_origin,
+        "source_bar_timestamp": _iso(source_bar_ts),
+        "restart_backfill": False,
+        "delivery_mode": DELIVERY_MODE_LIVE,
+        "lifecycle_episode_id": episode_id,
+        "paper_action_candidate": row.get("paper_action_candidate"),
+        "signal_eligibility_status": row.get("signal_eligibility_status"),
+    }
+    if evaluate_entry_freshness(probe, max_age_seconds=max_age_seconds) != FRESHNESS_FRESH:
+        return None
+    prior_type = str(prior.get("event_type") or "CONTEXT_FLIP").upper()
+    if prior_type not in ENTRY_EVENT_TYPES:
+        prior_type = "CONTEXT_FLIP"
+    return {
+        "event_type": prior_type,
+        "stale_blocked_entry_retry": True,
+        "retry_of_context_event_id": prior.get("context_event_id"),
+        "retry_reason": "STALE_BLOCKED_LIVE_ENTRY_UNFILLED",
+    }
+
+
 def materialize_closed_bar_events(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -505,6 +632,7 @@ def materialize_closed_bar_events(
     open_tfs = {str(x).upper() for x in (active_positions_by_timeframe or set())}
     traded = {str(x) for x in (traded_episodes or set())}
     watermarks = dict(recovery_watermarks or {})
+    episode_states = _index_episode_entry_states(_journal_events(journal))
     result.recovery["mode_active"] = bool(watermarks)
     result.recovery["per_tf_watermarks"] = {
         tf: wm.to_dict() for tf, wm in sorted(watermarks.items())
@@ -572,22 +700,6 @@ def materialize_closed_bar_events(
 
         direction = _direction(current)
         prev_direction = _direction(previous)
-
-        if current and lineage_previous and current == lineage_previous:
-            result.skipped.append(
-                {
-                    "reason": "SAME_CONTEXT_CONTINUATION",
-                    "timeframe": tf,
-                    "source_bar_timestamp": _iso(source_bar_ts),
-                }
-            )
-            continue
-
-        # The row already passed causal timestamp/freshness checks above.
-        # It therefore becomes the previous immutable decision for this TF,
-        # regardless of whether materialization below emits or skips it.
-        if current:
-            last_published_context_by_tf[tf] = current
         context_origin = _iso(
             row.get("context_origin_timestamp")
             or row.get("lifecycle_episode_start_time")
@@ -595,6 +707,37 @@ def materialize_closed_bar_events(
             or row.get("candidate_started_at")
         )
         episode_id = _episode_id(row, tf, direction or prev_direction)
+        retry_extra: dict[str, Any] | None = None
+        if current and lineage_previous and current == lineage_previous:
+            if episode_id:
+                retry_extra = _stale_blocked_retry_extra(
+                    row=row,
+                    timeframe=tf,
+                    episode_id=episode_id,
+                    decision_available=decision_available,
+                    context_origin=context_origin,
+                    source_bar_ts=source_bar_ts,
+                    max_age_seconds=max_age_seconds,
+                    is_recovery_delivery=is_recovery_delivery,
+                    open_tfs=open_tfs,
+                    traded=traded,
+                    episode_states=episode_states,
+                )
+            if retry_extra is None:
+                result.skipped.append(
+                    {
+                        "reason": "SAME_CONTEXT_CONTINUATION",
+                        "timeframe": tf,
+                        "source_bar_timestamp": _iso(source_bar_ts),
+                    }
+                )
+                continue
+
+        # The row already passed causal timestamp/freshness checks above.
+        # It therefore becomes the previous immutable decision for this TF,
+        # regardless of whether materialization below emits or skips it.
+        if current:
+            last_published_context_by_tf[tf] = current
         if not episode_id:
             result.skipped.append({"reason": "MISSING_EPISODE_ID", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
             continue
@@ -603,39 +746,78 @@ def materialize_closed_bar_events(
         new_context = current or "OBSERVE"
         previous_context = previous or "OBSERVE"
         extra: dict[str, Any] = {}
-        if current in DIRECTIONAL_CONTEXTS:
-            if not _event_action_allowed(row):
-                result.skipped.append({"reason": "ACTION_NOT_ALLOWED", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
-                continue
+        if retry_extra is not None:
+            # Retry intentionally ignores action_allowed: sticky ACTIVE episodes
+            # after a stale-blocked LIVE FLIP often carry action_allowed=False.
+            event_type = str(retry_extra["event_type"])
+            extra = {k: v for k, v in retry_extra.items() if k != "event_type"}
+        elif current in DIRECTIONAL_CONTEXTS:
             directional_flip = (
                 previous in DIRECTIONAL_CONTEXTS
                 and previous != current
             )
-            if tf in open_tfs and not directional_flip:
-                result.skipped.append({"reason": "ACTIVE_POSITION", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
-                continue
-            if episode_id in traded and not directional_flip:
-                result.skipped.append({"reason": "EPISODE_ALREADY_TRADED", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
-                continue
-            origin_ts = _to_ts(context_origin)
-            if directional_flip:
-                event_type = "CONTEXT_FLIP"
-            elif origin_ts is not None and origin_ts < activation_ts:
-                event_type = "CONTEXT_START"
-                previous_context = "OBSERVE"
-                extra = {
-                    "revalidated_after_restart": True,
-                    "restart_backfill": True,
-                    "materialization_class": "RESTART_BACKFILL",
-                    "revalidation_event_type": "CONTEXT_START",
-                    "historical_context_origin_timestamp": context_origin,
-                    "revalidation_reason": "PRE_EXISTING_ACTIVE_CONTEXT_CONFIRMED_ON_FRESH_BAR",
-                }
-            elif previous not in DIRECTIONAL_CONTEXTS:
-                event_type = "CONTEXT_START"
+            action_allowed = _event_action_allowed(row)
+            if not action_allowed:
+                retry_extra = _stale_blocked_retry_extra(
+                    row=row,
+                    timeframe=tf,
+                    episode_id=episode_id,
+                    decision_available=decision_available,
+                    context_origin=context_origin,
+                    source_bar_ts=source_bar_ts,
+                    max_age_seconds=max_age_seconds,
+                    is_recovery_delivery=is_recovery_delivery,
+                    open_tfs=open_tfs,
+                    traded=traded,
+                    episode_states=episode_states,
+                )
+                if retry_extra is None:
+                    result.skipped.append({"reason": "ACTION_NOT_ALLOWED", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
+                    continue
+                event_type = str(retry_extra["event_type"])
+                extra = {k: v for k, v in retry_extra.items() if k != "event_type"}
             else:
-                result.skipped.append({"reason": "SAME_CONTEXT_CONTINUATION", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
-                continue
+                if tf in open_tfs and not directional_flip:
+                    result.skipped.append({"reason": "ACTIVE_POSITION", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
+                    continue
+                if episode_id in traded and not directional_flip:
+                    result.skipped.append({"reason": "EPISODE_ALREADY_TRADED", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
+                    continue
+                origin_ts = _to_ts(context_origin)
+                if directional_flip:
+                    event_type = "CONTEXT_FLIP"
+                elif origin_ts is not None and origin_ts < activation_ts:
+                    event_type = "CONTEXT_START"
+                    previous_context = "OBSERVE"
+                    extra = {
+                        "revalidated_after_restart": True,
+                        "restart_backfill": True,
+                        "materialization_class": "RESTART_BACKFILL",
+                        "revalidation_event_type": "CONTEXT_START",
+                        "historical_context_origin_timestamp": context_origin,
+                        "revalidation_reason": "PRE_EXISTING_ACTIVE_CONTEXT_CONFIRMED_ON_FRESH_BAR",
+                    }
+                elif previous not in DIRECTIONAL_CONTEXTS:
+                    event_type = "CONTEXT_START"
+                else:
+                    retry_extra = _stale_blocked_retry_extra(
+                        row=row,
+                        timeframe=tf,
+                        episode_id=episode_id,
+                        decision_available=decision_available,
+                        context_origin=context_origin,
+                        source_bar_ts=source_bar_ts,
+                        max_age_seconds=max_age_seconds,
+                        is_recovery_delivery=is_recovery_delivery,
+                        open_tfs=open_tfs,
+                        traded=traded,
+                        episode_states=episode_states,
+                    )
+                    if retry_extra is None:
+                        result.skipped.append({"reason": "SAME_CONTEXT_CONTINUATION", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
+                        continue
+                    event_type = str(retry_extra["event_type"])
+                    extra = {k: v for k, v in retry_extra.items() if k != "event_type"}
         elif previous in DIRECTIONAL_CONTEXTS and current in NON_DIRECTIONAL_CONTEXTS:
             event_type = "CONTEXT_END"
             direction = prev_direction
@@ -767,12 +949,19 @@ def materialize_closed_bar_events(
             result.recovery["last_recovered_source_decision_id"] = _clean(row.get("decision_id")) or None
             result.recovery["last_run_result"] = "recovered"
         pending_events.append(event)
+        state_key = _episode_entry_key(tf, str(episode_id))
+        state = episode_states.setdefault(state_key, {"last_entry": None, "retry_emitted": False})
+        if bool(event.get("stale_blocked_entry_retry")):
+            state["retry_emitted"] = True
+        if str(event_type or "").upper() in ENTRY_EVENT_TYPES:
+            state["last_entry"] = event
 
         # Keep only batch-local OPEN/CLOSED state coherent. Do NOT mutate the
         # persistent traded-episode set here: lifecycle episode identifiers are
         # not globally unique across timeframes.
         if event_type in {"CONTEXT_START", "CONTEXT_FLIP"}:
-            open_tfs.add(tf)
+            if event.get("execution_eligible") is not False:
+                open_tfs.add(tf)
         elif event_type == "CONTEXT_END":
             open_tfs.discard(tf)
 

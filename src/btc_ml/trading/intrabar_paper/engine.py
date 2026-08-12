@@ -413,18 +413,6 @@ class IntrabarPaperEngine:
                 event_monotonic_ns=event_monotonic_ns,
             )
             return {"status": replay_reason, "timeframe": tf, "context_event_id": context_event_id}
-        if event.get("execution_eligible") is False:
-            provenance_reason = entry_freshness_block_reason(
-                event,
-                max_age_seconds=self.cfg.context_event_max_age_seconds,
-            ) or "ENTRY_BLOCKED_INVALID_CONTEXT_PROVENANCE"
-            self._block(provenance_reason, tf, context_event_id, side, event=event)
-            self.consumer.mark_processed(
-                key=key,
-                context_event_id=context_event_id,
-                event_monotonic_ns=event_monotonic_ns,
-            )
-            return {"status": provenance_reason, "timeframe": tf, "context_event_id": context_event_id}
         freshness_reason = entry_freshness_block_reason(
             event,
             max_age_seconds=self.cfg.context_event_max_age_seconds,
