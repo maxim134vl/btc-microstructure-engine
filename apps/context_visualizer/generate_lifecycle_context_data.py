@@ -623,42 +623,63 @@ def build_latest(memory: pd.DataFrame, episodes: list[dict[str, Any]]) -> dict[s
             row = evals.get("M15") if isinstance(evals, dict) else None
             bars = cog.get("partial_bars") if isinstance(cog, dict) else None
             bar = bars.get("M15") if isinstance(bars, dict) else None
+
             if isinstance(row, dict):
-                mc = _clean_text(row.get("market_context") or row.get("active"), default="OBSERVE")
-                life = _clean_text(row.get("lifecycle"), default="NO_ACTIVE_CONTEXT")
-                if life == "NO_ACTIVE_CONTEXT" or mc in {"OBSERVE", "STAND_ASIDE"}:
-                    active_ctx, bias = "OBSERVE", "NONE"
-                    life = "NO_ACTIVE_CONTEXT"
-                elif mc.upper().startswith("LONG"):
-                    active_ctx, bias = "LONG_CONTEXT", "LONG"
-                elif mc.upper().startswith("SHORT"):
-                    active_ctx, bias = "SHORT_CONTEXT", "SHORT"
+                # IMPORTANT:
+                # lifecycle_latest.json is the canonical lifecycle read model.
+                # Do NOT overwrite canonical active_market_context/lifecycle_state
+                # with LIVE1A provisional market_context. Provisional intrabar
+                # state may be OBSERVE while the canonical active lifecycle remains
+                # LONG_CONTEXT/SHORT_CONTEXT. Store live fields separately.
+                live_provisional = _clean_text(
+                    row.get("provisional_market_context") or row.get("market_context"),
+                    default="OBSERVE",
+                )
+                live_active_raw = (
+                    row.get("active_market_context")
+                    or row.get("active")
+                    or row.get("new_context")
+                )
+                live_lifecycle_raw = row.get("lifecycle_state") or row.get("lifecycle")
+
+                live_active = _clean_text(live_active_raw, default="OBSERVE")
+                live_lifecycle = _clean_text(live_lifecycle_raw, default="NO_ACTIVE_CONTEXT")
+
+                if live_active.upper().startswith("LONG"):
+                    live_active_ctx, live_bias = "LONG_CONTEXT", "LONG"
+                elif live_active.upper().startswith("SHORT"):
+                    live_active_ctx, live_bias = "SHORT_CONTEXT", "SHORT"
                 else:
-                    active_ctx, bias = "OBSERVE", "NONE"
-                    life = "NO_ACTIVE_CONTEXT"
-                payload["source"] = "LIVE1A_INTRABAR_CONTEXT"
-                payload["active_market_context"] = active_ctx
-                payload["lifecycle_state"] = life
-                payload["timeframe"] = "M15"
-                payload["lifecycle_episode_id"] = row.get("lifecycle_episode_id") or row.get("episode_id")
+                    live_active_ctx, live_bias = "OBSERVE", "NONE"
+                    live_lifecycle = "NO_ACTIVE_CONTEXT"
+
                 last_event = cog.get("last_context_event") if isinstance(cog.get("last_context_event"), dict) else {}
-                payload["context_event_id"] = (
+
+                payload["live_intrabar_source"] = "LIVE1A_INTRABAR_CONTEXT"
+                payload["live_intrabar_timeframe"] = "M15"
+                payload["live_intrabar_provisional_market_context"] = live_provisional
+                payload["live_intrabar_active_market_context"] = live_active_ctx
+                payload["live_intrabar_lifecycle_state"] = live_lifecycle
+                payload["live_intrabar_intended_side"] = live_bias
+                payload["live_intrabar_lifecycle_episode_id"] = (
+                    row.get("lifecycle_episode_id") or row.get("episode_id")
+                )
+                payload["live_intrabar_context_event_id"] = (
                     row.get("context_event_id")
                     or row.get("event_id")
                     or last_event.get("event_id")
                     or last_event.get("context_event_id")
                 )
-                payload["context_started_at"] = row.get("context_started_at") or row.get("active_context_started_at")
-                payload["causal_cutoff_timestamp"] = (
+                payload["live_intrabar_context_started_at"] = (
+                    row.get("context_started_at") or row.get("active_context_started_at")
+                )
+                payload["live_intrabar_causal_cutoff_timestamp"] = (
                     (bar or {}).get("causal_cutoff_timestamp") if isinstance(bar, dict) else None
                 )
-                payload["source_timestamp"] = cog.get("updated_at") or payload.get("causal_cutoff_timestamp")
-                payload["timestamp"] = payload.get("causal_cutoff_timestamp") or cog.get("updated_at") or payload.get("timestamp")
-                payload["intended_side"] = bias
-                if active_ctx == "OBSERVE":
-                    payload["open_episode_id"] = None
-                    payload["open_episode_context"] = None
-                    payload["active_context_age_bars"] = 0
+                payload["live_intrabar_source_timestamp"] = (
+                    cog.get("updated_at")
+                    or payload.get("live_intrabar_causal_cutoff_timestamp")
+                )
     except Exception:
         pass
 
