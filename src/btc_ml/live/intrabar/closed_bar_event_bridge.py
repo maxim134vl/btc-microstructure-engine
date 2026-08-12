@@ -406,6 +406,53 @@ def _recovery_source_bar_close(row: Mapping[str, Any]) -> Any:
     return None
 
 
+def _live_context_occurrence_price(row: Mapping[str, Any]) -> tuple[float | None, str]:
+    """Real context-occurrence price for live ENTRY; never invent from decision-time BBO or bar close."""
+    for key, source in (
+        ("context_event_price", "context_event_price"),
+        ("context_origin_price", "context_origin_price"),
+        ("historical_context_event_price", "historical_context_event_price"),
+    ):
+        value = row.get(key)
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+        text = _clean(value)
+        if not text:
+            continue
+        try:
+            px = float(text)
+        except (TypeError, ValueError):
+            continue
+        if px > 0.0 and px == px:
+            return px, source
+    return None, "MISSING_CONTEXT_OCCURRENCE_PRICE"
+
+
+def _context_occurrence_timestamp(
+    row: Mapping[str, Any],
+    *,
+    source_bar_ts: pd.Timestamp,
+    decision_available: pd.Timestamp,
+) -> pd.Timestamp:
+    """Timestamp of context occurrence for event_timestamp (not delayed materialization)."""
+    for key in (
+        "context_event_timestamp",
+        "context_origin_timestamp",
+        "lifecycle_episode_start_time",
+        "active_context_started_at",
+        "candidate_started_at",
+    ):
+        ts = _to_ts(row.get(key))
+        if ts is not None:
+            return ts
+    return source_bar_ts if source_bar_ts is not None else decision_available
+
+
 def _valid_recovery_bbo(
     current_bbo: Mapping[str, Any] | None,
     *,
@@ -826,6 +873,11 @@ def materialize_closed_bar_events(
             continue
 
         source_bar_close = _recovery_source_bar_close(row)
+        occurrence_ts = _context_occurrence_timestamp(
+            row,
+            source_bar_ts=source_bar_ts,
+            decision_available=decision_available,
+        )
         if is_recovery_delivery:
             bbo, bbo_reason = _valid_recovery_bbo(
                 current_bbo,
@@ -856,13 +908,21 @@ def materialize_closed_bar_events(
                 if row.get("close") is None and row.get("candle_close") is None
                 else "source_bar_close_recovery"
             )
+            event_timestamp = str(bbo["event_timestamp"])
         else:
             bbo, bbo_reason = _valid_bbo(current_bbo, decision_available)
             if bbo is None:
                 result.skipped.append({"reason": bbo_reason or "NO_CAUSAL_BBO", "timeframe": tf, "source_bar_timestamp": _iso(source_bar_ts)})
                 continue
-            context_event_price = str((float(bbo["best_bid"]) + float(bbo["best_ask"])) / 2.0)
-            context_event_price_source = "causal_bbo_mid"
+            occurrence_price, context_event_price_source = _live_context_occurrence_price(row)
+            if occurrence_price is None:
+                context_event_price = ""
+                extra["entry_price_status"] = "MISSING_CONTEXT_OCCURRENCE_PRICE"
+                extra["context_event_price_missing"] = True
+            else:
+                context_event_price = str(occurrence_price)
+            # Occurrence clock for entry semantics; BBO mono remains provenance / causal gate.
+            event_timestamp = _iso(occurrence_ts) or str(bbo["event_timestamp"])
 
         metadata = {
             "event_time_contract": EVENT_TIME_CONTRACT,
@@ -883,7 +943,7 @@ def materialize_closed_bar_events(
             event_type=event_type,
             previous_context=previous_context,
             new_context=new_context,
-            event_timestamp=str(bbo["event_timestamp"]),
+            event_timestamp=event_timestamp,
             event_monotonic_ns=int(bbo["event_monotonic_ns"]),
             context_event_price=context_event_price,
             last_trade_id=row.get("last_trade_id"),
@@ -931,6 +991,20 @@ def materialize_closed_bar_events(
         )
         event.update(provenance)
         if (
+            str(event_type or "").upper() in ENTRY_EVENT_TYPES
+            and bool(event.get("context_event_price_missing"))
+        ):
+            event["execution_eligible"] = False
+            result.skipped.append(
+                {
+                    "reason": "MISSING_CONTEXT_OCCURRENCE_PRICE",
+                    "context_event_price_source": event.get("context_event_price_source"),
+                    "timeframe": tf,
+                    "source_bar_timestamp": _iso(source_bar_ts),
+                    "context_event_id": event.get("context_event_id"),
+                }
+            )
+        elif (
             str(event_type or "").upper() in ENTRY_EVENT_TYPES
             and provenance.get("freshness_status") != FRESHNESS_FRESH
         ):

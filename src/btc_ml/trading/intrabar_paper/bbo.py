@@ -142,7 +142,11 @@ class CausalBBOStore:
 
 
 def fill_price_for(*, side: str, action: str, bbo: CausalBBO) -> float:
-    """Paper fill contract: entry ask/bid; exit opposite."""
+    """Paper fill helper for BBO-priced legs (EXIT / protective fallback).
+
+    ENTRY paper fills use :func:`resolve_context_entry_price` at the engine —
+    BBO ask/bid are provenance only for entry.
+    """
     side_u = str(side).upper()
     act = str(action).upper()
     if act == "ENTRY":
@@ -150,3 +154,34 @@ def fill_price_for(*, side: str, action: str, bbo: CausalBBO) -> float:
     if act == "EXIT":
         return bbo.best_bid if side_u == "LONG" else bbo.best_ask
     raise ValueError(f"unknown action {action}")
+
+
+def resolve_context_entry_price(event: dict[str, Any] | None, *candidates: Any) -> float | None:
+    """Return the context-occurrence price used for paper ENTRY fills.
+
+    Accepts explicit candidates first (``context_event_price`` / ``price``), then
+    common event fields. Does not invent prices from BBO.
+    """
+    values: list[Any] = list(candidates)
+    if isinstance(event, dict):
+        for key in (
+            "context_event_price",
+            "price",
+            "context_origin_price",
+            "historical_context_event_price",
+        ):
+            if event.get(key) is not None:
+                values.append(event.get(key))
+    for raw in values:
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text or text.lower() in {"nan", "nat", "none", "null", ""}:
+            continue
+        try:
+            px = float(text)
+        except (TypeError, ValueError):
+            continue
+        if px > 0.0 and px == px:  # finite and positive
+            return px
+    return None

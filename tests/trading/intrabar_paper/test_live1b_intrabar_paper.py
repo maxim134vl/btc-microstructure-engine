@@ -105,25 +105,90 @@ def _ctx(
     return payload
 
 
-def test_long_start_fills_ask(cfg):
+def test_long_start_fills_context_event_price(cfg):
     c, repo = cfg
     eng = _engine(c, repo)
     acts = eng.process_context_event(
         _ctx(eid="e1", etype="CONTEXT_START", tf="M15", prev="OBSERVE", new="LONG_CONTEXT", mono=2_000_000)
     )
     assert acts and acts[0]["status"] == "ENTERED"
-    assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.2)
+    assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.1)
+    assert acts[0]["fill"]["best_ask"] == pytest.approx(100.2)
+    assert acts[0]["fill"]["entry_price_source"] == "context_event_price"
     assert eng.positions["M15"].side == "LONG"
 
 
-def test_short_start_fills_bid(cfg):
+def test_short_start_fills_context_event_price(cfg):
     c, repo = cfg
     eng = _engine(c, repo)
     acts = eng.process_context_event(
         _ctx(eid="e2", etype="CONTEXT_START", tf="M30", prev="OBSERVE", new="SHORT_CONTEXT", mono=2_000_000)
     )
     assert acts[0]["status"] == "ENTERED"
+    assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.1)
+    assert acts[0]["fill"]["best_bid"] == pytest.approx(100.0)
+    assert eng.positions["M30"].side == "SHORT"
+
+
+def test_entry_uses_context_price_not_bbo_ask_or_bid(cfg):
+    c, repo = cfg
+    eng = _engine(c, repo)
+    long_ev = _ctx(
+        eid="ctx_px_long",
+        etype="CONTEXT_START",
+        tf="M15",
+        prev="OBSERVE",
+        new="LONG_CONTEXT",
+        mono=2_000_000,
+        bid=99.0,
+        ask=101.0,
+    )
+    long_ev["context_event_price"] = "100.0"
+    acts = eng.process_context_event(long_ev)
+    assert acts[0]["status"] == "ENTERED"
     assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.0)
+    assert acts[0]["fill"]["gross_entry_price"] == pytest.approx(100.0)
+    assert acts[0]["fill"]["best_ask"] == pytest.approx(101.0)
+    assert acts[0]["fill"]["best_bid"] == pytest.approx(99.0)
+    eng.process_context_event(
+        _ctx(
+            eid="ctx_px_end",
+            etype="CONTEXT_END",
+            tf="M15",
+            prev="LONG_CONTEXT",
+            new="OBSERVE",
+            mono=3_000_000,
+            bid=99.0,
+            ask=101.0,
+        )
+    )
+    short_ev = _ctx(
+        eid="ctx_px_short",
+        etype="CONTEXT_START",
+        tf="M30",
+        prev="OBSERVE",
+        new="SHORT_CONTEXT",
+        mono=4_000_000,
+        bid=99.0,
+        ask=101.0,
+        episode="ep_short_px",
+    )
+    short_ev["context_event_price"] = "100.0"
+    acts2 = eng.process_context_event(short_ev)
+    assert acts2[0]["status"] == "ENTERED"
+    assert acts2[0]["fill"]["paper_fill_price"] == pytest.approx(100.0)
+
+
+def test_missing_context_event_price_blocks_entry(cfg):
+    c, repo = cfg
+    eng = _engine(c, repo)
+    ev = _ctx(eid="missing_px", etype="CONTEXT_START", tf="M15", prev="OBSERVE", new="LONG_CONTEXT", mono=2_000_000)
+    ev.pop("context_event_price", None)
+    acts = eng.process_context_event(ev)
+    assert acts[0]["status"] == "ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE"
+    assert eng.positions == {}
+    blocked = eng.books.read_all("blocked")
+    assert blocked and blocked[-1]["reason"] == "ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE"
 
 
 def test_no_entry_observe_or_end(cfg):
@@ -254,7 +319,7 @@ def test_flip_long_to_short_close_then_open(cfg):
     )
     assert [a["status"] for a in acts] == ["EXITED", "ENTERED"]
     assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.5)  # long exit bid
-    assert acts[1]["fill"]["paper_fill_price"] == pytest.approx(100.5)  # short entry bid
+    assert acts[1]["fill"]["paper_fill_price"] == pytest.approx(100.1)  # short entry at context_event_price
     assert eng.positions["H4"].side == "SHORT"
     assert acts[0]["fill"].get("trigger_monotonic_ns", 4_000_000) < acts[1]["fill"]["fill_monotonic_ns"]
 
@@ -283,7 +348,7 @@ def test_flip_short_to_long(cfg):
     )
     assert [a["status"] for a in acts] == ["EXITED", "ENTERED"]
     assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.7)  # short exit ask
-    assert acts[1]["fill"]["paper_fill_price"] == pytest.approx(100.7)  # long entry ask
+    assert acts[1]["fill"]["paper_fill_price"] == pytest.approx(100.1)  # long entry at context_event_price
 
 
 def test_tp_before_end(cfg):

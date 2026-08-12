@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .bbo import CausalBBOStore, fill_price_for
+from .bbo import CausalBBOStore, fill_price_for, resolve_context_entry_price
 from .books import EpochBooks
 from .config import IntrabarPaperConfig
 from .consumer import (
@@ -448,6 +448,20 @@ class IntrabarPaperEngine:
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
             return None
 
+        fill_px = resolve_context_entry_price(event, context_event_price)
+        if fill_px is None:
+            self._block("ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE", tf, context_event_id, side, event=event)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {
+                "status": "ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE",
+                "timeframe": tf,
+                "context_event_id": context_event_id,
+            }
+
         bbo, reason, age_ms = self.bbo.resolve_causal(
             command_monotonic_ns=event_monotonic_ns,
             max_age_ms=self.cfg.max_bbo_age_ms,
@@ -461,7 +475,6 @@ class IntrabarPaperEngine:
             )
             return {"status": reason, "timeframe": tf}
 
-        fill_px = fill_price_for(side=side, action="ENTRY", bbo=bbo)
         equity_at_entry = float(self.equity)
         risk_pct_at_entry = float(self.cfg.max_risk_per_trade_pct)
         risk_budget_usd: float | None = None
@@ -496,7 +509,8 @@ class IntrabarPaperEngine:
         fill_id = _new_id("fill")
         pos_id = _new_id("pos")
         signal_id = _new_id("sig")
-        now = _utc_iso()
+        occurrence_ts = str(event_timestamp).strip() if event_timestamp else ""
+        now = occurrence_ts or _utc_iso()
         cmd_mono = event_monotonic_ns
         stop_distance_usd = float(sizing.stop_distance or 0.0)
         notional_usd = float(sizing.entry_notional or 0.0)
@@ -506,6 +520,17 @@ class IntrabarPaperEngine:
             "risk_budget_usd": float(risk_budget_usd or sizing.risk_amount_usd),
             "stop_distance_usd": stop_distance_usd,
             "notional_usd": notional_usd,
+        }
+        price_snap = {
+            "context_event_price": fill_px,
+            "paper_fill_price": fill_px,
+            "entry_price_source": "context_event_price",
+            "best_bid": bbo.best_bid,
+            "best_ask": bbo.best_ask,
+            "book_update_id": bbo.book_update_id,
+            "bbo_receive_timestamp": bbo.receive_timestamp,
+            "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
+            "bbo_age_ms": age_ms,
         }
 
         signal = self.books.append(
@@ -520,6 +545,7 @@ class IntrabarPaperEngine:
                 "ts": now,
                 "event_monotonic_ns": event_monotonic_ns,
                 "quantity": sizing.quantity,
+                "entry_price": fill_px,
                 **capital_snap,
             },
         )
@@ -534,15 +560,8 @@ class IntrabarPaperEngine:
                 "context_event_id": context_event_id,
                 "command_monotonic_ns": cmd_mono,
                 "ts": now,
-                "book_update_id": bbo.book_update_id,
-                "best_bid": bbo.best_bid,
-                "best_ask": bbo.best_ask,
-                "bbo_receive_timestamp": bbo.receive_timestamp,
-                "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
-                "bbo_age_ms": age_ms,
-                "context_event_price": context_event_price,
-                "paper_fill_price": fill_px,
                 "quantity": sizing.quantity,
+                **price_snap,
                 **capital_snap,
             },
         )
@@ -570,18 +589,12 @@ class IntrabarPaperEngine:
                 "side": side,
                 "action": "ENTRY",
                 "gross_entry_price": fill_px,
-                "paper_fill_price": fill_px,
                 "quantity": sizing.quantity,
-                "best_bid": bbo.best_bid,
-                "best_ask": bbo.best_ask,
-                "book_update_id": bbo.book_update_id,
-                "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
-                "bbo_age_ms": age_ms,
-                "context_event_price": context_event_price,
                 "entry_fee_bps": self.cfg.entry_fee_bps,
                 "entry_slippage_bps": self.cfg.entry_slippage_bps,
                 "ts": now,
                 "fill_monotonic_ns": cmd_mono,
+                **price_snap,
                 **capital_snap,
             },
         )
@@ -604,6 +617,7 @@ class IntrabarPaperEngine:
                 "entry_command_id": cmd_id,
                 "entry_monotonic_ns": cmd_mono,
                 "opened_at": now,
+                "entry_price_source": "context_event_price",
                 **capital_snap,
             },
         )

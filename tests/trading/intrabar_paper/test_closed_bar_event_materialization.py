@@ -45,10 +45,12 @@ def _row(
     action_allowed: bool = True,
     intent: str | None = None,
     stale: bool = False,
+    context_origin_price: float | None = None,
+    context_event_price: float | None = None,
 ) -> dict:
     if intent is None:
         intent = "INTENT_OPEN_LONG" if current == "LONG_CONTEXT" else "INTENT_OPEN_SHORT"
-    return {
+    row = {
         "decision_id": f"dec-{tf}-{source_bar}-{current}",
         "source_timeframe": tf,
         "candle_timestamp": source_bar,
@@ -67,6 +69,11 @@ def _row(
         "pipeline_pending": False,
         "close": 90.0,
     }
+    if context_origin_price is not None:
+        row["context_origin_price"] = context_origin_price
+    if context_event_price is not None:
+        row["context_event_price"] = context_event_price
+    return row
 
 
 def _materialize(tmp_path: Path, rows: list[dict], **kwargs):
@@ -172,8 +179,9 @@ def test_revalidated_timestamp_preserves_decision_available_at(tmp_path: Path):
     row = _row(current="LONG_CONTEXT", previous="LONG_CONTEXT", origin="2026-08-02T08:30:00Z")
     _, result = _materialize(tmp_path, [row])
     ev = result.emitted[0]
-    assert ev["event_timestamp"] == ev["decision_available_at"]
-    assert ev["event_timestamp"] != ev["historical_context_origin_timestamp"]
+    assert ev["decision_available_at"] == "2026-08-02T12:16:00Z"
+    assert ev["event_timestamp"] == "2026-08-02T08:30:00Z"
+    assert ev["event_timestamp"] != ev["decision_available_at"]
     assert ev["execution_not_before"] == "2026-08-02T12:16:02Z"
     assert ev["execution_not_before"] != ev["decision_available_at"]
     assert ev["restart_backfill"] is True
@@ -206,7 +214,7 @@ def _tmp_intrabar_config(tmp_path: Path) -> tuple[object, object, Path]:
     return cfg, epoch, repo
 
 
-def test_live1b_uses_causal_bbo_not_source_bar_close(tmp_path: Path):
+def test_live_closed_bar_without_occurrence_price_is_not_executable_via_bbo_mid(tmp_path: Path):
     from datetime import datetime, timedelta, timezone
 
     fresh_decision = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
@@ -214,15 +222,50 @@ def test_live1b_uses_causal_bbo_not_source_bar_close(tmp_path: Path):
     fresh_bar = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
     row = _row(current="LONG_CONTEXT", decision_at=fresh_decision, source_bar=fresh_bar, origin=fresh_bar)
     _, result = _materialize(tmp_path, [row], current_bbo=_bbo(ts=fresh_bbo, mono=2_000_000))
+    assert result.emitted_count == 1
     ev = result.emitted[0]
     assert ev["source_bar_close"] == 90.0
-    assert float(ev["context_event_price"]) == pytest.approx(100.1)
+    assert ev["context_event_price_source"] == "MISSING_CONTEXT_OCCURRENCE_PRICE"
+    assert ev.get("context_event_price_missing") is True
+    assert ev["execution_eligible"] is False
+    assert float(ev["best_bid"]) == pytest.approx(100.0)
+    assert float(ev["best_ask"]) == pytest.approx(100.2)
+    # Must not invent decision-time BBO mid as context occurrence price.
+    assert str(ev.get("context_event_price") or "").strip() in {"", "None", "nan"}
+    cfg, epoch, _ = _tmp_intrabar_config(tmp_path)
+    eng = IntrabarPaperEngine(cfg=cfg, epoch=epoch, activation_monotonic_ns=1_000_000)
+    acts = eng.process_context_event(ev)
+    assert acts[0]["status"] == "ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE"
+    assert eng.positions == {}
+
+
+def test_live_closed_bar_with_context_origin_price_enters_at_occurrence_price(tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    fresh_decision = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
+    fresh_bbo = (datetime.now(timezone.utc) - timedelta(seconds=25)).isoformat().replace("+00:00", "Z")
+    fresh_bar = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    row = _row(
+        current="LONG_CONTEXT",
+        decision_at=fresh_decision,
+        source_bar=fresh_bar,
+        origin=fresh_bar,
+        context_origin_price=100.0,
+    )
+    _, result = _materialize(tmp_path, [row], current_bbo=_bbo(ts=fresh_bbo, mono=2_000_000))
+    ev = result.emitted[0]
+    assert float(ev["context_event_price"]) == pytest.approx(100.0)
+    assert ev["context_event_price_source"] == "context_origin_price"
+    assert ev["execution_eligible"] is True
     cfg, epoch, _ = _tmp_intrabar_config(tmp_path)
     eng = IntrabarPaperEngine(cfg=cfg, epoch=epoch, activation_monotonic_ns=1_000_000)
     acts = eng.process_context_event(ev)
     assert acts[0]["status"] == "ENTERED"
-    assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.2)
+    assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.0)
+    assert acts[0]["fill"]["paper_fill_price"] != pytest.approx(100.2)
     assert acts[0]["fill"]["paper_fill_price"] != pytest.approx(90.0)
+    assert acts[0]["fill"]["best_ask"] == pytest.approx(100.2)
+    assert acts[0]["fill"]["entry_price_source"] == "context_event_price"
 
 
 def test_old_epoch_dedup_does_not_block_new_epoch(tmp_path: Path):
@@ -349,6 +392,7 @@ def test_stale_blocked_live_flip_retries_once_when_unfilled(tmp_path: Path):
         decision_at=stale_decision,
         origin=origin,
         episode="ep_sticky",
+        context_origin_price=100.0,
     )
     _, first = _materialize(
         tmp_path,
@@ -372,6 +416,7 @@ def test_stale_blocked_live_flip_retries_once_when_unfilled(tmp_path: Path):
         episode="ep_sticky",
         action_allowed=False,
         intent="NO_TRADE_OBSERVE",
+        context_origin_price=100.0,
     )
     _, second = _materialize(
         tmp_path,

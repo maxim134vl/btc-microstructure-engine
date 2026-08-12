@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,7 @@ def _seed_engine(tmp_path: Path, *, stamp: str, with_sleeves: bool = True):
 
 
 def _h4_start(mono: int = 2_000_000) -> dict:
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     return {
         "context_event_id": "CTX_d25c0ed08fd7b1d5c8af",
         "event_type": "CONTEXT_START",
@@ -110,8 +112,12 @@ def _h4_start(mono: int = 2_000_000) -> dict:
         "previous_context": "OBSERVE",
         "new_context": "LONG_CONTEXT",
         "event_monotonic_ns": mono,
-        "event_timestamp": "2026-07-29T09:40:34.724226Z",
-        "context_event_price": 64690.19,
+        "event_timestamp": fresh,
+        "decision_available_at": fresh,
+        "evaluation_mode": "CLOSED_BAR_CONTEXT_DECISION",
+        "materialization_source": "closed_bar_context_decision",
+        "delivery_mode": "LIVE",
+        "context_event_price": 64687.82,
         "best_bid": 64685.0,
         "best_ask": 64687.82,
         "bbo_receive_monotonic_ns": mono - 1000,
@@ -290,6 +296,19 @@ def test_activation_gate_blocks_with_open_positions(tmp_path: Path):
 def test_full_entry_exit_contract_match_zero_diff_engines(tmp_path: Path):
     _, _, a, _ = _seed_engine(tmp_path, stamp="A1")
     _, _, b, _ = _seed_engine(tmp_path, stamp="B1")
+    start = _h4_start()
+    end = {
+        **_h4_start(3_000_000),
+        "context_event_id": "CTX_end_h4",
+        "event_type": "CONTEXT_END",
+        "previous_context": "LONG_CONTEXT",
+        "new_context": "OBSERVE",
+        "best_bid": 64700.0,
+        "best_ask": 64702.0,
+        "bbo_receive_monotonic_ns": 2_999_000,
+        "event_timestamp": start["event_timestamp"],
+        "decision_available_at": start["decision_available_at"],
+    }
     for eng in (a, b):
         eng.bbo.update_from_book_ticker(
             best_bid=64685.0,
@@ -298,19 +317,8 @@ def test_full_entry_exit_contract_match_zero_diff_engines(tmp_path: Path):
             book_update_id="b1",
             domain="context",
         )
-        eng.process_context_event(_h4_start())
-        eng.process_context_event(
-            {
-                **_h4_start(3_000_000),
-                "context_event_id": "CTX_end_h4",
-                "event_type": "CONTEXT_END",
-                "previous_context": "LONG_CONTEXT",
-                "new_context": "OBSERVE",
-                "best_bid": 64700.0,
-                "best_ask": 64702.0,
-                "bbo_receive_monotonic_ns": 2_999_000,
-            }
-        )
+        eng.process_context_event(dict(start))
+        eng.process_context_event(dict(end))
     left = {t: a.books.read_all(t) for t in ("signals", "commands", "orders", "fills", "positions", "trades")}
     right = {t: b.books.read_all(t) for t in ("signals", "commands", "orders", "fills", "positions", "trades")}
     assert compare_replay_books(left, right)["status"] == ZERO_DIFF_MATCH

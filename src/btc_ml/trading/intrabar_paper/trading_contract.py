@@ -49,7 +49,7 @@ SLEEVE2_CAPITAL_CONTRACT_MISMATCH = "TRD_SLEEVE2_BLOCKED_CAPITAL_CONTRACT_MISMAT
 SLEEVE2_AWAITING_FLAT = "TRD_SLEEVE2_READY_AWAITING_FLAT"
 SLEEVE2_ACTIVE = "TRD_SLEEVE2_PER_TIMEFRAME_CAPITAL_ACTIVE"
 SLEEVE2_FREEZE = "TRD_SLEEVE2_ACTIVATION_FREEZE_REQUIRED"
-EXPECTED_SOURCE_FINGERPRINT = "a6a916a767c6cfe83e9eb4581103d422bfc1adad6a56dfbf8f867930c129cb5a"
+EXPECTED_SOURCE_FINGERPRINT = "01f3fba5ad1845c72afb7626840c409ad95a3e866257b92ea566378c44b6cd0e"
 EPOCH_PREFIX_SLEEVE2 = "PER_TF_EQUITY_1PCT_V1_"
 
 # Capital / risk deltas that may differ between parent and derived contracts.
@@ -217,8 +217,14 @@ def _hardcoded_rules() -> dict[str, Any]:
         "one_position_per_timeframe": True,
         "same_direction_duplicate_handling": "ENTRY_BLOCKED_ACTIVE_POSITION",
         "flip_behavior": "exit existing if matching from_side then enter flip_to at mono+1",
-        "entry_price_source": "causal BBO fill_price_for ENTRY (LONG=ask, SHORT=bid)",
-        "entry_timestamp_source": "engine wall-clock utc now at fill write; command_monotonic_ns=event_monotonic_ns",
+        "entry_price_source": (
+            "context_event_price / context occurrence price; "
+            "BBO retained as provenance only; missing price → ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE"
+        ),
+        "entry_timestamp_source": (
+            "context event_timestamp when present; else engine wall-clock; "
+            "command_monotonic_ns=event_monotonic_ns"
+        ),
         "stop_method": "entry * (1 ∓ stop_loss_bps/10000) via stop_take_prices",
         "take_method": "entry * (1 ± take_profit_bps/10000) via stop_take_prices",
         "risk_reward_ratio": "take_profit_bps / stop_loss_bps",
@@ -231,8 +237,8 @@ def _hardcoded_rules() -> dict[str, Any]:
         "opposite_direction_handling": "via CONTEXT_FLIP path only; OBSERVE tip does not exit",
         "exit_price_source": "causal BBO fill_price_for EXIT (LONG=bid, SHORT=ask); TP/SL may use local BBO",
         "exit_timestamp_source": "engine wall-clock utc now at fill/trade write",
-        "long_entry": "ask",
-        "short_entry": "bid",
+        "long_entry": "context_event_price",
+        "short_entry": "context_event_price",
         "long_exit": "bid",
         "short_exit": "ask",
         "trade_fallback_behavior": "aggTrade price may confirm TP/SL hit alongside BBO",
