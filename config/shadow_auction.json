@@ -1,0 +1,43 @@
+{
+  "shadow_name": "AUCTION_EPISODE_SHADOW",
+  "logic_version": "AES_V1",
+  "schema_version": 1,
+  "observer_only": true,
+  "enforcement_enabled": false,
+  "data_root": "/Volumes/MaksTiger/btc-ml/shadow_auction",
+  "required_volume_root": "/Volumes/MaksTiger",
+  "min_free_bytes": 1073741824,
+  "pid_file": "run/shadow_auction.pid",
+  "health_interval_s": 2.0,
+  "poll_interval_s": 1.0,
+  "aes2_enabled": true,
+  "aes3_enabled": true,
+  "aes4_enabled": true,
+  "aes5_enabled": true,
+  "aes2": {
+    "window_bars": {"M15": 8, "M30": 8, "H1": 6, "H4": 4},
+    "extreme_volume_z": 1.5,
+    "strong_efficiency": 0.55,
+    "weak_efficiency": 0.28,
+    "strong_effort": 0.55,
+    "balance_min_bars": 4,
+    "balance_support_enter": 0.55,
+    "balance_max_net_disp_ratio": 0.40,
+    "acceptance_bars_beyond": 2,
+    "reaction_retrace_ratio": 0.35,
+    "deterioration_effort_rise": 0.05,
+    "deterioration_result_drop": 0.05
+  },
+  "aes3": {
+    "stale_cadence_sec": {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400},
+    "stale_multiplier": 2.0,
+    "propagation_history": 16
+  },
+  "aes5": {
+    "horizon_sec": 1209600
+  },
+  "aes6": {
+    "storage_warning_bytes": 2147483648,
+    "storage_critical_bytes": 1073741824
+  }
+}

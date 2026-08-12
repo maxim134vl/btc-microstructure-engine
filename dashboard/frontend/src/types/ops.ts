@@ -267,6 +267,7 @@ export interface RuntimeTruthSnapshot {
   shadow_economic_correlation?: Record<string, unknown> | null;
   shadow_structural_protection?: Record<string, unknown> | null;
   shadow_stp_be33?: Record<string, unknown> | null;
+  shadow_auction?: Record<string, unknown> | null;
   cross_layer_outcome_reconciliation?: Record<string, unknown> | null;
 }
 

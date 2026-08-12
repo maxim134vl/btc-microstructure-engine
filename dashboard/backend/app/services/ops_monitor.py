@@ -1696,6 +1696,9 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
         "shadow_stp_be33": (
             (runtime_truth or {}).get("shadow_stp_be33") or {}
         ),
+        "shadow_auction": (
+            (runtime_truth or {}).get("shadow_auction") or {}
+        ),
         "cross_layer_outcome_reconciliation": (
             (runtime_truth or {}).get("cross_layer_outcome_reconciliation") or {}
         ),

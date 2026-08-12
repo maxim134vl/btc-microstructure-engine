@@ -533,6 +533,11 @@ def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
             ("run_shadow_stp_be33.py",),
             False,
         ),
+        (
+            "shadow_auction",
+            ("run_shadow_auction.py",),
+            False,
+        ),
     ]
     if live1b:
         specs.extend(
@@ -2816,6 +2821,47 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         "shadow_economic_correlation",
     )
 
+    def _shadow_auction_truth() -> dict[str, Any]:
+        """Read-only AUCTION_EPISODE_SHADOW panel from external health/integrity."""
+        try:
+            from btc_ml.trading.shadow_auction.dashboard_summary import (
+                build_dashboard_snapshot,
+            )
+
+            payload = build_dashboard_snapshot(repo=ROOT)
+        except Exception as exc:  # noqa: BLE001 — dashboard must stay up
+            return {
+                "mode": "RESEARCH_OBSERVER",
+                "read_only": True,
+                "no_execution": True,
+                "observer_only": True,
+                "enforcement_enabled": False,
+                "status": "UNAVAILABLE",
+                "process_health": "STOPPED",
+                "alive": False,
+                "error": str(exc),
+            }
+        proc = _shadow_process_truth("shadow_auction", payload)
+        # Prefer live health PID/status when process table misses the observer.
+        if payload.get("pid") is not None and not proc.get("pid"):
+            proc = {
+                **proc,
+                "pid": payload.get("pid"),
+                "alive": bool(payload.get("alive")),
+                "process_health": payload.get("process_health") or proc.get("process_health"),
+                "process_state": payload.get("process_health") or proc.get("process_state"),
+                "uptime_seconds": payload.get("uptime_seconds"),
+                "started_at": payload.get("process_started_at"),
+                "health_reason": "shadow_auction_health_json",
+            }
+        payload.update(proc)
+        payload["mode"] = "RESEARCH_OBSERVER"
+        payload["read_only"] = True
+        payload["no_execution"] = True
+        return payload
+
+    shadow_auction = _shadow_auction_truth()
+
     def _stp_be33_truth() -> dict[str, Any]:
         """Expose the independent STP_BE33 store without mutating its runtime."""
         root = stp_be33_root
@@ -3017,6 +3063,7 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "exact_intrabar_data": "UNKNOWN",
         },
         "shadow_stp_be33": shadow_stp_be33,
+        "shadow_auction": shadow_auction,
         "cross_layer_outcome_reconciliation": cross_layer_block or {
             "read_only": True,
             "status": "NO_AUDIT_YET",

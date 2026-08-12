@@ -903,6 +903,122 @@ export function OpsUnifiedDashboard({
           </SectionCard>
         </section>
 
+        {/* 3b2. Shadow Auction research observer */}
+        <section className="space-y-2.5" data-section="shadow-auction">
+          <SectionLabel>Shadow Auction</SectionLabel>
+          <SectionCard>
+            <Panel title="Research observer · no execution">
+              {(() => {
+                const sh = (snapshot as { shadow_auction?: Record<string, unknown> }).shadow_auction || {};
+                const tfs = (sh.timeframes || {}) as Record<string, Record<string, unknown>>;
+                const hier = (sh.hierarchy || {}) as Record<string, unknown>;
+                const funnel = (sh.funnel || {}) as Record<string, unknown>;
+                const verdicts = (sh.verdicts || {}) as Record<string, unknown>;
+                const integrity = (sh.integrity || {}) as Record<string, unknown>;
+                const resources = (sh.resources || {}) as Record<string, unknown>;
+                const research = (sh.research_checkpoint || {}) as Record<string, unknown>;
+                const economic = (sh.economic_research || {}) as Record<string, unknown>;
+                const postmortem = (sh.postmortem || {}) as Record<string, unknown>;
+                const lagMs = sh.source_lag_ms;
+                const uptime = sh.uptime_seconds;
+                const bytes = Number(resources.shadow_total_bytes ?? NaN);
+                const free = Number(resources.disk_free_bytes ?? NaN);
+                const mb = (n: number) =>
+                  Number.isFinite(n) ? `${(n / (1024 * 1024)).toFixed(1)} MB` : "—";
+                const tfLine = (tf: string) => {
+                  const row = tfs[tf] || {};
+                  return `${String(row.auction_family || "—")} · ${String(row.episode_phase || "—")} · lag ${String(row.source_lag_sec ?? "—")}s`;
+                };
+                const lookahead = Number(integrity.lookahead_violations ?? 0);
+                return (
+                  <>
+                    <MetricLine
+                      label="Status"
+                      value={`${String(sh.status || sh.process_health || "—")} · ${String(sh.mode || "RESEARCH_OBSERVER")}`}
+                    />
+                    <MetricLine
+                      label="Observer"
+                      value={`observer_only=${String(sh.observer_only ?? true)} · enforcement=${String(sh.enforcement_enabled ?? false)} · NO EXECUTION`}
+                    />
+                    <MetricLine
+                      label="Process"
+                      value={`PID ${String(sh.pid ?? "—")} · uptime ${uptime == null ? "—" : `${Math.floor(Number(uptime))}s`} · updated ${String(sh.updated_at || "—")}`}
+                    />
+                    <MetricLine
+                      label="Source lag"
+                      value={`${lagMs == null ? "—" : `${lagMs} ms`} · last ${String(sh.last_source_timestamp || "—")}`}
+                    />
+                    <MetricLine label="M15" value={tfLine("M15")} />
+                    <MetricLine label="M30" value={tfLine("M30")} />
+                    <MetricLine label="H1" value={tfLine("H1")} />
+                    <MetricLine label="H4" value={tfLine("H4")} />
+                    <MetricLine
+                      label="Hierarchy"
+                      value={`${String(hier.hierarchy_state || "—")} · depth ${String(hier.propagation_depth ?? "—")} · dir ${String(hier.propagation_direction || "—")}`}
+                    />
+                    <MetricLine
+                      label="TF relations"
+                      value={`M15↔M30 ${String(hier.m15_m30_relation || "—")} · M30↔H1 ${String(hier.m30_h1_relation || "—")} · H1↔H4 ${String(hier.h1_h4_relation || "—")}`}
+                    />
+                    <MetricLine
+                      label="Local vs structural"
+                      value={`${String(hier.local_vs_structural_state || "—")} · conflict ${String(hier.conflict_state || "—")}`}
+                    />
+                    <MetricLine
+                      label="Research comparison"
+                      value={
+                        research.checkpoint_verdict
+                          ? `${String(research.checkpoint_verdict)} · ${String(research.checkpoint_type || "—")} · ${String(research.canonical_timeframe || "—")} ${String(research.canonical_side || "")} · coverage ${String(research.coverage_status || "—")}`
+                          : "—"
+                      }
+                    />
+                    <MetricLine
+                      label="Research funnel"
+                      value={`ckp ${String(funnel.canonical_checkpoints ?? "—")} · verdicts ${String(funnel.checkpoint_verdicts ?? "—")} · closed ${String(funnel.closed_cases_evaluated ?? "—")} · open ${String(funnel.open_cases_waiting_close ?? "—")}`}
+                    />
+                    <MetricLine
+                      label="Coverage"
+                      value={`complete ${String(funnel.coverage_complete ?? "—")} · partial ${String(funnel.coverage_partial ?? "—")} · stale ${String(funnel.coverage_stale ?? "—")} · missing ${String(funnel.coverage_missing ?? "—")}`}
+                    />
+                    <MetricLine
+                      label="Post-mortem funnel"
+                      value={`complete ${String(funnel.postmortem_complete ?? "—")} · waiting ${String(funnel.postmortem_waiting ?? "—")} · expired ${String(funnel.postmortem_expired ?? "—")}`}
+                    />
+                    <MetricLine
+                      label="Verdict counts"
+                      value={`SUPPORT ${String(verdicts.SUPPORT ?? "—")} · WAIT ${String(verdicts.WAIT ?? "—")} · REJECT ${String(verdicts.REJECT ?? "—")} · OPPOSITE ${String(verdicts.OPPOSITE ?? "—")} · UNRESOLVED ${String(verdicts.UNRESOLVED ?? "—")}`}
+                    />
+                    {economic && Object.keys(economic).length > 0 ? (
+                      <MetricLine
+                        label="Economic research"
+                        value={`AVOIDED_LOSS ${String(economic.SHADOW_AVOIDED_LOSS ?? "—")} · MISSED_WIN ${String(economic.SHADOW_MISSED_WIN ?? "—")} · BETTER_ENTRY ${String(economic.SHADOW_BETTER_ENTRY ?? "—")} · CANONICAL_BETTER ${String(economic.CANONICAL_BETTER_ENTRY ?? "—")}`}
+                      />
+                    ) : null}
+                    {postmortem && postmortem.retrospective_structure_label ? (
+                      <MetricLine
+                        label="Post-mortem"
+                        value={`${String(postmortem.retrospective_structure_label)} · ${String(postmortem.eventual_resolution || "—")} · depth ${String(postmortem.max_propagation_depth ?? "—")}`}
+                      />
+                    ) : null}
+                    <MetricLine
+                      label="Integrity"
+                      value={`${String(integrity.status || "—")}${lookahead > 0 ? " · LOOKAHEAD CRITICAL" : ""} · lookahead ${String(integrity.lookahead_violations ?? "—")} · dup ${String(integrity.duplicates ?? "—")} · conflicts ${String(integrity.payload_conflicts ?? "—")} · broken ${String(integrity.broken_references ?? "—")} · order warn ${String(integrity.ordering_warnings ?? "—")}`}
+                      hint={lookahead > 0 ? "lookahead violation is critical" : undefined}
+                    />
+                    <MetricLine
+                      label="Resources"
+                      value={`RSS ${String(resources.rss_memory_mb ?? "—")} MB · store ${mb(bytes)} · free SSD ${mb(free)} · ${String(resources.storage_status || "—")} · mounted=${String(resources.storage_mounted ?? "—")} writable=${String(resources.storage_writable ?? "—")}`}
+                    />
+                    <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
+                      RESEARCH OBSERVER · NO EXECUTION. Verdicts are research comparisons only and never control trades.
+                    </p>
+                  </>
+                );
+              })()}
+            </Panel>
+          </SectionCard>
+        </section>
+
         {/* 3b3. Cross-Layer Outcome Reconciliation (read-only audit) */}
         <section className="space-y-2.5" data-section="cross-layer-outcome-reconciliation">
           <SectionLabel>Cross-Layer Outcome Reconciliation</SectionLabel>
