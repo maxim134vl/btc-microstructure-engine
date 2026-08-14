@@ -1,17 +1,25 @@
-"""External SSD write-boundary paths for Shadow Auction.
+"""Shadow Auction write-boundary paths.
 
-Heavy data MUST live under the configured external volume. Silent fallback to
-the repository tree is forbidden.
+Canonical storage for Docker/VPS/host parity is repo-local:
+
+    data/trading/shadow_auction
+
+Legacy ``external_volume`` mode (e.g. /Volumes/MaksTiger) remains supported
+when ``storage_mode`` is set explicitly, but is no longer the default.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Mapping
 
 from . import WRITE_BOUNDARY_VIOLATION
 
 
-DEFAULT_DATA_ROOT = "/Volumes/MaksTiger/btc-ml/shadow_auction"
+DEFAULT_STORAGE_MODE = "repo_local"
+DEFAULT_DATA_ROOT = "data/trading/shadow_auction"
+# Legacy defaults kept for external_volume mode / old tests.
+DEFAULT_EXTERNAL_DATA_ROOT = "/Volumes/MaksTiger/btc-ml/shadow_auction"
 DEFAULT_VOLUME_ROOT = "/Volumes/MaksTiger"
 
 REQUIRED_SUBDIRS = (
@@ -23,15 +31,18 @@ REQUIRED_SUBDIRS = (
     "archive",
 )
 
-# Sibling Shadow / canonical persistent roots that AES6 must never write into.
+# Sibling Shadow / canonical persistent roots that Auction must never write into.
 # Paths are relative to the repository root unless absolute.
+# Note: data/trading/shadow_auction itself is the allowed Auction root.
 FORBIDDEN_PERSISTENT_RELATIVE = (
     "data/cognition",
-    "data/trading",
     "data/trading/shadow_economic_correlation",
     "data/trading/shadow_structural_protection",
     "data/trading/intrabar_paper",
+    "data/trading/paper_epochs",
 )
+
+REPO_LOCAL_RELATIVE = "data/trading/shadow_auction"
 
 
 def forbidden_persistent_roots(repo: Path | None = None) -> tuple[Path, ...]:
@@ -39,7 +50,7 @@ def forbidden_persistent_roots(repo: Path | None = None) -> tuple[Path, ...]:
     out: list[Path] = []
     for rel in FORBIDDEN_PERSISTENT_RELATIVE:
         out.append((root / rel).resolve())
-    # Explicit absolute traps for accidental /tmp or repo-local "Volumes" fakes.
+    # Explicit absolute traps for accidental /tmp fallbacks.
     out.append(Path("/tmp").resolve())
     out.append(Path("/var/tmp").resolve())
     return tuple(out)
@@ -68,16 +79,45 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def configured_data_root(config: dict | None = None) -> Path:
-    if config and config.get("data_root"):
-        return Path(str(config["data_root"])).expanduser()
-    return Path(DEFAULT_DATA_ROOT)
+def storage_mode(config: Mapping[str, Any] | None = None) -> str:
+    cfg = dict(config or {})
+    mode = str(cfg.get("storage_mode") or DEFAULT_STORAGE_MODE).strip().lower()
+    if mode in {"repo_local", "local", "repository"}:
+        return "repo_local"
+    if mode in {"external_volume", "external", "ssd"}:
+        return "external_volume"
+    raise ValueError(f"unsupported shadow_auction storage_mode: {mode}")
 
 
-def configured_volume_root(config: dict | None = None) -> Path:
+def resolve_data_root(
+    config: Mapping[str, Any] | None = None,
+    *,
+    repo: Path | None = None,
+) -> Path:
+    """Resolve configured data_root; relative paths are anchored at repo root."""
+    root = (repo or repo_root()).resolve()
+    cfg = dict(config or {})
+    raw = cfg.get("data_root")
+    if raw is None or str(raw).strip() == "":
+        if storage_mode(cfg) == "repo_local":
+            return (root / DEFAULT_DATA_ROOT).resolve()
+        return Path(DEFAULT_EXTERNAL_DATA_ROOT).expanduser().resolve()
+    path = Path(str(raw)).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
+def configured_data_root(config: dict | None = None, *, repo: Path | None = None) -> Path:
+    return resolve_data_root(config, repo=repo)
+
+
+def configured_volume_root(config: dict | None = None) -> Path | None:
     if config and config.get("required_volume_root"):
         return Path(str(config["required_volume_root"])).expanduser()
-    return Path(DEFAULT_VOLUME_ROOT)
+    if storage_mode(config) == "external_volume":
+        return Path(DEFAULT_VOLUME_ROOT)
+    return None
 
 
 def assert_shadow_write_path(
@@ -86,10 +126,10 @@ def assert_shadow_write_path(
     data_root: Path | str,
     repo: Path | None = None,
 ) -> Path:
-    """Refuse any write outside the external Shadow Auction root.
+    """Refuse any write outside the configured Shadow Auction root.
 
-    Also refuse paths that resolve under the repository tree (no silent
-    internal-SSD fallback), and refuse known sibling Shadow / canonical roots.
+    Repo-local mode allows writes under ``data/trading/shadow_auction``.
+    Sibling trading/cognition roots remain forbidden.
     """
     root = Path(data_root).expanduser().resolve()
     target = Path(path).expanduser().resolve()
@@ -98,15 +138,8 @@ def assert_shadow_write_path(
     except ValueError as exc:
         raise RuntimeError(f"{WRITE_BOUNDARY_VIOLATION}: refused write to {target}") from exc
 
-    repo_path = (repo or repo_root()).resolve()
-    try:
-        target.relative_to(repo_path)
-    except ValueError:
-        assert_not_forbidden_persistent(target, repo=repo_path)
-        return target
-    raise RuntimeError(
-        f"{WRITE_BOUNDARY_VIOLATION}: refused write inside repository {target}"
-    )
+    assert_not_forbidden_persistent(target, repo=repo or repo_root())
+    return target
 
 
 def subdir(data_root: Path | str, name: str) -> Path:

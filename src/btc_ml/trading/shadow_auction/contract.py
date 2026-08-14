@@ -108,7 +108,7 @@ def load_config(path: Path | None = None, *, repo_root: Path | None = None) -> d
         "observer_only",
         "enforcement_enabled",
         "data_root",
-        "required_volume_root",
+        "storage_mode",
     )
     missing = [k for k in required if k not in raw]
     if missing:
@@ -117,6 +117,9 @@ def load_config(path: Path | None = None, *, repo_root: Path | None = None) -> d
         raise ValueError("enforcement_enabled must be false for AES_V1")
     if not bool(raw.get("observer_only", True)):
         raise ValueError("observer_only must be true for AES_V1")
+    mode = str(raw.get("storage_mode") or "").strip().lower()
+    if mode in {"external_volume", "external", "ssd"} and not raw.get("required_volume_root"):
+        raise ValueError("required_volume_root is required when storage_mode=external_volume")
     return raw
 
 

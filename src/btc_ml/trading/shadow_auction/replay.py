@@ -28,9 +28,9 @@ from .memory import (
     Aes5MemoryWriter,
 )
 from .observation import BarObservation
-from .paths import assert_shadow_write_path
+from .paths import assert_shadow_write_path, resolve_data_root, storage_mode
 from .source_adapter import TF_MINUTES, _floor_bucket, aggregate_htf, load_m15_observations
-from .storage import ShadowAuctionStore, atomic_write_json, validate_external_storage
+from .storage import ShadowAuctionStore, atomic_write_json, validate_storage
 
 REFUSE_UNBOUNDED = "REFUSE_UNBOUNDED_REPLAY"
 
@@ -201,16 +201,11 @@ class ReplayRunner:
 
         config = load_config(config_path, repo_root=repo)
         contract = build_contract(config=config)
-        live_root = Path(config["data_root"]).expanduser()
-        volume = Path(config["required_volume_root"]).expanduser()
-        validation = validate_external_storage(
-            data_root=live_root,
-            volume_root=volume,
-            min_free_bytes=int(config.get("min_free_bytes") or 0),
-            repo=repo,
-        )
+        validation = validate_storage(config, repo=repo)
         if not validation.ok:
             raise RuntimeError(validation.error or "storage unavailable")
+        live_root = validation.data_root
+        mode = storage_mode(config)
 
         warmup = warmup_from or evaluation_from
         cfg_fp = config_fingerprint(config)
@@ -227,7 +222,8 @@ class ReplayRunner:
         assert_shadow_write_path(replay_root, data_root=live_root, repo=repo)
         store = ShadowAuctionStore(
             data_root=replay_root,
-            volume_root=volume,
+            volume_root=None if mode == "repo_local" else validation.volume_root,
+            storage_mode_name="repo_local" if mode == "repo_local" else None,
             min_free_bytes=0,
             repo=repo,
         )

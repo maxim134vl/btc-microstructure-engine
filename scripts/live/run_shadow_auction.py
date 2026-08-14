@@ -154,14 +154,9 @@ def main() -> int:
             now = time.time()
             if now - last_health >= health_every:
                 try:
-                    from btc_ml.trading.shadow_auction.storage import validate_external_storage
+                    from btc_ml.trading.shadow_auction.storage import validate_storage
 
-                    validation = validate_external_storage(
-                        data_root=runtime.config["data_root"],
-                        volume_root=runtime.config["required_volume_root"],
-                        min_free_bytes=int(runtime.config.get("min_free_bytes") or 0),
-                        repo=REPO,
-                    )
+                    validation = validate_storage(runtime.config, repo=REPO)
                     if not validation.ok:
                         runtime.write_health(status="DEGRADED_STORAGE", source_lag_ms=None)
                         print(

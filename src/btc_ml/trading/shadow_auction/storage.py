@@ -1,4 +1,4 @@
-"""AES0 storage foundation: mount validation, atomic writes, no fallback."""
+"""AES0 storage foundation: mount/local validation, atomic writes, no silent fallback."""
 
 from __future__ import annotations
 
@@ -17,7 +17,15 @@ from . import (
     STORAGE_NOT_WRITABLE,
     STORAGE_UNAVAILABLE,
 )
-from .paths import REQUIRED_SUBDIRS, assert_shadow_write_path, forbidden_persistent_roots, repo_root
+from .paths import (
+    REPO_LOCAL_RELATIVE,
+    REQUIRED_SUBDIRS,
+    assert_shadow_write_path,
+    forbidden_persistent_roots,
+    repo_root,
+    resolve_data_root,
+    storage_mode,
+)
 
 
 def _utc_now() -> str:
@@ -56,7 +64,6 @@ def is_real_mounted_volume(volume_root: Path | str) -> bool:
     root = Path(volume_root).expanduser()
     if not root.exists():
         return False
-    # Resolve without requiring the target to exist beyond the volume root.
     try:
         resolved = root.resolve()
     except OSError:
@@ -68,7 +75,6 @@ def is_real_mounted_volume(volume_root: Path | str) -> bool:
         sys_dev = os.stat("/").st_dev
     except OSError:
         return False
-    # A real external volume must not share the system root device.
     if vol_dev == sys_dev:
         return False
     return True
@@ -105,6 +111,122 @@ def probe_atomic_write(directory: Path) -> tuple[bool, str | None]:
         return False, str(exc)
 
 
+def _refuse(
+    *,
+    data: Path,
+    volume: Path,
+    error: str,
+    details: dict[str, Any],
+    mounted: bool = False,
+    writable: bool = False,
+    avail: int | None = None,
+) -> StorageValidation:
+    return StorageValidation(
+        ok=False,
+        data_root=data,
+        volume_root=volume,
+        storage_mounted=mounted,
+        storage_writable=writable,
+        storage_free_bytes=avail,
+        error=error,
+        details=details,
+    )
+
+
+def validate_repo_local_storage(
+    *,
+    data_root: Path | str,
+    min_free_bytes: int = 0,
+    repo: Path | None = None,
+) -> StorageValidation:
+    """Fail-closed validation for repo-local Auction storage (Docker/VPS/host)."""
+    root = (repo or repo_root()).resolve()
+    data = Path(data_root).expanduser()
+    if not data.is_absolute():
+        data = (root / data).resolve()
+    else:
+        data = data.resolve()
+    expected = (root / REPO_LOCAL_RELATIVE).resolve()
+    volume = root  # no external volume in this mode
+    details: dict[str, Any] = {
+        "checked_at": _utc_now(),
+        "repo_root": str(root),
+        "storage_mode": "repo_local",
+        "expected_data_root": str(expected),
+    }
+
+    try:
+        data.relative_to(expected)
+    except ValueError:
+        return _refuse(
+            data=data,
+            volume=volume,
+            error=(
+                f"{SHADOW_REFUSED}: repo_local data_root must be under {expected} "
+                f"(got {data})"
+            ),
+            details=details,
+        )
+
+    for forbidden in forbidden_persistent_roots(root):
+        try:
+            data.relative_to(forbidden)
+            return _refuse(
+                data=data,
+                volume=volume,
+                error=f"{SHADOW_REFUSED}: data_root collides with forbidden root {forbidden}",
+                details=details,
+            )
+        except ValueError:
+            continue
+
+    try:
+        data.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _refuse(
+            data=data,
+            volume=volume,
+            error=f"{STORAGE_NOT_WRITABLE}: cannot create data_root: {exc}",
+            details=details,
+            mounted=True,
+        )
+
+    writable, write_err = probe_atomic_write(data)
+    avail = free_bytes(data)
+    details["atomic_probe_error"] = write_err
+    if not writable:
+        return _refuse(
+            data=data,
+            volume=volume,
+            error=f"{STORAGE_NOT_WRITABLE}: {write_err}",
+            details=details,
+            mounted=True,
+            avail=avail,
+        )
+
+    if min_free_bytes and avail is not None and avail < int(min_free_bytes):
+        return _refuse(
+            data=data,
+            volume=volume,
+            error=f"{STORAGE_INSUFFICIENT_SPACE}: free={avail} required={min_free_bytes}",
+            details=details,
+            mounted=True,
+            writable=True,
+            avail=avail,
+        )
+
+    return StorageValidation(
+        ok=True,
+        data_root=data,
+        volume_root=volume,
+        storage_mounted=True,
+        storage_writable=True,
+        storage_free_bytes=avail,
+        error=None,
+        details=details,
+    )
+
+
 def validate_external_storage(
     *,
     data_root: Path | str,
@@ -112,44 +234,33 @@ def validate_external_storage(
     min_free_bytes: int = 0,
     repo: Path | None = None,
 ) -> StorageValidation:
-    """Fail-closed validation for Shadow Auction heavy storage.
-
-    Never falls back to the repository tree.
-    """
+    """Fail-closed validation for legacy external-volume Shadow Auction storage."""
     data = Path(data_root).expanduser()
     volume = Path(volume_root).expanduser()
     details: dict[str, Any] = {
         "checked_at": _utc_now(),
         "repo_root": str((repo or repo_root()).resolve()),
+        "storage_mode": "external_volume",
     }
 
-    # Hard refuse data_root inside the repo.
+    # Hard refuse data_root inside the repo for external mode.
     try:
         data.resolve().relative_to((repo or repo_root()).resolve())
-        return StorageValidation(
-            ok=False,
-            data_root=data,
-            volume_root=volume,
-            storage_mounted=False,
-            storage_writable=False,
-            storage_free_bytes=None,
-            error=f"{SHADOW_REFUSED}: data_root must not be inside the repository",
+        return _refuse(
+            data=data,
+            volume=volume,
+            error=f"{SHADOW_REFUSED}: external data_root must not be inside the repository",
             details=details,
         )
     except ValueError:
         pass
 
-    # Hard refuse sibling Shadow / canonical persistent roots as Auction data_root.
     for forbidden in forbidden_persistent_roots(repo or repo_root()):
         try:
             data.expanduser().resolve(strict=False).relative_to(forbidden)
-            return StorageValidation(
-                ok=False,
-                data_root=data,
-                volume_root=volume,
-                storage_mounted=False,
-                storage_writable=False,
-                storage_free_bytes=None,
+            return _refuse(
+                data=data,
+                volume=volume,
                 error=f"{SHADOW_REFUSED}: data_root collides with forbidden root {forbidden}",
                 details=details,
             )
@@ -157,13 +268,9 @@ def validate_external_storage(
             continue
 
     if not volume.exists():
-        return StorageValidation(
-            ok=False,
-            data_root=data,
-            volume_root=volume,
-            storage_mounted=False,
-            storage_writable=False,
-            storage_free_bytes=None,
+        return _refuse(
+            data=data,
+            volume=volume,
             error=f"{STORAGE_UNAVAILABLE}: volume root missing: {volume}",
             details=details,
         )
@@ -171,13 +278,9 @@ def validate_external_storage(
     mounted = is_real_mounted_volume(volume)
     details["ismount"] = mounted
     if not mounted:
-        return StorageValidation(
-            ok=False,
-            data_root=data,
-            volume_root=volume,
-            storage_mounted=False,
-            storage_writable=False,
-            storage_free_bytes=None,
+        return _refuse(
+            data=data,
+            volume=volume,
             error=(
                 f"{STORAGE_NOT_MOUNTED}: {volume} is not a real mounted filesystem "
                 "(refusing plain local directory)"
@@ -185,17 +288,13 @@ def validate_external_storage(
             details=details,
         )
 
-    # data_root must live under the validated volume.
     try:
         data.expanduser().resolve(strict=False).relative_to(volume.resolve())
     except ValueError:
-        return StorageValidation(
-            ok=False,
-            data_root=data,
-            volume_root=volume,
-            storage_mounted=True,
-            storage_writable=False,
-            storage_free_bytes=None,
+        return _refuse(
+            data=data,
+            volume=volume,
+            mounted=True,
             error=f"{SHADOW_REFUSED}: data_root {data} is outside volume {volume}",
             details=details,
         )
@@ -203,13 +302,11 @@ def validate_external_storage(
     try:
         data.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        return StorageValidation(
-            ok=False,
-            data_root=data,
-            volume_root=volume,
-            storage_mounted=True,
-            storage_writable=False,
-            storage_free_bytes=free_bytes(volume),
+        return _refuse(
+            data=data,
+            volume=volume,
+            mounted=True,
+            avail=free_bytes(volume),
             error=f"{STORAGE_NOT_WRITABLE}: cannot create data_root: {exc}",
             details=details,
         )
@@ -218,28 +315,23 @@ def validate_external_storage(
     avail = free_bytes(data if data.exists() else volume)
     details["atomic_probe_error"] = write_err
     if not writable:
-        return StorageValidation(
-            ok=False,
-            data_root=data,
-            volume_root=volume,
-            storage_mounted=True,
-            storage_writable=False,
-            storage_free_bytes=avail,
+        return _refuse(
+            data=data,
+            volume=volume,
+            mounted=True,
+            avail=avail,
             error=f"{STORAGE_NOT_WRITABLE}: {write_err}",
             details=details,
         )
 
     if min_free_bytes and avail is not None and avail < int(min_free_bytes):
-        return StorageValidation(
-            ok=False,
-            data_root=data,
-            volume_root=volume,
-            storage_mounted=True,
-            storage_writable=True,
-            storage_free_bytes=avail,
-            error=(
-                f"{STORAGE_INSUFFICIENT_SPACE}: free={avail} required={min_free_bytes}"
-            ),
+        return _refuse(
+            data=data,
+            volume=volume,
+            mounted=True,
+            writable=True,
+            avail=avail,
+            error=f"{STORAGE_INSUFFICIENT_SPACE}: free={avail} required={min_free_bytes}",
             details=details,
         )
 
@@ -252,6 +344,38 @@ def validate_external_storage(
         storage_free_bytes=avail,
         error=None,
         details=details,
+    )
+
+
+def validate_storage(
+    config: Mapping[str, Any],
+    *,
+    repo: Path | None = None,
+) -> StorageValidation:
+    """Validate Auction storage according to ``storage_mode`` in config."""
+    root = repo or repo_root()
+    mode = storage_mode(config)
+    data = resolve_data_root(config, repo=root)
+    min_free = int(config.get("min_free_bytes") or 0)
+    if mode == "repo_local":
+        return validate_repo_local_storage(
+            data_root=data,
+            min_free_bytes=min_free,
+            repo=root,
+        )
+    volume = config.get("required_volume_root")
+    if not volume:
+        return _refuse(
+            data=data,
+            volume=Path("."),
+            error=f"{SHADOW_REFUSED}: required_volume_root is required for external_volume mode",
+            details={"storage_mode": mode},
+        )
+    return validate_external_storage(
+        data_root=data,
+        volume_root=volume,
+        min_free_bytes=min_free,
+        repo=root,
     )
 
 
@@ -310,23 +434,34 @@ def append_jsonl(
 
 
 class ShadowAuctionStore:
-    """Minimal AES0 store confined to the validated external root."""
+    """Minimal AES0 store confined to the validated Auction root."""
 
     def __init__(
         self,
         *,
         data_root: Path | str,
-        volume_root: Path | str,
+        volume_root: Path | str | None = None,
         min_free_bytes: int = 0,
         repo: Path | None = None,
+        storage_mode_name: str | None = None,
+        config: Mapping[str, Any] | None = None,
     ) -> None:
         self.repo = repo or repo_root()
-        self.validation = validate_external_storage(
-            data_root=data_root,
-            volume_root=volume_root,
-            min_free_bytes=min_free_bytes,
-            repo=self.repo,
-        )
+        if config is not None:
+            self.validation = validate_storage(config, repo=self.repo)
+        elif storage_mode_name == "repo_local" or volume_root is None:
+            self.validation = validate_repo_local_storage(
+                data_root=data_root,
+                min_free_bytes=min_free_bytes,
+                repo=self.repo,
+            )
+        else:
+            self.validation = validate_external_storage(
+                data_root=data_root,
+                volume_root=volume_root,
+                min_free_bytes=min_free_bytes,
+                repo=self.repo,
+            )
         if not self.validation.ok:
             raise RuntimeError(self.validation.error or STORAGE_UNAVAILABLE)
         self.data_root = self.validation.data_root

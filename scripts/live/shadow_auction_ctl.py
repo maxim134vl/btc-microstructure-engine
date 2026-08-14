@@ -25,12 +25,14 @@ from btc_ml.trading.shadow_auction.paths import (  # noqa: E402
     assert_not_forbidden_persistent,
     assert_shadow_write_path,
     forbidden_persistent_roots,
+    resolve_data_root,
+    storage_mode,
 )
 from btc_ml.trading.shadow_auction.replay import REFUSE_UNBOUNDED, ReplayRunner  # noqa: E402
 from btc_ml.trading.shadow_auction.runtime import refuse_without_storage  # noqa: E402
 from btc_ml.trading.shadow_auction.storage import (  # noqa: E402
     is_real_mounted_volume,
-    validate_external_storage,
+    validate_storage,
 )
 
 RUNNER = REPO / "scripts" / "live" / "run_shadow_auction.py"
@@ -117,21 +119,20 @@ def cmd_doctor(config_path: Path | None = None) -> int:
     else:
         note("PASS", "ENFORCEMENT", "enforcement_enabled=false")
 
-    volume = Path(config["required_volume_root"])
-    data_root = Path(config["data_root"])
-    if not volume.exists() or not is_real_mounted_volume(volume):
-        note("FAIL", "SSD_NOT_MOUNTED", f"{volume} not a real mounted volume")
+    mode = storage_mode(config)
+    data_root = resolve_data_root(config, repo=REPO)
+    if mode == "external_volume":
+        volume = Path(str(config.get("required_volume_root") or ""))
+        if not volume.exists() or not is_real_mounted_volume(volume):
+            note("FAIL", "SSD_NOT_MOUNTED", f"{volume} not a real mounted volume")
+        else:
+            note("PASS", "SSD_MOUNTED", f"{volume} mounted")
     else:
-        note("PASS", "SSD_MOUNTED", f"{volume} mounted")
+        note("PASS", "STORAGE_MODE", f"storage_mode={mode} data_root={data_root}")
 
-    validation = validate_external_storage(
-        data_root=data_root,
-        volume_root=volume,
-        min_free_bytes=int(config.get("min_free_bytes") or 0),
-        repo=REPO,
-    )
+    validation = validate_storage(config, repo=REPO)
     if validation.ok:
-        note("PASS", "STORAGE_WRITABLE", "external Shadow root writable")
+        note("PASS", "STORAGE_WRITABLE", f"Shadow root writable ({mode})")
     else:
         note("FAIL", "STORAGE", validation.error or "storage validation failed")
 

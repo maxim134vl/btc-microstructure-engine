@@ -151,7 +151,7 @@ def test_05_duplicate_source_event_no_duplicate_write(tmp_path: Path):
             store = None
             # Monkeypatch validate to treat tmp as mounted writable volume
             with mock.patch(
-                "btc_ml.trading.shadow_auction.runtime.validate_external_storage"
+                "btc_ml.trading.shadow_auction.runtime.validate_storage"
             ) as vmock:
                 from btc_ml.trading.shadow_auction.storage import StorageValidation
 
@@ -207,7 +207,7 @@ def test_06_out_of_order_event_records_violation(tmp_path: Path):
         storage_free_bytes=10**12,
     )
     with mock.patch(
-        "btc_ml.trading.shadow_auction.runtime.validate_external_storage",
+        "btc_ml.trading.shadow_auction.runtime.validate_storage",
         return_value=ok,
     ), mock.patch(
         "btc_ml.trading.shadow_auction.storage.validate_external_storage",
@@ -240,7 +240,7 @@ def test_07_restart_from_watermark_no_duplicate(tmp_path: Path):
         storage_free_bytes=10**12,
     )
     with mock.patch(
-        "btc_ml.trading.shadow_auction.runtime.validate_external_storage",
+        "btc_ml.trading.shadow_auction.runtime.validate_storage",
         return_value=ok,
     ), mock.patch(
         "btc_ml.trading.shadow_auction.storage.validate_external_storage",
@@ -337,7 +337,7 @@ def test_12_manifest_fingerprint_persisted(tmp_path: Path):
     )
     expected_fp = compute_logic_fingerprint()
     with mock.patch(
-        "btc_ml.trading.shadow_auction.runtime.validate_external_storage",
+        "btc_ml.trading.shadow_auction.runtime.validate_storage",
         return_value=ok,
     ), mock.patch(
         "btc_ml.trading.shadow_auction.storage.validate_external_storage",

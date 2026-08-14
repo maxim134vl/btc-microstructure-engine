@@ -27,7 +27,7 @@ from .observation import BarObservation
 from .postmortem import DEFAULT_HORIZON_SEC
 from .resources import storage_status
 from .source_adapter import iter_new_bars
-from .storage import ShadowAuctionStore, validate_external_storage
+from .storage import ShadowAuctionStore, validate_storage
 from .watermark import Watermark
 
 
@@ -78,16 +78,12 @@ class ShadowAuctionRuntime:
         config = load_config(config_path, repo_root=repo_path)
         contract = build_contract(config=config)
 
-        validation = validate_external_storage(
-            data_root=config["data_root"],
-            volume_root=config["required_volume_root"],
-            min_free_bytes=int(config.get("min_free_bytes") or 0),
-            repo=repo_path,
-        )
+        validation = validate_storage(config, repo=repo_path)
         if not validation.ok:
             raise RuntimeError(validation.error or STORAGE_UNAVAILABLE)
 
         store = ShadowAuctionStore(
+            config=config,
             data_root=validation.data_root,
             volume_root=validation.volume_root,
             min_free_bytes=int(config.get("min_free_bytes") or 0),
@@ -698,12 +694,7 @@ def refuse_without_storage(
             "error": str(exc),
             "canonical_unaffected": True,
         }
-    validation = validate_external_storage(
-        data_root=config["data_root"],
-        volume_root=config["required_volume_root"],
-        min_free_bytes=int(config.get("min_free_bytes") or 0),
-        repo=repo_path,
-    )
+    validation = validate_storage(config, repo=repo_path)
     return {
         "status": "READY" if validation.ok else SHADOW_REFUSED,
         "ok": validation.ok,

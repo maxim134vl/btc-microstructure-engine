@@ -39,6 +39,8 @@ from btc_ml.trading.shadow_auction.storage import (
     StorageValidation,
     is_real_mounted_volume,
     validate_external_storage,
+    validate_repo_local_storage,
+    validate_storage,
 )
 
 REPO = Path(__file__).resolve().parents[3]
@@ -102,9 +104,17 @@ def _mock_store(tmp_path: Path):
 
 def test_replay_01_bounded_interval_required(tmp_path: Path):
     root, vol, ok = _mock_store(tmp_path)
-    cfg = _cfg(tmp_path, data_root=str(root), required_volume_root=str(vol), min_free_bytes=0)
+    cfg = _cfg(
+        tmp_path,
+        storage_mode="external_volume",
+        data_root=str(root),
+        required_volume_root=str(vol),
+        min_free_bytes=0,
+    )
     with mock.patch(
-        "btc_ml.trading.shadow_auction.replay.validate_external_storage", return_value=ok
+        "btc_ml.trading.shadow_auction.replay.validate_storage", return_value=ok
+    ), mock.patch(
+        "btc_ml.trading.shadow_auction.storage.validate_storage", return_value=ok
     ), mock.patch(
         "btc_ml.trading.shadow_auction.storage.validate_external_storage", return_value=ok
     ):
@@ -712,9 +722,7 @@ def test_resource_07_ssd_unavailable_no_fallback(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_control_01_doctor_pass_when_mounted():
-    if not REAL_VOLUME.exists() or not is_real_mounted_volume(REAL_VOLUME):
-        pytest.skip("MaksTiger not mounted")
+def test_control_01_doctor_pass_repo_local(tmp_path: Path):
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -723,8 +731,20 @@ def test_control_01_doctor_pass_when_mounted():
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
-    rc = mod.cmd_doctor()
-    assert rc == 0
+    cfg = _cfg(tmp_path, min_free_bytes=0)
+    assert mod.cmd_doctor(cfg) == 0
+
+
+def test_control_08_status_reads_bounded_health_only():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "shadow_auction_ctl3", REPO / "scripts" / "live" / "shadow_auction_ctl.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    assert mod.cmd_status() == 0
 
 
 def test_control_02_doctor_fail_volume_absent(tmp_path: Path):
@@ -732,6 +752,7 @@ def test_control_02_doctor_fail_volume_absent(tmp_path: Path):
 
     cfg = _cfg(
         tmp_path,
+        storage_mode="external_volume",
         data_root=str(tmp_path / "shadow_auction"),
         required_volume_root=str(tmp_path / "no_vol"),
         min_free_bytes=0,
@@ -744,20 +765,6 @@ def test_control_02_doctor_fail_volume_absent(tmp_path: Path):
     spec.loader.exec_module(mod)
     rc = mod.cmd_doctor(cfg)
     assert rc == 2
-
-
-def test_control_08_status_reads_bounded_health_only():
-    import importlib.util
-
-    if not REAL_VOLUME.exists() or not is_real_mounted_volume(REAL_VOLUME):
-        pytest.skip("MaksTiger not mounted")
-    spec = importlib.util.spec_from_file_location(
-        "shadow_auction_ctl3", REPO / "scripts" / "live" / "shadow_auction_ctl.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-    assert mod.cmd_status() == 0
 
 
 def test_write_boundary_refuses_cognition_and_siblings():
@@ -777,6 +784,36 @@ def test_write_boundary_refuses_cognition_and_siblings():
         )
     with pytest.raises(RuntimeError, match=WRITE_BOUNDARY_VIOLATION):
         assert_not_forbidden_persistent(Path("/tmp") / "shadow_fallback" / "x.json", repo=REPO)
+
+
+def test_write_boundary_allows_repo_local_shadow_root(tmp_path: Path):
+    # Use the real canonical path under the repo (not tmp) for boundary assert.
+    data_root = REPO / "data" / "trading" / "shadow_auction"
+    data_root.mkdir(parents=True, exist_ok=True)
+    path = assert_shadow_write_path(
+        data_root / "memory" / "probe_aes6_local.json",
+        data_root=data_root,
+        repo=REPO,
+    )
+    assert str(path).startswith(str(data_root.resolve()))
+
+
+def test_repo_local_storage_validation_ok():
+    result = validate_repo_local_storage(
+        data_root="data/trading/shadow_auction",
+        min_free_bytes=0,
+        repo=REPO,
+    )
+    assert result.ok is True
+    assert result.details.get("storage_mode") == "repo_local"
+    assert "shadow_auction" in str(result.data_root)
+
+
+def test_repo_local_config_validate_storage():
+    cfg = json.loads((REPO / "config" / "shadow_auction.json").read_text(encoding="utf-8"))
+    # Doctor/runtime path must pass with current canonical config.
+    result = validate_storage({**cfg, "min_free_bytes": 0}, repo=REPO)
+    assert result.ok is True
 
 
 def test_write_boundary_allows_external_shadow_root():

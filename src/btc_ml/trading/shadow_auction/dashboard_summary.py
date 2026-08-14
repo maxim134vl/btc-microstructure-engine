@@ -78,9 +78,10 @@ def _parse_ts(value: Any) -> datetime | None:
 
 
 def resolve_data_root(repo: Path) -> Path:
+    from btc_ml.trading.shadow_auction.paths import resolve_data_root as _resolve
+
     cfg = _read_json(repo / "config" / "shadow_auction.json") or {}
-    raw = cfg.get("data_root") or "/Volumes/MaksTiger/btc-ml/shadow_auction"
-    return Path(str(raw)).expanduser()
+    return _resolve(cfg, repo=repo)
 
 
 def build_dashboard_snapshot(*, repo: Path | None = None) -> dict[str, Any]:
