@@ -323,6 +323,48 @@ def test_formula_examples_are_exact() -> None:
     assert partial_trigger_price(side="SHORT", entry_price=100.0, take_price=70.0) == 90.0
 
 
+def test_streaming_reader_reseeds_when_checkpoint_is_below_rotated_file(tmp_path: Path) -> None:
+    root = tmp_path / "wal"
+    root.mkdir()
+    path = root / "events.jsonl"
+    path.write_bytes(
+        b'{"wal_offset": 100}\n'
+        b'{"wal_offset": 101}\n'
+        b'{"wal_offset": 102}\n'
+    )
+    wal = ReadOnlyWal(root)
+    assert [row["wal_offset"] for row in wal.iter_from_offset(100)] == [101, 102]
+    path.write_bytes(
+        b'{"wal_offset": 200}\n'
+        b'{"wal_offset": 201}\n'
+        b'{"wal_offset": 202}\n'
+    )
+    rows = list(wal.iter_from_offset(102))
+    assert [row["wal_offset"] for row in rows] == [200, 201, 202]
+    assert wal.last_rotation_reseed == {
+        "requested_offset": 102,
+        "active_first_offset": 200,
+    }
+
+
+def test_streaming_reader_resets_cursor_when_rewritten_file_is_shorter(tmp_path: Path) -> None:
+    root = tmp_path / "wal"
+    root.mkdir()
+    path = root / "events.jsonl"
+    path.write_bytes(
+        b'{"wal_offset": 10}\n'
+        b'{"wal_offset": 11}\n'
+        b'{"wal_offset": 12}\n'
+        b'{"wal_offset": 13}\n'
+    )
+    wal = ReadOnlyWal(root)
+    list(wal.iter_from_offset(10))
+    assert wal._cursor_bytes and wal._cursor_bytes > 0
+    path.write_bytes(b'{"wal_offset": 20}\n{"wal_offset": 21}\n')
+    rows = list(wal.iter_from_offset(13))
+    assert [row["wal_offset"] for row in rows] == [20, 21]
+
+
 def test_streaming_reader_near_tail_is_bounded_on_large_logical_wal(tmp_path: Path) -> None:
     root = tmp_path / "wal"
     root.mkdir()

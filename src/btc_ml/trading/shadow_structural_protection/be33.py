@@ -223,8 +223,10 @@ class ReadOnlyWal:
         self.events_path = Path(root) / "events.jsonl"
         self._cursor_bytes: int | None = None
         self._cached_last_offset = 0
+        self._file_identity: tuple[int, int] | None = None
         self.bytes_scanned = 0
         self.rows_replayed = 0
+        self.last_rotation_reseed: dict[str, int] | None = None
 
     def _complete_size(self) -> int:
         """Return the byte end of the last newline-terminated WAL record."""
@@ -274,10 +276,38 @@ class ReadOnlyWal:
             return None
         return row if isinstance(row, dict) else None
 
+    def _identity(self) -> tuple[int, int] | None:
+        try:
+            stat = self.events_path.stat()
+        except OSError:
+            return None
+        return (int(stat.st_ino), int(stat.st_size))
+
+    def _first_offset(self) -> int | None:
+        if not self.events_path.exists():
+            return None
+        with self.events_path.open("rb") as handle:
+            line = handle.readline()
+        self.bytes_scanned += len(line)
+        if not line.endswith(b"\n"):
+            return None
+        row = self._decode(line)
+        if row is None:
+            raise RuntimeError("STP_BE33_WAL_MALFORMED_COMPLETE_RECORD")
+        return int(row.get("wal_offset") or 0)
+
     def _byte_after_offset(self, requested: int) -> int:
         """Locate a near-tail checkpoint without reading the WAL prefix."""
         complete_size = self._complete_size()
         if not complete_size or requested <= 0:
+            return 0
+        first_offset = self._first_offset()
+        if first_offset is not None and requested < first_offset:
+            # Active WAL rotated; archived prefix is gone. Resume at file start.
+            self.last_rotation_reseed = {
+                "requested_offset": int(requested),
+                "active_first_offset": int(first_offset),
+            }
             return 0
         suffix_bytes = 0
         for line in self._reverse_lines(complete_size):
@@ -318,9 +348,18 @@ class ReadOnlyWal:
 
     def iter_from_offset(self, offset: int) -> Iterable[dict[str, Any]]:
         requested = int(offset)
+        identity = self._identity()
+        complete_size = self._complete_size()
+        first_offset = self._first_offset()
+        rotated = identity is not None and self._file_identity is not None and identity[0] != self._file_identity[0]
+        cursor_past_eof = self._cursor_bytes is not None and self._cursor_bytes > complete_size
+        active_ahead = first_offset is not None and requested < first_offset
+        if rotated or cursor_past_eof or active_ahead:
+            self._cursor_bytes = None
         if self._cursor_bytes is None or requested < self._cached_last_offset:
             self._cursor_bytes = self._byte_after_offset(requested)
             self._cached_last_offset = requested
+        self._file_identity = identity
         return (row for row in self._read_from_cursor() if int(row.get("wal_offset") or 0) > requested)
 
     def offset_before_timestamp(self, timestamp: datetime) -> int:
@@ -875,6 +914,7 @@ class StpBe33Engine:
             "startup_elapsed_seconds": time.monotonic() - self.startup_started_monotonic,
             "startup_wal_bytes_scanned": self.wal.bytes_scanned,
             "startup_wal_rows_replayed": self.wal.rows_replayed,
+            "wal_rotation_reseed": self.wal.last_rotation_reseed,
             "canonical_write_capability": False,
             "live1b_command_capability": False,
             "real_execution_capability": False,

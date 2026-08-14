@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from btc_ml.model_assurance.runtime_health import mark_health_stopped  # noqa: E402
+from btc_ml.runtime.single_instance import AlreadyRunningError, acquire_pid_lock  # noqa: E402
 
 from btc_ml.model_assurance.behavioral_validation import (  # noqa: E402
     paths,
@@ -36,8 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     pid_path = Path(args.pid_file)
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    try:
+        instance_lock = acquire_pid_lock(pid_path)
+    except AlreadyRunningError as exc:
+        print(f"already running: {exc}", flush=True)
+        return 1
 
     signal.signal(signal.SIGTERM, _handle)
     signal.signal(signal.SIGINT, _handle)
@@ -66,12 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
 
-        if pid_path.exists():
-            try:
-                if pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
-                    pid_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        instance_lock.release()
     return 0
 
 

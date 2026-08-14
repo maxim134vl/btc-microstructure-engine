@@ -93,7 +93,10 @@ def start() -> int:
     if _alive(_pid()):
         print(json.dumps({"status": "STP_BE33_ALREADY_RUNNING", "pid": _pid()}))
         return 0
-    env = {**os.environ, "PYTHONPATH": str(REPO / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO / "src") + os.pathsep + str(REPO) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
     preflight = subprocess.run(
         [_python(), "-c", (
             "from pathlib import Path; "

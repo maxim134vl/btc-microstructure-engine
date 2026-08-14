@@ -92,8 +92,16 @@ def main() -> int:
             return code
 
     from btc_ml.runtime.pipeline import run_forever, run_once
+    from btc_ml.runtime.single_instance import AlreadyRunningError, acquire_pid_lock
 
     root = os.getcwd()
+    pipeline_lock = None
+    if not args.once:
+        try:
+            pipeline_lock = acquire_pid_lock(os.path.join(root, "run", "canonical_pipeline.lock"))
+        except AlreadyRunningError as exc:
+            print(f"CANONICAL RUNTIME already running ({exc})")
+            return 1
 
     if args.with_collectors:
         watchdog = os.path.join(root, "collector_watchdog.py")
@@ -115,8 +123,12 @@ def main() -> int:
         run_once()
         return 0
 
-    run_forever()
-    return 0
+    try:
+        run_forever()
+        return 0
+    finally:
+        if pipeline_lock is not None:
+            pipeline_lock.release()
 
 
 if __name__ == "__main__":
