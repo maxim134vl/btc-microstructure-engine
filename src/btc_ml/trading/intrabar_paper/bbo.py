@@ -140,12 +140,38 @@ class CausalBBOStore:
             return None, "EXIT_PENDING_NO_CAUSAL_BBO", age_ms
         return bbo, None, age_ms
 
+    def resolve_execution_entry_bbo(
+        self,
+        *,
+        command_monotonic_ns: int,
+        max_age_ms: float,
+    ) -> tuple[CausalBBO | None, str | None, float | None, str]:
+        """Price a paper ENTRY at processing time.
+
+        Causal context-domain BBO remains the gate (quote attached on the
+        decision path). Fill uses execution-market local BBO when present so a
+        delayed closed-bar event is not filled at a historical quote embedded
+        on the event. Falls back to the causal context BBO when no local
+        market quote exists (cognition-only / unit-test path).
+        """
+        causal, reason, age_ms = self.resolve_causal(
+            command_monotonic_ns=command_monotonic_ns,
+            max_age_ms=max_age_ms,
+        )
+        if causal is None:
+            return None, reason, age_ms, "context"
+        local = self._latest_local
+        if local is not None:
+            return local, None, 0.0, "local"
+        return causal, None, age_ms, "context"
+
 
 def fill_price_for(*, side: str, action: str, bbo: CausalBBO) -> float:
-    """Paper fill helper for BBO-priced legs (EXIT / protective fallback).
+    """Paper fill policy: LONG ENTRY=ask, SHORT ENTRY=bid; EXIT is the opposite.
 
-    ENTRY paper fills use :func:`resolve_context_entry_price` at the engine —
-    BBO ask/bid are provenance only for entry.
+    ENTRY uses this helper against the BBO returned by
+    :meth:`CausalBBOStore.resolve_execution_entry_bbo`. Context occurrence
+    price is provenance only and must not be passed here.
     """
     side_u = str(side).upper()
     act = str(action).upper()
@@ -157,10 +183,10 @@ def fill_price_for(*, side: str, action: str, bbo: CausalBBO) -> float:
 
 
 def resolve_context_entry_price(event: dict[str, Any] | None, *candidates: Any) -> float | None:
-    """Return the context-occurrence price used for paper ENTRY fills.
+    """Parse context-occurrence price for provenance / audit only.
 
-    Accepts explicit candidates first (``context_event_price`` / ``price``), then
-    common event fields. Does not invent prices from BBO.
+    Never used as paper ENTRY fill, sizing input, or a LIVE execution blocker.
+    Does not invent prices from BBO.
     """
     values: list[Any] = list(candidates)
     if isinstance(event, dict):

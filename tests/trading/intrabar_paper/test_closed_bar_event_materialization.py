@@ -214,7 +214,7 @@ def _tmp_intrabar_config(tmp_path: Path) -> tuple[object, object, Path]:
     return cfg, epoch, repo
 
 
-def test_live_closed_bar_without_occurrence_price_is_not_executable_via_bbo_mid(tmp_path: Path):
+def test_live_closed_bar_without_occurrence_price_is_not_invented_from_bbo_mid(tmp_path: Path):
     from datetime import datetime, timedelta, timezone
 
     fresh_decision = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
@@ -227,7 +227,8 @@ def test_live_closed_bar_without_occurrence_price_is_not_executable_via_bbo_mid(
     assert ev["source_bar_close"] == 90.0
     assert ev["context_event_price_source"] == "MISSING_CONTEXT_OCCURRENCE_PRICE"
     assert ev.get("context_event_price_missing") is True
-    assert ev["execution_eligible"] is False
+    assert ev["execution_eligible"] is True
+    assert ev.get("context_occurrence_timestamp")
     assert float(ev["best_bid"]) == pytest.approx(100.0)
     assert float(ev["best_ask"]) == pytest.approx(100.2)
     # Must not invent decision-time BBO mid as context occurrence price.
@@ -235,11 +236,13 @@ def test_live_closed_bar_without_occurrence_price_is_not_executable_via_bbo_mid(
     cfg, epoch, _ = _tmp_intrabar_config(tmp_path)
     eng = IntrabarPaperEngine(cfg=cfg, epoch=epoch, activation_monotonic_ns=1_000_000)
     acts = eng.process_context_event(ev)
-    assert acts[0]["status"] == "ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE"
-    assert eng.positions == {}
+    assert acts[0]["status"] == "ENTERED"
+    assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.2)
+    assert acts[0]["fill"]["paper_fill_price"] != pytest.approx(100.1)  # not BBO mid
+    assert "M15" in eng.positions
 
 
-def test_live_closed_bar_with_context_origin_price_enters_at_occurrence_price(tmp_path: Path):
+def test_live_closed_bar_with_context_origin_price_retains_provenance_not_fill(tmp_path: Path):
     from datetime import datetime, timedelta, timezone
 
     fresh_decision = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
@@ -257,15 +260,18 @@ def test_live_closed_bar_with_context_origin_price_enters_at_occurrence_price(tm
     assert float(ev["context_event_price"]) == pytest.approx(100.0)
     assert ev["context_event_price_source"] == "context_origin_price"
     assert ev["execution_eligible"] is True
+    assert ev.get("context_occurrence_timestamp")
     cfg, epoch, _ = _tmp_intrabar_config(tmp_path)
     eng = IntrabarPaperEngine(cfg=cfg, epoch=epoch, activation_monotonic_ns=1_000_000)
     acts = eng.process_context_event(ev)
     assert acts[0]["status"] == "ENTERED"
-    assert acts[0]["fill"]["paper_fill_price"] == pytest.approx(100.0)
-    assert acts[0]["fill"]["paper_fill_price"] != pytest.approx(100.2)
-    assert acts[0]["fill"]["paper_fill_price"] != pytest.approx(90.0)
-    assert acts[0]["fill"]["best_ask"] == pytest.approx(100.2)
-    assert acts[0]["fill"]["entry_price_source"] == "context_event_price"
+    fill = acts[0]["fill"]
+    assert fill["paper_fill_price"] == pytest.approx(100.2)
+    assert fill["paper_fill_price"] != pytest.approx(100.0)
+    assert fill["paper_fill_price"] != pytest.approx(90.0)
+    assert fill["best_ask"] == pytest.approx(100.2)
+    assert fill["context_event_price"] == pytest.approx(100.0)
+    assert fill["entry_price_source"] == "causal_bbo_entry"
 
 
 def test_old_epoch_dedup_does_not_block_new_epoch(tmp_path: Path):

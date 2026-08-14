@@ -49,7 +49,7 @@ SLEEVE2_CAPITAL_CONTRACT_MISMATCH = "TRD_SLEEVE2_BLOCKED_CAPITAL_CONTRACT_MISMAT
 SLEEVE2_AWAITING_FLAT = "TRD_SLEEVE2_READY_AWAITING_FLAT"
 SLEEVE2_ACTIVE = "TRD_SLEEVE2_PER_TIMEFRAME_CAPITAL_ACTIVE"
 SLEEVE2_FREEZE = "TRD_SLEEVE2_ACTIVATION_FREEZE_REQUIRED"
-EXPECTED_SOURCE_FINGERPRINT = "01f3fba5ad1845c72afb7626840c409ad95a3e866257b92ea566378c44b6cd0e"
+EXPECTED_SOURCE_FINGERPRINT = "b20fa15bf4a3126f0322b9b64658fa5e672ba0a61c3a09f64dce49615008a5db"
 EPOCH_PREFIX_SLEEVE2 = "PER_TF_EQUITY_1PCT_V1_"
 
 # Capital / risk deltas that may differ between parent and derived contracts.
@@ -218,11 +218,14 @@ def _hardcoded_rules() -> dict[str, Any]:
         "same_direction_duplicate_handling": "ENTRY_BLOCKED_ACTIVE_POSITION",
         "flip_behavior": "exit existing if matching from_side then enter flip_to at mono+1",
         "entry_price_source": (
-            "context_event_price / context occurrence price; "
-            "BBO retained as provenance only; missing price → ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE"
+            "execution-time BBO via fill_price_for ENTRY (LONG=ask, SHORT=bid); "
+            "prefer execution-market local BBO at processing time when present, else "
+            "context-domain causal BBO; context_event_price is provenance only and "
+            "does not size, fill, or block LIVE ENTRY"
         ),
         "entry_timestamp_source": (
-            "context event_timestamp when present; else engine wall-clock; "
+            "engine wall-clock execution_timestamp at fill; "
+            "opened_at/signals.ts/commands.ts/orders.ts/fills.ts=execution_timestamp; "
             "command_monotonic_ns=event_monotonic_ns"
         ),
         "stop_method": "entry * (1 ∓ stop_loss_bps/10000) via stop_take_prices",
@@ -235,10 +238,17 @@ def _hardcoded_rules() -> dict[str, Any]:
         "context_end": "exit open position on CONTEXT_END for matching side",
         "context_flip": "exit then enter opposite (or to_side) on CONTEXT_FLIP",
         "opposite_direction_handling": "via CONTEXT_FLIP path only; OBSERVE tip does not exit",
-        "exit_price_source": "causal BBO fill_price_for EXIT (LONG=bid, SHORT=ask); TP/SL may use local BBO",
-        "exit_timestamp_source": "engine wall-clock utc now at fill/trade write",
-        "long_entry": "context_event_price",
-        "short_entry": "context_event_price",
+        "exit_price_source": (
+            "execution-time BBO via fill_price_for EXIT (LONG=bid, SHORT=ask); "
+            "prefer execution-market local BBO at processing time when present, else "
+            "context-domain causal BBO; context_event_price is provenance only"
+        ),
+        "exit_timestamp_source": (
+            "engine wall-clock execution_timestamp at fill; "
+            "closed_at/orders.ts/fills.ts/trades.exit_ts=execution_timestamp"
+        ),
+        "long_entry": "ask",
+        "short_entry": "bid",
         "long_exit": "bid",
         "short_exit": "ask",
         "trade_fallback_behavior": "aggTrade price may confirm TP/SL hit alongside BBO",
@@ -1177,7 +1187,7 @@ def normalize_book_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for i, row in enumerate(rows):
         norm = {}
         for k, v in sorted(row.items()):
-            if k in _ID_KEYS or k in {"ts", "opened_at", "closed_at", "exit_ts", "entry_ts"}:
+            if k in _ID_KEYS or k in {"ts", "opened_at", "closed_at", "exit_ts", "entry_ts", "execution_timestamp"}:
                 continue
             if k.endswith("_ts") or k.endswith("_at"):
                 continue

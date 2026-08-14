@@ -407,7 +407,11 @@ def _recovery_source_bar_close(row: Mapping[str, Any]) -> Any:
 
 
 def _live_context_occurrence_price(row: Mapping[str, Any]) -> tuple[float | None, str]:
-    """Real context-occurrence price for live ENTRY; never invent from decision-time BBO or bar close."""
+    """Context-occurrence price for provenance / audit; never invent from BBO or bar close.
+
+    Missing occurrence price is not a LIVE execution blocker. Paper ENTRY is
+    priced from execution-time BBO in LIVE1B.
+    """
     for key, source in (
         ("context_event_price", "context_event_price"),
         ("context_origin_price", "context_origin_price"),
@@ -900,6 +904,7 @@ def materialize_closed_bar_events(
                     "recovery_reason": "MISSED_CANONICAL_TRANSITION_AFTER_JOURNAL_WATERMARK",
                     "historical_context_event_price": bbo["historical_context_event_price"],
                     "recovery_execution_bbo_timestamp": bbo["execution_not_before"],
+                    "context_occurrence_timestamp": _iso(occurrence_ts) or str(bbo["event_timestamp"]),
                 }
             )
             context_event_price = str(bbo["historical_context_event_price"])
@@ -921,8 +926,10 @@ def materialize_closed_bar_events(
                 extra["context_event_price_missing"] = True
             else:
                 context_event_price = str(occurrence_price)
-            # Occurrence clock for entry semantics; BBO mono remains provenance / causal gate.
+            # Occurrence clock for provenance; BBO mono remains causal gate.
+            # Missing occurrence price is audit information, not a LIVE blocker.
             event_timestamp = _iso(occurrence_ts) or str(bbo["event_timestamp"])
+            extra["context_occurrence_timestamp"] = _iso(occurrence_ts) or event_timestamp
 
         metadata = {
             "event_time_contract": EVENT_TIME_CONTRACT,
@@ -994,7 +1001,6 @@ def materialize_closed_bar_events(
             str(event_type or "").upper() in ENTRY_EVENT_TYPES
             and bool(event.get("context_event_price_missing"))
         ):
-            event["execution_eligible"] = False
             result.skipped.append(
                 {
                     "reason": "MISSING_CONTEXT_OCCURRENCE_PRICE",
@@ -1002,6 +1008,7 @@ def materialize_closed_bar_events(
                     "timeframe": tf,
                     "source_bar_timestamp": _iso(source_bar_ts),
                     "context_event_id": event.get("context_event_id"),
+                    "note": "provenance_only_not_live_execution_blocker",
                 }
             )
         elif (

@@ -132,7 +132,11 @@ class ContextEventConsumer:
         """Yield events with event_monotonic_ns > checkpoint, sorted causally."""
         pending: list[dict[str, Any]] = []
         last_mono = int(self.checkpoint.last_event_monotonic_ns or 0)
-        last_offset = int(self.checkpoint.last_offset or -1)
+        last_offset = (
+            int(self.checkpoint.last_offset)
+            if self.checkpoint.last_path
+            else -1
+        )
         last_path = self.checkpoint.last_path
         last_path_resolved = str(Path(last_path).resolve()) if last_path else None
         for path in self._iter_files():

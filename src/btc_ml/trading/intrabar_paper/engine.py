@@ -34,6 +34,21 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
+def _occurrence_timestamp(event: dict[str, Any], event_timestamp: str | None) -> str | None:
+    """Context occurrence clock for provenance; never used as opened_at."""
+    for key in (
+        "context_occurrence_timestamp",
+        "context_origin_timestamp",
+        "original_context_timestamp",
+    ):
+        val = event.get(key)
+        if val is not None and str(val).strip():
+            return str(val)
+    if event_timestamp is not None and str(event_timestamp).strip():
+        return str(event_timestamp)
+    return None
+
+
 @dataclass
 class OpenPosition:
     position_id: str
@@ -63,6 +78,8 @@ class PendingExit:
     trigger_timestamp: str | None
     trigger_price: float | None
     flip_to_side: str | None = None
+    episode_id: str | None = None
+    event: dict[str, Any] | None = None
 
 
 class IntrabarPaperEngine:
@@ -237,7 +254,7 @@ class IntrabarPaperEngine:
         for tf in list(self.pending_exits.keys()):
             done = self._try_pending_exit(tf)
             if done:
-                actions.append(done)
+                actions.extend(done if isinstance(done, list) else [done])
 
         etype = str(event.get("event_type") or event.get("type") or "").upper()
         tf = str(event.get("timeframe") or "").upper()
@@ -249,6 +266,9 @@ class IntrabarPaperEngine:
         episode = event.get("lifecycle_episode_id") or event.get("episode_id")
 
         if etype == "CONTEXT_FLIP":
+            pos = self.positions.get(tf)
+            if self._is_foreign_lifecycle_episode(episode, pos):
+                return actions
             flip_from = self._context_to_side(
                 event.get("from_side") or event.get("flip_from") or event.get("previous_context")
             )
@@ -256,7 +276,6 @@ class IntrabarPaperEngine:
                 event.get("to_side") or event.get("flip_to") or event.get("new_context") or side
             )
             # Close existing if opposite
-            pos = self.positions.get(tf)
             if pos and (not flip_from or pos.side == flip_from):
                 if flip_to and flip_to != pos.side:
                     exit_act = self._exit_position(
@@ -269,6 +288,7 @@ class IntrabarPaperEngine:
                         context_event_id=eid,
                         flip_to_side=flip_to,
                         episode_id=str(episode) if episode else None,
+                        event=event,
                     )
                     if exit_act:
                         actions.append(exit_act)
@@ -308,6 +328,8 @@ class IntrabarPaperEngine:
 
         if etype == "CONTEXT_END":
             pos = self.positions.get(tf)
+            if self._is_foreign_lifecycle_episode(episode, pos):
+                return actions
             if pos and (not side or side == pos.side or side in {"OBSERVE", "STAND_ASIDE", ""}):
                 # END for matching side (or end of episode)
                 end_side = side if side in {"LONG", "SHORT"} else pos.side
@@ -321,6 +343,7 @@ class IntrabarPaperEngine:
                         trigger_price=event.get("context_event_price") or event.get("price"),
                         context_event_id=eid,
                         episode_id=str(episode) if episode else None,
+                        event=event,
                     )
                     if exit_act:
                         actions.append(exit_act)
@@ -373,6 +396,15 @@ class IntrabarPaperEngine:
             if side:
                 return side
         return ""
+
+    @staticmethod
+    def _is_foreign_lifecycle_episode(episode: Any, pos: OpenPosition | None) -> bool:
+        """True when an identified event episode must not touch a different open position."""
+        event_episode_id = str(episode).strip() if episode else ""
+        if not event_episode_id or pos is None:
+            return False
+        position_episode_id = str(pos.lifecycle_episode_id or "").strip()
+        return event_episode_id != position_episode_id
 
     def _next_command_mono(self, base: int) -> int:
         self._command_seq += 1
@@ -448,21 +480,8 @@ class IntrabarPaperEngine:
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
             return None
 
-        fill_px = resolve_context_entry_price(event, context_event_price)
-        if fill_px is None:
-            self._block("ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE", tf, context_event_id, side, event=event)
-            self.consumer.mark_processed(
-                key=key,
-                context_event_id=context_event_id,
-                event_monotonic_ns=event_monotonic_ns,
-            )
-            return {
-                "status": "ENTRY_BLOCKED_MISSING_CONTEXT_EVENT_PRICE",
-                "timeframe": tf,
-                "context_event_id": context_event_id,
-            }
-
-        bbo, reason, age_ms = self.bbo.resolve_causal(
+        occurrence_px = resolve_context_entry_price(event, context_event_price)
+        bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
             command_monotonic_ns=event_monotonic_ns,
             max_age_ms=self.cfg.max_bbo_age_ms,
         )
@@ -474,6 +493,11 @@ class IntrabarPaperEngine:
                 event_monotonic_ns=event_monotonic_ns,
             )
             return {"status": reason, "timeframe": tf}
+
+        fill_px = fill_price_for(side=side, action="ENTRY", bbo=bbo)
+        entry_price_source = (
+            "execution_market_bbo" if bbo_domain == "local" else "causal_bbo_entry"
+        )
 
         equity_at_entry = float(self.equity)
         risk_pct_at_entry = float(self.cfg.max_risk_per_trade_pct)
@@ -509,8 +533,10 @@ class IntrabarPaperEngine:
         fill_id = _new_id("fill")
         pos_id = _new_id("pos")
         signal_id = _new_id("sig")
-        occurrence_ts = str(event_timestamp).strip() if event_timestamp else ""
-        now = occurrence_ts or _utc_iso()
+        execution_ts = _utc_iso()
+        occurrence_ts = _occurrence_timestamp(event, event_timestamp)
+        decision_available_at = event.get("decision_available_at")
+        materialized_timestamp = event.get("materialized_timestamp") or event.get("ingested_at")
         cmd_mono = event_monotonic_ns
         stop_distance_usd = float(sizing.stop_distance or 0.0)
         notional_usd = float(sizing.entry_notional or 0.0)
@@ -521,16 +547,25 @@ class IntrabarPaperEngine:
             "stop_distance_usd": stop_distance_usd,
             "notional_usd": notional_usd,
         }
+        provenance_snap = {
+            "context_event_price": occurrence_px,
+            "context_occurrence_timestamp": occurrence_ts,
+            "decision_available_at": decision_available_at,
+            "materialized_timestamp": materialized_timestamp,
+            "execution_timestamp": execution_ts,
+            "entry_price_source": entry_price_source,
+            "execution_bbo_domain": bbo_domain,
+        }
         price_snap = {
-            "context_event_price": fill_px,
             "paper_fill_price": fill_px,
-            "entry_price_source": "context_event_price",
+            "execution_price": fill_px,
             "best_bid": bbo.best_bid,
             "best_ask": bbo.best_ask,
             "book_update_id": bbo.book_update_id,
             "bbo_receive_timestamp": bbo.receive_timestamp,
             "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
             "bbo_age_ms": age_ms,
+            **provenance_snap,
         }
 
         signal = self.books.append(
@@ -542,11 +577,14 @@ class IntrabarPaperEngine:
                 "event_type": event_type,
                 "context_event_id": context_event_id,
                 "lifecycle_episode_id": episode_id,
-                "ts": now,
+                "ts": execution_ts,
                 "event_monotonic_ns": event_monotonic_ns,
                 "quantity": sizing.quantity,
                 "entry_price": fill_px,
+                "execution_price": fill_px,
+                "execution_timestamp": execution_ts,
                 **capital_snap,
+                **provenance_snap,
             },
         )
         command = self.books.append(
@@ -559,7 +597,7 @@ class IntrabarPaperEngine:
                 "action": "ENTRY",
                 "context_event_id": context_event_id,
                 "command_monotonic_ns": cmd_mono,
-                "ts": now,
+                "ts": execution_ts,
                 "quantity": sizing.quantity,
                 **price_snap,
                 **capital_snap,
@@ -575,7 +613,7 @@ class IntrabarPaperEngine:
                 "action": "ENTRY",
                 "quantity": sizing.quantity,
                 "status": "FILLED",
-                "ts": now,
+                "ts": execution_ts,
                 **capital_snap,
             },
         )
@@ -592,7 +630,7 @@ class IntrabarPaperEngine:
                 "quantity": sizing.quantity,
                 "entry_fee_bps": self.cfg.entry_fee_bps,
                 "entry_slippage_bps": self.cfg.entry_slippage_bps,
-                "ts": now,
+                "ts": execution_ts,
                 "fill_monotonic_ns": cmd_mono,
                 **price_snap,
                 **capital_snap,
@@ -616,9 +654,11 @@ class IntrabarPaperEngine:
                 "entry_fill_id": fill_id,
                 "entry_command_id": cmd_id,
                 "entry_monotonic_ns": cmd_mono,
-                "opened_at": now,
-                "entry_price_source": "context_event_price",
+                "opened_at": execution_ts,
+                "execution_timestamp": execution_ts,
+                "execution_price": fill_px,
                 **capital_snap,
+                **provenance_snap,
             },
         )
         self.positions[tf] = OpenPosition(
@@ -663,6 +703,7 @@ class IntrabarPaperEngine:
         episode_id: str | None = None,
         use_local_bbo: bool = False,
         market_provenance: dict[str, Any] | None = None,
+        event: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         pos = self.positions.get(tf)
         if not pos:
@@ -712,11 +753,14 @@ class IntrabarPaperEngine:
                 command_monotonic_ns=trigger_monotonic_ns,
                 max_age_ms=self.cfg.max_bbo_age_ms,
             )
+            bbo_domain = "local"
         else:
-            bbo, reason, age_ms = self.bbo.resolve_causal_exit(
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
                 command_monotonic_ns=trigger_monotonic_ns,
                 max_age_ms=self.cfg.max_bbo_age_ms,
             )
+            if reason == "ENTRY_BLOCKED_NO_CAUSAL_BBO":
+                reason = "EXIT_PENDING_NO_CAUSAL_BBO"
         if bbo is None:
             self.pending_exits[tf] = PendingExit(
                 timeframe=tf,
@@ -728,6 +772,8 @@ class IntrabarPaperEngine:
                 trigger_timestamp=trigger_timestamp,
                 trigger_price=float(trigger_price) if trigger_price is not None else None,
                 flip_to_side=flip_to_side,
+                episode_id=episode_id,
+                event=event,
             )
             self.blocked_commands += 1
             return {"status": reason, "timeframe": tf}
@@ -745,14 +791,16 @@ class IntrabarPaperEngine:
             context_event_id=context_event_id,
             episode_id=episode_id or pos.lifecycle_episode_id,
             market_provenance=market_provenance,
+            event=event,
+            bbo_domain=bbo_domain,
         )
 
-    def _try_pending_exit(self, tf: str) -> dict[str, Any] | None:
+    def _try_pending_exit(self, tf: str) -> list[dict[str, Any]] | None:
         pend = self.pending_exits.get(tf)
         pos = self.positions.get(tf)
         if not pend or not pos:
             return None
-        bbo, reason, age_ms = self.bbo.resolve_causal_exit(
+        bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
             command_monotonic_ns=pend.command_monotonic_ns,
             max_age_ms=self.cfg.max_bbo_age_ms,
         )
@@ -765,7 +813,7 @@ class IntrabarPaperEngine:
             action=f"EXIT_{pos.side}_{pend.trigger_type}",
         )
         del self.pending_exits[tf]
-        return self._complete_exit(
+        exit_act = self._complete_exit(
             pos=pos,
             key=key,
             bbo=bbo,
@@ -776,8 +824,26 @@ class IntrabarPaperEngine:
             trigger_monotonic_ns=pend.command_monotonic_ns,
             trigger_price=pend.trigger_price,
             context_event_id=pend.context_event_id,
-            episode_id=pos.lifecycle_episode_id,
+            episode_id=pend.episode_id or pos.lifecycle_episode_id,
+            event=pend.event,
+            bbo_domain=bbo_domain,
         )
+        actions = [exit_act]
+        if pend.flip_to_side in {"LONG", "SHORT"} and pend.event is not None:
+            entry_act = self._enter_position(
+                tf=tf,
+                side=pend.flip_to_side,
+                event_type="CONTEXT_FLIP",
+                context_event_id=pend.context_event_id,
+                event_monotonic_ns=pend.command_monotonic_ns + 1,
+                event_timestamp=pend.trigger_timestamp,
+                context_event_price=pend.trigger_price,
+                episode_id=pend.episode_id,
+                event=pend.event,
+            )
+            if entry_act:
+                actions.append(entry_act)
+        return actions
 
     def _complete_exit(
         self,
@@ -795,6 +861,8 @@ class IntrabarPaperEngine:
         episode_id: str | None,
         execution_price_override: float | None = None,
         market_provenance: dict[str, Any] | None = None,
+        event: dict[str, Any] | None = None,
+        bbo_domain: str | None = None,
     ) -> dict[str, Any]:
         fill_px = (
             float(execution_price_override)
@@ -822,6 +890,19 @@ class IntrabarPaperEngine:
             exit_reason=trigger_type,
         )
         now = _utc_iso()
+        execution_ts = now
+        event = event or {}
+        occurrence_px = resolve_context_entry_price(event, trigger_price)
+        occurrence_ts = _occurrence_timestamp(event, trigger_timestamp)
+        provenance_snap = {
+            "context_event_price": occurrence_px,
+            "context_occurrence_timestamp": occurrence_ts,
+            "decision_available_at": event.get("decision_available_at"),
+            "materialized_timestamp": event.get("materialized_timestamp") or event.get("ingested_at"),
+            "execution_timestamp": execution_ts,
+            "execution_price": fill_px,
+            "execution_bbo_domain": bbo_domain,
+        }
         cmd_id = _new_id("cmd")
         order_id = _new_id("ord")
         fill_id = _new_id("fill")
@@ -848,10 +929,10 @@ class IntrabarPaperEngine:
             "fill_ask": (bbo.best_ask if bbo is not None else None),
             "paper_fill_price": fill_px,
             "ts": now,
+            **provenance_snap,
         }
         if protective_level is not None:
             command_payload.update(
-                execution_price=fill_px,
                 protective_level=protective_level,
                 protective_slippage=protective_slippage,
             )
@@ -869,6 +950,7 @@ class IntrabarPaperEngine:
                 "quantity": pos.quantity,
                 "status": "FILLED",
                 "ts": now,
+                "execution_timestamp": execution_ts,
             },
         )
         fill_payload: dict[str, Any] = {
@@ -889,10 +971,11 @@ class IntrabarPaperEngine:
             "trigger_monotonic_ns": trigger_monotonic_ns,
             "trigger_price": trigger_price,
             "ts": now,
+            "fill_monotonic_ns": trigger_monotonic_ns,
+            **provenance_snap,
         }
         if protective_level is not None:
             fill_payload.update(
-                execution_price=fill_px,
                 protective_level=protective_level,
                 protective_slippage=protective_slippage,
             )
@@ -919,11 +1002,11 @@ class IntrabarPaperEngine:
             "entry_ts": None,
             "exit_ts": now,
             "status": "CLOSED",
+            **provenance_snap,
         }
         if protective_level is not None:
             trade_payload.update(
-                trigger_price=float(trigger_price),
-                execution_price=fill_px,
+                trigger_price=float(trigger_price) if trigger_price is not None else None,
                 protective_level=protective_level,
                 protective_slippage=protective_slippage,
                 stop_loss_price=pos.stop_loss_price,
@@ -942,10 +1025,10 @@ class IntrabarPaperEngine:
             "closed_at": now,
             "exit_reason": trigger_type,
             "lifecycle_episode_id": episode_id,
+            **provenance_snap,
         }
         if protective_level is not None:
             closed_position_payload.update(
-                execution_price=fill_px,
                 protective_level=protective_level,
                 protective_slippage=protective_slippage,
                 stop_loss_price=pos.stop_loss_price,

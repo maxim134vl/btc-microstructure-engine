@@ -260,10 +260,11 @@ def test_b_recovered_flip_closes_short_but_blocks_reverse_long(cfg, tmp_path: Pa
         domain="context",
     )
     acts = eng.process_context_event(recovered)
-    assert [a["status"] for a in acts] == ["EXITED", "ENTRY_BLOCKED_REPLAY_SIGNAL"]
-    assert "M15" not in eng.positions
-    blocked = eng.books.read_all("blocked")
-    assert blocked[-1]["reason"] == "ENTRY_BLOCKED_REPLAY_SIGNAL"
+    assert [a.get("status") for a in acts] == []
+    pos = eng.positions["M15"]
+    assert pos.side == "SHORT"
+    assert pos.lifecycle_episode_id == "960.0"
+    assert not eng.pending_exits
 
 
 def test_c_recovered_end_closes_existing_position(cfg, tmp_path: Path):
@@ -676,43 +677,48 @@ def test_l_current_executable_bbo_used_for_recovery_exit_fill(cfg, tmp_path: Pat
     journal = _journal(repo / "data" / "cognition" / "intrabar_context_events")
     _seed_m15_short_journal(journal)
     watermarks = _watermarks(journal)
-    flip_row = _decision_row(
-        candle="2026-08-06T05:00:00Z",
-        written="2026-08-06T05:16:59.773003Z",
-        current="LONG_CONTEXT",
-        previous=None,
-        episode="963.0",
-        decision_id="m15-8-causal-long",
+    end_row = _decision_row(
+        candle="2026-08-06T06:00:00Z",
+        written="2026-08-06T06:16:59Z",
+        current="OBSERVE",
+        previous="SHORT_CONTEXT",
+        episode="960.0",
+        decision_id="recovery-end-bbo",
         close=64920.5,
     )
+    end_row["paper_action_candidate"] = "NO_TRADE_OBSERVE"
+    end_row["intended_side"] = "NONE"
+    end_row["signal_eligibility_status"] = "BLOCKED_NOT_DIRECTIONAL"
     bridge_result = materialize_closed_bar_events(
-        [flip_row],
+        [end_row],
         journal=journal,
         provider_id="LIVE1A_CANONICAL_INTRABAR_CONTEXT",
         epoch_id="TEST_EPOCH",
-        current_bbo=_bbo(ts="2026-08-06T06:00:00Z", mono=6_000_000, bid=65100.0, ask=65100.01),
-        bridge_activated_at="2026-08-06T06:00:00Z",
+        current_bbo=_bbo(ts="2026-08-06T07:00:00Z", mono=7_000_000, bid=65100.0, ask=65100.01),
+        bridge_activated_at="2026-08-06T07:00:00Z",
         recovery_watermarks=watermarks,
-        active_positions_by_timeframe=set(),
-        traded_episodes=set(),
+        active_positions_by_timeframe={"M15"},
+        traded_episodes={"960.0"},
     )
     recovered = bridge_result.emitted[0]
-    recovered["event_monotonic_ns"] = 6_000_000
+    recovered["event_monotonic_ns"] = 7_000_000
     recovered["best_bid"] = 65100.0
     recovered["best_ask"] = 65100.01
-    recovered["bbo_receive_monotonic_ns"] = 6_000_000
+    recovered["bbo_receive_monotonic_ns"] = 7_000_000
 
-    eng = _engine(c, activation_mono=6_000_000)
-    _open_short_position(eng, mono=6_000_000)
+    eng = _engine(c, activation_mono=7_000_000)
+    _open_short_position(eng, mono=7_000_000)
     eng.bbo.update_from_book_ticker(
         best_bid=65100.0,
         best_ask=65100.01,
-        receive_monotonic_ns=6_000_000,
-        receive_timestamp="2026-08-06T06:00:00Z",
+        receive_monotonic_ns=7_000_000,
+        receive_timestamp="2026-08-06T07:00:00Z",
         book_update_id="recovery-live-bbo",
         domain="context",
     )
     acts = eng.process_context_event(recovered)
     exit_fill = acts[0]["fill"]["paper_fill_price"]
-    assert exit_fill == pytest.approx(65100.0)
+    assert acts[0]["status"] == "EXITED"
+    assert acts[0]["trade"]["lifecycle_episode_id"] == "960.0"
+    assert exit_fill == pytest.approx(65100.01)
     assert exit_fill != pytest.approx(64920.5)

@@ -183,7 +183,7 @@ def test_d_market_connected_public_disconnected_protective_still_works(env):
     proc = _processor(env)
     proc.on_market_websocket_connected()
     pos = engine.positions["M15"]
-    assert pos.entry_price == pytest.approx(100.1)
+    assert pos.entry_price == pytest.approx(100.2)
     actions = proc.handle_market_ws_payload(_market_agg_payload(200, float(pos.stop_loss_price) - 1.0))
     assert actions[0]["status"] == "AGG_TRADE_DISPATCHED"
     assert "M15" not in engine.positions

@@ -233,12 +233,13 @@ class IntrabarCognitionEngine:
                 "bbo_age_ms": age_ms,
             }
 
+        event_timestamp = str(bar.causal_cutoff_timestamp or trade.get("local_receive_timestamp"))
         event = self.journal.build_event(
             timeframe=timeframe,
             event_type=transition["event_type"],
             previous_context=transition["previous_context"],
             new_context=transition["new_context"],
-            event_timestamp=str(bar.causal_cutoff_timestamp or trade.get("local_receive_timestamp")),
+            event_timestamp=event_timestamp,
             event_monotonic_ns=mono,
             context_event_price=str(trade.get("price")),
             last_trade_id=bar.last_trade_id,
@@ -252,6 +253,13 @@ class IntrabarCognitionEngine:
             model_version=MODEL_VERSION,
             lifecycle_episode_id=episode_id,
             evidence={"synthesis": synth.get("decision_evidence"), "lifecycle_phase": life.get("lifecycle_state")},
+            decision_available_at=event_timestamp,
+            context_origin_timestamp=event_timestamp,
+            evaluation_mode="PROVISIONAL_INTRABAR",
+            extra_metadata={
+                "delivery_mode": "LIVE",
+                "context_occurrence_timestamp": event_timestamp,
+            },
             **bbo_fields,
         )
         if self.journal.append(event):
