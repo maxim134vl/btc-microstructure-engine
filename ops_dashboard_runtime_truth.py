@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import os
 import subprocess
 import sys
@@ -24,10 +25,13 @@ if str(_SRC) not in sys.path:
 
 from btc_ml.trading.trading_performance_truth import (  # noqa: E402
     build_trading_performance_truth as _build_canonical_trading_performance_truth,
+    load_canonical_equity_snapshots as _load_canonical_equity_snapshots,
+    _resolve_epoch_manifest_timestamp as _resolve_epoch_manifest_timestamp,
 )
 
 SCHEMA_VERSION = "ops_dashboard_runtime_truth_v1"
 PERFORMANCE_ADAPTER_PATH = "src/btc_ml/trading/trading_performance_truth.py"
+OPS_EQUITY_CURVE_MAX_POINTS = 400
 
 ENTITY_TAXONOMY = [
     "PROCESS",
@@ -106,6 +110,98 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _downsample_curve_points(points: list[dict[str, Any]], max_points: int) -> list[dict[str, Any]]:
+    if max_points < 2 or len(points) <= max_points:
+        return points
+    last_i = len(points) - 1
+    keep = {0, last_i}
+    for i in range(1, max_points - 1):
+        keep.add(round(i * last_i / (max_points - 1)))
+    return [points[i] for i in sorted(keep)]
+
+
+def build_ops_equity_pnl_curves(payload: dict[str, Any]) -> dict[str, Any]:
+    """Event-time master equity / realized PnL series for OPS chart cards.
+
+    Read-only projection of canonical ``equity_snapshots.jsonl`` plus initial capital.
+    Does not recompute economics.
+    """
+    epoch = str(payload.get("paper_epoch_id") or "")
+    portfolio = dict(payload.get("portfolio") or {})
+    initial = portfolio.get("initial_equity_usd")
+    empty = {
+        "status": "MISSING",
+        "point_count": 0,
+        "initial_equity_usd": initial,
+        "points": [],
+    }
+    try:
+        initial_f = float(initial)
+    except (TypeError, ValueError):
+        return empty
+    if not epoch or not math.isfinite(initial_f) or initial_f <= 0:
+        return empty
+
+    books_dir = ROOT / "data" / "trading" / "intrabar_paper" / epoch / "books"
+    if not books_dir.is_dir():
+        included = list((payload.get("source_policy") or {}).get("included_sources") or [])
+        if included:
+            candidate = Path(str(included[0]))
+            if candidate.is_dir():
+                books_dir = candidate
+    if not books_dir.is_dir():
+        return empty
+
+    snaps = _load_canonical_equity_snapshots(books_dir=books_dir, paper_epoch_id=epoch)
+    init_ts, inferred = _resolve_epoch_manifest_timestamp(
+        paper_epoch_id=epoch,
+        epoch_manifest=None,
+        repo_root=ROOT,
+    )
+    points: list[dict[str, Any]] = []
+    if init_ts is not None:
+        points.append(
+            {
+                "ts": init_ts.isoformat().replace("+00:00", "Z"),
+                "equity_usd": float(initial_f),
+                "pnl_usd": 0.0,
+            }
+        )
+    seen_ts = {p["ts"] for p in points}
+    for row in snaps:
+        ts = str(row.get("ts") or "")
+        eq = row.get("equity_usd")
+        if not ts or eq is None:
+            continue
+        if ts in seen_ts:
+            continue
+        seen_ts.add(ts)
+        points.append(
+            {
+                "ts": ts,
+                "equity_usd": float(eq),
+                "pnl_usd": float(eq) - float(initial_f),
+            }
+        )
+    points = _downsample_curve_points(points, OPS_EQUITY_CURVE_MAX_POINTS)
+    if not points:
+        return {**empty, "status": "INSUFFICIENT"}
+    last = points[-1]
+    return {
+        "status": "AVAILABLE",
+        "source": "equity_snapshots.jsonl",
+        "paper_epoch_id": epoch,
+        "initial_equity_usd": float(initial_f),
+        "last_equity_usd": last["equity_usd"],
+        "last_pnl_usd": last["pnl_usd"],
+        "point_count": len(points),
+        "start_ts": points[0]["ts"],
+        "end_ts": last["ts"],
+        "initial_timestamp_inferred": bool(inferred),
+        "points": points,
+    }
+
+
 def project_trading_performance_for_ops(payload: dict[str, Any]) -> dict[str, Any]:
     """Schema projection only — never recalculates economics.
 
@@ -160,6 +256,7 @@ def project_trading_performance_for_ops(payload: dict[str, Any]) -> dict[str, An
             # Backward-compatible aliases for existing OPS frontend fields.
             "realized_pnl": portfolio.get("realised_net_pnl_usd"),
             "unrealized_pnl": portfolio.get("unrealised_gross_pnl_usd"),
+            "equity_pnl_curves": build_ops_equity_pnl_curves(payload),
         }
     )
 
@@ -2077,11 +2174,31 @@ def build_timeframe_traders(
                         position_row = open_rows.iloc[-1].to_dict()
                         entry["open_position_id"] = position_row.get("position_id")
                         entry["direction"] = str(position_row.get("direction") or "FLAT").upper()
+                        entry["status"] = "OPEN"
                         entry["entry_price"] = _sf(position_row.get("entry_price"))
                         entry["quantity"] = _sf(position_row.get("quantity"))
+                        opened = position_row.get("opened_at")
+                        entry["opened_at"] = None if opened is None else str(opened)
+                        entry["entry_fill_timestamp"] = entry["opened_at"]
+                        entry["entry_fill_price"] = entry["entry_price"]
+                        meta = position_row.get("metadata_json")
+                        if isinstance(meta, str):
+                            try:
+                                meta = json.loads(meta)
+                            except Exception:
+                                meta = {}
+                        if isinstance(meta, dict):
+                            entry["stop_loss_price"] = _sf(meta.get("stop_loss_price"))
+                            entry["take_profit_price"] = _sf(meta.get("take_profit_price"))
+                            entry["entry_price_source"] = meta.get("entry_price_source") or meta.get(
+                                "fill_source"
+                            )
+                            entry["context_price"] = _sf(meta.get("context_origin_price"))
                         book_open_positions += 1
-            # Intentionally do NOT sum trades.parquet for realised PnL / closed counts.
-            # Canonical performance comes from trading_performance_truth only.
+                    else:
+                        entry["status"] = "FLAT"
+                else:
+                    entry["status"] = "FLAT"
         except Exception as exc:  # noqa: BLE001
             entry["error"] = f"{type(exc).__name__}: {exc}"
         trader_view = ((portfolio.get("traders") or {}).get(tf)) or {}
@@ -2107,7 +2224,10 @@ def build_timeframe_traders(
     plane = {
         "entity_type": "TIMEFRAME_TRADING_PLANE",
         "activated": activation is not None,
+        "activation_mode": "S4_1_TIMEFRAME_TRADERS",
         "activation_timestamp": (activation or {}).get("activation_timestamp"),
+        "paper_epoch_id": None,
+        "execution_owner": "TIMEFRAME_MANAGER_S4_1",
         "supported_timeframes": list(S4_TIMEFRAMES),
         "unsupported_timeframes": {"D1": "TIMEFRAME_NOT_LIVE/NO_LIVE_STAGE2_WRITER"},
         "d1_trader": False,

@@ -144,8 +144,10 @@ def _decision_status_label(
 DECISION_SOURCE_FRESH_LAG_SECONDS = 30 * 60
 LIVE1A_MAX_AGE_SECONDS = 120.0
 LIVE1A_SOURCE_NAME = "LIVE1A_INTRABAR_CONTEXT"
+MANAGER_SOURCE_NAME = "TIMEFRAME_MANAGER_LATEST"
 LIVE1A_HEALTH_REL = Path("data") / "runtime" / "intrabar_cognition_health.json"
 LIVE1B_HEALTH_REL = Path("data") / "runtime" / "intrabar_paper_health.json"
+MANAGER_LATEST_REL = Path("data") / "runtime" / "timeframe_manager_latest.json"
 LIVE1A_CONTEXT_JOURNAL_REL = Path("data") / "cognition" / "intrabar_context_events" / "events.jsonl"
 LIVE1A_TIMEFRAME_ORDER = ("M15", "M30", "H1", "H4")
 DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
@@ -269,6 +271,55 @@ def load_live1a_intrabar_health() -> dict[str, Any] | None:
 def load_live1b_paper_health() -> dict[str, Any] | None:
     """Canonical LIVE1B paper health for matching decision/intent fields."""
     return _read_runtime_json(LIVE1B_HEALTH_REL)
+
+
+def load_timeframe_manager_latest() -> dict[str, Any] | None:
+    """S4.1 manager tip used when LIVE1A provisional OBSERVE would erase an open TF context."""
+    return _read_runtime_json(MANAGER_LATEST_REL)
+
+
+def _manager_command_for_tf(
+    manager_latest: dict[str, Any] | None,
+    timeframe: str,
+) -> dict[str, Any] | None:
+    if not isinstance(manager_latest, dict):
+        return None
+    commands = manager_latest.get("commands")
+    if not isinstance(commands, dict):
+        return None
+    cmd = commands.get(timeframe)
+    return cmd if isinstance(cmd, dict) else None
+
+
+def _manager_directional_overlay(cmd: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Map manager tip to active directional context when LIVE1A tip is OBSERVE-only."""
+    if not isinstance(cmd, dict):
+        return None
+    state = _normalize_context_token(
+        cmd.get("timeframe_state") or cmd.get("lifecycle_phase") or cmd.get("active_market_context")
+    )
+    if state not in DIRECTIONAL_CONTEXTS:
+        direction = _clean_token(cmd.get("timeframe_direction"))
+        if direction and direction.upper() in {"LONG", "SHORT"}:
+            state = f"{direction.upper()}_CONTEXT"
+        else:
+            return None
+    if state not in DIRECTIONAL_CONTEXTS:
+        return None
+    life = _clean_token(cmd.get("lifecycle_phase")) or "ACTIVE"
+    if life.upper() in _OBSERVE_LIKE:
+        life = "ACTIVE"
+    return {
+        "active_market_context": state,
+        "directional_bias": _bias_from_active(state),
+        "lifecycle_state": life,
+        "lifecycle_episode_id": _clean_token(cmd.get("lifecycle_episode_id")),
+        "intent": _clean_token(cmd.get("intent")) or "NO_ACTION",
+        "evaluation_timestamp": _clean_token(
+            cmd.get("evaluation_timestamp")
+        ),
+        "source": MANAGER_SOURCE_NAME,
+    }
 
 
 def _map_live1a_context_fields(
@@ -538,6 +589,7 @@ def _build_live1a_timeframe_trading_state(
     stale: bool,
     age_s: float | None,
     last_context_event: dict[str, Any] | None = None,
+    manager_cmd: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row = evals.get(timeframe)
     if not isinstance(row, dict):
@@ -587,12 +639,22 @@ def _build_live1a_timeframe_trading_state(
         if recovered in DIRECTIONAL_CONTEXTS:
             active = recovered
 
+    # Hybrid / S4.1 tip: do not let provisional OBSERVE erase a fresh manager
+    # LONG/SHORT context that still drives commands (same policy as chart truth).
+    manager_overlay = None
+    if active not in DIRECTIONAL_CONTEXTS:
+        manager_overlay = _manager_directional_overlay(manager_cmd)
+        if manager_overlay is not None:
+            active = manager_overlay["active_market_context"]
+
     raw_life = _clean_token(row.get("lifecycle_state") or row.get("lifecycle"))
     if active in DIRECTIONAL_CONTEXTS:
         lifecycle_state = raw_life or "ACTIVE"
         if lifecycle_state.upper() in _OBSERVE_LIKE:
             # Tip lost lifecycle after restart; unfinished START ⇒ still active.
             lifecycle_state = "ACTIVE"
+        if manager_overlay is not None:
+            lifecycle_state = manager_overlay["lifecycle_state"]
     else:
         lifecycle_state = "NO_ACTIVE_CONTEXT"
 
@@ -610,6 +672,8 @@ def _build_live1a_timeframe_trading_state(
     context_event_id = lineage["context_event_id"]
     context_started_at = lineage["context_started_at"]
     context_price = lineage["context_price"]
+    if manager_overlay is not None and not lifecycle_episode_id:
+        lifecycle_episode_id = manager_overlay.get("lifecycle_episode_id")
 
     bias = _bias_from_active(active)
     # Compat trading_state: active directional context wins over provisional OBSERVE.
@@ -622,6 +686,8 @@ def _build_live1a_timeframe_trading_state(
     last_evaluated_at = _format_utc_timestamp(
         _parse_utc_timestamp(row.get("last_evaluated_at") or row.get("evaluation_timestamp"))
     ) or _format_utc_timestamp(updated_at)
+    if manager_overlay is not None and manager_overlay.get("evaluation_timestamp"):
+        last_evaluated_at = manager_overlay["evaluation_timestamp"]
 
     open_position_id, open_position_side = _open_position_for_tf(paper, timeframe)
 
@@ -636,6 +702,9 @@ def _build_live1a_timeframe_trading_state(
         entry_eligible = False
         if provisional not in DIRECTIONAL_CONTEXTS:
             intent = "NONE"
+    if manager_overlay is not None and manager_overlay.get("intent"):
+        # Manager tip owns posture when LIVE1A is OBSERVE-only.
+        intent = manager_overlay["intent"]
 
     if stale:
         level = "YELLOW"
@@ -643,6 +712,8 @@ def _build_live1a_timeframe_trading_state(
         level = "GREEN"
     else:
         level = "GREY"
+
+    source_name = manager_overlay["source"] if manager_overlay is not None else LIVE1A_SOURCE_NAME
 
     return {
         "timeframe": timeframe,
@@ -663,7 +734,7 @@ def _build_live1a_timeframe_trading_state(
         "decision_reason": decision_reason,
         "causal_cutoff_timestamp": causal_cutoff,
         "last_evaluated_at": last_evaluated_at,
-        "source": LIVE1A_SOURCE_NAME,
+        "source": source_name,
         "stale": stale,
         "source_lag_seconds": age_s,
         "level": level,
@@ -675,6 +746,7 @@ def build_live1a_decision_layer_payload(
     paper: dict[str, Any] | None = None,
     *,
     now: datetime | None = None,
+    manager_latest: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build Trading State from LIVE1A provisional/lifecycle for all M15/M30/H1/H4."""
     if not isinstance(cog, dict):
@@ -705,6 +777,7 @@ def build_live1a_decision_layer_payload(
             stale=stale,
             age_s=age_s,
             last_context_event=last_context_event,
+            manager_cmd=_manager_command_for_tf(manager_latest, tf),
         )
 
     active_directional_count = sum(
@@ -738,8 +811,11 @@ def build_live1a_decision_layer_payload(
     level = "GREY" if stale else ("GREEN" if entry_eligible else "YELLOW")
     status_label = "STALE_LIVE1A" if stale else str(trading_state)
 
+    used_manager = any(row.get("source") == MANAGER_SOURCE_NAME for row in timeframes.values())
     trading_states = {
-        "source": LIVE1A_SOURCE_NAME,
+        "source": (
+            f"{LIVE1A_SOURCE_NAME}+{MANAGER_SOURCE_NAME}" if used_manager else LIVE1A_SOURCE_NAME
+        ),
         "directional_timeframes": directional_count,
         "active_directional_contexts": active_directional_count,
         "current_directional_evaluations": current_directional_eval_count,
@@ -1002,10 +1078,12 @@ async def build_pipeline_sync_status() -> dict[str, Any]:
 
 
 async def build_decision_layer_snapshot() -> dict[str, Any]:
-    # LIVE1A provisional/lifecycle is the only authoritative Trading State source.
+    # LIVE1A provisional/lifecycle is the primary Trading State source; manager tip
+    # overlays OBSERVE-only TFs so hybrid S4.1 LONGs are not erased in OPS cards.
     live1a_payload = build_live1a_decision_layer_payload(
         load_live1a_intrabar_health(),
         load_live1b_paper_health(),
+        manager_latest=load_timeframe_manager_latest(),
     )
     if live1a_payload is not None:
         return live1a_payload

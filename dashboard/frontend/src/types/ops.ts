@@ -242,7 +242,28 @@ export interface TradingOperationsPerformance {
     included_sources?: string[] | null;
     excluded_sources?: string[] | null;
   } | null;
+  equity_pnl_curves?: EquityPnlCurves | null;
 }
+
+export type EquityPnlCurvePoint = {
+  ts?: string | null;
+  equity_usd?: number | null;
+  pnl_usd?: number | null;
+};
+
+export type EquityPnlCurves = {
+  status?: string | null;
+  source?: string | null;
+  paper_epoch_id?: string | null;
+  initial_equity_usd?: number | null;
+  last_equity_usd?: number | null;
+  last_pnl_usd?: number | null;
+  point_count?: number | null;
+  start_ts?: string | null;
+  end_ts?: string | null;
+  points?: EquityPnlCurvePoint[] | null;
+};
+
 
 export interface RuntimeTruthTradingOperations {
   manager?: Record<string, unknown> | null;

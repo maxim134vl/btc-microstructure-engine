@@ -73,6 +73,9 @@ COMMAND_COLUMNS = [
     "timeframe_episode_id",
     "source_decision_timestamp",
     "lineage_lookup_status",
+    # LIVE1B-aligned provenance (never used as fill price)
+    "context_origin_price",
+    "context_started_at",
 ]
 
 VALID_INTENTS = ("OPEN_LONG", "OPEN_SHORT", "HOLD", "CLOSE", "NO_ACTION")

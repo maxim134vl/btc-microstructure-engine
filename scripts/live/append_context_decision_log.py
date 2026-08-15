@@ -7,7 +7,12 @@ closed candle that has lifecycle context.
 Does NOT enable execution.
 Does NOT rewrite historical context artifacts.
 Does NOT use visual JSON as a decision source.
-Does NOT mutate previously written decision rows.
+
+Decision rows are append-only by default. Two intentional revisions exist:
+  - latest-candle canonical replacement (tip race)
+  - confirmation catch-up: when lifecycle later shows confirmed opposite ACTIVE
+    while the frozen decision row still has the prior direction (DEVELOPING-era
+    write). Without this, paper/event bridges miss real FLIPs after FT confirms.
 
 Required statement:
   This logger records shadow-only market context decisions. It does not enable
@@ -177,12 +182,17 @@ SIGNAL_FIELD_COLUMNS = [
 BACKFILL_META_COLUMNS = [
     "record_origin",
     "backfilled_at_utc",
+    "confirmation_catchup",
+    "confirmation_catchup_reason",
 ]
 
 DECISION_COLUMNS = DECISION_COLUMNS_BASE + SIGNAL_FIELD_COLUMNS + BACKFILL_META_COLUMNS
 
 RECORD_ORIGIN_LIVE = "LIVE"
 RECORD_ORIGIN_BACKFILL = "BACKFILL"
+RECORD_ORIGIN_CONFIRMATION_CATCHUP = "CONFIRMATION_CATCHUP"
+# Auto-heal window after each live tip append (stale FLIP lag after FT confirms).
+CONFIRMATION_CATCHUP_LOOKBACK_DAYS = 14
 
 DETERMINISTIC_TOTAL_ROUNDTRIP_MODEL_COST_BPS = 20.0
 DETERMINISTIC_COST_SOURCE = "DETERMINISTIC_PAPER_SIMULATOR_SPEC"
@@ -1606,7 +1616,11 @@ def build_decision_row(
     )
 
     origin = str(record_origin or RECORD_ORIGIN_LIVE).upper()
-    backfilled_at = _iso(written) if origin == RECORD_ORIGIN_BACKFILL else None
+    backfilled_at = (
+        _iso(written)
+        if origin in {RECORD_ORIGIN_BACKFILL, RECORD_ORIGIN_CONFIRMATION_CATCHUP}
+        else None
+    )
 
     row: dict[str, Any] = {
         "decision_id": str(uuid.uuid4()),
@@ -1738,6 +1752,8 @@ def build_decision_row(
         "logger_version": LOGGER_VERSION,
         "record_origin": origin,
         "backfilled_at_utc": backfilled_at,
+        "confirmation_catchup": False,
+        "confirmation_catchup_reason": None,
     }
     # Normalize empty context_direction to None for OBSERVE/non-directional rows.
     if not row.get("context_direction"):
@@ -1979,6 +1995,238 @@ def merge_decision_frames_preserving_existing(
     out = out.drop_duplicates(subset=["_sort_ts"], keep="first")
     out = out.sort_values("_sort_ts", kind="mergesort").drop(columns=["_sort_ts"])
     return out.reset_index(drop=True)
+
+
+DIRECTIONAL_DECISION_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
+
+
+def _lifecycle_confirmed_active(row: pd.Series | dict[str, Any]) -> bool:
+    status = _clean(row.get("raw_context_status"), default="").upper()
+    reason = _clean(row.get("transition_reason"), default="").lower()
+    return status == "ACTIVE" or "confirmed opposite context replaced" in reason
+
+
+def find_confirmation_catchup_timestamps(
+    lifecycle: pd.DataFrame,
+    existing: pd.DataFrame,
+    *,
+    from_timestamp: Any | None = None,
+    to_timestamp: Any | None = None,
+    max_rows: int | None = None,
+) -> list[pd.Timestamp]:
+    """Candles where frozen decision direction disagrees with confirmed lifecycle ACTIVE.
+
+    Typical failure mode: decision written while opposite was DEVELOPING/CHALLENGED;
+    auction FT later confirms and lifecycle flips; preserve-existing left the stale
+    decision row, so closed-bar event bridge never emits CONTEXT_FLIP.
+    """
+    if lifecycle is None or len(lifecycle) == 0 or existing is None or len(existing) == 0:
+        return []
+    if "timestamp" not in lifecycle.columns or "candle_timestamp" not in existing.columns:
+        return []
+
+    life = lifecycle.copy()
+    life["_ts"] = normalize_utc_ns_series(life["timestamp"])
+    life = life.dropna(subset=["_ts"]).sort_values("_ts")
+    dec = existing.copy()
+    dec["_ts"] = normalize_utc_ns_series(dec["candle_timestamp"])
+    dec = dec.dropna(subset=["_ts"])
+
+    start = _to_utc_ts(from_timestamp)
+    end = _to_utc_ts(to_timestamp)
+    if start is not None:
+        life = life[life["_ts"] >= start]
+        dec = dec[dec["_ts"] >= start]
+    if end is not None:
+        life = life[life["_ts"] <= end]
+        dec = dec[dec["_ts"] <= end]
+
+    life_view = life[
+        [
+            c
+            for c in (
+                "_ts",
+                "active_market_context",
+                "raw_context_status",
+                "transition_reason",
+            )
+            if c in life.columns
+        ]
+    ].drop_duplicates(subset=["_ts"], keep="last")
+    dec_view = dec[["_ts", "active_market_context"]].drop_duplicates(subset=["_ts"], keep="first")
+    merged = dec_view.merge(life_view, on="_ts", how="inner", suffixes=("_dec", "_life"))
+    if merged.empty:
+        return []
+
+    dec_ctx = merged["active_market_context_dec"].map(lambda x: _clean(x, default="").upper())
+    life_ctx = merged["active_market_context_life"].map(lambda x: _clean(x, default="").upper())
+    confirmed = merged.apply(_lifecycle_confirmed_active, axis=1)
+    mask = (
+        dec_ctx.isin(DIRECTIONAL_DECISION_CONTEXTS)
+        & life_ctx.isin(DIRECTIONAL_DECISION_CONTEXTS)
+        & (dec_ctx != life_ctx)
+        & confirmed
+    )
+    stamps = [pd.Timestamp(ts) for ts in merged.loc[mask, "_ts"].tolist()]
+    stamps = sorted(set(stamps))
+    if max_rows is not None:
+        stamps = stamps[: max(0, int(max_rows))]
+    return stamps
+
+
+def merge_decision_frames_with_catchup_overrides(
+    existing: pd.DataFrame,
+    catchup_rows: list[dict[str, Any]],
+) -> pd.DataFrame:
+    """Like preserve-existing, but catch-up rows win on candle_timestamp."""
+    if not catchup_rows:
+        return _align_frame_to_schema(existing) if len(existing) else pd.DataFrame(columns=DECISION_COLUMNS)
+    new_frame = pd.DataFrame(catchup_rows)
+    for col in DECISION_COLUMNS:
+        if col not in new_frame.columns:
+            new_frame[col] = None
+    if len(existing) == 0:
+        out = new_frame
+    else:
+        existing_aligned = _align_frame_to_schema(existing)
+        # Existing first, catch-up last; keep='last' so revised rows win.
+        out = pd.concat([existing_aligned, new_frame], ignore_index=True, sort=False)
+    out = _align_frame_to_schema(out)
+    out["_sort_ts"] = normalize_utc_ns_series(out["candle_timestamp"])
+    out = out.sort_values(["_sort_ts", "decision_written_at_utc"], kind="mergesort")
+    out = out.drop_duplicates(subset=["_sort_ts"], keep="last")
+    out = out.sort_values("_sort_ts", kind="mergesort").drop(columns=["_sort_ts"])
+    return out.reset_index(drop=True)
+
+
+def apply_confirmation_catchup(
+    *,
+    log_path: Path = DECISION_LOG_PATH,
+    output_path: Path | None = None,
+    dry_run: bool = False,
+    from_timestamp: Any | None = None,
+    to_timestamp: Any | None = None,
+    max_rows: int | None = None,
+    live_path: Path = LIVE_FEED,
+    auction_path: Path = AUCTION_PATH,
+    cognitive_path: Path = COGNITIVE_PATH,
+    final_path: Path = FINAL_PATH,
+    lifecycle_path: Path = LIFECYCLE_PATH,
+    runtime_log_path: Path = RUNTIME_LOG,
+) -> dict[str, Any]:
+    """Rebuild decision rows that lagged confirmed opposite lifecycle flips."""
+    missing_sources = [
+        p
+        for p in (live_path, auction_path, cognitive_path, final_path, lifecycle_path)
+        if not p.exists()
+    ]
+    if missing_sources:
+        raise DecisionLoggerError(
+            "Missing required source files: " + ", ".join(str(p) for p in missing_sources)
+        )
+
+    live = load_parquet(live_path)
+    auction = load_parquet(auction_path)
+    cognitive = load_parquet(cognitive_path)
+    final = load_parquet(final_path)
+    lifecycle = load_parquet(lifecycle_path)
+    runtime = parse_runtime_cycles(runtime_log_path)
+    src_hash = source_files_hash(
+        [live_path, auction_path, cognitive_path, final_path, lifecycle_path]
+    )
+    existing = load_decision_log(log_path)
+    targets = find_confirmation_catchup_timestamps(
+        lifecycle,
+        existing,
+        from_timestamp=from_timestamp,
+        to_timestamp=to_timestamp,
+        max_rows=max_rows,
+    )
+
+    written_at = pd.Timestamp.now(tz="UTC")
+    new_rows: list[dict[str, Any]] = []
+    for ts in targets:
+        available = merge_decision_frames_with_catchup_overrides(existing, new_rows)
+        previous = previous_decision_before(available, ts)
+        row = build_context_decision_row(
+            live=live,
+            auction=auction,
+            cognitive=cognitive,
+            final=final,
+            lifecycle=lifecycle,
+            runtime=runtime,
+            source_hash=src_hash,
+            written_at=written_at,
+            previous_decision=previous,
+            decision_candle=ts,
+            point_in_time=True,
+            record_origin=RECORD_ORIGIN_CONFIRMATION_CATCHUP,
+        )
+        row["confirmation_catchup"] = True
+        row["confirmation_catchup_reason"] = "LIFECYCLE_CONFIRMED_OPPOSITE_ACTIVE"
+        new_rows.append(row)
+
+    combined = merge_decision_frames_with_catchup_overrides(existing, new_rows)
+    combined = normalize_canonical_timestamp_columns(combined)
+    target = output_path or log_path
+    result: dict[str, Any] = {
+        "status": "DRY_RUN" if dry_run else ("CATCHUP_APPLIED" if new_rows else "NOOP"),
+        "dry_run": bool(dry_run),
+        "log_path": str(log_path),
+        "output_path": str(target),
+        "rows_before": int(len(existing)),
+        "rows_after": int(len(combined)),
+        "catchup_candidates": int(len(targets)),
+        "rows_revised": int(len(new_rows)),
+        "candidate_candle_timestamps": [_iso(ts) for ts in targets],
+        "action_allowed": False,
+        "shadow_only": True,
+        "execution_enabled": False,
+    }
+    if dry_run:
+        return result
+
+    if new_rows:
+        write_atomic_parquet(combined, target)
+        revision_path = Path(target).with_name("context_decision_log_revisions.jsonl")
+        revision_path.parent.mkdir(parents=True, exist_ok=True)
+        with revision_path.open("a", encoding="utf-8") as fh:
+            for row in new_rows:
+                fh.write(
+                    json.dumps(
+                        {
+                            "revision_type": "CONFIRMATION_CATCHUP",
+                            "revision_recorded_at_utc": _iso(written_at),
+                            "candle_timestamp": row.get("candle_timestamp"),
+                            "decision_id": row.get("decision_id"),
+                            "active_market_context": row.get("active_market_context"),
+                            "previous_active_market_context": row.get(
+                                "previous_active_market_context"
+                            ),
+                            "reason": row.get("confirmation_catchup_reason"),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    )
+                    + "\n"
+                )
+            fh.flush()
+            os.fsync(fh.fileno())
+        result["revision_log_path"] = str(revision_path)
+        try:
+            if str(ROOT) not in sys.path:
+                sys.path.insert(0, str(ROOT))
+            from runtime_dataset_metadata import emit_metadata_for_path
+
+            emit_metadata_for_path(
+                "data/live/context_decision_log.parquet",
+                root=ROOT,
+                metadata_origin="LIVE_WRITER",
+            )
+        except Exception as _meta_exc:  # noqa: BLE001
+            print(f"METADATA_WARN decision_log sidecar: {_meta_exc}")
+    return result
 
 
 def backfill_missing_decisions(
@@ -2359,6 +2607,29 @@ def run_once(
             "execution_enabled": False,
         }
     )
+
+    # After tip append, heal bars where lifecycle later confirmed opposite ACTIVE
+    # but the frozen decision still holds the prior direction (no tip-only path).
+    catchup_from = None
+    if decision_candle is not None:
+        catchup_from = pd.Timestamp(decision_candle) - pd.Timedelta(
+            days=CONFIRMATION_CATCHUP_LOOKBACK_DAYS
+        )
+    catchup = apply_confirmation_catchup(
+        log_path=log_path,
+        from_timestamp=catchup_from,
+        live_path=live_path,
+        auction_path=auction_path,
+        cognitive_path=cognitive_path,
+        final_path=final_path,
+        lifecycle_path=lifecycle_path,
+        runtime_log_path=runtime_log_path,
+    )
+    result["confirmation_catchup_status"] = catchup.get("status")
+    result["confirmation_catchup_rows_revised"] = catchup.get("rows_revised", 0)
+    result["confirmation_catchup_candidates"] = catchup.get("catchup_candidates", 0)
+    if catchup.get("rows_revised"):
+        result["rows_after"] = catchup.get("rows_after", result.get("rows_after"))
     return result
 
 
@@ -2376,27 +2647,35 @@ def main(argv: list[str] | None = None) -> int:
         help="Fill missing lifecycle timestamps (idempotent; does not rewrite existing rows)",
     )
     parser.add_argument(
+        "--confirmation-catchup",
+        action="store_true",
+        help=(
+            "Rewrite decision rows that lag confirmed opposite lifecycle ACTIVE "
+            "(FT confirm after DEVELOPING-era write)"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Compute backfill candidates without writing",
+        help="Compute candidates without writing (backfill or confirmation-catchup)",
     )
     parser.add_argument(
         "--from-timestamp",
         type=str,
         default=None,
-        help="Inclusive UTC lower bound for backfill window",
+        help="Inclusive UTC lower bound for backfill/catch-up window",
     )
     parser.add_argument(
         "--to-timestamp",
         type=str,
         default=None,
-        help="Inclusive UTC upper bound for backfill window",
+        help="Inclusive UTC upper bound for backfill/catch-up window",
     )
     parser.add_argument(
         "--max-rows",
         type=int,
         default=None,
-        help="Maximum number of missing timestamps to backfill",
+        help="Maximum number of timestamps to backfill/revise",
     )
     parser.add_argument(
         "--output-path",
@@ -2405,9 +2684,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Write candidate/combined log to this path (default: --log-path)",
     )
     args = parser.parse_args(argv)
+    if args.backfill_missing and args.confirmation_catchup:
+        print(
+            "ERROR: --backfill-missing and --confirmation-catchup are mutually exclusive",
+            file=sys.stderr,
+        )
+        return 1
     try:
         if args.backfill_missing:
             result = backfill_missing_decisions(
+                log_path=args.log_path,
+                output_path=args.output_path,
+                dry_run=bool(args.dry_run),
+                from_timestamp=args.from_timestamp,
+                to_timestamp=args.to_timestamp,
+                max_rows=args.max_rows,
+            )
+        elif args.confirmation_catchup:
+            result = apply_confirmation_catchup(
                 log_path=args.log_path,
                 output_path=args.output_path,
                 dry_run=bool(args.dry_run),
@@ -2419,14 +2713,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.dry_run or args.from_timestamp or args.to_timestamp or args.max_rows is not None:
                 print(
                     "ERROR: --dry-run/--from-timestamp/--to-timestamp/--max-rows "
-                    "require --backfill-missing",
+                    "require --backfill-missing or --confirmation-catchup",
                     file=sys.stderr,
                 )
                 return 1
             result = run_once(log_path=args.log_path)
             if args.output_path is not None and args.output_path != args.log_path:
                 print(
-                    "ERROR: --output-path without --backfill-missing is unsupported",
+                    "ERROR: --output-path without --backfill-missing/"
+                    "--confirmation-catchup is unsupported",
                     file=sys.stderr,
                 )
                 return 1
@@ -2436,11 +2731,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return 1
 
-    title = (
-        "CONTEXT DECISION LOGGER BACKFILL (shadow-only)"
-        if args.backfill_missing
-        else "CONTEXT DECISION LOGGER (shadow-only)"
-    )
+    if args.backfill_missing:
+        title = "CONTEXT DECISION LOGGER BACKFILL (shadow-only)"
+    elif args.confirmation_catchup:
+        title = "CONTEXT DECISION LOGGER CONFIRMATION CATCH-UP (shadow-only)"
+    else:
+        title = "CONTEXT DECISION LOGGER (shadow-only)"
     print(f"======== {title} ========")
     keys = (
         "status",
@@ -2449,6 +2745,8 @@ def main(argv: list[str] | None = None) -> int:
         "rows_before",
         "rows_after",
         "rows_added",
+        "rows_revised",
+        "catchup_candidates",
         "missing_before",
         "missing_selected",
         "missing_after",
@@ -2456,6 +2754,8 @@ def main(argv: list[str] | None = None) -> int:
         "to_timestamp",
         "decision_stale",
         "technical_refresh_lag_present",
+        "confirmation_catchup_status",
+        "confirmation_catchup_rows_revised",
         "visual_json_used",
         "execution_enabled",
         "dry_run",
@@ -2467,6 +2767,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{key}: {result.get(key)}")
     if result.get("gap_intervals"):
         print(f"gap_intervals: {json.dumps(result['gap_intervals'])}")
+    candidates = result.get("candidate_candle_timestamps") or []
+    if candidates:
+        preview = candidates[:12]
+        more = len(candidates) - len(preview)
+        print(f"candidate_candle_timestamps_preview: {preview}")
+        if more > 0:
+            print(f"candidate_candle_timestamps_more: {more}")
     print(
         "NOTE: This logger records shadow-only market context decisions. "
         "It does not enable execution and must not be used to place orders."

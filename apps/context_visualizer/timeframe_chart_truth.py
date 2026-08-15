@@ -545,8 +545,35 @@ def load_intrabar_context_events_for_tf(
     return rows
 
 
+def _normalize_episode_key(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"none", "nan", "<na>"}:
+        return ""
+    if ":" in text:
+        text = text.split(":")[-1].strip()
+    try:
+        num = float(text)
+        if num == int(num):
+            return str(int(num))
+    except ValueError:
+        pass
+    return text
+
+
+def _episodes_compatible(left: Any, right: Any) -> bool:
+    """True when episode ids match, or either side lacks an id."""
+    a = _normalize_episode_key(left)
+    b = _normalize_episode_key(right)
+    if not a or not b:
+        return True
+    return a == b
+
+
 def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Map START/END/FLIP into active directional zones for chart bands."""
+    """Map START/END/FLIP into active directional zones for chart bands.
+
+    CONTEXT_END / foreign-episode events must not close a different open episode.
+    """
     zones: list[dict[str, Any]] = []
     open_zone: dict[str, Any] | None = None
     for ev in events:
@@ -558,6 +585,7 @@ def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[s
                 open_zone["end_timestamp"] = ts
                 open_zone["end_event_id"] = ev.get("context_event_id")
                 open_zone["end_reason"] = "SUPERSEDED_BY_START"
+                open_zone["active"] = False
                 zones.append(open_zone)
             open_zone = {
                 "timeframe": ev.get("timeframe"),
@@ -575,6 +603,16 @@ def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[s
                 "lifecycle_state": "ACTIVE",
             }
         elif et == "CONTEXT_END" and open_zone is not None:
+            end_direction = direction if direction in {"LONG", "SHORT"} else None
+            if end_direction and end_direction != open_zone.get("direction"):
+                # Opposite-side END without FLIP — ignore for zone continuity.
+                continue
+            if not _episodes_compatible(
+                open_zone.get("lifecycle_episode_id"),
+                ev.get("lifecycle_episode_id"),
+            ):
+                # Stale/foreign END must not close a newer open episode.
+                continue
             open_zone["end_timestamp"] = ts
             open_zone["end_event_id"] = ev.get("context_event_id")
             open_zone["end_reason"] = "CONTEXT_END"
@@ -605,6 +643,74 @@ def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[s
             }
     if open_zone is not None:
         zones.append(open_zone)
+    return zones
+
+
+def ensure_tip_active_context_zone(
+    zones: list[dict[str, Any]],
+    *,
+    tip_active: str | None,
+    tip_lifecycle: str | None,
+    tip_episode_id: Any = None,
+    tip_timestamp: str | None = None,
+    timeframe: str | None = None,
+) -> list[dict[str, Any]]:
+    """If tip still shows directional context, keep/reopen a matching active zone."""
+    tip = str(tip_active or "").upper()
+    if tip not in {"LONG_CONTEXT", "SHORT_CONTEXT"}:
+        return zones
+    direction = "LONG" if tip.startswith("LONG") else "SHORT"
+    life = str(tip_lifecycle or "ACTIVE").upper() or "ACTIVE"
+    active = [z for z in zones if z.get("active") and z.get("direction") == direction]
+    if active:
+        for zone in active:
+            # Active zones must remain open-ended for renderer tip extension.
+            zone["end_timestamp"] = None
+            zone["end_event_id"] = None
+            zone["end_reason"] = None
+            zone["lifecycle_state"] = life
+        return zones
+
+    candidate = None
+    for zone in reversed(zones):
+        if zone.get("direction") != direction:
+            continue
+        if tip_episode_id is not None and _episodes_compatible(
+            zone.get("lifecycle_episode_id"), tip_episode_id
+        ):
+            candidate = zone
+            break
+        if candidate is None:
+            candidate = zone
+    if candidate is not None:
+        candidate["active"] = True
+        candidate["end_timestamp"] = None
+        candidate["end_event_id"] = None
+        candidate["end_reason"] = None
+        candidate["lifecycle_state"] = life
+        candidate["reopened_for_tip"] = True
+        if tip_episode_id is not None and not candidate.get("lifecycle_episode_id"):
+            candidate["lifecycle_episode_id"] = tip_episode_id
+        return zones
+
+    zones.append(
+        {
+            "timeframe": timeframe,
+            "direction": direction,
+            "directional_state": tip,
+            "start_timestamp": tip_timestamp,
+            "end_timestamp": None,
+            "start_event_id": None,
+            "lifecycle_episode_id": tip_episode_id,
+            "context_price": None,
+            "bar_anchor_time": tip_timestamp,
+            "paper_epoch_id": None,
+            "source": "TIP_LIFECYCLE_ACTIVE",
+            "active": True,
+            "lifecycle_state": life,
+            "synthesized_for_tip": True,
+        }
+    )
     return zones
 
 
@@ -744,43 +850,71 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
     cmd = (manager.get("commands") or {}).get(timeframe) or {}
 
     availability_status = _map_availability_status(_txt(avail_row.get("availability_status")))
+    manager_state = _txt(cmd.get("timeframe_state")) or _txt(cmd.get("lifecycle_phase"))
+    manager_direction = _txt(cmd.get("timeframe_direction"))
     state = {
         "timeframe": timeframe,
         "availability_status": availability_status,
         "availability_raw": _txt(avail_row.get("availability_status")),
         "source_bar_open": _txt(avail_row.get("source_bar_open")),
         "source_bar_close": _txt(avail_row.get("source_bar_close")),
-        "directional_state": _txt(cmd.get("timeframe_state")) or _txt(cmd.get("lifecycle_phase")),
-        "timeframe_direction": _txt(cmd.get("timeframe_direction")),
+        "directional_state": manager_state,
+        "timeframe_direction": manager_direction,
         "manager_instruction": _txt(cmd.get("intent")),
         "manager_lifecycle_episode_id": _txt(cmd.get("lifecycle_episode_id")),
-        "lifecycle_phase": _txt(cmd.get("lifecycle_phase")),
+        "lifecycle_phase": _txt(cmd.get("lifecycle_phase")) or "ACTIVE",
         "evaluation_timestamp": _txt(cmd.get("evaluation_timestamp") or manager.get("evaluation_timestamp")),
         "context_event_id": None,
         "context_started_at": None,
         "causal_cutoff_timestamp": None,
         "context_source": "timeframe_command_memory",
+        "active_market_context": manager_state
+        if str(manager_state or "").upper() in {"LONG_CONTEXT", "SHORT_CONTEXT"}
+        else None,
     }
     live1a = load_live1a_visual_overlay(timeframe)
     if live1a:
-        # LIVE1A provisional/lifecycle overrides stale closed-bar manager command tip.
-        state["directional_state"] = live1a["directional_state"]
-        state["timeframe_direction"] = live1a["timeframe_direction"]
-        state["lifecycle_phase"] = live1a["lifecycle_state"]
-        state["manager_lifecycle_episode_id"] = live1a["lifecycle_episode_id"]
-        state["context_event_id"] = live1a["context_event_id"]
-        state["context_started_at"] = live1a["context_started_at"]
-        state["causal_cutoff_timestamp"] = live1a["causal_cutoff_timestamp"]
-        state["evaluation_timestamp"] = live1a["evaluation_timestamp"]
-        state["context_source"] = live1a["source"]
-        state["source_timestamp"] = live1a["source_timestamp"]
-        state["provisional_market_context"] = live1a.get("provisional_market_context")
-        state["active_market_context"] = live1a.get("active_market_context")
-        state["context_price"] = live1a.get("context_price")
-        if live1a["directional_state"] == "OBSERVE":
-            state["manager_instruction"] = "NO_ACTION"
-        elif live1a.get("lifecycle_state") == "CHALLENGED":
-            state["manager_instruction"] = "HOLD"
+        live_dir = str(live1a.get("directional_state") or "").upper()
+        manager_dir = str(state.get("directional_state") or "").upper()
+        # Hybrid / S4.1 tip: do not let provisional OBSERVE erase a fresh manager
+        # LONG/SHORT context that still drives commands.
+        if live_dir == "OBSERVE" and manager_dir in {
+            "LONG_CONTEXT",
+            "SHORT_CONTEXT",
+            "LONG",
+            "SHORT",
+        }:
+            state["provisional_market_context"] = live1a.get("provisional_market_context")
+            state["context_source"] = "timeframe_command_memory"
+            state["source_timestamp"] = state.get("evaluation_timestamp")
+            if state.get("active_market_context") is None and manager_dir in {
+                "LONG",
+                "SHORT",
+            }:
+                state["active_market_context"] = f"{manager_dir}_CONTEXT"
+            elif state.get("active_market_context") is None:
+                state["active_market_context"] = manager_dir
+        else:
+            # LIVE1A provisional/lifecycle overrides stale closed-bar manager command tip.
+            state["directional_state"] = live1a["directional_state"]
+            state["timeframe_direction"] = live1a["timeframe_direction"]
+            state["lifecycle_phase"] = live1a["lifecycle_state"]
+            state["manager_lifecycle_episode_id"] = live1a["lifecycle_episode_id"] or state.get(
+                "manager_lifecycle_episode_id"
+            )
+            state["context_event_id"] = live1a["context_event_id"]
+            state["context_started_at"] = live1a["context_started_at"]
+            state["causal_cutoff_timestamp"] = live1a["causal_cutoff_timestamp"]
+            state["evaluation_timestamp"] = live1a["evaluation_timestamp"]
+            state["context_source"] = live1a["source"]
+            state["source_timestamp"] = live1a["source_timestamp"]
+            state["provisional_market_context"] = live1a.get("provisional_market_context")
+            state["active_market_context"] = live1a.get("active_market_context")
+            state["context_price"] = live1a.get("context_price")
+            if live1a["directional_state"] == "OBSERVE":
+                state["manager_instruction"] = "NO_ACTION"
+            elif live1a.get("lifecycle_state") == "CHALLENGED":
+                state["manager_instruction"] = "HOLD"
     return state
 
 
@@ -1494,6 +1628,24 @@ def build_timeframe_chart_truth(
         # must not close them — only CONTEXT_END/FLIP does.
         tip_life = str(state.get("lifecycle_phase") or "").upper()
         tip_active = str(state.get("active_market_context") or state.get("directional_state") or "").upper()
+        tip_episode = (
+            state.get("manager_lifecycle_episode_id")
+            or state.get("lifecycle_episode_id")
+            or state.get("open_episode_id")
+        )
+        tip_ts = (
+            state.get("source_timestamp")
+            or state.get("evaluation_timestamp")
+            or state.get("context_started_at")
+        )
+        context_zones = ensure_tip_active_context_zone(
+            context_zones,
+            tip_active=tip_active,
+            tip_lifecycle=tip_life,
+            tip_episode_id=tip_episode,
+            tip_timestamp=str(tip_ts) if tip_ts is not None else None,
+            timeframe=tf,
+        )
         for zone in context_zones:
             if not zone.get("active"):
                 continue

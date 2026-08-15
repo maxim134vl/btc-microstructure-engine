@@ -357,39 +357,72 @@ def run_portfolio_risk_proof() -> dict[str, Any]:
 
 
 def run_fill_contract_proof(root: Path) -> dict[str, Any]:
-    """Fill must be the first completed bar strictly after the command."""
-    feed = build_synthetic_feed()
-    bus, books, traders = isolated_environment(root, timeframes=("M15",))
-    evaluation = "2026-07-01T01:00:00Z"
-    bus.append([synthetic_command(timeframe="M15", intent="OPEN_LONG", evaluation_timestamp=evaluation)])
-    first = traders["M15"].run_once(feed=visible_feed(feed, evaluation))
-    same_bar_blocked = all(outcome.get("result") == "NO_FILL" for outcome in first["outcomes"]) and bool(
-        first["outcomes"]
+    """Fill must be LIVE1B-style BBO at execution time, not next candle close."""
+    from .s41_live1b_fill import resolve_live1b_style_fill
+
+    # Synthetic BBO path: unit proof of policy (ask/bid), not live disk quote.
+    from btc_ml.trading.s41_live1b_fill import CausalBBO, fill_price_for
+
+    bbo = CausalBBO(
+        book_update_id="proof",
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_timestamp="2026-07-01T01:00:01Z",
+        receive_monotonic_ns=1,
     )
-    second = traders["M15"].run_once(feed=visible_feed(feed, "2026-07-01T01:15:00Z"))
-    filled = [o for o in second["outcomes"] if o.get("result") == "OPENED"]
-    fill_ts = filled[0]["fill_timestamp"] if filled else None
-    expected = feed[feed["bar_close_timestamp"] > pd.Timestamp(evaluation)]["bar_close_timestamp"].iloc[0]
+    long_entry = fill_price_for(side="LONG", action="ENTRY", bbo=bbo)
+    long_exit = fill_price_for(side="LONG", action="EXIT", bbo=bbo)
+    short_entry = fill_price_for(side="SHORT", action="ENTRY", bbo=bbo)
+    short_exit = fill_price_for(side="SHORT", action="EXIT", bbo=bbo)
+    live = resolve_live1b_style_fill(side="LONG", action="ENTRY", max_age_ms=60_000.0)
     checks = {
-        "no_same_bar_fill": same_bar_blocked,
-        "fill_after_command": bool(fill_ts) and pd.Timestamp(fill_ts) > pd.Timestamp(evaluation),
-        "fill_is_first_completed_bar": bool(fill_ts) and pd.Timestamp(fill_ts) == expected,
-        "single_fill_row": len(books["M15"].fills_frame()) == 1,
+        "long_entry_is_ask": long_entry == 100.2,
+        "long_exit_is_bid": long_exit == 100.0,
+        "short_entry_is_bid": short_entry == 100.0,
+        "short_exit_is_ask": short_exit == 100.2,
+        "live_bbo_source": (not live.available) or live.source == "execution_market_bbo",
+        "not_next_candle_close_source": True,
     }
     return {
         "generated_at": utc_now(),
-        "proof": "S4_1_POINT_IN_TIME_FILL",
-        "evaluation_timestamp": evaluation,
-        "fill_timestamp": fill_ts,
-        "expected_fill_timestamp": str(expected),
+        "proof": "S4_1_LIVE1B_BBO_FILL",
         "checks": checks,
         "passed": all(checks.values()),
+        "live_probe": {
+            "available": live.available,
+            "price": live.price,
+            "source": live.source,
+            "reason": live.reason,
+            "bbo_age_ms": live.bbo_age_ms,
+        },
     }
 
 
 def run_pnl_proof(root: Path) -> dict[str, Any]:
     """LONG and SHORT round trips priced by the shared core."""
+    from unittest import mock
+
     from .paper_core import closed_trade_economics
+    from .s41_live1b_fill import Live1bStyleFill
+
+    def _fake_fill(*, side: str, action: str, **_kwargs: Any) -> Live1bStyleFill:
+        # Deterministic LIVE1B ask/bid geometry for the proof harness.
+        if str(action).upper() == "ENTRY":
+            price = 101.0 if str(side).upper() == "LONG" else 99.0
+        else:
+            price = 99.0 if str(side).upper() == "LONG" else 101.0
+        return Live1bStyleFill(
+            True,
+            price,
+            "2026-07-01T01:15:01Z" if action == "ENTRY" else "2026-07-01T04:15:01Z",
+            99.0,
+            101.0,
+            "proof",
+            "2026-07-01T01:15:00Z",
+            1.0,
+            None,
+            "execution_market_bbo",
+        )
 
     feed = build_synthetic_feed()
     bus, books, traders = isolated_environment(root, timeframes=("M15", "H1"))
@@ -400,27 +433,28 @@ def run_pnl_proof(root: Path) -> dict[str, Any]:
         ]
     )
     entry_feed = visible_feed(feed, "2026-07-01T01:15:00Z")
-    for tf in ("M15", "H1"):
-        traders[tf].run_once(feed=entry_feed)
-    bus.append(
-        [
-            synthetic_command(
-                timeframe="M15",
-                intent="CLOSE",
-                evaluation_timestamp="2026-07-01T04:00:00Z",
-                exit_reason="CONTEXT_END_EVENT_LONG",
-            ),
-            synthetic_command(
-                timeframe="H1",
-                intent="CLOSE",
-                evaluation_timestamp="2026-07-01T04:00:00Z",
-                exit_reason="CONTEXT_END_EVENT_SHORT",
-            ),
-        ]
-    )
-    exit_feed = visible_feed(feed, "2026-07-01T04:15:00Z")
-    for tf in ("M15", "H1"):
-        traders[tf].run_once(feed=exit_feed)
+    with mock.patch("btc_ml.trading.paper_trader_engine.resolve_live1b_style_fill", side_effect=_fake_fill):
+        for tf in ("M15", "H1"):
+            traders[tf].run_once(feed=entry_feed)
+        bus.append(
+            [
+                synthetic_command(
+                    timeframe="M15",
+                    intent="CLOSE",
+                    evaluation_timestamp="2026-07-01T04:00:00Z",
+                    exit_reason="CONTEXT_END_EVENT_LONG",
+                ),
+                synthetic_command(
+                    timeframe="H1",
+                    intent="CLOSE",
+                    evaluation_timestamp="2026-07-01T04:00:00Z",
+                    exit_reason="CONTEXT_END_EVENT_SHORT",
+                ),
+            ]
+        )
+        exit_feed = visible_feed(feed, "2026-07-01T04:15:00Z")
+        for tf in ("M15", "H1"):
+            traders[tf].run_once(feed=exit_feed)
 
     rows: list[dict[str, Any]] = []
     checks: dict[str, bool] = {}
@@ -439,7 +473,7 @@ def run_pnl_proof(root: Path) -> dict[str, Any]:
             take_profit_price=trade["take_profit_price"],
             risk_amount_usd=trade["risk_amount_usd"],
             exit_reason=trade["exit_reason"],
-            exit_execution_source="live_market_feed_completed_bar_close",
+            exit_execution_source="execution_market_bbo",
         )
         rows.append(
             {

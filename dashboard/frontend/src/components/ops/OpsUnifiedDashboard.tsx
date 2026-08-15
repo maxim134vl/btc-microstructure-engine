@@ -40,6 +40,7 @@ import {
 } from "./tradingStateLifecycleDisplay";
 import type { TimeframeTradingState } from "../../types/ops";
 import { TradingMetricsPanel } from "./TradingMetricsPanel";
+import { TradingEquityCurvesPanel } from "./TradingEquityCurvesPanel";
 
 const TRADING_STATE_TIMEFRAMES = ["M15", "M30", "H1", "H4"] as const;
 
@@ -623,6 +624,11 @@ export function OpsUnifiedDashboard({
                 epochStartedAt: traders?.activation_timestamp,
                 currentTimestamp: generatedAt,
               }}
+            />
+            <TradingEquityCurvesPanel
+              performance={tradingPerformance}
+              liveConnected={liveConnected}
+              generatedAt={generatedAt}
             />
           </SectionCard>
         </section>

@@ -15,14 +15,21 @@
   "entry_slippage_bps": 3.0,
   "exit_slippage_bps": 3.0,
   "stop_exit_slippage_bps": 5.0,
-    "max_bbo_age_ms": 2000.0,
-    "max_agg_trade_age_ms": 5000.0,
-    "max_entry_signal_age_seconds": 900.0,
-    "context_event_max_age_seconds": 300.0,
+  "max_bbo_age_ms": 2000.0,
+  "max_agg_trade_age_ms": 5000.0,
+  "max_entry_signal_age_seconds": 900.0,
+  "context_event_max_age_seconds": 300.0,
   "max_open_positions_per_timeframe": 1,
-  "timeframes": ["M15", "M30", "H1", "H4"],
+  "timeframes": [
+    "M15",
+    "M30",
+    "H1",
+    "H4"
+  ],
   "context_journal_root": "data/cognition/intrabar_context_events",
   "books_root": "data/trading/intrabar_paper",
   "epochs_root": "data/trading/paper_epochs",
-  "economics_source": "canonical_paper_trade_economics_v1"
+  "economics_source": "canonical_paper_trade_economics_v1",
+  "entry_source": "s41_command_bus",
+  "s41_consume_commands_after": "2026-08-15T08:33:58.378788Z"
 }

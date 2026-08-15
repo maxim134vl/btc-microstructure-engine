@@ -298,7 +298,36 @@ class TimeframeManager:
 
     # --- read-only trader views ---------------------------------------------
     def trader_views(self, *, mark_price: float | None = None) -> dict[str, dict[str, Any]]:
+        if self._use_live1b_position_views():
+            from .live1b_position_views import live1b_trader_views
+
+            return live1b_trader_views(
+                timeframes=self.timeframes,
+                mark_price=mark_price,
+            )
         return {tf: PaperTraderEngine(book).snapshot(mark_price=mark_price) for tf, book in self.books.items()}
+
+    @staticmethod
+    def _use_live1b_position_views() -> bool:
+        """Hybrid: S4.1 manager reads LIVE1B epoch books for open/risk."""
+        activation = ROOT / "data" / "trading" / "manager" / "activation.json"
+        try:
+            payload = json.loads(activation.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        hybrid = payload.get("hybrid") if isinstance(payload.get("hybrid"), dict) else {}
+        if str(hybrid.get("position_source") or "").lower() in {
+            "live1b",
+            "live1b_epoch_books",
+            "live1b_intrabar_paper",
+        }:
+            return True
+        return str(payload.get("execution_owner") or "").upper() in {
+            "LIVE1B_INTRABAR_PAPER",
+            "LIVE1B",
+        }
 
     # --- cycle ---------------------------------------------------------------
     def run_cycle(
@@ -490,8 +519,13 @@ class TimeframeManager:
                 side = str(open_position.get("direction") or "").upper()
                 entry = float(safe_float(open_position.get("entry_price")) or 0.0)
                 quantity = float(safe_float(open_position.get("quantity")) or 0.0)
-                stop = safe_float(meta.get("stop_loss_price"))
-                take = safe_float(meta.get("take_profit_price"))
+                meta = self._position_meta(timeframe)
+                stop = safe_float(open_position.get("stop_loss_price"))
+                take = safe_float(open_position.get("take_profit_price"))
+                if stop is None:
+                    stop = safe_float(meta.get("stop_loss_price"))
+                if take is None:
+                    take = safe_float(meta.get("take_profit_price"))
                 if stop is None or take is None:
                     stop, take = compute_stop_take(side, entry)
                 stop_reference = stop
@@ -501,7 +535,11 @@ class TimeframeManager:
                     quantity=quantity,
                     stop_loss_price=float(stop),
                     take_profit_price=float(take),
-                    entry_fee_usd=float(safe_float(meta.get("entry_fee_usd")) or 0.0),
+                    entry_fee_usd=float(
+                        safe_float(open_position.get("entry_fee_usd"))
+                        or safe_float(meta.get("entry_fee_usd"))
+                        or 0.0
+                    ),
                     current_price=float(observation["close"]),
                     latest_high=float(observation.get("high") or observation["close"]),
                     latest_low=float(observation.get("low") or observation["close"]),
@@ -610,6 +648,8 @@ class TimeframeManager:
             "availability_status": state.get("availability_status"),
             "lifecycle_episode_id": episode,
             "lifecycle_phase": state.get("lifecycle_phase"),
+            "context_origin_price": state.get("context_origin_price"),
+            "context_started_at": state.get("context_started_at"),
             "intent": intent,
             "action_allowed": action_allowed,
             "reason_codes": json.dumps(reasons),

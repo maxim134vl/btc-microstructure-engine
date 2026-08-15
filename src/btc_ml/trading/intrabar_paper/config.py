@@ -38,6 +38,8 @@ class IntrabarPaperConfig:
     books_root: Path
     epochs_root: Path
     economics_source: str
+    entry_source: str
+    s41_consume_commands_after: str | None
     raw: dict[str, Any]
 
 
@@ -70,6 +72,10 @@ def load_intrabar_paper_config(
         raise ValueError(f"intrabar_paper_execution.json missing required keys: {missing}")
     if bool(raw.get("real_execution_enabled", False)):
         raise ValueError("real_execution_enabled must be false for LIVE1B paper-only activation")
+    entry_source = str(raw.get("entry_source") or "context_journal").strip().lower()
+    if entry_source not in {"context_journal", "s41_command_bus"}:
+        raise ValueError(f"unsupported entry_source={entry_source!r}")
+    consume_after = raw.get("s41_consume_commands_after")
     return IntrabarPaperConfig(
         schema_version=str(raw["schema_version"]),
         rule_contract_version=str(raw["rule_contract_version"]),
@@ -99,5 +105,7 @@ def load_intrabar_paper_config(
         books_root=(root / str(raw["books_root"])).resolve(),
         epochs_root=(root / str(raw["epochs_root"])).resolve(),
         economics_source=str(raw.get("economics_source", "canonical_paper_trade_economics_v1")),
+        entry_source=entry_source,
+        s41_consume_commands_after=None if consume_after in (None, "") else str(consume_after),
         raw=raw,
     )

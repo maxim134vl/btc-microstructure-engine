@@ -742,49 +742,62 @@ def build_equity_curve_risk_metrics(
         elapsed_seconds = max(0.0, (curve[-1][0] - curve[0][0]).total_seconds())
         span_hours = elapsed_seconds / 3600.0
 
-    # --- Maximum drawdown + longest drawdown duration ---
+    # --- Maximum drawdown + duration of that drawdown (peak → trough) ---
+    # Duration is NOT calendar time still below HWM (idle days between sparse
+    # trade-close marks). It is the time from the HWM that produced the worst
+    # drawdown to the trough of that same episode.
     max_dd = None
     dd_duration_hours = None
     dd_open = False
     dd_start = None
     dd_end = None
+    time_underwater_hours = None
     if equity_point_count >= 1:
         peak = curve[0][1]
         peak_ts = curve[0][0]
         max_dd = 0.0
-        longest = 0.0
-        open_start: datetime | None = None
+        max_dd_peak_ts = None
+        max_dd_trough_ts = None
+        underwater_start: datetime | None = None
+        longest_underwater = 0.0
         for ts, eq in curve:
-            if eq >= peak:
-                # recovery to / new high-water mark
-                if open_start is not None and eq >= peak:
-                    dur = (ts - open_start).total_seconds() / 3600.0
-                    if dur >= longest:
-                        longest = dur
-                        dd_start = _iso_ts(open_start)
-                        dd_end = _iso_ts(ts)
-                        dd_open = False
-                    open_start = None
-                if eq > peak:
-                    peak = eq
-                    peak_ts = ts
+            if eq > peak:
+                if underwater_start is not None:
+                    longest_underwater = max(
+                        longest_underwater, (ts - underwater_start).total_seconds() / 3600.0
+                    )
+                    underwater_start = None
+                peak = eq
+                peak_ts = ts
             elif eq < peak:
                 dd = (peak - eq) / peak if peak > 0 else 0.0
                 if dd > (max_dd or 0.0):
                     max_dd = dd
-                if open_start is None:
-                    open_start = peak_ts
-        if open_start is not None and curve:
-            dur = (curve[-1][0] - open_start).total_seconds() / 3600.0
-            if dur >= longest:
-                longest = dur
-                dd_start = _iso_ts(open_start)
-                dd_end = _iso_ts(curve[-1][0])
-                dd_open = True
+                    max_dd_peak_ts = peak_ts
+                    max_dd_trough_ts = ts
+                if underwater_start is None:
+                    underwater_start = peak_ts
             else:
-                # still mark open if underwater at end
-                dd_open = curve[-1][1] < peak
-        dd_duration_hours = longest if equity_point_count >= 2 else 0.0
+                # Recovered to prior HWM.
+                if underwater_start is not None:
+                    longest_underwater = max(
+                        longest_underwater, (ts - underwater_start).total_seconds() / 3600.0
+                    )
+                    underwater_start = None
+        if underwater_start is not None and curve:
+            longest_underwater = max(
+                longest_underwater, (curve[-1][0] - underwater_start).total_seconds() / 3600.0
+            )
+        dd_open = curve[-1][1] < peak
+        if max_dd_peak_ts is not None and max_dd_trough_ts is not None:
+            dd_duration_hours = max(
+                0.0, (max_dd_trough_ts - max_dd_peak_ts).total_seconds() / 3600.0
+            )
+            dd_start = _iso_ts(max_dd_peak_ts)
+            dd_end = _iso_ts(max_dd_trough_ts)
+        elif equity_point_count >= 2:
+            dd_duration_hours = 0.0
+        time_underwater_hours = longest_underwater if equity_point_count >= 2 else 0.0
 
     # --- Sharpe (event-time, non-annualised, sample stdev) ---
     sharpe_value = None
@@ -909,7 +922,9 @@ def build_equity_curve_risk_metrics(
     dd_status = "INSUFFICIENT_SAMPLE" if equity_point_count < 1 else "PRELIMINARY"
     dd_reason = "equity_point_count=%d; short history" % equity_point_count
     dur_status = "INSUFFICIENT_SAMPLE" if equity_point_count < 2 else "PRELIMINARY"
-    dur_reason = "equity_point_count=%d; short history" % equity_point_count
+    dur_reason = (
+        "PEAK_TO_TROUGH_OF_MAX_DRAWDOWN; equity_point_count=%d; short history" % equity_point_count
+    )
 
     if equity_point_count == 0:
         equity_series_status = "MISSING"
@@ -950,6 +965,7 @@ def build_equity_curve_risk_metrics(
         "drawdown_open": bool(dd_open),
         "drawdown_start": dd_start,
         "drawdown_end": dd_end,
+        "time_underwater_hours": _clean_num(time_underwater_hours),
         "status": overall,
         "decision_grade": False,
         "reasons": reasons,
@@ -978,6 +994,7 @@ def _risk_adjusted_metrics_unavailable(*, reason: str) -> dict[str, Any]:
         "drawdown_open": False,
         "drawdown_start": None,
         "drawdown_end": None,
+        "time_underwater_hours": None,
         "status": "INSUFFICIENT_SAMPLE",
         "decision_grade": False,
         "reasons": [reason],

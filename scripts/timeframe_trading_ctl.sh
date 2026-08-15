@@ -53,6 +53,32 @@ cleanup_stale() {
   fi
 }
 
+# Detach via Python start_new_session=True (setsid). Plain `nohup ... &` stays in
+# the launcher process group and dies when an IDE/shell tears that group down.
+start_detached() {
+  local role="$1"
+  local log="$2"
+  shift 2
+  "$PYTHON" - "$role" "$log" "$ROOT" "$@" <<'PY'
+import subprocess
+import sys
+from pathlib import Path
+
+role, log_path, root, *cmd = sys.argv[1:]
+log = open(log_path, "a", encoding="utf-8")
+proc = subprocess.Popen(
+    cmd,
+    cwd=root,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    stdin=subprocess.DEVNULL,
+    start_new_session=True,
+)
+Path(root, "run", f"{role}.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+print(proc.pid)
+PY
+}
+
 start_role() {
   local role="$1"
   cleanup_stale "$role"
@@ -62,23 +88,24 @@ start_role() {
     echo "already_running role=$role pid=$existing"
     return 0
   fi
-  local log
+  local log pid
   log="$(log_file "$role")"
   if [[ "$role" == "timeframe_manager" ]]; then
-    nohup "$PYTHON" "$ROOT/scripts/live/timeframe_manager_daemon.py" \
+    pid="$(start_detached "$role" "$log" \
+      "$PYTHON" "$ROOT/scripts/live/timeframe_manager_daemon.py" \
       --approved-timeframe-manager --paper-only --no-real-execution \
-      --interval-seconds "$INTERVAL" >>"$log" 2>&1 &
+      --interval-seconds "$INTERVAL")"
   else
     local tf="${role#trader_}"
-    nohup "$PYTHON" "$ROOT/scripts/live/timeframe_trader_daemon.py" \
+    pid="$(start_detached "$role" "$log" \
+      "$PYTHON" "$ROOT/scripts/live/timeframe_trader_daemon.py" \
       --timeframe "$tf" \
       --approved-timeframe-trader --paper-only --no-real-execution \
-      --interval-seconds "$INTERVAL" >>"$log" 2>&1 &
+      --interval-seconds "$INTERVAL")"
   fi
-  local pid=$!
   sleep 2
   if pid_alive "$pid"; then
-    echo "started role=$role pid=$pid"
+    echo "started role=$role pid=$pid session_detached=true"
   else
     echo "start_failed role=$role (see $log)"
     return 1

@@ -168,14 +168,23 @@ reset or block M30 / H1 / H4, and vice versa.
 ## 9. Fill contract
 
 ```text
-command evaluation_timestamp < fill market timestamp
+LIVE1B-aligned execution fill (not next-candle close)
 ```
 
-The fill is the first admissible completed market observation strictly after the
-command evaluation timestamp, using the unchanged paper fill model. Forbidden:
-same-bar fill on bar close, future joins, current-price fallback, fills shared
-between traders, rewriting an entry or an exit. No admissible observation means
-`NO_FILL`.
+Entry and exit use execution-time BBO via the shared LIVE1B helper
+`fill_price_for`:
+
+- LONG ENTRY = ask, SHORT ENTRY = bid
+- LONG EXIT = bid, SHORT EXIT = ask
+- `opened_at` / fill timestamp = execution wall-clock at apply time
+- `context_origin_price` is provenance only (never sizes or fills)
+
+Forbidden: waiting for the next completed M15 bar close after the command,
+same-bar OHLC look-ahead as a fill price, current mid fallback, fills shared
+between traders, rewriting an entry or an exit. Missing/stale BBO means
+`NO_FILL` (retry until TTL).
+
+Causal ordering still requires `evaluation_timestamp <= execution_timestamp`.
 
 ## 10. Sizing and portfolio risk
 

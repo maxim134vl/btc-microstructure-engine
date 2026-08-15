@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""Three host launchers after reboot. Does not change trading logic.
+
+  python3 scripts/btc_ml_host.py model start
+  python3 scripts/btc_ml_host.py dashboard start
+  python3 scripts/btc_ml_host.py drift start     # only after ~400 closed trades
+
+Also: stop | status | restart for each profile.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+RUN = ROOT / "run"
+LOGS = ROOT / "run" / "logs"
+STACK_LOGS = ROOT / "logs" / "runtime_stack"
+
+
+def _python() -> str:
+    for cand in (ROOT / "venv" / "bin" / "python", ROOT / ".venv" / "bin" / "python"):
+        if cand.exists():
+            return str(cand)
+    return sys.executable
+
+
+def _env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{ROOT / 'src'}{os.pathsep}{ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["BTC_ML_CONTEXT_REFRESH_DAEMON"] = "1"
+    env.setdefault("BTC_ML_ENGINE_EXECUTION_MODE", "persistent_worker")
+    return env
+
+
+def _alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _read_pid(path: Path) -> int | None:
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _pattern_alive(pattern: str) -> int | None:
+    try:
+        out = subprocess.check_output(["pgrep", "-f", pattern], text=True)
+    except subprocess.CalledProcessError:
+        return None
+    for line in out.split():
+        try:
+            pid = int(line)
+        except ValueError:
+            continue
+        if pid != os.getpid() and _alive(pid):
+            return pid
+    return None
+
+
+def _ok_already(stdout: str) -> bool:
+    text = stdout.lower()
+    return any(
+        token in text
+        for token in ("already_running", "already running", "stp_be33_already_running")
+    )
+
+
+def run_ctl(script: Path, action: str) -> dict[str, object]:
+    proc = subprocess.run(
+        [_python(), str(script), action],
+        cwd=ROOT,
+        env=_env(),
+        capture_output=True,
+        text=True,
+    )
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    ok = proc.returncode == 0 or (action == "start" and _ok_already(combined))
+    return {
+        "script": str(script.relative_to(ROOT)),
+        "action": action,
+        "ok": ok,
+        "returncode": proc.returncode,
+        "stdout": combined.strip()[-800:],
+    }
+
+
+def detach(
+    name: str,
+    pid_path: Path,
+    log_path: Path,
+    argv: list[str],
+    *,
+    cwd: Path | None = None,
+    pattern: str | None = None,
+) -> dict[str, object]:
+    existing = _read_pid(pid_path)
+    if _alive(existing):
+        return {"name": name, "ok": True, "pid": existing, "note": "already_running"}
+    if pattern:
+        found = _pattern_alive(pattern)
+        if found:
+            pid_path.parent.mkdir(parents=True, exist_ok=True)
+            pid_path.write_text(f"{found}\n", encoding="utf-8")
+            return {"name": name, "ok": True, "pid": found, "note": "adopted"}
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = log_path.open("a", encoding="utf-8")
+    proc = subprocess.Popen(
+        argv,
+        cwd=str(cwd or ROOT),
+        env=_env(),
+        stdout=handle,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pid_path.write_text(f"{proc.pid}\n", encoding="utf-8")
+    time.sleep(0.4)
+    return {"name": name, "ok": _alive(proc.pid), "pid": proc.pid}
+
+
+def stop_pid_file(name: str, pid_path: Path) -> dict[str, object]:
+    pid = _read_pid(pid_path)
+    stopped: list[int] = []
+    if _alive(pid):
+        assert pid is not None
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(40):
+            if not _alive(pid):
+                break
+            time.sleep(0.15)
+        if _alive(pid):
+            os.kill(pid, signal.SIGKILL)
+        stopped.append(pid)
+    pid_path.unlink(missing_ok=True)
+    return {"name": name, "stopped": stopped}
+
+
+MODEL_CTLS: list[tuple[str, Path]] = [
+    ("live1a", ROOT / "scripts/live/intrabar_cognition_ctl.py"),
+    ("live1b", ROOT / "scripts/live/intrabar_paper_ctl.py"),
+    ("intrabar_supervisor", ROOT / "scripts/live/intrabar_process_supervisor_ctl.py"),
+    ("stp_be33", ROOT / "scripts/live/shadow_stp_be33_ctl.py"),
+    ("shadow_auction", ROOT / "scripts/live/shadow_auction_ctl.py"),
+    ("shadow_structural_protection", ROOT / "scripts/live/shadow_structural_protection_ctl.py"),
+    ("shadow_economic_correlation", ROOT / "scripts/live/shadow_economic_correlation_ctl.py"),
+    ("shadow_model", ROOT / "scripts/model_assurance/shadow_model_ctl.py"),
+    ("behavioral_validation", ROOT / "scripts/model_assurance/behavioral_validation_ctl.py"),
+    ("economic_validation", ROOT / "scripts/model_assurance/economic_validation_ctl.py"),
+    ("external_data_toxicity", ROOT / "scripts/model_assurance/external_data_toxicity_ctl.py"),
+    ("current_toxicity", ROOT / "scripts/model_assurance/current_toxicity_ctl.py"),
+    ("incident_correlation", ROOT / "scripts/model_assurance/incident_correlation_ctl.py"),
+    ("promotion_gate", ROOT / "scripts/model_assurance/promotion_gate_ctl.py"),
+    ("model_assurance_summary", ROOT / "scripts/model_assurance/model_assurance_summary_ctl.py"),
+]
+
+DRIFT_CTL = ROOT / "scripts/model_assurance/drift_monitoring_ctl.py"
+DAEMON_CTL = ROOT / "scripts/ops/context_refresh_daemon_ctl.sh"
+
+
+def _start_daemon() -> dict[str, object]:
+    proc = subprocess.run(
+        ["bash", str(DAEMON_CTL), "start"],
+        cwd=ROOT,
+        env=_env(),
+        capture_output=True,
+        text=True,
+    )
+    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    return {
+        "script": "scripts/ops/context_refresh_daemon_ctl.sh",
+        "action": "start",
+        "ok": proc.returncode == 0 or "already" in text.lower(),
+        "returncode": proc.returncode,
+        "stdout": text[-800:],
+    }
+
+
+def _stop_daemon() -> dict[str, object]:
+    proc = subprocess.run(
+        ["bash", str(DAEMON_CTL), "stop"],
+        cwd=ROOT,
+        env=_env(),
+        capture_output=True,
+        text=True,
+    )
+    return {"script": "context_refresh_daemon_ctl.sh", "ok": proc.returncode == 0, "returncode": proc.returncode}
+
+
+def model_start() -> int:
+    results: list[dict[str, object]] = [
+        detach(
+            "collector_watchdog",
+            RUN / "collector_watchdog.pid",
+            LOGS / "collector_watchdog.log",
+            [_python(), str(ROOT / "collector_watchdog.py"), "--required-only"],
+            pattern="collector_watchdog.py",
+        ),
+        detach(
+            "run.py",
+            RUN / "canonical_runtime.pid",
+            STACK_LOGS / "runtime.log",
+            [_python(), str(ROOT / "run.py")],
+            pattern=str(ROOT / "run.py"),
+        ),
+        _start_daemon(),
+    ]
+    for _name, script in MODEL_CTLS:
+        results.append(run_ctl(script, "start"))
+    print(json.dumps({"profile": "model", "action": "start", "results": results}, indent=2, default=str))
+    return 0 if all(bool(row.get("ok", True)) for row in results) else 1
+
+
+def model_stop() -> int:
+    results = [run_ctl(script, "stop") for _name, script in reversed(MODEL_CTLS)]
+    results.append(_stop_daemon())
+    results.append(stop_pid_file("run.py", RUN / "canonical_runtime.pid"))
+    results.append(stop_pid_file("collector_watchdog", RUN / "collector_watchdog.pid"))
+    print(json.dumps({"profile": "model", "action": "stop", "results": results}, indent=2, default=str))
+    return 0
+
+
+def _pid_status(name: str, pid_path: Path, pattern: str) -> dict[str, object]:
+    pid = _read_pid(pid_path) or _pattern_alive(pattern)
+    return {"name": name, "pid": pid, "alive": _alive(pid)}
+
+
+def model_status() -> int:
+    rows = [
+        _pid_status("run.py", RUN / "canonical_runtime.pid", str(ROOT / "run.py")),
+        _pid_status("collector_watchdog", RUN / "collector_watchdog.pid", "collector_watchdog.py"),
+        _pid_status("live1a", RUN / "intrabar_cognition.pid", "run_intrabar_cognition_service.py"),
+        _pid_status("live1b", RUN / "intrabar_paper_manager.pid", "run_intrabar_paper_manager.py"),
+        _pid_status("supervisor", RUN / "intrabar_process_supervisor.pid", "intrabar_process_supervisor.py"),
+        _pid_status("stp_be33", RUN / "shadow_stp_be33.pid", "run_shadow_stp_be33.py"),
+        _pid_status("shadow_auction", RUN / "shadow_auction.pid", "run_shadow_auction.py"),
+        _pid_status("shadow_structural", RUN / "shadow_structural_protection.pid", "run_shadow_structural_protection.py"),
+        _pid_status("eqcorr", RUN / "shadow_economic_correlation.pid", "run_shadow_economic_correlation.py"),
+        _pid_status("drift", RUN / "drift_monitoring.pid", "run_drift_monitoring.py"),
+        _pid_status("dashboard_api", RUN / "ops_api.pid", "run_api.py"),
+    ]
+    required = {row["name"] for row in rows} - {"drift", "dashboard_api"}
+    print(json.dumps({"profile": "model", "processes": rows}, indent=2))
+    return 0 if all(row["alive"] for row in rows if row["name"] in required) else 1
+
+
+def dashboard_start() -> int:
+    results = [
+        run_ctl(ROOT / "dashboard/backend/scripts/ops_api_ctl.py", "start"),
+        detach(
+            "dashboard_ui",
+            STACK_LOGS / "dashboard_ui.pid",
+            STACK_LOGS / "dashboard_ui.log",
+            ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"],
+            cwd=ROOT / "dashboard" / "frontend",
+            pattern="vite --host 127.0.0.1 --port 5173",
+        ),
+        detach(
+            "visual_refresher",
+            ROOT / "runtime_context_visual_refresher.pid",
+            ROOT / "logs" / "context_visual_refresher.log",
+            [
+                _python(),
+                str(ROOT / "scripts/live/run_market_context_visual_refresher.py"),
+                "--interval-seconds",
+                "20",
+            ],
+            pattern="run_market_context_visual_refresher.py",
+        ),
+        detach(
+            "trade_chart",
+            STACK_LOGS / "context_visual_viewer.pid",
+            STACK_LOGS / "context_visual_viewer.log",
+            [_python(), "-m", "http.server", "8765", "--bind", "127.0.0.1"],
+            cwd=ROOT / "apps/context_visualizer/public",
+            pattern="http.server 8765",
+        ),
+    ]
+    print(json.dumps({"profile": "dashboard", "action": "start", "results": results}, indent=2, default=str))
+    print("OPS UI  http://127.0.0.1:5173", file=sys.stderr)
+    print("OPS API http://127.0.0.1:8080/health", file=sys.stderr)
+    print("Chart   http://127.0.0.1:8765/index.html", file=sys.stderr)
+    return 0 if all(bool(row.get("ok", True)) for row in results) else 1
+
+
+def dashboard_stop() -> int:
+    results = [
+        run_ctl(ROOT / "dashboard/backend/scripts/ops_api_ctl.py", "stop"),
+        stop_pid_file("dashboard_ui", STACK_LOGS / "dashboard_ui.pid"),
+        stop_pid_file("visual_refresher", ROOT / "runtime_context_visual_refresher.pid"),
+        stop_pid_file("trade_chart", STACK_LOGS / "context_visual_viewer.pid"),
+    ]
+    print(json.dumps({"profile": "dashboard", "action": "stop", "results": results}, indent=2, default=str))
+    return 0
+
+
+def dashboard_status() -> int:
+    rows = [
+        _pid_status("dashboard_api", RUN / "ops_api.pid", "run_api.py"),
+        _pid_status("dashboard_ui", STACK_LOGS / "dashboard_ui.pid", "vite --host 127.0.0.1 --port 5173"),
+        _pid_status("trade_chart", STACK_LOGS / "context_visual_viewer.pid", "http.server 8765"),
+    ]
+    print(json.dumps({"profile": "dashboard", "processes": rows}, indent=2))
+    return 0 if all(row["alive"] for row in rows) else 1
+
+
+def drift_start() -> int:
+    result = run_ctl(DRIFT_CTL, "start")
+    print(json.dumps({"profile": "drift", "action": "start", "result": result}, indent=2))
+    return 0 if result["ok"] else 1
+
+
+def drift_stop() -> int:
+    result = run_ctl(DRIFT_CTL, "stop")
+    print(json.dumps({"profile": "drift", "action": "stop", "result": result}, indent=2))
+    return 0 if result["ok"] else 1
+
+
+def drift_status() -> int:
+    result = run_ctl(DRIFT_CTL, "status")
+    print(result.get("stdout") or json.dumps(result, indent=2))
+    return 0 if result["ok"] else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="BTC-ML host profiles: model / dashboard / drift")
+    parser.add_argument("profile", choices=("model", "dashboard", "drift"))
+    parser.add_argument("action", choices=("start", "stop", "status", "restart"))
+    args = parser.parse_args()
+    table = {
+        ("model", "start"): model_start,
+        ("model", "stop"): model_stop,
+        ("model", "status"): model_status,
+        ("dashboard", "start"): dashboard_start,
+        ("dashboard", "stop"): dashboard_stop,
+        ("dashboard", "status"): dashboard_status,
+        ("drift", "start"): drift_start,
+        ("drift", "stop"): drift_stop,
+        ("drift", "status"): drift_status,
+    }
+    if args.action == "restart":
+        table[(args.profile, "stop")]()
+        return table[(args.profile, "start")]()
+    return table[(args.profile, args.action)]()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -353,6 +353,8 @@ class IntrabarPaperEngine:
         return actions
 
     def poll_context_journal(self) -> list[dict[str, Any]]:
+        if str(getattr(self.cfg, "entry_source", "context_journal") or "context_journal") == "s41_command_bus":
+            return self._drain_journal_observe_only()
         all_actions: list[dict[str, Any]] = []
         for ev in self.consumer.iter_new_events(
             max_entry_signal_age_seconds=self.cfg.context_event_max_age_seconds,
@@ -378,6 +380,80 @@ class IntrabarPaperEngine:
             self.consumer.save()
             all_actions.extend(actions)
         return all_actions
+
+    def _drain_journal_observe_only(self) -> list[dict[str, Any]]:
+        """Advance journal cursor without opening/closing (hybrid S4.1 command mode)."""
+        for ev in self.consumer.iter_new_events(
+            max_entry_signal_age_seconds=self.cfg.context_event_max_age_seconds,
+        ):
+            self.bbo.update_from_context_event(ev)
+            eid = str(ev.get("context_event_id") or ev.get("event_id") or "")
+            mono = int(ev.get("event_monotonic_ns") or 0)
+            consume_key = idempotency_key(
+                paper_epoch_id=self.epoch.paper_epoch_id,
+                context_event_id=eid,
+                timeframe=str(ev.get("timeframe") or "NA"),
+                action="CONSUME_OBSERVE",
+            )
+            if not self.consumer.already_processed(consume_key):
+                self.consumer.mark_processed(
+                    key=consume_key,
+                    context_event_id=eid,
+                    event_monotonic_ns=mono,
+                    path=ev.get("_journal_path"),
+                    offset=ev.get("_journal_offset"),
+                )
+            self.consumer.save()
+        return []
+
+    def apply_s41_manager_command(self, command: dict[str, Any]) -> dict[str, Any] | None:
+        """Execute one S4.1 manager command against LIVE1B books (hybrid)."""
+        intent = str(command.get("intent") or "").upper()
+        tf = str(command.get("timeframe") or "").upper()
+        command_id = str(command.get("command_id") or "").strip()
+        if tf not in self.cfg.timeframes or not command_id:
+            return {"status": "REJECTED_BAD_COMMAND", "command_id": command_id, "timeframe": tf}
+        episode = command.get("lifecycle_episode_id") or command.get("timeframe_episode_id")
+        mono = int(time.time_ns())
+        event = {
+            "manager_command_id": command_id,
+            "lifecycle_episode_id": episode,
+            "event_timestamp": command.get("evaluation_timestamp") or command.get("created_at"),
+            "context_origin_price": command.get("context_origin_price"),
+            "context_started_at": command.get("context_started_at"),
+            "context_event_price": command.get("context_origin_price"),
+            "from_manager_command": True,
+            "approved_risk_usd": command.get("approved_risk_usd"),
+            "decision_id": command.get("decision_id"),
+        }
+        if intent in {"OPEN_LONG", "OPEN_SHORT"}:
+            side = "LONG" if intent == "OPEN_LONG" else "SHORT"
+            return self._enter_position(
+                tf=tf,
+                side=side,
+                event_type="S41_COMMAND_OPEN",
+                context_event_id=command_id,
+                event_monotonic_ns=mono,
+                event_timestamp=str(event.get("event_timestamp") or ""),
+                context_event_price=event.get("context_origin_price"),
+                episode_id=str(episode) if episode else None,
+                event=event,
+                from_manager_command=True,
+            )
+        if intent == "CLOSE":
+            return self._exit_position(
+                tf=tf,
+                trigger_type="S41_COMMAND_CLOSE",
+                trigger_event_id=command_id,
+                trigger_timestamp=str(event.get("event_timestamp") or ""),
+                trigger_monotonic_ns=mono,
+                trigger_price=event.get("context_origin_price"),
+                context_event_id=command_id,
+                episode_id=str(episode) if episode else None,
+                event=event,
+                use_local_bbo=True,
+            )
+        return {"status": "IGNORED", "intent": intent, "command_id": command_id, "timeframe": tf}
 
     @staticmethod
     def _context_to_side(value: Any) -> str:
@@ -422,6 +498,7 @@ class IntrabarPaperEngine:
         context_event_price: Any,
         episode_id: str | None,
         event: dict[str, Any],
+        from_manager_command: bool = False,
     ) -> dict[str, Any] | None:
         action = "ENTRY"
         key = idempotency_key(
@@ -434,49 +511,54 @@ class IntrabarPaperEngine:
             return {"status": "DUPLICATE_PREVENTED", "key": key}
         if side not in {"LONG", "SHORT"}:
             return None
-        if event_type not in ENTRY_EVENTS:
+        if not from_manager_command and event_type not in ENTRY_EVENTS:
             return None
-        replay_reason = replay_entry_block_reason(event)
-        if replay_reason:
-            self._block(replay_reason, tf, context_event_id, side, event=event)
-            self.consumer.mark_processed(
-                key=key,
-                context_event_id=context_event_id,
-                event_monotonic_ns=event_monotonic_ns,
+        if not from_manager_command:
+            replay_reason = replay_entry_block_reason(event)
+            if replay_reason:
+                self._block(replay_reason, tf, context_event_id, side, event=event)
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
+                return {"status": replay_reason, "timeframe": tf, "context_event_id": context_event_id}
+            freshness_reason = entry_freshness_block_reason(
+                event,
+                max_age_seconds=self.cfg.context_event_max_age_seconds,
             )
-            return {"status": replay_reason, "timeframe": tf, "context_event_id": context_event_id}
-        freshness_reason = entry_freshness_block_reason(
-            event,
-            max_age_seconds=self.cfg.context_event_max_age_seconds,
-        )
-        if freshness_reason:
-            self._block(freshness_reason, tf, context_event_id, side, event=event)
-            self.consumer.mark_processed(
-                key=key,
-                context_event_id=context_event_id,
-                event_monotonic_ns=event_monotonic_ns,
+            if freshness_reason:
+                self._block(freshness_reason, tf, context_event_id, side, event=event)
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
+                return {"status": freshness_reason, "timeframe": tf, "context_event_id": context_event_id}
+            stale_reason = stale_entry_block_reason(
+                event,
+                max_age_seconds=self.cfg.context_event_max_age_seconds,
             )
-            return {"status": freshness_reason, "timeframe": tf, "context_event_id": context_event_id}
-        stale_reason = stale_entry_block_reason(
-            event,
-            max_age_seconds=self.cfg.context_event_max_age_seconds,
-        )
-        if stale_reason:
-            self._block(stale_reason, tf, context_event_id, side, event=event)
-            self.consumer.mark_processed(
-                key=key,
-                context_event_id=context_event_id,
-                event_monotonic_ns=event_monotonic_ns,
-            )
-            return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
+            if stale_reason:
+                self._block(stale_reason, tf, context_event_id, side, event=event)
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
+                return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
         if tf in self.positions:
             self._block("ENTRY_BLOCKED_ACTIVE_POSITION", tf, context_event_id, side)
             return None
         if not self.execution_market_ready_for_entry():
             self._block("ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", tf, context_event_id, side, event=event)
             return {"status": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", "timeframe": tf}
-        # Episode lock applies to CONTEXT_START re-entry, not FLIP close→open.
-        if event_type == "CONTEXT_START" and episode_id and episode_id in self.traded_episodes:
+        # Episode lock applies to CONTEXT_START and S4.1 OPEN (not FLIP close→open).
+        if (
+            (event_type == "CONTEXT_START" or from_manager_command)
+            and episode_id
+            and episode_id in self.traded_episodes
+        ):
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
             return None
 
@@ -555,6 +637,8 @@ class IntrabarPaperEngine:
             "execution_timestamp": execution_ts,
             "entry_price_source": entry_price_source,
             "execution_bbo_domain": bbo_domain,
+            "manager_command_id": event.get("manager_command_id"),
+            "entry_source": "s41_command_bus" if from_manager_command else "context_journal",
         }
         price_snap = {
             "paper_fill_price": fill_px,

@@ -30,26 +30,36 @@ def _independent_metrics(equities: list[float], hours: list[float]):
     peak = equities[0]
     peak_i = 0
     max_dd = 0.0
-    longest = 0.0
+    max_peak_i = None
+    max_trough_i = None
     open_i = None
     dd_open = False
+    longest = 0.0
     for i, eq in enumerate(equities):
-        if eq >= peak:
-            if open_i is not None and eq >= peak:
-                dur = hours[i] - hours[open_i]
-                longest = max(longest, dur)
+        if eq > peak:
+            if open_i is not None:
+                longest = max(longest, hours[i] - hours[open_i])
                 open_i = None
-            if eq > peak:
-                peak = eq
-                peak_i = i
+            peak = eq
+            peak_i = i
         elif eq < peak:
-            max_dd = max(max_dd, (peak - eq) / peak)
+            dd = (peak - eq) / peak
+            if dd > max_dd:
+                max_dd = dd
+                max_peak_i = peak_i
+                max_trough_i = i
             if open_i is None:
                 open_i = peak_i
+        else:
+            if open_i is not None:
+                longest = max(longest, hours[i] - hours[open_i])
+                open_i = None
     if open_i is not None:
-        dur = hours[-1] - hours[open_i]
-        longest = max(longest, dur)
+        longest = max(longest, hours[-1] - hours[open_i])
         dd_open = equities[-1] < peak
+    dd_hours = (
+        hours[max_trough_i] - hours[max_peak_i] if max_trough_i is not None else 0.0
+    )
 
     elapsed_years = (hours[-1] - hours[0]) / (365.25 * 24.0)
     ann = (equities[-1] / equities[0]) ** (1.0 / elapsed_years) - 1.0
@@ -59,7 +69,7 @@ def _independent_metrics(equities: list[float], hours: list[float]):
         "sharpe": sharpe,
         "sortino": sortino,
         "max_dd": max_dd,
-        "dd_hours": longest,
+        "dd_hours": dd_hours,
         "dd_open": dd_open,
         "ann": ann,
         "calmar": calmar,
@@ -105,6 +115,7 @@ def test_synthetic_equity_curve_metrics_match_independent_math():
     assert out["max_drawdown"]["status"] == "PRELIMINARY"
     assert out["drawdown_duration"]["value"] == pytest.approx(ref["dd_hours"])
     assert out["drawdown_duration"]["status"] == "PRELIMINARY"
+    assert "PEAK_TO_TROUGH_OF_MAX_DRAWDOWN" in out["drawdown_duration"]["reason"]
     assert out["drawdown_open"] is True
     assert out["drawdown_open"] == ref["dd_open"]
     assert out["annualised_return"]["value"] == pytest.approx(ref["ann"])
@@ -165,6 +176,32 @@ def test_zero_variance_and_no_downside_statuses():
     assert up["sortino"]["status"] == "UNDEFINED_NO_DOWNSIDE"
     assert up["sharpe"]["value"] is not None
     assert up["max_drawdown"]["value"] == pytest.approx(0.0)
+
+
+def test_drawdown_duration_is_peak_to_trough_not_idle_underwater():
+    """Idle calendar time below HWM must not inflate Drawdown duration."""
+    t0 = datetime(2026, 8, 5, 18, 0, tzinfo=timezone.utc)
+    snaps = [
+        {"_ts": t0 + timedelta(hours=1), "ts": None, "equity_usd": 120.0, "trade_id": "ath"},
+        {"_ts": t0 + timedelta(hours=3), "ts": None, "equity_usd": 100.0, "trade_id": "trough"},
+        {"_ts": t0 + timedelta(hours=30), "ts": None, "equity_usd": 115.0, "trade_id": "partial"},
+        {"_ts": t0 + timedelta(hours=230), "ts": None, "equity_usd": 118.0, "trade_id": "still_below"},
+    ]
+    for row in snaps:
+        row["ts"] = row["_ts"].isoformat().replace("+00:00", "Z")
+    out = build_equity_curve_risk_metrics(
+        initial_equity_usd=100.0,
+        initial_timestamp=t0,
+        equity_snapshots=snaps,
+        initial_timestamp_inferred=False,
+    )
+    # Max DD is 120 → 100 (16.67%) over 2h, not 229h still below HWM.
+    assert out["max_drawdown"]["value"] == pytest.approx((120.0 - 100.0) / 120.0)
+    assert out["drawdown_duration"]["value"] == pytest.approx(2.0)
+    assert out["time_underwater_hours"] == pytest.approx(229.0)
+    assert out["drawdown_open"] is True
+    assert out["drawdown_start"].startswith("2026-08-05T19:00")
+    assert out["drawdown_end"].startswith("2026-08-05T21:00")
 
 
 def test_live_active_epoch_equity_curve_populated():

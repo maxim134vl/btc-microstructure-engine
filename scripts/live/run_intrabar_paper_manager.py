@@ -22,6 +22,7 @@ from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
 from btc_ml.trading.intrabar_paper.epoch import load_active_epoch
 from btc_ml.trading.intrabar_paper.execution_market_processor import ExecutionMarketProcessor
 from btc_ml.trading.intrabar_paper.execution_market_wal_config import load_execution_market_wal_config
+from btc_ml.trading.intrabar_paper.s41_command_consumer import S41CommandConsumer
 
 STOP = False
 
@@ -208,6 +209,14 @@ def main() -> int:
     _start_execution_market_feeds(processor)
     engine.write_health()
 
+    s41_consumer: S41CommandConsumer | None = None
+    if cfg.entry_source == "s41_command_bus":
+        s41_consumer = S41CommandConsumer(
+            engine,
+            checkpoint_path=epoch_root / "s41_command_cursor.json",
+            consume_after=cfg.s41_consume_commands_after,
+        )
+
     pid_path = REPO / "run" / "intrabar_paper_manager.pid"
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(f"{__import__('os').getpid()}\n", encoding="utf-8")
@@ -220,6 +229,8 @@ def main() -> int:
                 "paper_epoch_id": epoch.paper_epoch_id,
                 "paper_only": True,
                 "real_execution_enabled": False,
+                "entry_source": cfg.entry_source,
+                "s41_consume_commands_after": cfg.s41_consume_commands_after,
                 "max_bbo_age_ms": cfg.max_bbo_age_ms,
                 "max_agg_trade_age_ms": cfg.max_agg_trade_age_ms,
                 "execution_market_wal": str(epoch_root / "execution_market_wal"),
@@ -236,6 +247,8 @@ def main() -> int:
         while not STOP:
             try:
                 engine.poll_context_journal()
+                if s41_consumer is not None:
+                    s41_consumer.poll()
             except Exception as exc:  # noqa: BLE001
                 engine.errors.append(f"poll:{exc}")
             now = time.time()

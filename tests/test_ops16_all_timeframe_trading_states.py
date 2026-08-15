@@ -145,3 +145,42 @@ def test_missing_h4_is_unavailable_others_remain() -> None:
     assert tfs["M15"]["trading_state"] == "OBSERVE"
     assert tfs["M30"]["trading_state"] == "LONG_CONTEXT"
     assert tfs["H1"]["trading_state"] == "OBSERVE"
+
+
+def test_manager_tip_overlays_observe_only_timeframes() -> None:
+    manager = {
+        "commands": {
+            "M30": {
+                "timeframe_state": "LONG_CONTEXT",
+                "timeframe_direction": "LONG",
+                "intent": "NO_ACTION",
+                "lifecycle_episode_id": "M30:1023",
+            },
+            "H1": {
+                "timeframe_state": "LONG_CONTEXT",
+                "timeframe_direction": "LONG",
+                "intent": "NO_ACTION",
+                "lifecycle_episode_id": "H1:1023",
+            },
+        }
+    }
+    payload = svc.build_live1a_decision_layer_payload(
+        _cog(states={tf: ("OBSERVE", "NO_ACTIVE_CONTEXT") for tf in ("M15", "M30", "H1", "H4")}),
+        {"paper_epoch_id": "EPOCH"},
+        now=datetime(2026, 7, 28, 18, 40, 5, tzinfo=timezone.utc),
+        manager_latest=manager,
+    )
+    assert payload is not None
+    tfs = payload["trading_states"]["timeframes"]
+    assert tfs["M15"]["trading_state"] == "OBSERVE"
+    assert tfs["M15"]["source"] == "LIVE1A_INTRABAR_CONTEXT"
+    assert tfs["M30"]["trading_state"] == "LONG_CONTEXT"
+    assert tfs["M30"]["active_market_context"] == "LONG_CONTEXT"
+    assert tfs["M30"]["directional_bias"] == "LONG"
+    assert tfs["M30"]["lifecycle_episode_id"] == "M30:1023"
+    assert tfs["M30"]["source"] == "TIMEFRAME_MANAGER_LATEST"
+    assert tfs["H1"]["trading_state"] == "LONG_CONTEXT"
+    assert tfs["H1"]["source"] == "TIMEFRAME_MANAGER_LATEST"
+    assert tfs["H4"]["trading_state"] == "OBSERVE"
+    assert payload["trading_states"]["active_directional_contexts"] == 2
+    assert "TIMEFRAME_MANAGER_LATEST" in payload["trading_states"]["source"]

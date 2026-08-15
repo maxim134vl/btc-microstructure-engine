@@ -229,3 +229,22 @@ def test_frontend_compatible_aliases_present():
     # New block optional for UI; must not break shape.
     assert "performance" in snap["trading_operations"]
     assert "risk" in snap["trading_operations"]
+
+
+def test_ops_equity_pnl_curves_from_canonical_snapshots():
+    canon = build_trading_performance_truth()
+    projected = truth.project_trading_performance_for_ops(canon)
+    curves = projected["equity_pnl_curves"]
+    assert curves["status"] in {"AVAILABLE", "INSUFFICIENT", "MISSING"}
+    if curves["status"] != "AVAILABLE":
+        pytest.skip("no canonical equity snapshots on this epoch")
+    points = curves["points"]
+    assert len(points) >= 2
+    assert points[0]["pnl_usd"] == pytest.approx(0.0)
+    assert points[0]["equity_usd"] == pytest.approx(float(curves["initial_equity_usd"]))
+    last = points[-1]
+    assert last["equity_usd"] == pytest.approx(float(curves["last_equity_usd"]))
+    assert last["pnl_usd"] == pytest.approx(float(last["equity_usd"]) - float(curves["initial_equity_usd"]))
+    assert all("ts" in p and "equity_usd" in p and "pnl_usd" in p for p in points)
+    # Same series drives both cards — do not invent a second economics path.
+    assert projected["equity_pnl_curves"]["source"] == "equity_snapshots.jsonl"

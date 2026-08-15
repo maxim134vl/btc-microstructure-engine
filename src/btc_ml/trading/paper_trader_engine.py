@@ -3,7 +3,8 @@
 All execution math is delegated to :mod:`paper_core` (which re-exports the
 canonical paper economics + legacy controller helpers). This engine only:
 
-  * resolves a point-in-time fill strictly after the command timestamp
+  * resolves a LIVE1B-aligned BBO fill at execution time (ask/bid), never the
+    next candle close; ``context_origin_price`` is provenance only
   * enforces per-book idempotency via deterministic IDs
   * writes the timeframe's own signals / orders / fills / positions / trades
 
@@ -36,6 +37,7 @@ from .paper_core import (
     resolve_risk_sizing,
     safe_float,
 )
+from .s41_live1b_fill import context_provenance, resolve_live1b_style_fill
 from .trader_book import CLOSED_TRADE_COLUMNS, TraderBook, atomic_write_parquet
 
 OPEN_INTENTS = {"OPEN_LONG", "OPEN_SHORT"}
@@ -310,9 +312,11 @@ class PaperTraderEngine:
             return self._result(command, RESULT_BLOCKED, reason="PORTFOLIO_RISK_LIMIT")
 
         evaluation_ts = command.get("evaluation_timestamp")
-        fill = resolve_point_in_time_fill(feed, after_timestamp=evaluation_ts)
+        side = "LONG" if command["intent"] == "OPEN_LONG" else "SHORT"
+        fill = resolve_live1b_style_fill(side=side, action="ENTRY")
         if not fill.available:
             return self._result(command, RESULT_NO_FILL, reason=fill.reason)
+        # Causal ordering: fill may not precede the command evaluation tip.
         guard = fill_after_decision_ok(
             decision={"candle_timestamp": evaluation_ts},
             execution_ts=fill.timestamp,
@@ -320,7 +324,6 @@ class PaperTraderEngine:
         if not guard.get("ok"):
             return self._result(command, RESULT_NO_FILL, reason=str(guard.get("reason")))
 
-        side = "LONG" if command["intent"] == "OPEN_LONG" else "SHORT"
         sizing = self._sizing(side=side, entry_price=fill.price, approved_risk_usd=approved)
         if not sizing.get("allowed"):
             reason = str(sizing.get("reason") or "INVALID_STOP_DISTANCE")
@@ -355,6 +358,13 @@ class PaperTraderEngine:
             "evaluation_timestamp": command.get("evaluation_timestamp"),
             "fill_timestamp": fill.timestamp,
             "fill_source": fill.source,
+            "execution_timestamp": fill.timestamp,
+            "best_bid": fill.best_bid,
+            "best_ask": fill.best_ask,
+            "book_update_id": fill.book_update_id,
+            "bbo_receive_timestamp": fill.bbo_receive_timestamp,
+            "bbo_age_ms": fill.bbo_age_ms,
+            **context_provenance(command),
             "approved_risk_usd": approved,
             "requested_risk_usd": command.get("requested_risk_usd"),
             "portfolio_open_risk_usd": command.get("portfolio_open_risk_usd"),
@@ -395,6 +405,9 @@ class PaperTraderEngine:
             "position_effect": "OPEN",
             "entry_price_source": fill.source,
             "entry_price": fill.price,
+            "context_reference_price": command.get("context_origin_price"),
+            "context_reference_timestamp": command.get("context_started_at")
+            or command.get("source_event_timestamp"),
             "context_episode_id": command.get("lifecycle_episode_id"),
             "execution_observation_price": fill.price,
             "stop_loss_price": stop,
@@ -542,7 +555,8 @@ class PaperTraderEngine:
 
         evaluation_ts = command.get("evaluation_timestamp")
         exit_reason = str(command.get("exit_reason") or "CONTEXT_EXIT")
-        fill = resolve_point_in_time_fill(feed, after_timestamp=evaluation_ts)
+        side = str(open_position.get("direction") or "").upper()
+        fill = resolve_live1b_style_fill(side=side, action="EXIT")
         if not fill.available:
             return self._result(command, RESULT_NO_FILL, reason=fill.reason, position_id=position_id)
         guard = fill_after_decision_ok(
@@ -552,7 +566,6 @@ class PaperTraderEngine:
         if not guard.get("ok"):
             return self._result(command, RESULT_NO_FILL, reason=str(guard.get("reason")), position_id=position_id)
 
-        side = str(open_position.get("direction") or "").upper()
         qty = float(safe_float(open_position.get("quantity")) or 0.0)
         entry_price = float(safe_float(open_position.get("entry_price")) or 0.0)
         stop = safe_float(meta.get("stop_loss_price"))
