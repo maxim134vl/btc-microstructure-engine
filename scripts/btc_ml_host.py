@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Three host launchers after reboot. Does not change trading logic.
+"""Host launchers for the current hybrid runtime.
 
-  python3 scripts/btc_ml_host.py model start
-  python3 scripts/btc_ml_host.py dashboard start
-  python3 scripts/btc_ml_host.py drift start     # only after ~400 closed trades
+  ./scripts/btc_ml model start|stop|status|restart
+  ./scripts/btc_ml dashboard start|stop|status|restart
+  ./scripts/btc_ml drift start     # only after ~400 closed trades
 
-Also: stop | status | restart for each profile.
+Hybrid model: S4.1 TimeframeManager + LIVE1B paper books. S4.1 traders stay stopped.
+Dashboard: OPS API + UI + visual refresher + chart :8765.
 """
 
 from __future__ import annotations
@@ -23,6 +24,50 @@ ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / "run"
 LOGS = ROOT / "run" / "logs"
 STACK_LOGS = ROOT / "logs" / "runtime_stack"
+TF_CTL = ROOT / "scripts" / "timeframe_trading_ctl.sh"
+DAEMON_CTL = ROOT / "scripts/ops/context_refresh_daemon_ctl.sh"
+DRIFT_CTL = ROOT / "scripts/model_assurance/drift_monitoring_ctl.py"
+
+MODEL_CTLS: list[tuple[str, Path]] = [
+    ("live1a", ROOT / "scripts/live/intrabar_cognition_ctl.py"),
+    ("live1b", ROOT / "scripts/live/intrabar_paper_ctl.py"),
+    ("intrabar_supervisor", ROOT / "scripts/live/intrabar_process_supervisor_ctl.py"),
+    ("stp_be33", ROOT / "scripts/live/shadow_stp_be33_ctl.py"),
+    ("shadow_auction", ROOT / "scripts/live/shadow_auction_ctl.py"),
+    ("shadow_structural_protection", ROOT / "scripts/live/shadow_structural_protection_ctl.py"),
+    ("shadow_economic_correlation", ROOT / "scripts/live/shadow_economic_correlation_ctl.py"),
+    ("shadow_model", ROOT / "scripts/model_assurance/shadow_model_ctl.py"),
+    ("behavioral_validation", ROOT / "scripts/model_assurance/behavioral_validation_ctl.py"),
+    ("economic_validation", ROOT / "scripts/model_assurance/economic_validation_ctl.py"),
+    ("external_data_toxicity", ROOT / "scripts/model_assurance/external_data_toxicity_ctl.py"),
+    ("current_toxicity", ROOT / "scripts/model_assurance/current_toxicity_ctl.py"),
+    ("incident_correlation", ROOT / "scripts/model_assurance/incident_correlation_ctl.py"),
+    ("promotion_gate", ROOT / "scripts/model_assurance/promotion_gate_ctl.py"),
+    ("model_assurance_summary", ROOT / "scripts/model_assurance/model_assurance_summary_ctl.py"),
+]
+
+# Full stop matches by command line. Dashboard stop must not match model, and vice versa.
+MODEL_STOP_PATTERNS: list[tuple[str, str]] = [
+    ("timeframe_trader", r"timeframe_trader_daemon\.py"),
+    ("timeframe_manager", r"timeframe_manager_daemon\.py"),
+    ("live1b", r"run_intrabar_paper_manager\.py"),
+    ("live1a", r"run_intrabar_cognition_service\.py"),
+    ("intrabar_supervisor", r"intrabar_process_supervisor\.py"),
+    ("stp_be33", r"run_shadow_stp_be33\.py"),
+    ("shadow_auction", r"run_shadow_auction\.py"),
+    ("shadow_structural", r"run_shadow_structural_protection\.py"),
+    ("eqcorr", r"run_shadow_economic_correlation\.py"),
+    ("collector_watchdog", r"collector_watchdog\.py"),
+    ("run.py", str(ROOT / "run.py")),
+    ("context_refresh_daemon", r"run_context_refresh_daemon\.py"),
+]
+
+DASHBOARD_STOP_PATTERNS: list[tuple[str, str]] = [
+    ("ops_api", r"dashboard/backend/run_api\.py"),
+    ("dashboard_ui", r"vite --host 127\.0\.0\.1 --port 5173"),
+    ("trade_chart", r"http\.server 8765"),
+    ("visual_refresher", r"run_market_context_visual_refresher\.py"),
+]
 
 
 def _python() -> str:
@@ -57,19 +102,25 @@ def _read_pid(path: Path) -> int | None:
         return None
 
 
-def _pattern_alive(pattern: str) -> int | None:
+def _pattern_pids(pattern: str) -> list[int]:
     try:
         out = subprocess.check_output(["pgrep", "-f", pattern], text=True)
     except subprocess.CalledProcessError:
-        return None
+        return []
+    pids: list[int] = []
     for line in out.split():
         try:
             pid = int(line)
         except ValueError:
             continue
         if pid != os.getpid() and _alive(pid):
-            return pid
-    return None
+            pids.append(pid)
+    return pids
+
+
+def _pattern_alive(pattern: str) -> int | None:
+    pids = _pattern_pids(pattern)
+    return pids[0] if pids else None
 
 
 def _ok_already(stdout: str) -> bool:
@@ -96,6 +147,25 @@ def run_ctl(script: Path, action: str) -> dict[str, object]:
         "ok": ok,
         "returncode": proc.returncode,
         "stdout": combined.strip()[-800:],
+    }
+
+
+def run_tf_ctl(action: str, target: str) -> dict[str, object]:
+    proc = subprocess.run(
+        ["bash", str(TF_CTL), action, target],
+        cwd=ROOT,
+        env=_env(),
+        capture_output=True,
+        text=True,
+    )
+    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    ok = proc.returncode == 0 or (action == "start" and _ok_already(text))
+    return {
+        "script": "scripts/timeframe_trading_ctl.sh",
+        "action": f"{action} {target}",
+        "ok": ok,
+        "returncode": proc.returncode,
+        "stdout": text[-800:],
     }
 
 
@@ -134,43 +204,36 @@ def detach(
     return {"name": name, "ok": _alive(proc.pid), "pid": proc.pid}
 
 
+def _kill_pid(pid: int) -> None:
+    if not _alive(pid):
+        return
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(40):
+        if not _alive(pid):
+            return
+        time.sleep(0.15)
+    if _alive(pid):
+        os.kill(pid, signal.SIGKILL)
+
+
 def stop_pid_file(name: str, pid_path: Path) -> dict[str, object]:
     pid = _read_pid(pid_path)
     stopped: list[int] = []
-    if _alive(pid):
-        assert pid is not None
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(40):
-            if not _alive(pid):
-                break
-            time.sleep(0.15)
-        if _alive(pid):
-            os.kill(pid, signal.SIGKILL)
+    if _alive(pid) and pid is not None:
+        _kill_pid(pid)
         stopped.append(pid)
     pid_path.unlink(missing_ok=True)
     return {"name": name, "stopped": stopped}
 
 
-MODEL_CTLS: list[tuple[str, Path]] = [
-    ("live1a", ROOT / "scripts/live/intrabar_cognition_ctl.py"),
-    ("live1b", ROOT / "scripts/live/intrabar_paper_ctl.py"),
-    ("intrabar_supervisor", ROOT / "scripts/live/intrabar_process_supervisor_ctl.py"),
-    ("stp_be33", ROOT / "scripts/live/shadow_stp_be33_ctl.py"),
-    ("shadow_auction", ROOT / "scripts/live/shadow_auction_ctl.py"),
-    ("shadow_structural_protection", ROOT / "scripts/live/shadow_structural_protection_ctl.py"),
-    ("shadow_economic_correlation", ROOT / "scripts/live/shadow_economic_correlation_ctl.py"),
-    ("shadow_model", ROOT / "scripts/model_assurance/shadow_model_ctl.py"),
-    ("behavioral_validation", ROOT / "scripts/model_assurance/behavioral_validation_ctl.py"),
-    ("economic_validation", ROOT / "scripts/model_assurance/economic_validation_ctl.py"),
-    ("external_data_toxicity", ROOT / "scripts/model_assurance/external_data_toxicity_ctl.py"),
-    ("current_toxicity", ROOT / "scripts/model_assurance/current_toxicity_ctl.py"),
-    ("incident_correlation", ROOT / "scripts/model_assurance/incident_correlation_ctl.py"),
-    ("promotion_gate", ROOT / "scripts/model_assurance/promotion_gate_ctl.py"),
-    ("model_assurance_summary", ROOT / "scripts/model_assurance/model_assurance_summary_ctl.py"),
-]
-
-DRIFT_CTL = ROOT / "scripts/model_assurance/drift_monitoring_ctl.py"
-DAEMON_CTL = ROOT / "scripts/ops/context_refresh_daemon_ctl.sh"
+def stop_patterns(pairs: list[tuple[str, str]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for name, pattern in pairs:
+        pids = _pattern_pids(pattern)
+        for pid in pids:
+            _kill_pid(pid)
+        rows.append({"name": name, "pattern": pattern, "stopped": pids})
+    return rows
 
 
 def _start_daemon() -> dict[str, object]:
@@ -219,31 +282,44 @@ def model_start() -> int:
             pattern=str(ROOT / "run.py"),
         ),
         _start_daemon(),
+        run_tf_ctl("stop", "traders"),
+        run_tf_ctl("start", "manager"),
     ]
     for _name, script in MODEL_CTLS:
         results.append(run_ctl(script, "start"))
-    print(json.dumps({"profile": "model", "action": "start", "results": results}, indent=2, default=str))
+    print(json.dumps({"profile": "model", "action": "start", "hybrid": True, "results": results}, indent=2, default=str))
     return 0 if all(bool(row.get("ok", True)) for row in results) else 1
 
 
 def model_stop() -> int:
-    results = [run_ctl(script, "stop") for _name, script in reversed(MODEL_CTLS)]
+    """Full model teardown: traders (if any), manager, LIVE1A/B, shadows, run.py."""
+    results: list[dict[str, object]] = [
+        run_tf_ctl("stop", "traders"),
+        run_tf_ctl("stop", "manager"),
+    ]
+    results.extend(run_ctl(script, "stop") for _name, script in reversed(MODEL_CTLS))
     results.append(_stop_daemon())
     results.append(stop_pid_file("run.py", RUN / "canonical_runtime.pid"))
     results.append(stop_pid_file("collector_watchdog", RUN / "collector_watchdog.pid"))
+    results.extend(stop_patterns(MODEL_STOP_PATTERNS))
     print(json.dumps({"profile": "model", "action": "stop", "results": results}, indent=2, default=str))
     return 0
 
 
-def _pid_status(name: str, pid_path: Path, pattern: str) -> dict[str, object]:
+def _pid_status(name: str, pid_path: Path, pattern: str, *, required: bool = True) -> dict[str, object]:
     pid = _read_pid(pid_path) or _pattern_alive(pattern)
-    return {"name": name, "pid": pid, "alive": _alive(pid)}
+    return {"name": name, "pid": pid, "alive": _alive(pid), "required": required}
 
 
 def model_status() -> int:
+    trader_pids = {
+        tf: _pattern_alive(rf"timeframe_trader_daemon\.py --timeframe {tf}( |$)")
+        for tf in ("M15", "M30", "H1", "H4")
+    }
     rows = [
         _pid_status("run.py", RUN / "canonical_runtime.pid", str(ROOT / "run.py")),
         _pid_status("collector_watchdog", RUN / "collector_watchdog.pid", "collector_watchdog.py"),
+        _pid_status("timeframe_manager", RUN / "timeframe_manager.pid", r"timeframe_manager_daemon\.py"),
         _pid_status("live1a", RUN / "intrabar_cognition.pid", "run_intrabar_cognition_service.py"),
         _pid_status("live1b", RUN / "intrabar_paper_manager.pid", "run_intrabar_paper_manager.py"),
         _pid_status("supervisor", RUN / "intrabar_process_supervisor.pid", "intrabar_process_supervisor.py"),
@@ -251,12 +327,19 @@ def model_status() -> int:
         _pid_status("shadow_auction", RUN / "shadow_auction.pid", "run_shadow_auction.py"),
         _pid_status("shadow_structural", RUN / "shadow_structural_protection.pid", "run_shadow_structural_protection.py"),
         _pid_status("eqcorr", RUN / "shadow_economic_correlation.pid", "run_shadow_economic_correlation.py"),
-        _pid_status("drift", RUN / "drift_monitoring.pid", "run_drift_monitoring.py"),
-        _pid_status("dashboard_api", RUN / "ops_api.pid", "run_api.py"),
+        _pid_status("drift", RUN / "drift_monitoring.pid", "run_drift_monitoring.py", required=False),
+        {
+            "name": "s41_traders",
+            "required": False,
+            "expected": "STOPPED",
+            "pids": trader_pids,
+            "alive": any(_alive(pid) for pid in trader_pids.values()),
+        },
     ]
-    required = {row["name"] for row in rows} - {"drift", "dashboard_api"}
-    print(json.dumps({"profile": "model", "processes": rows}, indent=2))
-    return 0 if all(row["alive"] for row in rows if row["name"] in required) else 1
+    print(json.dumps({"profile": "model", "hybrid": True, "processes": rows}, indent=2))
+    required_ok = all(row.get("alive") for row in rows if row.get("required") is True)
+    traders_down = not any(_alive(pid) for pid in trader_pids.values())
+    return 0 if required_ok and traders_down else 1
 
 
 def dashboard_start() -> int:
@@ -272,7 +355,7 @@ def dashboard_start() -> int:
         ),
         detach(
             "visual_refresher",
-            ROOT / "runtime_context_visual_refresher.pid",
+            STACK_LOGS / "context_visual_refresher.pid",
             ROOT / "logs" / "context_visual_refresher.log",
             [
                 _python(),
@@ -299,20 +382,24 @@ def dashboard_start() -> int:
 
 
 def dashboard_stop() -> int:
-    results = [
+    """Full dashboard teardown: API, UI, chart :8765, visual refresher."""
+    results: list[dict[str, object]] = [
         run_ctl(ROOT / "dashboard/backend/scripts/ops_api_ctl.py", "stop"),
         stop_pid_file("dashboard_ui", STACK_LOGS / "dashboard_ui.pid"),
-        stop_pid_file("visual_refresher", ROOT / "runtime_context_visual_refresher.pid"),
+        stop_pid_file("visual_refresher", STACK_LOGS / "context_visual_refresher.pid"),
+        stop_pid_file("visual_refresher_legacy", ROOT / "runtime_context_visual_refresher.pid"),
         stop_pid_file("trade_chart", STACK_LOGS / "context_visual_viewer.pid"),
     ]
+    results.extend(stop_patterns(DASHBOARD_STOP_PATTERNS))
     print(json.dumps({"profile": "dashboard", "action": "stop", "results": results}, indent=2, default=str))
     return 0
 
 
 def dashboard_status() -> int:
     rows = [
-        _pid_status("dashboard_api", RUN / "ops_api.pid", "run_api.py"),
+        _pid_status("dashboard_api", RUN / "ops_api.pid", r"dashboard/backend/run_api\.py"),
         _pid_status("dashboard_ui", STACK_LOGS / "dashboard_ui.pid", "vite --host 127.0.0.1 --port 5173"),
+        _pid_status("visual_refresher", STACK_LOGS / "context_visual_refresher.pid", "run_market_context_visual_refresher.py"),
         _pid_status("trade_chart", STACK_LOGS / "context_visual_viewer.pid", "http.server 8765"),
     ]
     print(json.dumps({"profile": "dashboard", "processes": rows}, indent=2))

@@ -14,22 +14,22 @@ help: ## Show orchestration targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
-model-start: ## Start trading brain + shadows (not drift, not dashboard)
+model-start: ## Start hybrid model: S4.1 manager + LIVE1B + shadows (not traders, not dashboard)
 	./scripts/btc_ml model start
 
-model-stop: ## Stop trading brain + shadows
+model-stop: ## Fully stop hybrid model (manager, LIVE1A/B, shadows, run.py)
 	./scripts/btc_ml model stop
 
-model-status: ## Status of trading brain + shadows
+model-status: ## Status of hybrid model processes
 	./scripts/btc_ml model status
 
-dashboard-start: ## Start OPS API + UI + trade chart
+dashboard-start: ## Start OPS API + UI + visual refresher + trade chart
 	./scripts/btc_ml dashboard start
 
-dashboard-stop: ## Stop OPS API + UI + trade chart
+dashboard-stop: ## Fully stop OPS API + UI + visual refresher + trade chart
 	./scripts/btc_ml dashboard stop
 
-dashboard-status: ## Status of OPS API + UI + trade chart
+dashboard-status: ## Status of OPS API + UI + visual refresher + trade chart
 	./scripts/btc_ml dashboard status
 
 drift-start: ## Start drift monitoring (after ~400 closed trades)

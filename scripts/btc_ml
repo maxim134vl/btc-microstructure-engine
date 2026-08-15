@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# After reboot:
+# After reboot (hybrid: S4.1 manager + LIVE1B books):
 #   ./scripts/btc_ml model start
 #   ./scripts/btc_ml dashboard start
 #   ./scripts/btc_ml drift start    # only after ~400 closed trades
+# Full stop:
+#   ./scripts/stop_model.sh
+#   ./scripts/stop_dashboard.sh
+#   # or: ./scripts/btc_ml model stop && ./scripts/btc_ml dashboard stop
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-$ROOT/venv/bin/python3}"

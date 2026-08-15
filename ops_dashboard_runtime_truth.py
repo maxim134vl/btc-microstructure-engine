@@ -614,7 +614,7 @@ def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
         # Legacy global controller is required only until the S4.1 cutover.
         ("paper_controller", ("bounded_paper_trading_controller_auto_ledger",), not activated and not live1b),
         ("ops_backend", ("run_api.py", "dashboard/backend"), False),
-        ("dashboard_refresher", ("run_market_context_visual_refresher.py",), False),
+        ("visual_refresher", ("run_market_context_visual_refresher.py",), False),
         (
             "shadow_structural_protection",
             ("run_shadow_structural_protection.py",),
@@ -641,6 +641,8 @@ def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
             [
                 ("intrabar_cognition", ("run_intrabar_cognition_service.py",), True),
                 ("intrabar_paper_manager", ("run_intrabar_paper_manager.py",), True),
+                # Hybrid: S4.1 manager still owns the command bus; traders stay stopped.
+                ("timeframe_manager", ("timeframe_manager_daemon.py",), True),
             ]
         )
     else:
@@ -657,6 +659,39 @@ def _process_specs() -> tuple[tuple[str, tuple[str, ...], bool], ...]:
 
 
 PROCESS_SPECS = _process_specs()
+
+
+def _ps_line_for_pid(lines: list[str], pid: int) -> str | None:
+    for line in lines:
+        text = line.strip()
+        parts = text.split(None, 1)
+        if parts and parts[0] == str(pid):
+            return text
+    return None
+
+
+def _visual_refresher_ps_line(lines: list[str]) -> str | None:
+    token = "run_market_context_visual_refresher.py"
+    for line in lines:
+        text = line.strip()
+        if not text or "rg " in text or "pytest" in text:
+            continue
+        if token in text:
+            return text
+    pid_paths = (
+        ROOT / "logs" / "runtime_stack" / "context_visual_refresher.pid",
+        ROOT / "runtime_context_visual_refresher.pid",
+        ROOT / "run" / "runtime_context_visual_refresher.pid",
+    )
+    for path in pid_paths:
+        try:
+            pid = int(path.read_text(encoding="utf-8").strip())
+        except (OSError, TypeError, ValueError):
+            continue
+        matched = _ps_line_for_pid(lines, pid)
+        if matched and token in matched:
+            return matched
+    return None
 
 
 def utc_now() -> str:
@@ -959,6 +994,10 @@ def inspect_processes() -> list[dict[str, Any]]:
             matched, heartbeat_ts, missing_reason = _collector_process_line(
                 lines, "binance_live_feed"
             )
+        elif process_id == "visual_refresher":
+            matched = _visual_refresher_ps_line(lines)
+            if matched is None:
+                missing_reason = "process_not_found_in_ps"
         else:
             for line in lines:
                 text = line.strip()
@@ -1032,6 +1071,7 @@ def inspect_processes() -> list[dict[str, Any]]:
                 "context_refresher",
                 "live_feed",
                 "timeframe_manager",
+                "visual_refresher",
             } or process_id.startswith("trader_"):
                 if base in {"python", "python3"} and "/.venv/" not in interpreter and "venv" not in interpreter:
                     # Allow bare python3 when cwd/command still bind to repo scripts (common launch style).
