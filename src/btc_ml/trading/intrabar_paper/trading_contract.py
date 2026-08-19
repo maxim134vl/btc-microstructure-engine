@@ -204,8 +204,11 @@ def _hardcoded_rules() -> dict[str, Any]:
         "context_dedup_key": "{paper_epoch_id}|{context_event_id}|{timeframe}|{action}",
         "episode_dedup_key": "lifecycle_episode_id",
         "already_traded_episode_behavior": (
-            "CONTEXT_START blocked with ENTRY_BLOCKED_EPISODE_ALREADY_TRADED; "
-            "CONTEXT_FLIP close→open not blocked by episode lock"
+            "CONTEXT_END closes the episode: later CONTEXT_START/S4.1 OPEN blocked "
+            "with ENTRY_BLOCKED_EPISODE_ALREADY_TRADED; TP/SL leave the episode "
+            "open for re-entry while the directional context remains; "
+            "one position per timeframe still applies; "
+            "CONTEXT_FLIP close→open is not blocked by episode lock"
         ),
         "entry_eligibility": "CONTEXT_START/FLIP with side in {LONG,SHORT}; no OBSERVE/STAND_ASIDE entry",
         "long_short_mapping": {

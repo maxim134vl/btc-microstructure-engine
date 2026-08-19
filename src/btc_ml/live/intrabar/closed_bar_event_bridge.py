@@ -1139,7 +1139,7 @@ class ClosedBarContextEventBridge:
             if pid:
                 latest[pid] = row
             ep = _clean(row.get("lifecycle_episode_id"))
-            if ep:
+            if ep and str(row.get("exit_reason") or "").upper().startswith("CONTEXT_END"):
                 traded.add(ep)
         open_tfs = {
             _timeframe(row.get("timeframe"))
@@ -1148,7 +1148,7 @@ class ClosedBarContextEventBridge:
         }
         for row in self._jsonl_rows(root / "trades.jsonl"):
             ep = _clean(row.get("lifecycle_episode_id"))
-            if ep:
+            if ep and str(row.get("exit_reason") or "").upper().startswith("CONTEXT_END"):
                 traded.add(ep)
         return open_tfs, traded
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -139,6 +140,29 @@ class CausalBBOStore:
         if age_ms > float(max_age_ms):
             return None, "EXIT_PENDING_NO_CAUSAL_BBO", age_ms
         return bbo, None, age_ms
+
+    def resolve_live_local_entry_bbo(
+        self,
+        *,
+        max_age_ms: float,
+        now_monotonic_ns: int | None = None,
+    ) -> tuple[CausalBBO | None, str | None, float | None, str]:
+        """Price an S4.1 OPEN from the execution-market websocket clock.
+
+        Context-domain quotes live on the cognition monotonic clock and must
+        not gate manager commands. Execution-market quotes use
+        ``time.monotonic_ns()`` (same clock as the websocket ingest). A live
+        local quote stamped a few ns after the command snapshot is still valid.
+        """
+        bbo = self._latest_local
+        if bbo is None:
+            return None, "ENTRY_BLOCKED_NO_CAUSAL_BBO", None, "local"
+        now = int(now_monotonic_ns if now_monotonic_ns is not None else time.monotonic_ns())
+        ref = now if now >= bbo.receive_monotonic_ns else bbo.receive_monotonic_ns
+        age_ms = (ref - bbo.receive_monotonic_ns) / 1_000_000.0
+        if age_ms > float(max_age_ms):
+            return None, "ENTRY_BLOCKED_NO_CAUSAL_BBO", age_ms, "local"
+        return bbo, None, age_ms, "local"
 
     def resolve_execution_entry_bbo(
         self,

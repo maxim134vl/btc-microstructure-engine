@@ -10,6 +10,14 @@ from typing import Any
 from btc_ml.trading.command_bus import CommandBus, CommandBusPaths
 
 
+_TRANSIENT_OPEN_BLOCKS = frozenset(
+    {
+        "ENTRY_BLOCKED_NO_CAUSAL_BBO",
+        "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY",
+    }
+)
+
+
 def _utc_iso() -> str:
     from datetime import datetime, timezone
 
@@ -93,7 +101,16 @@ class S41CommandConsumer:
                 allowed = bool(command.get("action_allowed"))
                 result: dict[str, Any] | None = None
                 if intent in {"OPEN_LONG", "OPEN_SHORT"} and allowed:
+                    if not self.engine.execution_market_ready_for_entry():
+                        continue
+                    local_bbo, _reason, _age, _domain = self.engine.bbo.resolve_live_local_entry_bbo(
+                        max_age_ms=self.engine.cfg.max_bbo_age_ms,
+                    )
+                    if local_bbo is None:
+                        continue
                     result = self.engine.apply_s41_manager_command(command)
+                    if str((result or {}).get("status") or "") in _TRANSIENT_OPEN_BLOCKS:
+                        continue
                 elif intent == "CLOSE" and allowed:
                     result = self.engine.apply_s41_manager_command(command)
                 else:

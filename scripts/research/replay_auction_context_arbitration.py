@@ -631,9 +631,17 @@ def _refresh_favorable_adverse(frame: pd.DataFrame) -> pd.DataFrame:
 SHORT_SUBTYPES = (
     "FAILED_BULLISH_REVERSAL_BREAKDOWN",
     "DISTRIBUTION_AFTER_BUYING_CLIMAX",
+    "DIRECTIONAL_DISTRIBUTION_CONTINUATION",
     "SHORT_IMPULSE_ONLY",
     "LATE_EXHAUSTION_SHORT",
     "UNKNOWN_SHORT",
+)
+
+ALLOWED_LIVE_SHORT_SUBTYPES = frozenset(
+    {
+        "DISTRIBUTION_AFTER_BUYING_CLIMAX",
+        "DIRECTIONAL_DISTRIBUTION_CONTINUATION",
+    }
 )
 
 
@@ -1726,14 +1734,22 @@ def _context_distribution(frame: pd.DataFrame, column: str) -> dict[str, int]:
 
 
 def _assert_calibrated_v3_invariants(frame: pd.DataFrame) -> None:
-    """Fail hard if calibrated_v3 final context violates live-safe LONG-only rules."""
+    """Fail hard if calibrated_v3 final context violates current live-safe rules.
+
+    Live policy (symmetric): final LONG is HELD_STOPPING_VOLUME_REVERSAL only;
+    final SHORT is only the two directional distribution subtypes.
+    """
     final_col = "calibrated_v3_context" if "calibrated_v3_context" in frame.columns else "chosen_context"
-    short_count = int((frame[final_col] == "SHORT_CONTEXT").sum())
-    if short_count > 0:
-        raise RuntimeError(
-            f"calibrated_v3 invariant violated: final SHORT_CONTEXT={short_count} "
-            f"(must be 0; column={final_col})"
-        )
+    short_rows = frame[frame[final_col] == "SHORT_CONTEXT"]
+    if len(short_rows) and "short_subtype" in frame.columns:
+        bad_short = short_rows[
+            ~short_rows["short_subtype"].fillna("").astype(str).isin(ALLOWED_LIVE_SHORT_SUBTYPES)
+        ]
+        if len(bad_short):
+            raise RuntimeError(
+                f"calibrated_v3 invariant violated: {len(bad_short)} final SHORT_CONTEXT rows "
+                f"are not in {sorted(ALLOWED_LIVE_SHORT_SUBTYPES)}"
+            )
     long_rows = frame[frame[final_col] == "LONG_CONTEXT"]
     if len(long_rows) and "long_subtype" in frame.columns:
         bad = long_rows[long_rows["long_subtype"].fillna("").astype(str) != "HELD_STOPPING_VOLUME_REVERSAL"]
@@ -1778,12 +1794,265 @@ def build_context_layer_distribution_report(
             [
                 "## calibrated_v3 invariants",
                 "",
-                f"- final SHORT_CONTEXT == 0: **{'yes' if v3['SHORT_CONTEXT'] == 0 else 'NO'}**",
-                f"- final LONG_CONTEXT count: **{v3['LONG_CONTEXT']}**",
+                f"- final SHORT_CONTEXT count: **{v3['SHORT_CONTEXT']}** "
+                "(allowed subtypes: DISTRIBUTION_AFTER_BUYING_CLIMAX, "
+                "DIRECTIONAL_DISTRIBUTION_CONTINUATION)",
+                f"- final LONG_CONTEXT count: **{v3['LONG_CONTEXT']}** "
+                "(allowed subtype: HELD_STOPPING_VOLUME_REVERSAL)",
                 "",
             ]
         )
     return "\n".join(lines)
+
+
+def _raw_subtype_horizon_stats(subset: pd.DataFrame, *, side: str) -> dict[str, Any]:
+    """Forward-return stats for one raw subtype cohort (measurement only)."""
+    n = int(len(subset))
+    if n == 0:
+        return {
+            "bars": 0,
+            "exp8_pct": float("nan"),
+            "exp16_pct": float("nan"),
+            "hit8_pct": float("nan"),
+            "hit16_pct": float("nan"),
+            "max_fav16_pct": float("nan"),
+            "max_adv16_pct": float("nan"),
+        }
+    f8 = pd.to_numeric(subset["forward_return_8b"], errors="coerce")
+    f16 = pd.to_numeric(subset["forward_return_16b"], errors="coerce")
+    if side == "short":
+        hit8 = float((f8 < 0).mean() * 100)
+        hit16 = float((f16 < 0).mean() * 100)
+    else:
+        hit8 = float((f8 > 0).mean() * 100)
+        hit16 = float((f16 > 0).mean() * 100)
+    fav = pd.to_numeric(subset.get("max_favorable_16b"), errors="coerce")
+    adv = pd.to_numeric(subset.get("max_adverse_16b"), errors="coerce")
+    return {
+        "bars": n,
+        "exp8_pct": float(f8.mean() * 100),
+        "exp16_pct": float(f16.mean() * 100),
+        "hit8_pct": hit8,
+        "hit16_pct": hit16,
+        "max_fav16_pct": float(fav.mean() * 100) if fav.notna().any() else float("nan"),
+        "max_adv16_pct": float(adv.mean() * 100) if adv.notna().any() else float("nan"),
+    }
+
+
+def _raw_short_subtype_verdict(
+    *,
+    subtype: str,
+    stats: dict[str, Any],
+    final_pass_pct: float,
+    baseline: dict[str, Any],
+) -> str:
+    """Heuristic vs trusted LONG HELD_STOPPING band (no policy change)."""
+    if stats["bars"] < 30:
+        return "HOLD_OUT_LOW_N"
+    if subtype in ALLOWED_LIVE_SHORT_SUBTYPES:
+        if stats["exp16_pct"] < 0 and stats["hit16_pct"] >= max(45.0, baseline["hit16_pct"] - 12.0):
+            return "KEEP_LIVE"
+        return "KEEP_BUT_REVIEW_EDGE"
+    # Short edge: want negative expectancy; compare magnitude to long baseline.
+    long_edge = abs(float(baseline["exp16_pct"])) if not pd.isna(baseline["exp16_pct"]) else 0.0
+    if stats["exp16_pct"] >= 0:
+        return "REJECT_POSITIVE_FWD"
+    if abs(stats["exp16_pct"]) < 0.45 * max(long_edge, 0.05):
+        return "HOLD_OUT_WEAK_EDGE"
+    if stats["hit16_pct"] < max(48.0, baseline["hit16_pct"] - 10.0):
+        return "HOLD_OUT_WEAK_HIT"
+    if final_pass_pct < 5.0 and subtype == "UNKNOWN_SHORT":
+        return "PROMOTE_CANDIDATE_IF_RULE_TIGHTENED"
+    if subtype in {"FAILED_BULLISH_REVERSAL_BREAKDOWN", "SHORT_IMPULSE_ONLY", "LATE_EXHAUSTION_SHORT"}:
+        return "PROMOTE_CANDIDATE"
+    return "PROMOTE_CANDIDATE"
+
+
+def _raw_long_subtype_verdict(
+    *,
+    subtype: str,
+    stats: dict[str, Any],
+    baseline: dict[str, Any],
+) -> str:
+    if subtype == "HELD_STOPPING_VOLUME_REVERSAL":
+        return "BASELINE_KEEP_LIVE"
+    if stats["bars"] < 30:
+        return "HOLD_OUT_LOW_N"
+    if stats["exp16_pct"] <= 0:
+        return "REJECT_NONPOSITIVE_FWD"
+    long_edge = float(baseline["exp16_pct"]) if not pd.isna(baseline["exp16_pct"]) else 0.0
+    if stats["exp16_pct"] < 0.55 * max(long_edge, 0.05):
+        return "HOLD_OUT_WEAK_EDGE"
+    if stats["hit16_pct"] < max(48.0, baseline["hit16_pct"] - 10.0):
+        return "HOLD_OUT_WEAK_HIT"
+    return "PROMOTE_CANDIDATE"
+
+
+def build_raw_subtype_forward_report(frame: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Measure live subtypes on raw directional bars vs forward price (read-only).
+
+    Universe = raw_chosen_context LONG/SHORT (includes bars later filtered to OBSERVE).
+    Subtypes = live-safe classifier labels already attached by calibrated_v2/v3.
+    Baseline = final HELD_STOPPING_VOLUME_REVERSAL LONG_CONTEXT.
+    """
+    work = frame.copy()
+    if "long_subtype" not in work.columns:
+        work["long_subtype"] = ""
+    if "short_subtype" not in work.columns:
+        work["short_subtype"] = ""
+    if "suppress_reason" not in work.columns:
+        work["suppress_reason"] = ""
+    raw_col = "raw_chosen_context" if "raw_chosen_context" in work.columns else "chosen_context_raw"
+    if raw_col not in work.columns:
+        raise ValueError("raw_chosen_context missing; run with --calibrated-v2 or --calibrated-v3")
+    final_col = (
+        "calibrated_v3_context"
+        if "calibrated_v3_context" in work.columns
+        else ("calibrated_v2_context" if "calibrated_v2_context" in work.columns else "chosen_context")
+    )
+
+    baseline_rows = work[
+        (work[final_col] == "LONG_CONTEXT")
+        & (work["long_subtype"].fillna("").astype(str) == "HELD_STOPPING_VOLUME_REVERSAL")
+    ]
+    if baseline_rows.empty:
+        baseline_rows = work[
+            (work[raw_col] == "LONG_CONTEXT")
+            & (work["long_subtype"].fillna("").astype(str) == "HELD_STOPPING_VOLUME_REVERSAL")
+        ]
+    baseline = _raw_subtype_horizon_stats(baseline_rows, side="long")
+    baseline["subtype"] = "HELD_STOPPING_VOLUME_REVERSAL"
+    baseline["side"] = "LONG"
+    baseline["final_pass_pct"] = 100.0 if len(baseline_rows) else float("nan")
+    baseline["top_suppress"] = ""
+    baseline["verdict"] = "BASELINE_KEEP_LIVE"
+
+    rows: list[dict[str, Any]] = [baseline]
+    lines = [
+        "# Raw subtype × forward return (live labels, no paper PnL)",
+        "",
+        "Measures price path after context start. Subtypes stay even when filter → OBSERVE.",
+        "Baseline = final live LONG `HELD_STOPPING_VOLUME_REVERSAL`.",
+        "",
+        f"- baseline bars: **{baseline['bars']}**",
+        f"- baseline exp8/exp16: **{baseline['exp8_pct']:.3f}% / {baseline['exp16_pct']:.3f}%**",
+        f"- baseline hit8/hit16: **{baseline['hit8_pct']:.1f}% / {baseline['hit16_pct']:.1f}%**",
+        "",
+        "## SHORT (raw_chosen_context = SHORT_CONTEXT)",
+        "",
+        "| subtype | bars | final_pass% | exp8% | exp16% | hit8% | hit16% | max_fav16% | max_adv16% | top_suppress | verdict |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+    ]
+
+    short_raw = work[work[raw_col].astype(str).str.upper() == "SHORT_CONTEXT"].copy()
+    short_names = list(SHORT_SUBTYPES)
+    for extra in sorted(set(short_raw["short_subtype"].fillna("").astype(str)) - set(short_names) - {""}):
+        short_names.append(extra)
+
+    for subtype in short_names:
+        subset = short_raw[short_raw["short_subtype"].fillna("").astype(str) == subtype]
+        stats = _raw_subtype_horizon_stats(subset, side="short")
+        if stats["bars"] == 0:
+            lines.append(f"| {subtype} | 0 | — | — | — | — | — | — | — | — | — |")
+            continue
+        final_pass = float((subset[final_col] == "SHORT_CONTEXT").mean() * 100)
+        top_suppress = (
+            subset.loc[subset[final_col] != "SHORT_CONTEXT", "suppress_reason"]
+            .fillna("")
+            .astype(str)
+            .value_counts()
+            .head(1)
+        )
+        top_suppress_s = f"{top_suppress.index[0]} ({int(top_suppress.iloc[0])})" if len(top_suppress) else ""
+        verdict = _raw_short_subtype_verdict(
+            subtype=subtype,
+            stats=stats,
+            final_pass_pct=final_pass,
+            baseline=baseline,
+        )
+        rows.append(
+            {
+                "side": "SHORT",
+                "subtype": subtype,
+                **stats,
+                "final_pass_pct": final_pass,
+                "top_suppress": top_suppress_s,
+                "verdict": verdict,
+            }
+        )
+        lines.append(
+            f"| {subtype} | {stats['bars']} | {final_pass:.1f} | "
+            f"{stats['exp8_pct']:.3f} | {stats['exp16_pct']:.3f} | "
+            f"{stats['hit8_pct']:.1f} | {stats['hit16_pct']:.1f} | "
+            f"{stats['max_fav16_pct']:.3f} | {stats['max_adv16_pct']:.3f} | "
+            f"{top_suppress_s or '—'} | {verdict} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## LONG (raw_chosen_context = LONG_CONTEXT)",
+            "",
+            "| subtype | bars | final_pass% | exp8% | exp16% | hit8% | hit16% | max_fav16% | max_adv16% | top_suppress | verdict |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        ]
+    )
+    long_raw = work[work[raw_col].astype(str).str.upper() == "LONG_CONTEXT"].copy()
+    long_names = list(LONG_SUBTYPES)
+    for extra in sorted(set(long_raw["long_subtype"].fillna("").astype(str)) - set(long_names) - {""}):
+        long_names.append(extra)
+
+    for subtype in long_names:
+        subset = long_raw[long_raw["long_subtype"].fillna("").astype(str) == subtype]
+        stats = _raw_subtype_horizon_stats(subset, side="long")
+        if stats["bars"] == 0:
+            lines.append(f"| {subtype} | 0 | — | — | — | — | — | — | — | — | — |")
+            continue
+        final_pass = float((subset[final_col] == "LONG_CONTEXT").mean() * 100)
+        top_suppress = (
+            subset.loc[subset[final_col] != "LONG_CONTEXT", "suppress_reason"]
+            .fillna("")
+            .astype(str)
+            .value_counts()
+            .head(1)
+        )
+        top_suppress_s = f"{top_suppress.index[0]} ({int(top_suppress.iloc[0])})" if len(top_suppress) else ""
+        verdict = _raw_long_subtype_verdict(subtype=subtype, stats=stats, baseline=baseline)
+        rows.append(
+            {
+                "side": "LONG",
+                "subtype": subtype,
+                **stats,
+                "final_pass_pct": final_pass,
+                "top_suppress": top_suppress_s,
+                "verdict": verdict,
+            }
+        )
+        lines.append(
+            f"| {subtype} | {stats['bars']} | {final_pass:.1f} | "
+            f"{stats['exp8_pct']:.3f} | {stats['exp16_pct']:.3f} | "
+            f"{stats['hit8_pct']:.1f} | {stats['hit16_pct']:.1f} | "
+            f"{stats['max_fav16_pct']:.3f} | {stats['max_adv16_pct']:.3f} | "
+            f"{top_suppress_s or '—'} | {verdict} |"
+        )
+
+    promote = [r for r in rows if str(r.get("verdict", "")).startswith("PROMOTE")]
+    keep = [r for r in rows if str(r.get("verdict", "")).startswith("KEEP") or r.get("verdict") == "BASELINE_KEEP_LIVE"]
+    keep_s = ", ".join(f"{r['side']}:{r['subtype']}" for r in keep) or "—"
+    promote_s = ", ".join(f"{r['side']}:{r['subtype']}" for r in promote) or "none"
+    lines.extend(
+        [
+            "",
+            "## Recommendation snapshot (measurement only — do not change live yet)",
+            "",
+            f"- keep / baseline: {keep_s}",
+            f"- promote candidates: {promote_s}",
+            "",
+            "Next step after this table: tighten UNKNOWN→continuation rules if UNKNOWN shows edge but low final_pass%.",
+            "",
+        ]
+    )
+    return pd.DataFrame(rows), "\n".join(lines)
 
 
 def _attach_backward_returns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -4435,12 +4704,19 @@ def main() -> int:
         action="store_true",
         help="Audit parquet feature sources and replay merge completeness",
     )
+    parser.add_argument(
+        "--raw-subtype-audit",
+        action="store_true",
+        help="Measure raw LONG/SHORT subtypes vs forward 8/16 returns (requires calibrated_v2/v3)",
+    )
     args = parser.parse_args()
 
     if args.calibrated_v2 and args.calibrated_v3 and not (args.long_gate_audit or args.feature_source_audit):
         parser.error("Use only one of --calibrated-v2 or --calibrated-v3 (unless auditing)")
     if args.weekly_validation and not (args.calibrated_v2 or args.calibrated_v3):
         parser.error("--weekly-validation requires --calibrated-v2 or --calibrated-v3")
+    if args.raw_subtype_audit and not (args.calibrated_v2 or args.calibrated_v3):
+        parser.error("--raw-subtype-audit requires --calibrated-v2 or --calibrated-v3")
     if args.long_gate_audit or args.feature_source_audit:
         args.calibrated_v2 = True
         args.calibrated_v3 = True
@@ -4499,6 +4775,8 @@ def main() -> int:
         outcome_cols = [f"forward_return_{bars}b" for bars in FORWARD_HORIZONS] + [
             "high",
             "low",
+            "max_up_16b",
+            "max_down_16b",
             "max_favorable_16b",
             "max_adverse_16b",
         ]
@@ -4612,6 +4890,16 @@ def main() -> int:
         )
         markdown = markdown + "\n\n" + calibrated_v3_report
         markdown = markdown + "\n\n" + build_leakage_audit_report()
+
+    if args.raw_subtype_audit and replay_cal is not None:
+        raw_table, raw_report = build_raw_subtype_forward_report(replay_cal)
+        raw_csv = reports_dir / f"auction_context_raw_subtype_forward_{tag}.csv"
+        raw_md = reports_dir / f"auction_context_raw_subtype_forward_{tag}.md"
+        raw_table.to_csv(raw_csv, index=False)
+        raw_md.write_text(raw_report, encoding="utf-8")
+        markdown = markdown + "\n\n" + raw_report
+        print(f"Wrote raw subtype forward table → {raw_csv}")
+        print(f"Wrote raw subtype forward report → {raw_md}")
 
     if args.weekly_validation:
         weekly_report = build_weekly_validation_report(

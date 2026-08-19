@@ -30,6 +30,12 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def context_episode_is_closed(exit_reason: Any) -> bool:
+    """True when the episode itself ended; TP/SL/FLIP leave it tradable."""
+    text = str(exit_reason or "").upper()
+    return text.startswith("CONTEXT_END")
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
@@ -116,6 +122,7 @@ class IntrabarPaperEngine:
         self.bbo = CausalBBOStore()
         self.positions: dict[str, OpenPosition] = {}
         self.traded_episodes: set[str] = set()
+        self.ended_episodes: set[str] = set()
         self.pending_exits: dict[str, PendingExit] = {}
         self.blocked_commands = 0
         self.last_command: dict[str, Any] | None = None
@@ -179,17 +186,17 @@ class IntrabarPaperEngine:
                 pos.traded_episode_ids.add(str(ep))
             self.positions[tf] = pos
         if self._uses_sleeves():
-            # Sleeve ledger is the equity source of truth; only recover episode locks.
+            # Sleeve ledger is the equity source of truth; recover ended episodes only.
             for t in self.books.closed_trades():
                 ep = t.get("lifecycle_episode_id")
-                if ep:
-                    self.traded_episodes.add(str(ep))
+                if ep and context_episode_is_closed(t.get("exit_reason")):
+                    self.ended_episodes.add(str(ep))
             return
         for t in self.books.closed_trades():
             self.realized_pnl += float(t.get("net_pnl_usd") or 0.0)
             ep = t.get("lifecycle_episode_id")
-            if ep:
-                self.traded_episodes.add(str(ep))
+            if ep and context_episode_is_closed(t.get("exit_reason")):
+                self.ended_episodes.add(str(ep))
         self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
 
     def execution_market_ready_for_entry(self) -> bool:
@@ -330,6 +337,8 @@ class IntrabarPaperEngine:
             pos = self.positions.get(tf)
             if self._is_foreign_lifecycle_episode(episode, pos):
                 return actions
+            if episode:
+                self.ended_episodes.add(str(episode))
             if pos and (not side or side == pos.side or side in {"OBSERVE", "STAND_ASIDE", ""}):
                 # END for matching side (or end of episode)
                 end_side = side if side in {"LONG", "SHORT"} else pos.side
@@ -387,6 +396,10 @@ class IntrabarPaperEngine:
             max_entry_signal_age_seconds=self.cfg.context_event_max_age_seconds,
         ):
             self.bbo.update_from_context_event(ev)
+            etype = str(ev.get("event_type") or ev.get("type") or "").upper()
+            episode = ev.get("lifecycle_episode_id") or ev.get("episode_id")
+            if etype == "CONTEXT_END" and episode:
+                self.ended_episodes.add(str(episode))
             eid = str(ev.get("context_event_id") or ev.get("event_id") or "")
             mono = int(ev.get("event_monotonic_ns") or 0)
             consume_key = idempotency_key(
@@ -414,7 +427,7 @@ class IntrabarPaperEngine:
         if tf not in self.cfg.timeframes or not command_id:
             return {"status": "REJECTED_BAD_COMMAND", "command_id": command_id, "timeframe": tf}
         episode = command.get("lifecycle_episode_id") or command.get("timeframe_episode_id")
-        mono = int(time.time_ns())
+        mono = int(time.monotonic_ns())
         event = {
             "manager_command_id": command_id,
             "lifecycle_episode_id": episode,
@@ -553,27 +566,34 @@ class IntrabarPaperEngine:
         if not self.execution_market_ready_for_entry():
             self._block("ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", tf, context_event_id, side, event=event)
             return {"status": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", "timeframe": tf}
-        # Episode lock applies to CONTEXT_START and S4.1 OPEN (not FLIP close→open).
+        # Episode lock only after CONTEXT_END. TP/SL leave the episode tradable.
         if (
             (event_type == "CONTEXT_START" or from_manager_command)
             and episode_id
-            and episode_id in self.traded_episodes
+            and episode_id in self.ended_episodes
         ):
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
             return None
 
         occurrence_px = resolve_context_entry_price(event, context_event_price)
-        bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
-            command_monotonic_ns=event_monotonic_ns,
-            max_age_ms=self.cfg.max_bbo_age_ms,
-        )
+        if from_manager_command:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_live_local_entry_bbo(
+                max_age_ms=self.cfg.max_bbo_age_ms,
+                now_monotonic_ns=event_monotonic_ns,
+            )
+        else:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
+                command_monotonic_ns=event_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
         if bbo is None:
             self._block(reason or "ENTRY_BLOCKED_NO_CAUSAL_BBO", tf, context_event_id, side)
-            self.consumer.mark_processed(
-                key=key,
-                context_event_id=context_event_id,
-                event_monotonic_ns=event_monotonic_ns,
-            )
+            if not from_manager_command:
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
             return {"status": reason, "timeframe": tf}
 
         fill_px = fill_price_for(side=side, action="ENTRY", bbo=bbo)
@@ -1120,6 +1140,8 @@ class IntrabarPaperEngine:
             )
         self.books.append("positions", closed_position_payload)
         del self.positions[pos.timeframe]
+        if episode_id and context_episode_is_closed(trigger_type):
+            self.ended_episodes.add(str(episode_id))
         if self._uses_sleeves() and self.sleeves is not None:
             sleeve = self.sleeves.apply_realized_net_pnl(
                 pos.timeframe, float(econ["net_pnl_usd"]), at=now

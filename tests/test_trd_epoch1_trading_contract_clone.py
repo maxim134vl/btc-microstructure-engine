@@ -86,6 +86,9 @@ def _make_engine(tmp_path: Path, *, epoch_id_stamp: str, equity: float = 100000.
     raw["books_root"] = "data/trading/intrabar_paper"
     raw["epochs_root"] = "data/trading/paper_epochs"
     raw["initial_equity_usd"] = equity
+    # Fixture events are stamped 2026-07-29; this suite tests episode/end/flip
+    # identity, not the live 300s freshness gate.
+    raw["context_event_max_age_seconds"] = 40_000_000.0
     (repo / "config" / "intrabar_paper_execution.json").write_text(
         json.dumps(raw, indent=2) + "\n", encoding="utf-8"
     )

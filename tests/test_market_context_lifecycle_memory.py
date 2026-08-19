@@ -1034,3 +1034,97 @@ def test_candidate_does_not_create_trading_origin():
     assert out.iloc[0]["lifecycle_state"] == "CANDIDATE"
     assert out.iloc[0]["active_market_context"] == "OBSERVE"
     assert out.iloc[0]["context_origin_price"] is None or pd.isna(out.iloc[0]["context_origin_price"])
+
+
+def _short_developing(i: int) -> dict:
+    return _bar(
+        _ts(i),
+        "SHORT_CONTEXT",
+        "DEVELOPING",
+        auction_episode="ACCEPTANCE_LOWER",
+        cognitive_market_state="ACCEPTANCE_LOWER",
+        state_direction="SELLER_CONTROL",
+    )
+
+
+def _long_developing(i: int) -> dict:
+    return _bar(
+        _ts(i),
+        "LONG_CONTEXT",
+        "DEVELOPING",
+        auction_episode="LOWER_ABSORPTION",
+        cognitive_market_state="LOWER_ABSORPTION",
+        state_direction="BUYER_SUPPORT",
+    )
+
+
+def test_single_developing_opposite_challenges_not_replaces():
+    """One DEVELOPING opposite bar must only CHALLENGE, never replace."""
+    rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
+    rows.append(_short_developing(len(rows)))
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "LONG_CONTEXT"
+    assert last["lifecycle_state"] == "CHALLENGED"
+    assert last["invalidation_type"] == "NONE"
+
+
+def test_two_consecutive_developing_opposite_replaces_mature_active():
+    """Two consecutive DEVELOPING opposite bars replace a mature active context."""
+    rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
+    n = len(rows)
+    rows.append(_short_developing(n))
+    rows.append(_short_developing(n + 1))
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "SHORT_CONTEXT"
+    assert last["lifecycle_state"] == "ACTIVE"
+    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
+    assert last["previous_active_market_context"] == "LONG_CONTEXT"
+
+
+def test_developing_opposite_does_not_replace_young_active():
+    """Even two consecutive DEVELOPING opposite bars cannot replace a young active."""
+    rows = [_long_active(0), _short_developing(1), _short_developing(2)]
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "LONG_CONTEXT"
+    assert last["lifecycle_state"] == "CHALLENGED"
+
+
+def test_developing_opposite_streak_resets_on_gap():
+    """A non-opposite bar between two DEVELOPING opposite bars resets the streak."""
+    rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
+    n = len(rows)
+    rows.append(_short_developing(n))
+    rows.append(_long_active(n + 1))
+    rows.append(_short_developing(n + 2))
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "LONG_CONTEXT"
+    assert last["lifecycle_state"] == "CHALLENGED"
+
+
+def test_developing_opposite_short_to_long_symmetric():
+    """Developing LONG opposite replaces mature SHORT the same way."""
+    rows = [_short_active(i) for i in range(_active_bars_to_pass_hold())]
+    n = len(rows)
+    rows.append(_long_developing(n))
+    rows.append(_long_developing(n + 1))
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "LONG_CONTEXT"
+    assert last["lifecycle_state"] == "ACTIVE"
+    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
+    assert last["previous_active_market_context"] == "SHORT_CONTEXT"
+
+
+def test_developing_opposite_streak_not_in_output():
+    """Internal streak counter must not leak into output columns."""
+    rows = [_long_active(0), _short_developing(1)]
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    assert "_developing_opposite_streak" not in out.columns
+
+
+def test_developing_opposite_confirm_bars_constant():
+    assert mod.DEVELOPING_OPPOSITE_CONFIRM_BARS == 2

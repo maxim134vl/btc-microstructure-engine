@@ -125,6 +125,7 @@ INVALIDATION_THESIS = "THESIS_REJECTION"
 # Opposite CONFIRMED replacement is intentionally exempt and still replaces immediately.
 NEUTRALIZATION_CONFIRM_BARS = 2
 MIN_ACTIVE_CONTEXT_HOLD_BARS = 3
+DEVELOPING_OPPOSITE_CONFIRM_BARS = 2
 
 
 def _clean_text(value: Any, default: str = "UNKNOWN") -> str:
@@ -350,6 +351,7 @@ def step_lifecycle(
         prev_lifecycle = "NO_ACTIVE_CONTEXT"
         carried_inv = _empty_invalidation()
         prev_neutralization_streak = 0
+        prev_developing_opposite_streak = 0
     else:
         active = _clean_text(prev.get("active_market_context"), default="OBSERVE")
         lifecycle = _clean_text(prev.get("lifecycle_state"), default="NO_ACTIVE_CONTEXT")
@@ -366,6 +368,7 @@ def step_lifecycle(
         transition = ""
         prev_lifecycle = lifecycle
         prev_neutralization_streak = int(prev.get("_neutralization_streak") or 0)
+        prev_developing_opposite_streak = int(prev.get("_developing_opposite_streak") or 0)
         # Invalidation diagnostics describe the actual event row only.
         # Do NOT carry AUCTION_NEUTRALIZATION forward onto later OBSERVE/CANDIDATE rows.
         carried_inv = _empty_invalidation()
@@ -379,6 +382,7 @@ def step_lifecycle(
     new_transition = transition
     inv = dict(carried_inv)
     neutralization_streak = 0
+    developing_opposite_streak = 0
 
     # Source-row INVALIDATED → thesis rejection, with minimum-hold protection.
     if status == "INVALIDATED":
@@ -492,12 +496,38 @@ def step_lifecycle(
                 active_age = active_age + 1
                 new_transition = "developing same-direction context keeps active"
             else:
-                lifecycle = "CHALLENGED"
-                new_challenge = raw
-                new_challenge_started = timestamp
-                new_challenge_reason = reason
-                active_age = active_age + 1
-                new_transition = "developing opposite context challenges active"
+                developing_opposite_streak = prev_developing_opposite_streak + 1
+                mature = active_age >= MIN_ACTIVE_CONTEXT_HOLD_BARS
+                persistent = developing_opposite_streak >= DEVELOPING_OPPOSITE_CONFIRM_BARS
+                if mature and persistent:
+                    previous = active
+                    active = raw
+                    lifecycle = "ACTIVE"
+                    active_started = timestamp
+                    active_age = 0
+                    new_transition = (
+                        f"developing opposite context replaced active after "
+                        f"{developing_opposite_streak} consecutive bars"
+                    )
+                    inv = {
+                        "previous_active_market_context": previous,
+                        "invalidation_reason": (
+                            f"{previous} replaced by persistent developing opposite {raw} "
+                            f"(streak={developing_opposite_streak})"
+                        ),
+                        "invalidated_at": timestamp,
+                        "invalidated_by_auction_episode": auction,
+                        "invalidated_by_cognitive_state": cognitive,
+                        "invalidated_by_market_context": raw,
+                        "invalidation_type": INVALIDATION_OPPOSITE,
+                    }
+                else:
+                    lifecycle = "CHALLENGED"
+                    new_challenge = raw
+                    new_challenge_started = timestamp
+                    new_challenge_reason = reason
+                    active_age = active_age + 1
+                    new_transition = "developing opposite context challenges active"
         elif status == "ACTIVE":
             if active == "OBSERVE":
                 active = raw
@@ -587,6 +617,7 @@ def step_lifecycle(
         "transition_reason": new_transition,
         # Internal state threaded via prev; dropped from output (not in REQUIRED_MEMORY_COLUMNS).
         "_neutralization_streak": int(neutralization_streak),
+        "_developing_opposite_streak": int(developing_opposite_streak),
         **inv,
     }
 

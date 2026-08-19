@@ -26,6 +26,7 @@ def cfg(tmp_path: Path):
     raw["context_journal_root"] = "data/cognition/intrabar_context_events"
     raw["books_root"] = "data/trading/intrabar_paper"
     raw["epochs_root"] = "data/trading/paper_epochs"
+    raw["entry_source"] = "context_journal"
     (repo / "config" / "intrabar_paper_execution.json").write_text(
         json.dumps(raw, indent=2) + "\n", encoding="utf-8"
     )
@@ -255,6 +256,162 @@ def test_b_delayed_m15_11_style_short_uses_processing_time_bid(cfg):
     assert fill["paper_fill_price"] != pytest.approx(62996.0)
     assert fill["context_event_price"] == pytest.approx(62996.0)
     assert fill["entry_price_source"] == "execution_market_bbo"
+
+
+def test_tp_then_same_episode_can_reenter(cfg):
+    c, _ = cfg
+    eng = _engine(c)
+    episode = "ep_live"
+    assert eng.process_context_event(_start(eid="tp_in", episode=episode))[0]["status"] == "ENTERED"
+    assert eng._exit_position(
+        tf="M15",
+        trigger_type="TP",
+        trigger_event_id="tp_out",
+        trigger_timestamp=_fresh(10),
+        trigger_monotonic_ns=2_500_000,
+        trigger_price=None,
+        context_event_id="tp_out",
+        episode_id=episode,
+        use_local_bbo=True,
+    )["status"] == "EXITED"
+    assert "M15" not in eng.positions
+    acts = eng.process_context_event(_start(eid="tp_reenter", episode=episode, mono=3_000_000))
+    assert acts[0]["status"] == "ENTERED"
+    assert eng.positions["M15"].lifecycle_episode_id == episode
+
+
+def test_sl_then_same_episode_can_reenter(cfg):
+    c, _ = cfg
+    eng = _engine(c)
+    episode = "ep_sl"
+    assert eng.process_context_event(_start(eid="sl_in", episode=episode))[0]["status"] == "ENTERED"
+    assert eng._exit_position(
+        tf="M15",
+        trigger_type="SL",
+        trigger_event_id="sl_out",
+        trigger_timestamp=_fresh(10),
+        trigger_monotonic_ns=2_500_000,
+        trigger_price=None,
+        context_event_id="sl_out",
+        episode_id=episode,
+        use_local_bbo=True,
+    )["status"] == "EXITED"
+    acts = eng.process_context_event(_start(eid="sl_reenter", episode=episode, mono=3_000_000))
+    assert acts[0]["status"] == "ENTERED"
+
+
+def test_s41_open_uses_local_bbo_not_context_clock(cfg):
+    """Hybrid OPEN is priced from websocket local BBO, not cognition-domain quotes."""
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    # Stale context-domain quote (cognition clock) must not gate the entry.
+    eng.bbo.update_from_book_ticker(
+        best_bid=90.0,
+        best_ask=90.2,
+        receive_monotonic_ns=1_000_000,
+        receive_timestamp="2026-08-13T16:00:00Z",
+        book_update_id="stale_context",
+        domain="context",
+    )
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="live_local",
+    )
+    result = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_local_bbo",
+            "timeframe": "M15",
+            "intent": "OPEN_LONG",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M15:live",
+            "evaluation_timestamp": _fresh(20),
+            "context_origin_price": 100.1,
+        }
+    )
+    assert result["status"] == "ENTERED"
+    assert result["fill"]["paper_fill_price"] == pytest.approx(100.2)
+    assert result["fill"]["entry_price_source"] == "execution_market_bbo"
+
+
+def test_s41_open_retries_after_missing_local_bbo(cfg):
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    cmd = {
+        "command_id": "TF_CMD_retry_local",
+        "timeframe": "M15",
+        "intent": "OPEN_LONG",
+        "action_allowed": True,
+        "lifecycle_episode_id": "M15:live",
+        "evaluation_timestamp": _fresh(20),
+        "context_origin_price": 100.1,
+    }
+    first = eng.apply_s41_manager_command(cmd)
+    assert first["status"] == "ENTRY_BLOCKED_NO_CAUSAL_BBO"
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="retry_local",
+    )
+    assert eng.apply_s41_manager_command(cmd)["status"] == "ENTERED"
+
+
+def test_s41_open_reenters_after_tp(cfg):
+    c, _ = cfg
+    eng = _engine(c)
+    episode = "M15:live"
+    import time as time_mod
+
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="s41_reentry",
+    )
+    first = {
+        "command_id": "TF_CMD_reentry_a",
+        "timeframe": "M15",
+        "intent": "OPEN_LONG",
+        "action_allowed": True,
+        "lifecycle_episode_id": episode,
+        "evaluation_timestamp": _fresh(20),
+        "context_origin_price": 100.1,
+    }
+    assert eng.apply_s41_manager_command(first)["status"] == "ENTERED"
+    assert eng._exit_position(
+        tf="M15",
+        trigger_type="TP",
+        trigger_event_id="s41_tp",
+        trigger_timestamp=_fresh(10),
+        trigger_monotonic_ns=2_500_000,
+        trigger_price=None,
+        context_event_id="s41_tp",
+        episode_id=episode,
+        use_local_bbo=True,
+    )["status"] == "EXITED"
+    now2 = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now2 - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="s41_reentry2",
+    )
+    second = dict(first)
+    second["command_id"] = "TF_CMD_reentry_b"
+    assert eng.apply_s41_manager_command(second)["status"] == "ENTERED"
 
 
 def test_c_ended_episode_cannot_reenter(cfg):

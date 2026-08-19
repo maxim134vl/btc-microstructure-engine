@@ -560,45 +560,36 @@ class TimeframeManager:
             intent = "NO_ACTION"
         else:
             episode = state.get("lifecycle_episode_id")
-            # Re-running the same evaluation must reproduce the same command, so the
-            # entry recorded by this very evaluation does not block itself.
-            already_entered = (
-                episode is not None
-                and per_tf_state.get("last_entry_episode_id") == episode
-                and per_tf_state.get("last_entry_evaluation_timestamp")
-                != str(state.get("evaluation_timestamp") or evaluation_timestamp)
+            # One open slot per TF is enforced by `if open_position` above.
+            # After TP/SL the slot is free: the same live episode may OPEN again.
+            # CONTEXT_END makes the timeframe non-actionable, so this branch is not used.
+            direction = str(state.get("timeframe_direction") or "").upper()
+            candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
+            requested_risk = self.risk.trader_budget(timeframe)
+            decision = self.risk.evaluate(
+                timeframe=timeframe,
+                requested_risk_usd=requested_risk,
+                open_risk_by_timeframe=reserved_risk,
+                open_positions_by_timeframe=open_positions,
             )
-            if already_entered:
-                intent = "NO_ACTION"
-                reasons.append("EPISODE_ALREADY_TRADED")
-            else:
-                direction = str(state.get("timeframe_direction") or "").upper()
-                candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
-                requested_risk = self.risk.trader_budget(timeframe)
-                decision = self.risk.evaluate(
-                    timeframe=timeframe,
-                    requested_risk_usd=requested_risk,
-                    open_risk_by_timeframe=reserved_risk,
-                    open_positions_by_timeframe=open_positions,
+            portfolio_open_risk = decision.portfolio_open_risk_usd
+            if decision.approved:
+                intent = candidate_intent
+                approved_risk = decision.approved_risk_usd
+                reasons.append(f"TIMEFRAME_DIRECTIONAL_ENTRY:{direction}")
+                per_tf_state["last_entry_episode_id"] = episode
+                per_tf_state["last_entry_evaluation_timestamp"] = str(
+                    state.get("evaluation_timestamp") or evaluation_timestamp
                 )
-                portfolio_open_risk = decision.portfolio_open_risk_usd
-                if decision.approved:
-                    intent = candidate_intent
-                    approved_risk = decision.approved_risk_usd
-                    reasons.append(f"TIMEFRAME_DIRECTIONAL_ENTRY:{direction}")
-                    per_tf_state["last_entry_episode_id"] = episode
-                    per_tf_state["last_entry_evaluation_timestamp"] = str(
-                        state.get("evaluation_timestamp") or evaluation_timestamp
-                    )
-                    observation = _market_observation(feed, at_or_before=evaluation_timestamp)
-                    if observation and observation.get("close"):
-                        stop_reference = compute_stop_take(
-                            "LONG" if candidate_intent == "OPEN_LONG" else "SHORT",
-                            float(observation["close"]),
-                        )[0]
-                else:
-                    intent = "NO_ACTION"
-                    reasons.append(str(decision.reason))
+                observation = _market_observation(feed, at_or_before=evaluation_timestamp)
+                if observation and observation.get("close"):
+                    stop_reference = compute_stop_take(
+                        "LONG" if candidate_intent == "OPEN_LONG" else "SHORT",
+                        float(observation["close"]),
+                    )[0]
+            else:
+                intent = "NO_ACTION"
+                reasons.append(str(decision.reason))
 
         action_allowed = intent in {"OPEN_LONG", "OPEN_SHORT", "CLOSE"}
         if not reasons:
