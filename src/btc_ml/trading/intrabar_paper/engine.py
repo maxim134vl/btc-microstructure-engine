@@ -712,6 +712,9 @@ class IntrabarPaperEngine:
             {
                 "order_id": order_id,
                 "command_id": cmd_id,
+                # Expose position identity for notification dedup across
+                # commands/orders/fills/positions streams (e.g. price-only alerts).
+                "position_id": pos_id,
                 "timeframe": tf,
                 "side": side,
                 "action": "ENTRY",
@@ -727,6 +730,7 @@ class IntrabarPaperEngine:
                 "fill_id": fill_id,
                 "order_id": order_id,
                 "command_id": cmd_id,
+                "position_id": pos_id,
                 "timeframe": tf,
                 "side": side,
                 "action": "ENTRY",
