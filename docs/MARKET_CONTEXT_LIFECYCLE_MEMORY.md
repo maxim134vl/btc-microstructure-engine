@@ -28,7 +28,8 @@ This layer publishes:
 
 `DEVELOPING` raw directional context can become a **candidate**, but cannot instantly become active.
 `OBSERVE` alone can **challenge** an active directional context, but does not instantly end it.
-Auction neutralization or a confirmed opposite `ACTIVE` context closes / replaces it.
+Auction neutralization or a **persistent** confirmed opposite `ACTIVE` context closes / replaces it.
+A single confirmed opposite bar does **not** replace.
 
 ## CHALLENGED is not terminal
 
@@ -37,7 +38,8 @@ Auction neutralization or a confirmed opposite `ACTIVE` context closes / replace
 It stays challenged when:
 
 - raw OBSERVE appears without full auction/cognitive BALANCE confluence
-- opposite DEVELOPING appears without confirmed ACTIVE replacement
+- opposite DEVELOPING appears (DEVELOPING never replaces an active context)
+- a single confirmed opposite `ACTIVE` bar appears without persistence
 - evidence is incomplete
 
 It must **not** hang forever once auction neutralization arrives.
@@ -66,24 +68,25 @@ A neutralization confluence bar for an active SHORT or LONG requires **all** of:
 ### Termination persistence protection
 
 A single neutralization confluence bar must **not** kill a confirmed active context.
-Two conservative persistence rules protect directional episodes (shadow-only; no execution):
+A single confirmed opposite `ACTIVE` bar must **not** kill it either.
+Three conservative persistence rules protect directional episodes (shadow-only; no execution):
 
 - `NEUTRALIZATION_CONFIRM_BARS = 2` — a confirmed context is invalidated only after
   this many **consecutive** neutralization confluence bars. The first confluence bar
   sets `lifecycle_state = CHALLENGED` while keeping the existing LONG/SHORT active.
 - `MIN_ACTIVE_CONTEXT_HOLD_BARS = 3` — a fresh context whose
   `active_context_age_bars < MIN_ACTIVE_CONTEXT_HOLD_BARS` is never invalidated by
-  auction neutralization **or** by a source `INVALIDATED` row. It is held as
-  `CHALLENGED` with the active context unchanged until the minimum hold is met.
+  auction neutralization, a source `INVALIDATED` row, **or** confirmed opposite
+  replacement. It is held as `CHALLENGED` with the active context unchanged until
+  the minimum hold is met.
+- `CONFIRMED_OPPOSITE_CONFIRM_BARS = 2` — opposite `ACTIVE` replaces the living
+  thesis only after this many **consecutive** confirmed opposite bars on a mature
+  context. The first opposite `ACTIVE` bar sets `CHALLENGED` and keeps the
+  previous LONG/SHORT. This is the same persistence family as neutralization:
+  it delays termination; it is not a trading signal and does not force a reversal.
 
-Both constants live next to the lifecycle parameters in
-`scripts/research/build_market_context_lifecycle_memory.py`.
-
-Exempt from persistence protection:
-
-- **Opposite CONFIRMED replacement** — if `raw_market_context` is the opposite
-  LONG/SHORT with `raw_context_status == ACTIVE`, the active context is replaced
-  **immediately** via `OPPOSITE_CONTEXT_REPLACEMENT`, even before the minimum hold.
+There is **no exemption** for opposite CONFIRMED replacement. The historical
+“replace immediately on one opposite ACTIVE bar” hole is closed.
 
 `invalidation_type` describes the exact event row only. It is **not** carried forward
 onto later `NO_ACTIVE_CONTEXT` / `CANDIDATE` rows.
@@ -95,13 +98,13 @@ This is a persistence/debounce rule only. No `challenge_ratio` rule. No price re
 No “N bars then expire” (there is no expiry — an undisturbed active context lives on).
 No rolling-window smoothing.
 No rewriting history from later price.
-The only N-bar element is the neutralization/hold **persistence** debounce above,
-which delays termination; it never forces one.
+The only N-bar element is the neutralization / opposite-confirm / hold
+**persistence** debounce above, which delays termination; it never forces one.
 
 Episode ends when:
 
 - auction/cognitive neutralization invalidates active context, or
-- confirmed opposite context becomes active, or
+- persistent confirmed opposite context becomes active, or
 - source row is `INVALIDATED`
 
 `active_context_age_bars` is diagnostic only and applies **only** while
@@ -124,7 +127,8 @@ So:
 
 - OBSERVE + DEVELOPING LONG → `CANDIDATE`, active stays OBSERVE
 - ACTIVE LONG + DEVELOPING SHORT → `CHALLENGED`, active stays LONG
-- ACTIVE LONG + ACTIVE SHORT → active becomes SHORT (`OPPOSITE_CONTEXT_REPLACEMENT`)
+- ACTIVE LONG + one ACTIVE SHORT → `CHALLENGED`, active stays LONG
+- ACTIVE LONG + two consecutive ACTIVE SHORT (mature hold) → active becomes SHORT (`OPPOSITE_CONTEXT_REPLACEMENT`)
 
 ## Why OBSERVE challenges instead of always ending
 

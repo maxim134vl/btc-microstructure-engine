@@ -22,6 +22,8 @@ DEFAULT_CONTROLLED_RESTART = ROOT / "run" / "intrabar_cognition.controlled_resta
 DEFAULT_JOURNAL = ROOT / "data" / "raw_market_events_v2"
 DEFAULT_CONTEXT = ROOT / "data" / "cognition" / "intrabar_context_events"
 DEFAULT_LOG = ROOT / "logs" / "intrabar_cognition.log"
+SERVICE_MARK = "run_intrabar_cognition_service.py"
+CTL_MARK = "intrabar_cognition_ctl.py"
 
 sys.path.insert(0, str(ROOT / "src"))
 from btc_ml.runtime.intrabar_supervision import (  # noqa: E402
@@ -50,6 +52,73 @@ def _alive(pid: int | None) -> bool:
         return True
     except OSError:
         return False
+
+
+def _write_pid(path: Path, pid: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{int(pid)}\n", encoding="utf-8")
+
+
+def _command(pid: int) -> str:
+    try:
+        return subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def _is_runner(pid: int | None) -> bool:
+    if not pid:
+        return False
+    cmd = _command(pid)
+    return SERVICE_MARK in cmd and CTL_MARK not in cmd
+
+
+def _runner_pids() -> list[int]:
+    found: list[int] = []
+    try:
+        out = subprocess.check_output(["ps", "-ax", "-o", "pid=,command="], text=True)
+    except Exception:
+        return found
+    for line in out.splitlines():
+        if SERVICE_MARK not in line or CTL_MARK in line:
+            continue
+        parts = line.strip().split(None, 1)
+        if not parts or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        if pid != os.getpid() and _alive(pid):
+            found.append(pid)
+    return found
+
+
+def _keep_live_runner(pid_file: Path) -> int | None:
+    """Return the live cognition runner PID to keep, or None if the service is down."""
+    pid = _read_pid(pid_file)
+    if _alive(pid) and _is_runner(pid):
+        return pid
+    live = _runner_pids()
+    if not live:
+        return None
+    if pid in live:
+        return pid
+    return live[0]
+
+
+def _kill_pid(pid: int) -> bool:
+    if not _alive(pid):
+        return False
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(30):
+        if not _alive(pid):
+            return False
+        time.sleep(0.1)
+    if _alive(pid):
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.2)
+    return _alive(pid)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -114,9 +183,24 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 def cmd_start(args: argparse.Namespace) -> int:
     clear_stop_intent(args.stop_intent_file)
-    if _alive(_read_pid(args.pid_file)):
-        print(json.dumps({"started": False, "error": "already_running", "pid": _read_pid(args.pid_file)}))
-        return 1
+    keep = _keep_live_runner(args.pid_file)
+    if keep is not None:
+        stale = _read_pid(args.pid_file)
+        extras = [pid for pid in _runner_pids() if pid != keep]
+        for extra in extras:
+            _kill_pid(extra)
+        _write_pid(args.pid_file, keep)
+        payload: dict[str, object] = {
+            "started": False,
+            "status": "already_running",
+            "pid": keep,
+            "pid_file": str(args.pid_file),
+        }
+        if stale != keep:
+            payload["note"] = "adopted"
+            payload["replaced_stale_pid"] = stale
+        print(json.dumps(payload, indent=2))
+        return 0
     args.journal_root.mkdir(parents=True, exist_ok=True)
     args.context_root.mkdir(parents=True, exist_ok=True)
     args.health_path.parent.mkdir(parents=True, exist_ok=True)
