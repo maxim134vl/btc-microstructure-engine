@@ -248,3 +248,88 @@ def test_ops_equity_pnl_curves_from_canonical_snapshots():
     assert all("ts" in p and "equity_usd" in p and "pnl_usd" in p for p in points)
     # Same series drives both cards — do not invent a second economics path.
     assert projected["equity_pnl_curves"]["source"] == "equity_snapshots.jsonl"
+
+
+def test_directional_position_stats_from_canonical_sides():
+    payload = {
+        "portfolio": {"closed_trade_count": 5, "open_position_count": 3, "initial_equity_usd": 100000},
+        "closed_trades": [
+            {"side": "LONG", "net_realised_pnl_usd": 10.0},
+            {"side": "LONG", "net_realised_pnl_usd": -4.0},
+            {"side": "SHORT", "net_realised_pnl_usd": 2.0},
+            {"side": "SHORT", "net_realised_pnl_usd": -1.0},
+            {"side": "SHORT", "net_realised_pnl_usd": 0.0},
+        ],
+        "open_positions": [
+            {"side": "LONG"},
+            {"side": "SHORT"},
+            {"side": "SHORT"},
+        ],
+        "descriptive_metrics": {},
+        "risk_adjusted_metrics": {},
+        "sample_status": {},
+        "data_quality": {"reconciliation_status": "OK"},
+        "source_policy": {},
+    }
+    stats = truth.project_directional_position_stats(payload)
+    assert stats["open"]["total"] == 3
+    assert stats["open"]["long"] == {
+        "count": 1,
+        "pct": 33.33,
+        "wins": None,
+        "losses": None,
+        "win_rate_pct": None,
+    }
+    assert stats["open"]["short"]["count"] == 2
+    assert stats["open"]["short"]["pct"] == 66.67
+    assert stats["open"]["short"]["win_rate_pct"] is None
+    assert stats["closed"]["total"] == 5
+    assert stats["closed"]["long"]["count"] == 2
+    assert stats["closed"]["long"]["pct"] == 40.0
+    assert stats["closed"]["long"]["wins"] == 1
+    assert stats["closed"]["long"]["losses"] == 1
+    assert stats["closed"]["long"]["win_rate_pct"] == 50.0
+    assert stats["closed"]["short"]["count"] == 3
+    assert stats["closed"]["short"]["wins"] == 1
+    assert stats["closed"]["short"]["losses"] == 2
+    assert stats["closed"]["short"]["win_rate_pct"] == round(100.0 / 3, 2)
+    projected = truth.project_trading_performance_for_ops(payload)
+    assert projected["directional_position_stats"] == stats
+
+
+def test_directional_open_stats_fallback_to_live1b_by_timeframe():
+    payload = {
+        "closed_trades": [{"side": "LONG", "net_realised_pnl_usd": 1.0}],
+        "open_positions": [],
+        "positions": {
+            "by_timeframe": {
+                "M15": {"side": "LONG", "quantity": 0.01},
+                "H1": {"side": "SHORT", "quantity": 0.02},
+            }
+        },
+        "portfolio": {},
+        "descriptive_metrics": {},
+        "risk_adjusted_metrics": {},
+        "sample_status": {},
+        "data_quality": {},
+        "source_policy": {},
+    }
+    stats = truth.project_directional_position_stats(payload)
+    assert stats["open"]["long"]["count"] == 1
+    assert stats["open"]["short"]["count"] == 1
+    assert stats["open"]["long"]["pct"] == 50.0
+    assert stats["closed"]["long"]["count"] == 1
+    assert stats["closed"]["short"]["count"] == 0
+
+
+def test_ops_directional_mix_matches_canonical_closed_sides():
+    canon = build_trading_performance_truth()
+    projected = truth.project_trading_performance_for_ops(canon)
+    stats = projected["directional_position_stats"]
+    closed = [r for r in (canon.get("closed_trades") or []) if str(r.get("side") or "").upper() in {"LONG", "SHORT"}]
+    assert stats["closed"]["total"] == len(closed)
+    assert stats["closed"]["long"]["count"] + stats["closed"]["short"]["count"] == len(closed)
+    long_nets = [float(r["net_realised_pnl_usd"]) for r in closed if str(r.get("side")).upper() == "LONG"]
+    if long_nets:
+        expected = round(100.0 * sum(1 for n in long_nets if n > 0) / len(long_nets), 2)
+        assert stats["closed"]["long"]["win_rate_pct"] == expected

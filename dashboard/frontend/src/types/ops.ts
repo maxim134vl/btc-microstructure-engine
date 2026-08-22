@@ -243,7 +243,27 @@ export interface TradingOperationsPerformance {
     excluded_sources?: string[] | null;
   } | null;
   equity_pnl_curves?: EquityPnlCurves | null;
+  directional_position_stats?: DirectionalPositionStats | null;
 }
+
+export type DirectionalSideStats = {
+  count?: number | null;
+  pct?: number | null;
+  wins?: number | null;
+  losses?: number | null;
+  win_rate_pct?: number | null;
+};
+
+export type DirectionalStatusStats = {
+  total?: number | null;
+  long?: DirectionalSideStats | null;
+  short?: DirectionalSideStats | null;
+};
+
+export type DirectionalPositionStats = {
+  open?: DirectionalStatusStats | null;
+  closed?: DirectionalStatusStats | null;
+};
 
 export type EquityPnlCurvePoint = {
   ts?: string | null;

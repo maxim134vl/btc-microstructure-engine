@@ -15,8 +15,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 PID_PATH = REPO / "run" / "shadow_structural_protection.pid"
 LOG_PATH = REPO / "run" / "logs" / "shadow_structural_protection.log"
-HEALTH_PATH = REPO / "data" / "trading" / "shadow_structural_protection" / "health.json"
+LEGACY_HEALTH_PATH = REPO / "data" / "trading" / "shadow_structural_protection" / "health.json"
 RUNNER = REPO / "scripts" / "live" / "run_shadow_structural_protection.py"
+RUNNER_MARK = "run_shadow_structural_protection.py"
+CTL_MARK = "shadow_structural_protection_ctl.py"
 
 
 def _python() -> str:
@@ -45,20 +47,87 @@ def _alive(pid: int | None) -> bool:
         return False
 
 
+def _command(pid: int) -> str:
+    try:
+        return subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def _is_runner(pid: int | None) -> bool:
+    if not pid:
+        return False
+    cmd = _command(pid)
+    return RUNNER_MARK in cmd and CTL_MARK not in cmd
+
+
+def _runner_pids() -> list[int]:
+    found: list[int] = []
+    try:
+        out = subprocess.check_output(["ps", "-ax", "-o", "pid=,command="], text=True)
+    except Exception:
+        return found
+    for line in out.splitlines():
+        if RUNNER_MARK not in line or CTL_MARK in line:
+            continue
+        parts = line.strip().split(None, 1)
+        if not parts or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        if pid != os.getpid() and _alive(pid):
+            found.append(pid)
+    return found
+
+
+def _active_epoch_id() -> str | None:
+    path = REPO / "data" / "trading" / "paper_epochs" / "active.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    epoch = str(payload.get("paper_epoch_id") or "").strip()
+    return epoch or None
+
+
+def _health_path() -> Path:
+    epoch = _active_epoch_id()
+    if epoch:
+        return (
+            REPO
+            / "data"
+            / "trading"
+            / "shadow_structural_protection"
+            / "epochs"
+            / epoch
+            / "health.json"
+        )
+    return LEGACY_HEALTH_PATH
+
+
+def _write_pid(pid: int) -> None:
+    PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PID_PATH.write_text(f"{pid}\n", encoding="utf-8")
+
+
 def cmd_status() -> int:
+    health_path = _health_path()
     health = None
-    if HEALTH_PATH.exists():
+    if health_path.exists():
         try:
-            health = json.loads(HEALTH_PATH.read_text(encoding="utf-8"))
+            health = json.loads(health_path.read_text(encoding="utf-8"))
         except Exception as exc:
             health = {"error": str(exc)}
     print(
         json.dumps(
             {
                 "pid": _read_pid(),
-                "alive": _alive(_read_pid()),
+                "alive": _alive(_read_pid()) and _is_runner(_read_pid()),
                 "pid_path": str(PID_PATH),
                 "log_path": str(LOG_PATH),
+                "health_path": str(health_path),
                 "health": health,
             },
             indent=2,
@@ -68,55 +137,79 @@ def cmd_status() -> int:
     return 0
 
 
+def _kill_pid(target: int) -> bool:
+    if not _alive(target):
+        return False
+    try:
+        os.kill(target, signal.SIGTERM)
+    except OSError:
+        return False
+    for _ in range(30):
+        if not _alive(target):
+            return False
+        time.sleep(0.2)
+    if not _alive(target):
+        return False
+    try:
+        os.kill(target, signal.SIGKILL)
+        return True
+    except OSError:
+        return False
+
+
 def cmd_stop() -> int:
     pid = _read_pid()
-    orphans: list[int] = []
-    try:
-        out = subprocess.check_output(["ps", "-ax", "-o", "pid=,command="], text=True)
-        for line in out.splitlines():
-            if "run_shadow_structural_protection.py" in line:
-                parts = line.strip().split(None, 1)
-                if parts and parts[0].isdigit():
-                    orphans.append(int(parts[0]))
-    except Exception:
-        pass
     targets: list[int] = []
     if pid:
         targets.append(pid)
-    for o in orphans:
-        if o not in targets:
-            targets.append(o)
+    for orphan in _runner_pids():
+        if orphan not in targets:
+            targets.append(orphan)
     if not targets:
         PID_PATH.unlink(missing_ok=True)
         print(json.dumps({"status": "not_running"}))
         return 0
     forced = False
     for target in targets:
-        if not _alive(target):
-            continue
-        try:
-            os.kill(target, signal.SIGTERM)
-        except OSError:
-            continue
-        for _ in range(30):
-            if not _alive(target):
-                break
-            time.sleep(0.2)
-        if _alive(target):
-            try:
-                os.kill(target, signal.SIGKILL)
-                forced = True
-            except OSError:
-                pass
+        if _kill_pid(target):
+            forced = True
     PID_PATH.unlink(missing_ok=True)
     print(json.dumps({"status": "stopped", "pids": targets, "forced_kill": forced}))
     return 0
 
 
+def _keep_live_runner() -> int | None:
+    """Return the live runner PID to keep, or None if the service is down."""
+    pid = _read_pid()
+    if _alive(pid) and _is_runner(pid):
+        return pid
+    live = _runner_pids()
+    if not live:
+        return None
+    if pid in live:
+        return pid
+    return live[0]
+
+
 def cmd_start() -> int:
-    cmd_stop()
-    time.sleep(0.3)
-    # Preflight: refuse start if exact data missing / blocking health
+    keep = _keep_live_runner()
+    if keep is not None:
+        stale = _read_pid()
+        extras = [pid for pid in _runner_pids() if pid != keep]
+        for extra in extras:
+            _kill_pid(extra)
+        _write_pid(keep)
+        payload: dict[str, object] = {"status": "already_running", "pid": keep}
+        if stale != keep:
+            payload["note"] = "adopted"
+            payload["replaced_stale_pid"] = stale
+        print(json.dumps(payload))
+        return 0
+
+    stale = _read_pid()
+    if stale is not None:
+        PID_PATH.unlink(missing_ok=True)
+
     env = {
         **os.environ,
         "PYTHONPATH": str(REPO / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""),
@@ -171,7 +264,7 @@ def cmd_start() -> int:
         start_new_session=True,
         env=env,
     )
-    PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
+    _write_pid(proc.pid)
     time.sleep(1.5)
     if not _alive(proc.pid):
         print(json.dumps({"status": "start_failed", "pid": proc.pid, "log": str(LOG_PATH)}))

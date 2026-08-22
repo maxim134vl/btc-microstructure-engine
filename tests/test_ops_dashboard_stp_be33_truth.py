@@ -43,5 +43,8 @@ def test_stp_be33_is_a_separate_dashboard_card() -> None:
 
     assert 'data-section="shadow-stp-be33"' in source
     assert "STP_BE33 Shadow" in source
+    assert "Last activity" in source
+    assert "Policy started (immutable)" in source
+    assert "Effective since" not in source
     assert source.index("STP_BE33 Shadow") > source.index("Structural Stop/Take Shadow")
     assert "canonical writes, LIVE1B commands and real execution are disabled" in source

@@ -77,8 +77,10 @@ from .reaction import REACTION_MODEL, REACTION_THRESHOLDS, ZONE_AGE_POLICIES
 from .significance import (
     CLASSIFICATION_MODE,
     CLASSIFICATION_MODEL,
+    CLASSIFICATION_PARITY_RULE,
     SIGNIFICANCE_PARAMS,
     m15_parity_report,
+    refresh_m15_parity_from_stored,
 )
 from .sleeves import (
     apply_realized,
@@ -323,6 +325,7 @@ class StructuralProtectionEngine:
         self._migrate_policy_integrity_if_needed(ck)
         self._rebuild_open_index()
         self._repair_stale_processed_closes()
+        self._release_stale_hav_parity_latch(ck)
 
     def _policy_outcome_attached(
         self,
@@ -947,6 +950,7 @@ class StructuralProtectionEngine:
             "active_policy_manifest_fingerprint": self.manifest_fp,
             "m15_parity": self.m15_parity,
             "classification_parity_blocked": self.classification_parity_blocked,
+            "classification_parity_rule": CLASSIFICATION_PARITY_RULE,
             "market_recon_ok": self.market_recon_ok,
             "unique_zone_ids": {tf: sorted(self._unique_zone_ids[tf]) for tf in TIMEFRAMES},
             "unique_proven_zone_ids": {tf: sorted(self._unique_proven_zone_ids[tf]) for tf in TIMEFRAMES},
@@ -1129,6 +1133,16 @@ class StructuralProtectionEngine:
             if candidate_id in self.processed_candidates:
                 continue
 
+            if self.classification_parity_blocked:
+                actions.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "status": STATUS_CLASS_PARITY_BLOCKED,
+                        "deferred": True,
+                    }
+                )
+                break
+
             transaction_state = self._capture_transaction_state()
             transaction = self.store.begin_transaction(
                 kind="candidate",
@@ -1229,6 +1243,24 @@ class StructuralProtectionEngine:
         self.write_health()
         return actions
 
+    def _release_stale_hav_parity_latch(self, ck: dict[str, Any]) -> None:
+        """Drop the old exact-match HAV latch. Do not replay processed candidates."""
+        stored_rule = str(ck.get("classification_parity_rule") or "")
+        if stored_rule == CLASSIFICATION_PARITY_RULE:
+            return
+        if self.m15_parity:
+            self.m15_parity = refresh_m15_parity_from_stored(self.m15_parity)
+            still_blocked = bool(self.m15_parity.get("parity_blocked"))
+        else:
+            still_blocked = False
+        if self.classification_parity_blocked and not still_blocked:
+            self.classification_parity_blocked = False
+            self.research_valid = True
+        elif still_blocked:
+            self.classification_parity_blocked = True
+            self.research_valid = False
+        self._save_checkpoint()
+
     def _ingest_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
         decision_ts = parse_ts(candidate["decision_timestamp"])
         if decision_ts is None:
@@ -1237,8 +1269,11 @@ class StructuralProtectionEngine:
             return {"candidate_id": candidate["candidate_id"], "status": "INSUFFICIENT_CAUSAL_DATA"}
 
         if self.classification_parity_blocked:
-            self.processed_candidates.add(candidate["candidate_id"])
-            return {"candidate_id": candidate["candidate_id"], "status": STATUS_CLASS_PARITY_BLOCKED}
+            return {
+                "candidate_id": candidate["candidate_id"],
+                "status": STATUS_CLASS_PARITY_BLOCKED,
+                "deferred": True,
+            }
 
         tf = candidate["timeframe"]
         entry = float(candidate["entry_executable_price"])
@@ -2420,6 +2455,7 @@ class StructuralProtectionEngine:
             **self.counters,
             "m15_parity": self.m15_parity,
             "classification_parity_blocked": self.classification_parity_blocked,
+            "classification_parity_rule": CLASSIFICATION_PARITY_RULE,
             "market_recon_ok": self.market_recon_ok,
             "bar_coverage": self.bar_coverage,
             "lookback_coverage_by_timeframe": self.lookback_coverage_by_timeframe,

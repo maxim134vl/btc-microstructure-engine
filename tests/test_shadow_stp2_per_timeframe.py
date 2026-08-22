@@ -37,8 +37,10 @@ from btc_ml.trading.shadow_structural_protection.policies import (
 from btc_ml.trading.shadow_structural_protection.reaction import prove_zone_reaction
 from btc_ml.trading.shadow_structural_protection.significance import (
     CLASSIFICATION_MODE,
+    CLASSIFICATION_PARITY_RULE,
     classify_bars_shadow,
     m15_parity_report,
+    refresh_m15_parity_from_stored,
 )
 
 
@@ -149,6 +151,80 @@ def test_m15_parity_compared_zero_is_not_evaluable(tmp_path: Path):
     assert r["compared"] == 0
     assert r["status"] == "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
     assert r["status"] != "SHADOW_RESEARCH_PARITY_OK"
+
+
+def _parity_fixture(tmp_path: Path, *, volume_class: str, shadows: list[str]):
+    repo = tmp_path / "repo"
+    (repo / "data/cognition").mkdir(parents=True)
+    start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    bars = []
+    for i, shadow in enumerate(shadows):
+        ts = start.replace(minute=(i * 15) % 60, hour=i * 15 // 60)
+        iso = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows.append({"timestamp": iso, "volume_class": volume_class})
+        bars.append(
+            {
+                "timeframe": "M15",
+                "incomplete": False,
+                "open_timestamp": iso,
+                "shadow_volume_class": shadow,
+            }
+        )
+    pd.DataFrame(rows).to_parquet(
+        repo / "data/cognition/volume_classification_memory.parquet",
+        index=False,
+    )
+    return repo, bars
+
+
+def test_m15_parity_hav_compatible_with_shadow_normal_is_not_blocked(tmp_path: Path):
+    shadows = ["NORMAL"] * 10 + ["HIGH_AVERAGE_VOLUME"] * 2
+    repo, bars = _parity_fixture(tmp_path, volume_class="high_average", shadows=shadows)
+    r = m15_parity_report(repo=repo, shadow_bars=bars)
+    assert r["parity_rule"] == CLASSIFICATION_PARITY_RULE
+    assert r["compared"] == 12
+    assert r["agreement"] == 2
+    assert r["per_class"]["HIGH_AVERAGE_VOLUME"]["canonical_count"] == 12
+    assert r["per_class"]["HIGH_AVERAGE_VOLUME"]["agree"] == 12
+    assert r["compatible_agreement"] == 12
+    assert r["parity_blocked"] is False
+    assert r["status"] == "SHADOW_RESEARCH_PARITY_OK"
+
+
+def test_m15_parity_climax_mismatch_still_blocks(tmp_path: Path):
+    shadows = ["NORMAL"] * 12
+    repo, bars = _parity_fixture(tmp_path, volume_class="climax", shadows=shadows)
+    r = m15_parity_report(repo=repo, shadow_bars=bars)
+    assert r["compared"] == 12
+    assert r["agreement"] == 0
+    assert r["per_class"]["CLIMAX"]["agree"] == 0
+    assert r["parity_blocked"] is True
+    assert r["status"] == "SHADOW_STP2_BLOCKED_CLASSIFICATION_PARITY_FAILURE"
+
+
+def test_refresh_m15_parity_from_stored_unblocks_hav_exact_mismatch():
+    stored = {
+        "compared": 45,
+        "agreement": 9,
+        "disagreement": 36,
+        "agreement_rate": 9 / 45,
+        "parity_blocked": True,
+        "status": "SHADOW_STP2_BLOCKED_CLASSIFICATION_PARITY_FAILURE",
+        "confusion": {
+            "HIGH_AVERAGE_VOLUME": {
+                "HIGH_AVERAGE_VOLUME": 9,
+                "NORMAL": 25,
+                "LOW_SMALL": 11,
+            }
+        },
+    }
+    r = refresh_m15_parity_from_stored(stored)
+    assert r["parity_rule"] == CLASSIFICATION_PARITY_RULE
+    assert r["agreement"] == 9
+    assert r["per_class"]["HIGH_AVERAGE_VOLUME"]["agree"] == 34
+    assert r["parity_blocked"] is False
+    assert r["status"] == "SHADOW_RESEARCH_PARITY_OK"
 
 
 def test_execute_breakdown_and_baseline_only_proof():

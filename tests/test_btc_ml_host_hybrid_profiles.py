@@ -20,3 +20,8 @@ def test_stop_wrappers_exist() -> None:
     assert (ROOT / "scripts" / "stop_dashboard.sh").is_file()
     assert "model stop" in (ROOT / "scripts" / "stop_model.sh").read_text(encoding="utf-8")
     assert "dashboard stop" in (ROOT / "scripts" / "stop_dashboard.sh").read_text(encoding="utf-8")
+
+
+def test_model_ctls_include_shadow_structural_protection() -> None:
+    assert "scripts/live/shadow_structural_protection_ctl.py" in HOST
+    assert "run_shadow_structural_protection.py" in HOST

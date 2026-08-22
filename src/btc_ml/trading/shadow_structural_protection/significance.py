@@ -15,6 +15,109 @@ CLASSIFICATION_MODEL = "SHADOW_VOLUME_SIGNIFICANCE_V1"
 
 SHADOW_CLASSES = ("CLIMAX", "STOPPING", "HIGH_AVERAGE_VOLUME", "NORMAL", "LOW_SMALL")
 
+# Canonical volume_classification_memory has no NORMAL: high_average is the residual
+# majority class (~two thirds of M15). Shadow splits that band into HAV (top ~30%)
+# and NORMAL. Exact HAV equality is a false systemic contradiction and must not
+# latch ingest for M30/H1/H4. CLIMAX / STOPPING / LOW_SMALL stay exact-match.
+CLASSIFICATION_PARITY_RULE = "CANONICAL_HAV_COMPATIBLE_WITH_SHADOW_HAV_OR_NORMAL_V1"
+_PARITY_COMPATIBLE = {
+    "HIGH_AVERAGE_VOLUME": frozenset({"HIGH_AVERAGE_VOLUME", "NORMAL"}),
+    "CLIMAX": frozenset({"CLIMAX"}),
+    "STOPPING": frozenset({"STOPPING"}),
+    "LOW_SMALL": frozenset({"LOW_SMALL"}),
+    "NORMAL": frozenset({"NORMAL", "HIGH_AVERAGE_VOLUME"}),
+}
+
+
+def _parity_labels_compatible(canonical: str, shadow: str) -> bool:
+    allowed = _PARITY_COMPATIBLE.get(canonical)
+    if allowed is None:
+        return canonical == shadow
+    return shadow in allowed
+
+
+def _parity_report_from_confusion(confusion: dict[str, dict[str, int]]) -> dict[str, Any]:
+    class_hits = {c: {"agree": 0, "disagree": 0, "canonical_count": 0} for c in SHADOW_CLASSES}
+    agreement = 0
+    disagreement = 0
+    compared = 0
+    for canon, shadows in confusion.items():
+        if not isinstance(shadows, dict):
+            continue
+        for shadow, raw_n in shadows.items():
+            n = int(raw_n or 0)
+            if n <= 0:
+                continue
+            compared += n
+            if canon == shadow:
+                agreement += n
+            else:
+                disagreement += n
+            if canon in class_hits:
+                class_hits[canon]["canonical_count"] += n
+                if _parity_labels_compatible(str(canon), str(shadow)):
+                    class_hits[canon]["agree"] += n
+                else:
+                    class_hits[canon]["disagree"] += n
+
+    rate = (agreement / compared) if compared else None
+    compatible_agreement = sum(int((class_hits.get(k) or {}).get("agree") or 0) for k in SHADOW_CLASSES)
+    compatible_rate = (compatible_agreement / compared) if compared else None
+    blocked = False
+    for key in ("CLIMAX", "STOPPING", "HIGH_AVERAGE_VOLUME", "LOW_SMALL"):
+        c = class_hits.get(key) or {}
+        n = int(c.get("canonical_count") or 0)
+        if n >= 10 and int(c.get("agree") or 0) / n < 0.2:
+            blocked = True
+
+    if blocked:
+        status = "SHADOW_STP2_BLOCKED_CLASSIFICATION_PARITY_FAILURE"
+    elif compared == 0:
+        status = "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
+    else:
+        status = "SHADOW_RESEARCH_PARITY_OK"
+
+    return {
+        "classification_mode": CLASSIFICATION_MODE,
+        "classification_model": CLASSIFICATION_MODEL,
+        "parity_rule": CLASSIFICATION_PARITY_RULE,
+        "compared": compared,
+        "agreement": agreement,
+        "disagreement": disagreement,
+        "agreement_rate": rate,
+        "compatible_agreement": compatible_agreement,
+        "compatible_agreement_rate": compatible_rate,
+        "confusion": confusion,
+        "per_class": class_hits,
+        "parity_blocked": blocked,
+        "status": status,
+    }
+
+
+def refresh_m15_parity_from_stored(parity: dict[str, Any] | None) -> dict[str, Any]:
+    """Re-score a checkpointed M15 report under the current compatibility rule."""
+    stored = dict(parity or {})
+    confusion = stored.get("confusion") or {}
+    if not isinstance(confusion, dict) or not confusion:
+        compared = int(stored.get("compared") or 0)
+        status = (
+            "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
+            if compared == 0
+            else "SHADOW_RESEARCH_PARITY_OK"
+        )
+        return {
+            **stored,
+            "parity_rule": CLASSIFICATION_PARITY_RULE,
+            "parity_blocked": False,
+            "status": status,
+        }
+    cleaned: dict[str, dict[str, int]] = {}
+    for canon, shadows in confusion.items():
+        if not isinstance(shadows, dict):
+            continue
+        cleaned[str(canon)] = {str(k): int(v or 0) for k, v in shadows.items()}
+    return _parity_report_from_confusion(cleaned)
+
 SIGNIFICANCE_PARAMS = {
     "rolling_window_bars": 20,
     "min_history_bars": 5,
@@ -144,10 +247,6 @@ def m15_parity_report(
     """Compare SHADOW_VOLUME_SIGNIFICANCE_V1 vs canonical M15 labels (research only)."""
     vc = load_volume_classification(repo)
     confusion: dict[str, dict[str, int]] = {}
-    agreement = 0
-    disagreement = 0
-    compared = 0
-    class_hits = {c: {"agree": 0, "disagree": 0, "canonical_count": 0} for c in SHADOW_CLASSES}
 
     for bar in shadow_bars:
         if str(bar.get("timeframe") or "").upper() != "M15":
@@ -170,48 +269,10 @@ def m15_parity_report(
         if not canon:
             continue
         shadow = str(bar.get("shadow_volume_class") or "NORMAL")
-        compared += 1
         confusion.setdefault(canon, {})
         confusion[canon][shadow] = confusion[canon].get(shadow, 0) + 1
-        if canon == shadow:
-            agreement += 1
-            if canon in class_hits:
-                class_hits[canon]["agree"] += 1
-                class_hits[canon]["canonical_count"] += 1
-        else:
-            disagreement += 1
-            if canon in class_hits:
-                class_hits[canon]["disagree"] += 1
-                class_hits[canon]["canonical_count"] += 1
 
-    rate = (agreement / compared) if compared else None
-    # Systemic contradiction: among significant canonical labels, agreement < 20% with n>=10
-    blocked = False
-    for key in ("CLIMAX", "STOPPING", "HIGH_AVERAGE_VOLUME", "LOW_SMALL"):
-        c = class_hits.get(key) or {}
-        n = int(c.get("canonical_count") or 0)
-        if n >= 10 and int(c.get("agree") or 0) / n < 0.2:
-            blocked = True
-
-    if blocked:
-        status = "SHADOW_STP2_BLOCKED_CLASSIFICATION_PARITY_FAILURE"
-    elif compared == 0:
-        status = "NOT_EVALUABLE_INSUFFICIENT_OVERLAP"
-    else:
-        status = "SHADOW_RESEARCH_PARITY_OK"
-
-    return {
-        "classification_mode": CLASSIFICATION_MODE,
-        "classification_model": CLASSIFICATION_MODEL,
-        "compared": compared,
-        "agreement": agreement,
-        "disagreement": disagreement,
-        "agreement_rate": rate,
-        "confusion": confusion,
-        "per_class": class_hits,
-        "parity_blocked": blocked,
-        "status": status,
-    }
+    return _parity_report_from_confusion(confusion)
 
 
 def class_allowed_shadow(volume_class: str | None, policy: str) -> bool:

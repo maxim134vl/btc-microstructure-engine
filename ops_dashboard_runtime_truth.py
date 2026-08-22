@@ -202,6 +202,120 @@ def build_ops_equity_pnl_curves(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_trade_side(row: dict[str, Any]) -> str | None:
+    raw = row.get("side")
+    if raw is None:
+        raw = row.get("direction")
+    side = str(raw or "").strip().upper()
+    if side in {"LONG", "BUY"}:
+        return "LONG"
+    if side in {"SHORT", "SELL"}:
+        return "SHORT"
+    return None
+
+
+def _closed_net_usd(row: dict[str, Any]) -> float | None:
+    raw = row.get("net_realised_pnl_usd")
+    if raw is None:
+        raw = row.get("net_pnl_usd")
+    try:
+        if raw is None:
+            return None
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):  # noqa: PLR0124
+        return None
+    return value
+
+
+def _open_rows_for_direction_mix(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Prefer canonical open_positions; LIVE1B shortcut stores sides on by_timeframe."""
+    opens = [row for row in (payload.get("open_positions") or []) if isinstance(row, dict)]
+    if opens:
+        return opens
+    by_tf = (
+        ((payload.get("positions") or {}).get("by_timeframe"))
+        or ((payload.get("intrabar_epoch_summary") or {}).get("positions_by_timeframe"))
+        or {}
+    )
+    if not isinstance(by_tf, dict):
+        return []
+    return [pos for pos in by_tf.values() if isinstance(pos, dict)]
+
+
+def _direction_side_stats(
+    *,
+    count: int,
+    total: int,
+    nets: list[float] | None,
+) -> dict[str, Any]:
+    pct = None if total <= 0 else round(100.0 * count / total, 2)
+    if nets is None:
+        return {
+            "count": int(count),
+            "pct": pct,
+            "wins": None,
+            "losses": None,
+            "win_rate_pct": None,
+        }
+    wins = sum(1 for net in nets if net > 0)
+    losses = sum(1 for net in nets if net <= 0)
+    n = len(nets)
+    return {
+        "count": int(count),
+        "pct": pct,
+        "wins": int(wins),
+        "losses": int(losses),
+        "win_rate_pct": None if n <= 0 else round(100.0 * wins / n, 2),
+    }
+
+
+def project_directional_position_stats(payload: dict[str, Any]) -> dict[str, Any]:
+    """LONG/SHORT counts, shares, and closed win rates. No new PnL math."""
+    closed_rows = [row for row in (payload.get("closed_trades") or []) if isinstance(row, dict)]
+    open_rows = _open_rows_for_direction_mix(payload)
+
+    closed_by_side: dict[str, list[dict[str, Any]]] = {"LONG": [], "SHORT": []}
+    for row in closed_rows:
+        side = _normalize_trade_side(row)
+        if side is None:
+            continue
+        closed_by_side[side].append(row)
+
+    open_long = sum(1 for row in open_rows if _normalize_trade_side(row) == "LONG")
+    open_short = sum(1 for row in open_rows if _normalize_trade_side(row) == "SHORT")
+    open_total = open_long + open_short
+    closed_long_n = len(closed_by_side["LONG"])
+    closed_short_n = len(closed_by_side["SHORT"])
+    closed_total = closed_long_n + closed_short_n
+
+    def nets_for(side: str) -> list[float]:
+        out: list[float] = []
+        for row in closed_by_side[side]:
+            net = _closed_net_usd(row)
+            if net is not None:
+                out.append(net)
+        return out
+
+    return {
+        "open": {
+            "total": int(open_total),
+            "long": _direction_side_stats(count=open_long, total=open_total, nets=None),
+            "short": _direction_side_stats(count=open_short, total=open_total, nets=None),
+        },
+        "closed": {
+            "total": int(closed_total),
+            "long": _direction_side_stats(
+                count=closed_long_n, total=closed_total, nets=nets_for("LONG")
+            ),
+            "short": _direction_side_stats(
+                count=closed_short_n, total=closed_total, nets=nets_for("SHORT")
+            ),
+        },
+    }
+
+
 def project_trading_performance_for_ops(payload: dict[str, Any]) -> dict[str, Any]:
     """Schema projection only — never recalculates economics.
 
@@ -257,6 +371,7 @@ def project_trading_performance_for_ops(payload: dict[str, Any]) -> dict[str, An
             "realized_pnl": portfolio.get("realised_net_pnl_usd"),
             "unrealized_pnl": portfolio.get("unrealised_gross_pnl_usd"),
             "equity_pnl_curves": build_ops_equity_pnl_curves(payload),
+            "directional_position_stats": project_directional_position_stats(payload),
         }
     )
 
@@ -696,6 +811,38 @@ def _visual_refresher_ps_line(lines: list[str]) -> str | None:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_age_seconds(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+
+
+def _live_paper_close_pulse(epoch_id: str) -> dict[str, Any]:
+    if not epoch_id:
+        return {
+            "live_closed_paper_trades": None,
+            "live_last_exit_timestamp": None,
+            "live_last_trade_id": None,
+        }
+    rows = _read_jsonl_rows(
+        ROOT / "data/trading/intrabar_paper" / epoch_id / "books" / "trades.jsonl"
+    )
+    last = rows[-1] if rows else {}
+    return {
+        "live_closed_paper_trades": len(rows),
+        "live_last_exit_timestamp": last.get("exit_ts")
+        or last.get("exit_timestamp")
+        or last.get("closed_at"),
+        "live_last_trade_id": last.get("trade_id"),
+    }
 
 
 def _env_flag_enabled(name: str, default: str = "0") -> bool:
@@ -3068,6 +3215,8 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
 
         latest_event = events[-1] if events else None
         latest_outcome = outcomes[-1] if outcomes else None
+        last_event_at = None if not latest_event else latest_event.get("recorded_at")
+        health_updated_at = health.get("updated_at")
         return {
             **health,
             **proc,
@@ -3090,6 +3239,10 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
             "outcomes_by_timeframe": outcomes_by_timeframe,
             "latest_event": latest_event,
             "latest_outcome": latest_outcome,
+            "last_event_at": last_event_at,
+            "health_updated_at": health_updated_at,
+            "last_activity_at": last_event_at or health_updated_at,
+            "last_activity_age_seconds": _utc_age_seconds(last_event_at or health_updated_at),
             "violations": violations,
             "research_safety_status": "ISOLATED" if not violations else "VIOLATION",
             "source_paths": {
@@ -3110,15 +3263,33 @@ def build_runtime_truth_snapshot() -> dict[str, Any]:
         summary = cross_layer.get("summary") or {}
         counts = cross_layer.get("counts") or {}
         stp_m = cross_layer.get("stp_manifest") or {}
+        audit_timestamp = cross_layer.get("generated_at") or cross_layer.get("audit_timestamp_utc")
+        audit_age_seconds = _utc_age_seconds(audit_timestamp)
+        pulse = _live_paper_close_pulse(
+            str(cross_layer.get("active_epoch") or active_shadow_epoch_id or "")
+        )
+        live_count = pulse.get("live_closed_paper_trades")
+        audit_count = counts.get("closed_trades")
+        stale_by_age = audit_age_seconds is not None and audit_age_seconds > 7200
+        stale_by_count = (
+            isinstance(live_count, int)
+            and isinstance(audit_count, int)
+            and live_count > audit_count
+        )
         cross_layer_block = {
             "read_only": True,
             "status": cross_layer.get("status"),
-            "audit_timestamp": cross_layer.get("generated_at") or cross_layer.get("audit_timestamp_utc"),
+            "audit_timestamp": audit_timestamp,
+            "audit_age_seconds": None if audit_age_seconds is None else round(audit_age_seconds, 1),
+            "freshness_status": "STALE" if stale_by_age or stale_by_count else "CURRENT",
             "active_paper_epoch": cross_layer.get("active_epoch"),
             "active_trading_fingerprint": cross_layer.get("active_trading_contract_fingerprint"),
             "active_stp_manifest": stp_m.get("active_stp_manifest_fingerprint"),
             "active_stp_manifest_version": stp_m.get("active_stp_manifest_version"),
-            "closed_paper_trades": counts.get("closed_trades"),
+            "closed_paper_trades": audit_count,
+            "live_closed_paper_trades": live_count,
+            "live_last_trade_id": pulse.get("live_last_trade_id"),
+            "live_last_exit_timestamp": pulse.get("live_last_exit_timestamp"),
             "fully_reconciled_trades": summary.get("fully_reconciled_trades"),
             "pending_eqcorr_outcomes": summary.get("pending_eqcorr_outcomes"),
             "pending_stp_outcomes": summary.get("pending_stp_outcomes"),

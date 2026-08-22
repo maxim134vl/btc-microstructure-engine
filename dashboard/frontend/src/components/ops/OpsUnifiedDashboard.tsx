@@ -41,6 +41,7 @@ import {
 import type { TimeframeTradingState } from "../../types/ops";
 import { TradingMetricsPanel } from "./TradingMetricsPanel";
 import { TradingEquityCurvesPanel } from "./TradingEquityCurvesPanel";
+import { TradingDirectionMixPanel } from "./TradingDirectionMixPanel";
 
 const TRADING_STATE_TIMEFRAMES = ["M15", "M30", "H1", "H4"] as const;
 
@@ -96,6 +97,25 @@ function MetricLine({ label, value, hint }: { label: string; value: string; hint
       </div>
     </div>
   );
+}
+
+function formatActivityTs(value: unknown): string {
+  if (value == null || value === "") return "—";
+  const parsed = Date.parse(String(value));
+  if (Number.isNaN(parsed)) return String(value);
+  const label = new Date(parsed).toLocaleString("ru-RU", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const ageHours = (Date.now() - parsed) / 3_600_000;
+  let age = `${Math.round(ageHours / 24)} дн. назад`;
+  if (ageHours < 1) age = `${Math.max(0, Math.round(ageHours * 60))} мин назад`;
+  else if (ageHours < 48) age = `${ageHours.toFixed(1)} ч назад`;
+  return `${label} МСК · ${age}`;
 }
 
 function SummaryCard({
@@ -630,6 +650,11 @@ export function OpsUnifiedDashboard({
               liveConnected={liveConnected}
               generatedAt={generatedAt}
             />
+            <TradingDirectionMixPanel
+              performance={tradingPerformance}
+              liveConnected={liveConnected}
+              generatedAt={generatedAt}
+            />
           </SectionCard>
         </section>
 
@@ -821,11 +846,20 @@ export function OpsUnifiedDashboard({
                 return <>
                   <MetricLine label="Mode" value={String(sh?.mode || "SHADOW_OBSERVE_ONLY")} />
                   <MetricLine label="Process / ownership" value={`${String(sh?.process_health || "STOPPED")} · ${String(sh?.ownership || "INDEPENDENT_RUNNER")}${sh?.pid != null ? ` · PID ${String(sh.pid)}` : ""}`} />
+                  <MetricLine
+                    label="Last activity"
+                    value={`${String(latestEvent.event_type || "—")} · ${formatActivityTs(sh?.last_event_at || latestEvent.recorded_at)}`}
+                  />
+                  <MetricLine label="Health heartbeat" value={formatActivityTs(sh?.health_updated_at || sh?.updated_at)} />
                   <MetricLine label="Binding" value={`${String(sh?.binding_status || "—")} · epoch ${sh?.epoch_match === true ? "MATCH" : "MISMATCH"} · policy fp ${sh?.policy_fingerprint_match === true ? "MATCH" : "MISMATCH"}`} />
                   <MetricLine label="Epoch" value={String(sh?.source_epoch_id || "—")} />
                   <MetricLine label="Generation / version" value={`${String(sh?.policy_id || "—")} / ${String(sh?.policy_version || "—")}`} />
                   <MetricLine label="Policy fingerprint" value={fp === "—" ? fp : `${fp.slice(0, 16)}…`} />
-                  <MetricLine label="Effective since" value={String(sh?.policy_effective_at || "—")} />
+                  <MetricLine
+                    label="Policy started (immutable)"
+                    value={formatActivityTs(sh?.policy_effective_at)}
+                    hint="Дата старта политики STP_BE33, не последняя активность"
+                  />
                   <MetricLine label="Trigger rule" value="At 1/3 of entry→TP distance" />
                   <MetricLine label="Partial / remaining" value={`${String(manifest.partial_fraction || "—")} close / ${String(manifest.remaining_fraction || "—")} moved to economic BE`} />
                   <MetricLine label="Intrabar / WAL provenance" value={`${String(sh?.trigger_source || "—")} · processed ${String(sh?.last_processed_wal_offset ?? "—")} / WAL ${String(sh?.wal_last_offset ?? "—")}`} />
@@ -834,7 +868,6 @@ export function OpsUnifiedDashboard({
                   <MetricLine label="Events by TF" value={tf(eventsByTf)} />
                   <MetricLine label="Outcomes by TF" value={tf(outcomesByTf)} />
                   <MetricLine label="Partial + stop-move events" value={String(eventCounts.STP_BE33_STOP_MOVED ?? 0)} />
-                  <MetricLine label="Last event / update" value={`${String(latestEvent.event_type || "—")} · ${String(latestEvent.recorded_at || sh?.updated_at || "—")}`} />
                   <MetricLine label="Errors / violations" value={violations.length ? violations.join(", ") : "none"} />
                   <MetricLine label="Research / safety" value={String(sh?.research_safety_status || "—")} />
                   <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
@@ -1036,7 +1069,19 @@ export function OpsUnifiedDashboard({
                 return (
                   <>
                     <MetricLine label="Last audit status" value={String(sh?.status || "NO_AUDIT_YET")} />
-                    <MetricLine label="Last audit timestamp" value={String(sh?.audit_timestamp || "—")} />
+                    <MetricLine
+                      label="Last audit generated"
+                      value={formatActivityTs(sh?.audit_timestamp)}
+                      hint={String(sh?.freshness_status || "—") === "STALE" ? "Аудит отстал от live paper books" : "TRD-OUTCOME2 snapshot"}
+                    />
+                    <MetricLine
+                      label="Live paper last close"
+                      value={`${String(sh?.live_last_trade_id || "—")} · ${formatActivityTs(sh?.live_last_exit_timestamp)}`}
+                    />
+                    <MetricLine
+                      label="Live / audited closed trades"
+                      value={`${String(sh?.live_closed_paper_trades ?? "—")} / ${String(sh?.closed_paper_trades ?? "—")}`}
+                    />
                     <MetricLine label="Active paper epoch" value={String(sh?.active_paper_epoch || "—")} />
                     <MetricLine
                       label="Active trading fingerprint"
@@ -1046,7 +1091,6 @@ export function OpsUnifiedDashboard({
                       label="Active STP manifest"
                       value={`${String(sh?.active_stp_manifest_version || "—")} / ${String(sh?.active_stp_manifest || "—").slice(0, 12)}…`}
                     />
-                    <MetricLine label="Closed paper trades" value={String(sh?.closed_paper_trades ?? "—")} />
                     <MetricLine label="Fully reconciled" value={String(sh?.fully_reconciled_trades ?? "—")} />
                     <MetricLine
                       label="Pending EQCORR / STP"
@@ -1067,10 +1111,10 @@ export function OpsUnifiedDashboard({
                     <MetricLine label="Last reconciled trade" value={String(sh?.last_reconciled_trade || "—")} />
                     <MetricLine
                       label="Last reconciled exit"
-                      value={String(sh?.last_reconciled_exit_timestamp || "—")}
+                      value={formatActivityTs(sh?.last_reconciled_exit_timestamp)}
                     />
                     <p className="px-3.5 pb-2.5 text-[11px] text-ds-text-secondary">
-                      Diagnostic only — does not rewrite paper books, shadow decisions, or recommend policies.
+                      Diagnostic snapshot, refreshed every 15 min. Live paper last close is read from books independently of the audit file.
                     </p>
                   </>
                 );
