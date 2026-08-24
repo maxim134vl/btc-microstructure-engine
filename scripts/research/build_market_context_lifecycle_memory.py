@@ -20,7 +20,7 @@ from typing import Any
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "market_context_lifecycle_memory_v2_thesis_persistence"
+BUILDER_VERSION = "market_context_lifecycle_memory_v2_neutralization_carry"
 INPUT_PATH = ROOT / "data" / "cognition" / "final_market_context_memory.parquet"
 AUCTION_PATH = ROOT / "data" / "cognition" / "auction_episode_memory.parquet"
 COGNITION_PATH = ROOT / "data" / "cognition" / "runtime_cognition_memory.parquet"
@@ -123,6 +123,8 @@ INVALIDATION_THESIS = "THESIS_REJECTION"
 # BALANCE/OBSERVE neutralization nor a one-bar confirmed opposite label.
 # DEVELOPING opposite never replaces: it only challenges. Confirmed opposite
 # replacement uses the same persistence family as neutralization (delay only).
+# DEVELOPING same-direction while CHALLENGED must not reset neutralization:
+# a LOWER_ABSORPTION developing bar cannot resurrect a zombie LONG through BALANCE.
 #   NEUTRALIZATION_CONFIRM_BARS      — consecutive full-confluence bars to invalidate.
 #   MIN_ACTIVE_CONTEXT_HOLD_BARS     — a fresh context cannot be replaced before this age.
 #   CONFIRMED_OPPOSITE_CONFIRM_BARS  — consecutive ACTIVE opposite bars to replace.
@@ -130,6 +132,7 @@ INVALIDATION_THESIS = "THESIS_REJECTION"
 NEUTRALIZATION_CONFIRM_BARS = 2
 MIN_ACTIVE_CONTEXT_HOLD_BARS = 3
 CONFIRMED_OPPOSITE_CONFIRM_BARS = 2
+_TF_BAR_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
 
 
 def _clean_text(value: Any, default: str = "UNKNOWN") -> str:
@@ -289,6 +292,20 @@ def _mode_or_unknown(series: pd.Series) -> str:
     return str(counts.index[0])
 
 
+def _lifecycle_bar_key(timestamp: Any, prev: dict[str, Any] | None) -> str:
+    """Bucket evaluations onto one bar so live ticks do not inflate neutralization."""
+    ts = pd.Timestamp(timestamp)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    tf = _clean_text((prev or {}).get("_timeframe"), default="")
+    secs = _TF_BAR_SECONDS.get(tf)
+    if not secs:
+        return str(int(ts.value))
+    return f"{tf}:{int(ts.timestamp() // secs)}"
+
+
 def is_auction_neutralization(
     *,
     raw_market_context: str,
@@ -386,6 +403,7 @@ def step_lifecycle(
     new_transition = transition
     inv = dict(carried_inv)
     neutralization_streak = 0
+    neutralization_bar_key = None
     confirmed_opposite_streak = 0
 
     # Source-row INVALIDATED → thesis rejection, with minimum-hold protection.
@@ -429,7 +447,13 @@ def step_lifecycle(
             auction_episode=auction,
         ):
             # Persistence protection: a single neutral bar must not kill a confirmed context.
-            streak = prev_neutralization_streak + 1
+            # Live evaluates every tick; count at most one increment per TF bar.
+            bar_key = _lifecycle_bar_key(timestamp, prev)
+            prev_bar_key = (prev or {}).get("_neutralization_bar_key")
+            if prev_bar_key == bar_key and prev_neutralization_streak > 0:
+                streak = prev_neutralization_streak
+            else:
+                streak = prev_neutralization_streak + 1
             too_young = active_age < MIN_ACTIVE_CONTEXT_HOLD_BARS
             not_persistent = streak < NEUTRALIZATION_CONFIRM_BARS
             if too_young or not_persistent:
@@ -439,6 +463,7 @@ def step_lifecycle(
                 new_challenge_reason = reason
                 active_age = active_age + 1
                 neutralization_streak = streak
+                neutralization_bar_key = bar_key
                 new_transition = (
                     "neutralization confluence challenged active context "
                     f"(hold protection: age={active_age - 1}, streak={streak})"
@@ -454,6 +479,7 @@ def step_lifecycle(
                 active_started = None
                 active_age = 0
                 neutralization_streak = 0
+                neutralization_bar_key = None
                 new_transition = "auction neutralization invalidated active context"
                 inv = {
                     "previous_active_market_context": previous,
@@ -495,6 +521,10 @@ def step_lifecycle(
                     new_challenge = challenge
                     new_challenge_started = challenge_started
                     new_challenge_reason = challenge_reason
+                    # Developing same-direction is not a reconfirmation. Keep the
+                    # BALANCE neutralization count so zombie LONG cannot revive.
+                    neutralization_streak = prev_neutralization_streak
+                    neutralization_bar_key = (prev or {}).get("_neutralization_bar_key")
                 else:
                     lifecycle = "ACTIVE"
                 active_age = active_age + 1
@@ -507,6 +537,8 @@ def step_lifecycle(
                 new_challenge_started = timestamp
                 new_challenge_reason = reason
                 active_age = active_age + 1
+                neutralization_streak = prev_neutralization_streak
+                neutralization_bar_key = (prev or {}).get("_neutralization_bar_key")
                 new_transition = "developing opposite context challenges active"
         elif status == "ACTIVE":
             if active == "OBSERVE":
@@ -615,7 +647,9 @@ def step_lifecycle(
         "transition_reason": new_transition,
         # Internal state threaded via prev; dropped from output (not in REQUIRED_MEMORY_COLUMNS).
         "_neutralization_streak": int(neutralization_streak),
+        "_neutralization_bar_key": neutralization_bar_key,
         "_confirmed_opposite_streak": int(confirmed_opposite_streak),
+        "_timeframe": (prev or {}).get("_timeframe"),
         **inv,
     }
 

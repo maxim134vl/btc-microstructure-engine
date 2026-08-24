@@ -79,9 +79,10 @@ class EpochBooks:
         ]
 
     def closed_trades(self) -> list[dict[str, Any]]:
-        from .performance_eligibility import counts_toward_strategy_performance
+        from .performance_eligibility import counts_toward_strategy_performance, filter_superseded_trades
 
-        return [row for row in self.read_all("trades") if counts_toward_strategy_performance(row)]
+        rows = filter_superseded_trades(self.read_all("trades"))
+        return [row for row in rows if counts_toward_strategy_performance(row)]
 
     def count(self, table: str) -> int:
         return len(self.read_all(table))

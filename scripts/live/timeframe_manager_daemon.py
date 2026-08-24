@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
@@ -31,6 +32,7 @@ from btc_ml.trading.timeframe_state_adapter import load_sources  # noqa: E402
 ROLE = "timeframe_manager"
 AVAILABILITY_LATEST = ROOT / "data" / "runtime" / "multi_timeframe_availability_latest.json"
 ACTIVATION_PATH = ROOT / "data" / "trading" / "manager" / "activation.json"
+HEALTH_PATH = ROOT / "data" / "runtime" / "timeframe_manager_health.json"
 
 _STOP = False
 
@@ -51,6 +53,26 @@ def latest_evaluation_timestamp() -> str | None:
     return payload.get("latest_evaluation_timestamp")
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def write_health(payload: dict[str, Any]) -> None:
+    HEALTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    body = {
+        "service": ROLE,
+        "pid": os.getpid(),
+        "alive": True,
+        "updated_at": _utc_now(),
+        "paper_only": True,
+        "execution_enabled": False,
+        **payload,
+    }
+    tmp = HEALTH_PATH.with_suffix(HEALTH_PATH.suffix + ".tmp")
+    tmp.write_text(json.dumps(body, indent=2, default=str) + "\n", encoding="utf-8")
+    tmp.replace(HEALTH_PATH)
+
+
 def activation_boundary() -> str | None:
     if not ACTIVATION_PATH.exists():
         return None
@@ -65,6 +87,7 @@ def run_cycle(manager: TimeframeManager, *, boundary: str | None) -> dict[str, A
     evaluation = latest_evaluation_timestamp()
     if evaluation is None:
         process_lock.log_line(ROLE, "cycle_skipped reason=NO_MTF_AVAILABILITY_LATEST")
+        write_health({"last_cycle_skipped": True, "skip_reason": "NO_MTF_AVAILABILITY_LATEST"})
         return {"skipped": True, "reason": "NO_MTF_AVAILABILITY_LATEST"}
     cycle = manager.run_cycle(
         evaluation_timestamp=evaluation,
@@ -86,6 +109,23 @@ def run_cycle(manager: TimeframeManager, *, boundary: str | None) -> dict[str, A
             json.dumps(summary),
             float(cycle["portfolio"]["gross_open_risk_usd"]),
         ),
+    )
+    write_health(
+        {
+            "last_cycle_skipped": False,
+            "last_evaluation_timestamp": evaluation,
+            "last_cycle_at": _utc_now(),
+            "appended": cycle["append_result"]["appended"],
+            "duplicates_rejected": cycle["append_result"]["duplicates_rejected"],
+            "commands": {
+                cmd["timeframe"]: {
+                    "intent": cmd.get("intent"),
+                    "timeframe_state": cmd.get("timeframe_state"),
+                    "lifecycle_episode_id": cmd.get("lifecycle_episode_id"),
+                }
+                for cmd in cycle["commands"]
+            },
+        }
     )
     return cycle
 
@@ -114,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         "started pid=%s interval=%.0fs activation_boundary=%s paper_only=True execution_enabled=False"
         % (lock["pid"], args.interval_seconds, boundary),
     )
+    write_health({"started_at": _utc_now(), "interval_seconds": args.interval_seconds})
     cycles = 0
     try:
         while not _STOP:

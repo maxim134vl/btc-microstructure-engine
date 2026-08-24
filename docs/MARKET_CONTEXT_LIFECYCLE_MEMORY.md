@@ -74,6 +74,9 @@ Three conservative persistence rules protect directional episodes (shadow-only; 
 - `NEUTRALIZATION_CONFIRM_BARS = 2` — a confirmed context is invalidated only after
   this many **consecutive** neutralization confluence bars. The first confluence bar
   sets `lifecycle_state = CHALLENGED` while keeping the existing LONG/SHORT active.
+  DEVELOPING same-direction or opposite bars **do not reset** this count. A
+  `LOWER_ABSORPTION` developing print cannot resurrect a challenged LONG through
+  BALANCE. Live ticks on the same TF bar count as one bar.
 - `MIN_ACTIVE_CONTEXT_HOLD_BARS = 3` — a fresh context whose
   `active_context_age_bars < MIN_ACTIVE_CONTEXT_HOLD_BARS` is never invalidated by
   auction neutralization, a source `INVALIDATED` row, **or** confirmed opposite

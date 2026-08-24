@@ -4,7 +4,10 @@ Reuses the existing runtime planes without changing their semantics:
 
   * availability / clock  -> data/cognition/multi_timeframe_availability_memory.parquet
                              (writer: mtf_availability_runtime_engine_v1.py)
-  * lifecycle / direction -> data/cognition/market_context_lifecycle_memory.parquet
+  * lifecycle / direction -> LIVE1A per-TF context journal when present
+                             (data/cognition/intrabar_context_events/events.jsonl);
+                             otherwise the M15 research parquet
+                             data/cognition/market_context_lifecycle_memory.parquet
   * synthesis metadata    -> data/cognition/multi_timeframe_synthesis.parquet
 
 The same lifecycle contract is applied *independently per timeframe*: each
@@ -19,6 +22,7 @@ Hard rules enforced here:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +35,11 @@ ROOT = Path(__file__).resolve().parents[3]
 AVAILABILITY_MEMORY = ROOT / "data/cognition/multi_timeframe_availability_memory.parquet"
 AVAILABILITY_LATEST = ROOT / "data/runtime/multi_timeframe_availability_latest.json"
 LIFECYCLE_MEMORY = ROOT / "data/cognition/market_context_lifecycle_memory.parquet"
+CONTEXT_JOURNAL = ROOT / "data/cognition/intrabar_context_events/events.jsonl"
 SYNTHESIS_MEMORY = ROOT / "data/cognition/multi_timeframe_synthesis.parquet"
+
+_JOURNAL_CACHE: tuple[float, int, pd.DataFrame] | None = None
+_CONTEXT_EVENTS = frozenset({"CONTEXT_START", "CONTEXT_END", "CONTEXT_FLIP"})
 
 SUPPORTED_TIMEFRAMES = ("M15", "M30", "H1", "H4")
 UNSUPPORTED_TIMEFRAMES = ("D1",)
@@ -56,6 +64,8 @@ DIRECTION_SHORT = "SHORT"
 DIRECTION_FLAT = "NON_DIRECTIONAL"
 
 TERMINAL_LIFECYCLE_PHASES = {"INVALIDATED", "NO_ACTIVE_CONTEXT", "EXPIRED", "TERMINATED"}
+# Entries require a confirmed ACTIVE tip. CHALLENGED keeps an open hold path via
+# open-position preview, but must not open a fresh position from noise.
 
 
 def _utc_now() -> str:
@@ -85,6 +95,139 @@ class TimeframeSources:
     lifecycle: pd.DataFrame = field(default_factory=pd.DataFrame)
     synthesis: pd.DataFrame = field(default_factory=pd.DataFrame)
     load_errors: dict[str, str] = field(default_factory=dict)
+    lifecycle_source: str = "parquet"
+
+
+def _normalize_context(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if text in {"LONG", "LONG_CONTEXT"}:
+        return "LONG_CONTEXT"
+    if text in {"SHORT", "SHORT_CONTEXT"}:
+        return "SHORT_CONTEXT"
+    if text in {"OBSERVE", "NO_ACTIVE_CONTEXT", "STAND_ASIDE", "NONE", "", "UNKNOWN", "INVALIDATED"}:
+        return "OBSERVE"
+    return text
+
+
+def _journal_event_timestamp(event: dict[str, Any]) -> pd.Timestamp | None:
+    for key in (
+        "source_bar_timestamp",
+        "causal_cutoff_timestamp",
+        "causal_cutoff_timestamp",
+        "decision_available_at",
+        "event_timestamp",
+    ):
+        stamp = _ts(event.get(key))
+        if stamp is not None:
+            return stamp
+    return None
+
+
+def _lifecycle_from_context_journal(path: Path) -> pd.DataFrame | None:
+    """Map LIVE1A per-TF CONTEXT_* events into the manager lifecycle schema.
+
+    Returns None when the journal is missing or has no usable rows so callers
+    can keep the research parquet (tests / isolated fixtures).
+    """
+    global _JOURNAL_CACHE
+    if not path.exists():
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    cached = _JOURNAL_CACHE
+    if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                tf = str(event.get("timeframe") or "").upper()
+                if tf not in SUPPORTED_TIMEFRAMES:
+                    continue
+                event_type = str(event.get("event_type") or "").upper()
+                if event_type not in _CONTEXT_EVENTS:
+                    continue
+                stamp = _journal_event_timestamp(event)
+                if stamp is None:
+                    continue
+                active = _normalize_context(event.get("new_context"))
+                evidence = event.get("evidence") if isinstance(event.get("evidence"), dict) else {}
+                phase = str(
+                    evidence.get("lifecycle_phase")
+                    or evidence.get("lifecycle_state")
+                    or ("ACTIVE" if active in {"LONG_CONTEXT", "SHORT_CONTEXT"} else "NO_ACTIVE_CONTEXT")
+                ).upper()
+                price = event.get("context_event_price") or event.get("context_event_price")
+                try:
+                    origin_price = float(price) if price not in (None, "") else None
+                except (TypeError, ValueError):
+                    origin_price = None
+                rows.append(
+                    {
+                        "timestamp": stamp,
+                        "timeframe": tf,
+                        "active_market_context": active,
+                        "lifecycle_state": phase,
+                        "context_episode_id": event.get("lifecycle_episode_id")
+                        or event.get("lifecycle_episode_id"),
+                        "invalidation_reason": None,
+                        "active_context_started_at": event.get("context_origin_timestamp")
+                        or event.get("context_origin_timestamp")
+                        or event.get("event_timestamp"),
+                        "context_origin_price": origin_price,
+                    }
+                )
+    except OSError:
+        return None
+    if not rows:
+        return None
+    frame = pd.DataFrame(rows)
+    _JOURNAL_CACHE = (stat.st_mtime, stat.st_size, frame)
+    return frame
+
+
+def _scoped_lifecycle(lifecycle: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Restrict lifecycle rows to one TF.
+
+    Tagged frames (LIVE1A journal): filter by ``timeframe``.
+    Untagged frames (legacy M15 research parquet / fixtures): only M15 may
+    consume them. M30/H1/H4 must not inherit M15 direction — return empty so
+    the caller reports NO_LIFECYCLE_ROW instead of broadcasting M15.
+    """
+    if not len(lifecycle):
+        return lifecycle
+    tf = str(timeframe or "").upper()
+    if "timeframe" not in lifecycle.columns:
+        if tf == "M15":
+            return lifecycle
+        return lifecycle.iloc[0:0].copy()
+    stamps = lifecycle["timeframe"].astype(str).str.upper()
+    return lifecycle.loc[stamps == tf]
+
+
+def _episode_id_for_timeframe(timeframe: str, raw_episode: Any) -> str | None:
+    if raw_episode is None or (isinstance(raw_episode, float) and pd.isna(raw_episode)):
+        return None
+    tf = str(timeframe or "").upper()
+    text = str(raw_episode).strip()
+    if not text:
+        return None
+    if text.upper().startswith(f"{tf}:"):
+        return text
+    try:
+        return f"{tf}:{int(float(text))}"
+    except (TypeError, ValueError):
+        return f"{tf}:{text}"
 
 
 def load_sources(
@@ -92,6 +235,7 @@ def load_sources(
     availability_path: Path | None = None,
     lifecycle_path: Path | None = None,
     synthesis_path: Path | None = None,
+    context_journal_path: Path | None = None,
 ) -> TimeframeSources:
     sources = TimeframeSources()
     for name, path, attr in (
@@ -106,6 +250,17 @@ def load_sources(
             setattr(sources, attr, pd.read_parquet(path))
         except Exception as exc:
             sources.load_errors[name] = f"SCHEMA_INVALID:{type(exc).__name__}"
+    # Production default: prefer the per-TF LIVE1A journal over the M15 parquet.
+    # Explicit lifecycle_path keeps fixtures / research reads on parquet.
+    sources.lifecycle_source = "parquet"
+    if lifecycle_path is None:
+        journal = _lifecycle_from_context_journal(
+            CONTEXT_JOURNAL if context_journal_path is None else context_journal_path
+        )
+        if journal is not None and len(journal):
+            sources.lifecycle = journal
+            sources.lifecycle_source = "context_journal"
+            sources.load_errors.pop("lifecycle", None)
     return sources
 
 
@@ -193,7 +348,12 @@ def resolve_timeframe_state(
         "model_version": model_version,
         "source_lineage": {
             "availability": str(AVAILABILITY_MEMORY.relative_to(ROOT)),
-            "lifecycle": str(LIFECYCLE_MEMORY.relative_to(ROOT)),
+            "lifecycle": (
+                str(CONTEXT_JOURNAL.relative_to(ROOT))
+                if getattr(sources, "lifecycle_source", "parquet") == "context_journal"
+                else str(LIFECYCLE_MEMORY.relative_to(ROOT))
+            ),
+            "lifecycle_source": getattr(sources, "lifecycle_source", "parquet"),
             "synthesis": str(SYNTHESIS_MEMORY.relative_to(ROOT)),
         },
     }
@@ -282,9 +442,13 @@ def resolve_timeframe_state(
     if sources.load_errors.get("lifecycle"):
         base["no_action_reason"] = sources.load_errors["lifecycle"]
         return base
-    lifecycle = sources.lifecycle
-    if not len(lifecycle) or "timestamp" not in lifecycle.columns:
+    raw_lifecycle = sources.lifecycle
+    if raw_lifecycle is None or not len(raw_lifecycle) or "timestamp" not in raw_lifecycle.columns:
         base["no_action_reason"] = "LIFECYCLE_DATASET_MISSING"
+        return base
+    lifecycle = _scoped_lifecycle(raw_lifecycle, tf)
+    if not len(lifecycle):
+        base["no_action_reason"] = "NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE"
         return base
     life_stamps = pd.to_datetime(lifecycle["timestamp"], utc=True, errors="coerce")
     life_mask = life_stamps <= bar_close
@@ -295,13 +459,7 @@ def resolve_timeframe_state(
     life_row = lifecycle.loc[life_idx].to_dict()
     direction, direction_reason = _lifecycle_direction(life_row)
     phase = str(life_row.get("lifecycle_state") or "UNKNOWN").upper()
-    raw_episode = life_row.get("context_episode_id")
-    episode = None
-    if raw_episode is not None and not (isinstance(raw_episode, float) and pd.isna(raw_episode)):
-        try:
-            episode = f"{tf}:{int(float(raw_episode))}"
-        except Exception:
-            episode = f"{tf}:{raw_episode}"
+    episode = _episode_id_for_timeframe(tf, life_row.get("context_episode_id"))
 
     base.update(
         {
@@ -316,15 +474,16 @@ def resolve_timeframe_state(
             "context_origin_price": None
             if life_row.get("context_origin_price") is None
             else float(life_row.get("context_origin_price") or 0.0) or None,
-            "actionable": direction in {DIRECTION_LONG, DIRECTION_SHORT} and phase not in TERMINAL_LIFECYCLE_PHASES,
+            "actionable": direction in {DIRECTION_LONG, DIRECTION_SHORT} and phase == "ACTIVE",
         }
     )
     if not base["actionable"] and base["no_action_reason"] is None:
-        base["no_action_reason"] = (
-            "NON_DIRECTIONAL_TIMEFRAME_STATE"
-            if direction == DIRECTION_FLAT
-            else f"TERMINAL_LIFECYCLE_PHASE:{phase}"
-        )
+        if direction == DIRECTION_FLAT:
+            base["no_action_reason"] = "NON_DIRECTIONAL_TIMEFRAME_STATE"
+        elif phase in TERMINAL_LIFECYCLE_PHASES:
+            base["no_action_reason"] = f"TERMINAL_LIFECYCLE_PHASE:{phase}"
+        else:
+            base["no_action_reason"] = f"LIFECYCLE_PHASE_NOT_ACTIONABLE:{phase}"
 
     synthesis = sources.synthesis
     if len(synthesis) and "timestamp" in synthesis.columns:

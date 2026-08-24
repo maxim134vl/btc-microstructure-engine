@@ -256,7 +256,32 @@ def test_acceptance_lower_unknown_side_without_follow_through_stays_developing()
     assert status == "DEVELOPING"
 
 
-def test_balance_unknown_fields_not_confirmed_by_follow_through():
+def test_acceptance_lower_unknown_ft_with_accepted_effort_is_confirmed():
+    """Dump bars: ACCEPTED_LOWER already classified, live FT is UNKNOWN — still SHORT."""
+    status = mod.classify_episode_status(
+        auction_episode="ACCEPTANCE_LOWER",
+        follow_through="UNKNOWN",
+        effort_result="ACCEPTED",
+    )
+    assert status == "CONFIRMED"
+
+
+def test_acceptance_higher_unknown_ft_with_accepted_effort_is_confirmed():
+    status = mod.classify_episode_status(
+        auction_episode="ACCEPTANCE_HIGHER",
+        follow_through="UNKNOWN",
+        effort_result="CONTINUED",
+    )
+    assert status == "CONFIRMED"
+
+
+def test_acceptance_lower_unknown_ft_without_accepted_effort_stays_developing():
+    status = mod.classify_episode_status(
+        auction_episode="ACCEPTANCE_LOWER",
+        follow_through="UNKNOWN",
+        effort_result="ABSORBED",
+    )
+    assert status == "DEVELOPING"
     closes = [100.0, 100.3, 100.5, 100.6, 100.7]  # strong up move
     assert (
         mod.resolve_expected_follow_through_direction(

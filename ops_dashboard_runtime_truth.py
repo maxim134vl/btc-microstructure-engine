@@ -2562,9 +2562,9 @@ def compute_overall_health(
     if live1b_paper_active() and live1b_roles_tracked:
         down("intrabar_cognition", "INTRABAR_COGNITION_DOWN", "CRITICAL")
         down("intrabar_paper_manager", "INTRABAR_PAPER_MANAGER_DOWN", "ERROR")
-        # Legacy closed-bar stack must stay stopped under LIVE1B.
+        down("timeframe_manager", "TIMEFRAME_MANAGER_DOWN", "ERROR")
+        # Hybrid keeps the S4.1 manager; only the independent S4.1 traders stay stopped.
         for pid_name, alert_id in (
-            ("timeframe_manager", "LEGACY_TIMEFRAME_MANAGER_RUNNING_AFTER_LIVE1B"),
             *((f"trader_{tf}", f"LEGACY_TRADER_RUNNING_AFTER_LIVE1B_{tf}") for tf in S4_TIMEFRAMES),
         ):
             legacy = by_id.get(pid_name)

@@ -158,6 +158,20 @@ class SleeveLedger:
         self.save()
         return s
 
+    def apply_realized_net_pnl_adjustment(
+        self,
+        timeframe: str,
+        net_pnl_delta_usd: float,
+        *,
+        at: str | None = None,
+    ) -> SleeveState:
+        """Apply a PnL correction delta without incrementing closed trade count."""
+        s = self.get(timeframe)
+        s.cumulative_realized_net_pnl_usd = float(s.cumulative_realized_net_pnl_usd) + float(net_pnl_delta_usd)
+        s.last_realized_update_at = at or _utc_now()
+        self.save()
+        return s
+
     def sync_open_from_positions(self, open_positions: list[dict[str, Any]]) -> None:
         """Restart recovery: align open markers with books without rewriting PnL."""
         by_tf = {str(p.get("timeframe") or "").upper(): p for p in open_positions}

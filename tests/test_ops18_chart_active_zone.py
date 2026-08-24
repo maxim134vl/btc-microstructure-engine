@@ -107,3 +107,81 @@ def test_visual_overlay_prefers_active_over_provisional_observe() -> None:
     )
     assert directional == "LONG_CONTEXT"
     assert direction == "LONG"
+
+
+def test_zone_edges_use_source_bar_not_reused_origin() -> None:
+    """FLIP events that reuse context-origin timestamps must still paint causally."""
+    events = [
+        {
+            "context_event_id": "CTX_short",
+            "event_type": "CONTEXT_FLIP",
+            "timeframe": "M15",
+            "direction": "SHORT",
+            "event_timestamp": "2026-08-24T03:15:00Z",
+            "zone_timestamp": "2026-08-24T03:45:00Z",
+            "source_bar_timestamp": "2026-08-24T03:45:00Z",
+            "lifecycle_episode_id": "548.0",
+        },
+        {
+            "context_event_id": "CTX_long",
+            "event_type": "CONTEXT_START",
+            "timeframe": "M15",
+            "direction": "LONG",
+            # Origin stays at episode start; decision bar is later.
+            "event_timestamp": "2026-08-23T22:15:00Z",
+            "zone_timestamp": "2026-08-24T05:00:00Z",
+            "source_bar_timestamp": "2026-08-24T05:00:00Z",
+            "lifecycle_episode_id": "547.0",
+        },
+    ]
+    zones = build_context_zones_from_events(events)
+    assert len(zones) == 2
+    assert zones[0]["direction"] == "SHORT"
+    assert zones[0]["active"] is False
+    assert zones[0]["end_timestamp"] == "2026-08-24T05:00:00Z"
+    assert zones[1]["direction"] == "LONG"
+    assert zones[1]["active"] is True
+    assert zones[1]["start_timestamp"] == "2026-08-24T05:00:00Z"
+    assert zones[1]["end_timestamp"] is None
+
+
+def test_tip_reopen_closes_opposite_active_zone() -> None:
+    from timeframe_chart_truth import ensure_tip_active_context_zone
+
+    zones = [
+        {
+            "timeframe": "M15",
+            "direction": "LONG",
+            "directional_state": "LONG_CONTEXT",
+            "start_timestamp": "2026-08-23T22:15:00Z",
+            "end_timestamp": "2026-08-24T03:15:00Z",
+            "lifecycle_episode_id": "547.0",
+            "active": False,
+            "lifecycle_state": "ACTIVE",
+        },
+        {
+            "timeframe": "M15",
+            "direction": "SHORT",
+            "directional_state": "SHORT_CONTEXT",
+            "start_timestamp": "2026-08-24T03:15:00Z",
+            "end_timestamp": None,
+            "lifecycle_episode_id": "548.0",
+            "active": True,
+            "lifecycle_state": "ACTIVE",
+        },
+    ]
+    out = ensure_tip_active_context_zone(
+        zones,
+        tip_active="LONG_CONTEXT",
+        tip_lifecycle="ACTIVE",
+        tip_episode_id="547.0",
+        tip_timestamp="2026-08-24T08:00:00Z",
+        timeframe="M15",
+    )
+    actives = [z for z in out if z.get("active")]
+    assert len(actives) == 1
+    assert actives[0]["direction"] == "LONG"
+    assert actives[0]["end_timestamp"] is None
+    short = next(z for z in out if z["direction"] == "SHORT")
+    assert short["active"] is False
+    assert short["end_timestamp"] is not None

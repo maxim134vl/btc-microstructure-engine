@@ -99,11 +99,17 @@ def availability_rows(evaluation: str) -> pd.DataFrame:
 
 
 def lifecycle_rows() -> pd.DataFrame:
-    """LONG at 04:00 (M15/M30 clock), SHORT at 03:00 (H1 clock)."""
+    """Per-TF tagged lifecycle (independent clocks, no M15 broadcast).
+
+    H1 bar closes 03:00 → SHORT ep 11.
+    M15/M30 bar closes 04:00 → LONG ep 12.
+    Future 05:00 row must not leak into 04:00 evaluation.
+    """
     return pd.DataFrame(
         [
             {
                 "timestamp": "2026-07-01T02:45:00Z",
+                "timeframe": "H1",
                 "active_market_context": "SHORT_CONTEXT",
                 "lifecycle_state": "ACTIVE",
                 "context_episode_id": 11,
@@ -113,6 +119,17 @@ def lifecycle_rows() -> pd.DataFrame:
             },
             {
                 "timestamp": "2026-07-01T03:45:00Z",
+                "timeframe": "M15",
+                "active_market_context": "LONG_CONTEXT",
+                "lifecycle_state": "ACTIVE",
+                "context_episode_id": 12,
+                "invalidation_reason": None,
+                "active_context_started_at": "2026-07-01T03:30:00Z",
+                "context_origin_price": 60500.0,
+            },
+            {
+                "timestamp": "2026-07-01T03:45:00Z",
+                "timeframe": "M30",
                 "active_market_context": "LONG_CONTEXT",
                 "lifecycle_state": "ACTIVE",
                 "context_episode_id": 12,
@@ -122,6 +139,7 @@ def lifecycle_rows() -> pd.DataFrame:
             },
             {
                 "timestamp": "2026-07-01T05:00:00Z",
+                "timeframe": "M15",
                 "active_market_context": "SHORT_CONTEXT",
                 "lifecycle_state": "INVALIDATED",
                 "context_episode_id": 13,

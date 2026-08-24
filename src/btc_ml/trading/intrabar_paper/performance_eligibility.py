@@ -48,3 +48,15 @@ def counts_toward_strategy_performance(row: Mapping[str, Any] | None) -> bool:
 
 def performance_eligible_trades(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return [row for row in (rows or []) if counts_toward_strategy_performance(row)]
+
+
+def filter_superseded_trades(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Drop trades restated by a later recovery row (append-only supersession)."""
+    superseded = {
+        str(row.get("supersedes_trade_id"))
+        for row in (rows or [])
+        if row.get("supersedes_trade_id")
+    }
+    if not superseded:
+        return list(rows or [])
+    return [row for row in (rows or []) if str(row.get("trade_id") or "") not in superseded]

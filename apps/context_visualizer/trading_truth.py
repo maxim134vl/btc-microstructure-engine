@@ -243,6 +243,7 @@ def _load_live1b_closed_trades(*, timeframe: str | None = None) -> list[dict[str
             opened_at_by_position[position_id] = opened_at
 
     out: list[dict[str, Any]] = []
+    raw_rows: list[dict[str, Any]] = []
     for row in _read_jsonl(books / "trades.jsonl"):
         tf = str(row.get("timeframe") or "").upper()
         if tf not in selected:
@@ -250,7 +251,18 @@ def _load_live1b_closed_trades(*, timeframe: str | None = None) -> list[dict[str
         exit_ts = _iso(row.get("exit_ts"))
         if not exit_ts:
             continue
+        raw_rows.append(row)
 
+    try:
+        from btc_ml.trading.intrabar_paper.performance_eligibility import filter_superseded_trades
+
+        trade_rows = filter_superseded_trades(raw_rows)
+    except Exception:
+        trade_rows = raw_rows
+
+    for row in trade_rows:
+        tf = str(row.get("timeframe") or "").upper()
+        exit_ts = _iso(row.get("exit_ts"))
         position_id = _txt(row.get("position_id"))
         entry_ts = _iso(row.get("entry_ts")) or opened_at_by_position.get(position_id)
 
@@ -271,6 +283,8 @@ def _load_live1b_closed_trades(*, timeframe: str | None = None) -> list[dict[str
                 "stop_price": _f(row.get("stop_loss_price")),
                 "take_profit_price": _f(row.get("take_profit_price")),
                 "realized_pnl": _f(row.get("net_pnl_usd")),
+                "exit_reason": _txt(row.get("exit_reason")),
+                "recovery_reason": _txt(row.get("recovery_reason")),
                 "symbol": "BTCUSDT",
                 "source_book": f"INTRABAR_PAPER_{tf}",
                 "visual_kind": "CLOSED_TRADE",

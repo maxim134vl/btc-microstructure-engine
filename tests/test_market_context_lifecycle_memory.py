@@ -1222,3 +1222,106 @@ def test_aug22_1115_single_long_active_does_not_flip_short():
     assert last["lifecycle_state"] == "CHALLENGED"
     assert last["invalidation_type"] == "NONE"
     assert last["challenge_context"] == "LONG_CONTEXT"
+
+
+def test_neutralization_not_reset_by_developing_same_direction():
+    """BALANCE, LONG DEVELOPING, BALANCE must still kill zombie LONG."""
+    n_active = _active_bars_to_pass_hold()
+    rows = [_long_active(i) for i in range(n_active)]
+    rows.append(_neutral(n_active))
+    rows.append(_long_developing(n_active + 1))
+    rows.append(_neutral(n_active + 2))
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "OBSERVE"
+    assert last["lifecycle_state"] == "INVALIDATED"
+    assert last["invalidation_type"] == "AUCTION_NEUTRALIZATION"
+    assert last["previous_active_market_context"] == "LONG_CONTEXT"
+    mid = out.iloc[n_active + 1]
+    assert mid["active_market_context"] == "LONG_CONTEXT"
+    assert mid["lifecycle_state"] == "CHALLENGED"
+
+
+def test_neutralization_not_reset_by_developing_opposite():
+    """BALANCE, SHORT DEVELOPING, BALANCE still ends LONG (dump then range)."""
+    n_active = _active_bars_to_pass_hold()
+    rows = [_long_active(i) for i in range(n_active)]
+    rows.append(_neutral(n_active))
+    rows.append(_short_developing(n_active + 1))
+    rows.append(_neutral(n_active + 2))
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "OBSERVE"
+    assert last["lifecycle_state"] == "INVALIDATED"
+    assert last["invalidation_type"] == "AUCTION_NEUTRALIZATION"
+
+
+def test_aug23_dump_two_confirmed_short_replaces_zombie_long():
+    """07:45–08:00 MSK template: two ACCEPTANCE_LOWER ACTIVE bars replace LONG."""
+    rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
+    n = len(rows)
+    rows.append(
+        _bar(
+            _ts(n),
+            "SHORT_CONTEXT",
+            "ACTIVE",
+            auction_episode="ACCEPTANCE_LOWER",
+            cognitive_market_state="ACCEPTANCE_LOWER",
+            state_direction="SELLER_CONTROL",
+        )
+    )
+    rows.append(
+        _bar(
+            _ts(n + 1),
+            "SHORT_CONTEXT",
+            "ACTIVE",
+            auction_episode="ACCEPTANCE_LOWER",
+            cognitive_market_state="ACCEPTANCE_LOWER",
+            state_direction="SELLER_CONTROL",
+        )
+    )
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    assert out.iloc[n]["active_market_context"] == "LONG_CONTEXT"
+    assert out.iloc[n]["lifecycle_state"] == "CHALLENGED"
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "SHORT_CONTEXT"
+    assert last["lifecycle_state"] == "ACTIVE"
+    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
+
+
+def test_live_ticks_on_same_bar_do_not_double_count_neutralization():
+    n_active = _active_bars_to_pass_hold()
+    rows = [_long_active(i) for i in range(n_active)]
+    memory = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    prev = memory.iloc[-1].to_dict()
+    prev["_timeframe"] = "M15"
+    prev["_neutralization_streak"] = 1
+    prev["_neutralization_bar_key"] = "M15:1000"
+    ts = pd.Timestamp("2026-07-10 13:00:01", tz="UTC")
+    # Force same bucket as prev key by using a timestamp that hashes to M15:1000
+    # Directly call step with matching bar key via prev.
+    first = mod.step_lifecycle(
+        raw_market_context="OBSERVE",
+        raw_context_status="OBSERVE",
+        raw_context_reason="BALANCE",
+        raw_cognitive_market_state="BALANCE",
+        raw_state_direction="NEUTRAL",
+        auction_episode="BALANCE",
+        timestamp=ts,
+        prev={**prev, "_neutralization_bar_key": mod._lifecycle_bar_key(ts, {"_timeframe": "M15"}), "_timeframe": "M15"},
+    )
+    second = mod.step_lifecycle(
+        raw_market_context="OBSERVE",
+        raw_context_status="OBSERVE",
+        raw_context_reason="BALANCE",
+        raw_cognitive_market_state="BALANCE",
+        raw_state_direction="NEUTRAL",
+        auction_episode="BALANCE",
+        timestamp=ts + pd.Timedelta(seconds=5),
+        prev=first,
+    )
+    assert first["_neutralization_streak"] == 1
+    assert first["lifecycle_state"] == "CHALLENGED"
+    assert second["_neutralization_streak"] == 1
+    assert second["lifecycle_state"] == "CHALLENGED"
+    assert second["invalidation_type"] == "NONE"

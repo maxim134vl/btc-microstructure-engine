@@ -473,23 +473,31 @@ def load_intrabar_context_events_for_tf(
         stamped_epoch = _txt(raw.get("paper_epoch_id"))
         if paper_epoch_id and stamped_epoch and stamped_epoch != paper_epoch_id:
             continue
-        event_ts = _iso(raw.get("event_timestamp") or raw.get("causal_cutoff_timestamp"))
-        if not event_ts:
+        # Origin/context-start time (may stay fixed across FLIPs that keep the episode).
+        origin_ts = _iso(raw.get("event_timestamp") or raw.get("context_origin_timestamp"))
+        # Decision/causal time — what actually advances on the chart.
+        source_bar_ts = _iso(raw.get("source_bar_timestamp"))
+        causal_ts = _iso(raw.get("causal_cutoff_timestamp"))
+        decision_ts = _iso(raw.get("decision_available_at"))
+        ingested_ts = _iso(raw.get("ingested_at"))
+        zone_ts = source_bar_ts or causal_ts or decision_ts or ingested_ts or origin_ts
+        if not zone_ts:
             continue
-        stamp = _to_utc(event_ts)
+        stamp = _to_utc(zone_ts)
         if stamp is None:
             continue
         if window_start is not None and stamp < window_start - pd.Timedelta(days=1):
             continue
         if window_end is not None and stamp > window_end + pd.Timedelta(hours=12):
             continue
+        event_ts = origin_ts or zone_ts
         try:
-            bar_open_ts = bar_open_for(event_ts, timeframe)
+            bar_open_ts = bar_open_for(zone_ts, timeframe)
             bar_open = bar_open_ts.isoformat().replace("+00:00", "Z")
             scheduled = bar_open_ts + pd.Timedelta(seconds=int(TF_SECONDS[timeframe]))
             scheduled_close = scheduled.isoformat().replace("+00:00", "Z")
         except Exception:
-            bar_open = None
+            bar_open = source_bar_ts
             scheduled_close = None
         candle = candle_by_open.get(bar_open or "")
         confirmed = bool(candle.get("confirmed")) if candle else None
@@ -524,8 +532,10 @@ def load_intrabar_context_events_for_tf(
                 "new_context": _txt(raw.get("new_context")),
                 "lifecycle_episode_id": _txt(raw.get("lifecycle_episode_id")),
                 "event_timestamp": event_ts,
+                "zone_timestamp": zone_ts,
+                "source_bar_timestamp": source_bar_ts,
                 "context_started_at": event_ts if event_type in {"CONTEXT_START", "CONTEXT_FLIP"} else None,
-                "context_ended_at": event_ts if event_type in {"CONTEXT_END", "CONTEXT_FLIP"} else None,
+                "context_ended_at": zone_ts if event_type in {"CONTEXT_END", "CONTEXT_FLIP"} else None,
                 "context_price": _f(raw.get("context_event_price")),
                 "context_price_timestamp": _iso(raw.get("last_trade_timestamp")),
                 "context_bar_open_timestamp": bar_open,
@@ -535,13 +545,22 @@ def load_intrabar_context_events_for_tf(
                 "context_bar_partial_close_timestamp": None,
                 "context_bar_final_close": final_close,
                 "context_bar_final_close_timestamp": final_close_ts,
-                "bar_anchor_time": bar_open,
-                "causal_cutoff_timestamp": _iso(raw.get("causal_cutoff_timestamp")),
+                "bar_anchor_time": bar_open or source_bar_ts,
+                "causal_cutoff_timestamp": causal_ts,
+                "decision_available_at": decision_ts,
+                "ingested_at": ingested_ts,
                 "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
                 "model_version": _txt(raw.get("model_version")),
             }
         )
-    rows.sort(key=lambda r: (r.get("event_timestamp") or "", r.get("context_event_id") or ""))
+    # Sort by decision/causal time, not origin event_timestamp (FLIP can reuse origin).
+    rows.sort(
+        key=lambda r: (
+            r.get("zone_timestamp") or "",
+            r.get("ingested_at") or "",
+            r.get("context_event_id") or "",
+        )
+    )
     return rows
 
 
@@ -569,17 +588,30 @@ def _episodes_compatible(left: Any, right: Any) -> bool:
     return a == b
 
 
+def _zone_edge_timestamp(ev: dict[str, Any]) -> str | None:
+    """Chart-band edge time: decision/source bar, not reused context origin."""
+    return (
+        ev.get("zone_timestamp")
+        or ev.get("source_bar_timestamp")
+        or ev.get("bar_anchor_time")
+        or ev.get("causal_cutoff_timestamp")
+        or ev.get("event_timestamp")
+    )
+
+
 def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map START/END/FLIP into active directional zones for chart bands.
 
     CONTEXT_END / foreign-episode events must not close a different open episode.
+    Zone edges use decision/source-bar time so FLIPs that reuse origin timestamps
+    still paint in causal order.
     """
     zones: list[dict[str, Any]] = []
     open_zone: dict[str, Any] | None = None
     for ev in events:
         et = str(ev.get("event_type") or "").upper()
         direction = ev.get("direction")
-        ts = ev.get("event_timestamp")
+        ts = _zone_edge_timestamp(ev)
         if et == "CONTEXT_START" and direction in {"LONG", "SHORT"}:
             if open_zone is not None:
                 open_zone["end_timestamp"] = ts
@@ -646,6 +678,23 @@ def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[s
     return zones
 
 
+def _close_other_active_zones(
+    zones: list[dict[str, Any]],
+    *,
+    keep: dict[str, Any],
+    tip_timestamp: str | None,
+) -> None:
+    """Invariant: at most one open-ended active directional zone per TF."""
+    for zone in zones:
+        if zone is keep or not zone.get("active"):
+            continue
+        zone["active"] = False
+        if zone.get("end_timestamp") is None:
+            zone["end_timestamp"] = tip_timestamp or zone.get("start_timestamp")
+            zone["end_reason"] = "SUPERSEDED_BY_TIP_ACTIVE"
+            zone["end_event_id"] = None
+
+
 def ensure_tip_active_context_zone(
     zones: list[dict[str, Any]],
     *,
@@ -655,7 +704,10 @@ def ensure_tip_active_context_zone(
     tip_timestamp: str | None = None,
     timeframe: str | None = None,
 ) -> list[dict[str, Any]]:
-    """If tip still shows directional context, keep/reopen a matching active zone."""
+    """If tip still shows directional context, keep/reopen a matching active zone.
+
+    Opposite (or stale) open zones are closed — chart must not paint two tip bands.
+    """
     tip = str(tip_active or "").upper()
     if tip not in {"LONG_CONTEXT", "SHORT_CONTEXT"}:
         return zones
@@ -663,12 +715,21 @@ def ensure_tip_active_context_zone(
     life = str(tip_lifecycle or "ACTIVE").upper() or "ACTIVE"
     active = [z for z in zones if z.get("active") and z.get("direction") == direction]
     if active:
+        keep = active[-1]
         for zone in active:
-            # Active zones must remain open-ended for renderer tip extension.
-            zone["end_timestamp"] = None
-            zone["end_event_id"] = None
-            zone["end_reason"] = None
-            zone["lifecycle_state"] = life
+            if zone is keep:
+                zone["end_timestamp"] = None
+                zone["end_event_id"] = None
+                zone["end_reason"] = None
+                zone["lifecycle_state"] = life
+                zone["active"] = True
+            else:
+                zone["active"] = False
+                if zone.get("end_timestamp") is None:
+                    zone["end_timestamp"] = tip_timestamp or zone.get("start_timestamp")
+                    zone["end_reason"] = "SUPERSEDED_BY_TIP_ACTIVE"
+                    zone["end_event_id"] = None
+        _close_other_active_zones(zones, keep=keep, tip_timestamp=tip_timestamp)
         return zones
 
     candidate = None
@@ -691,26 +752,27 @@ def ensure_tip_active_context_zone(
         candidate["reopened_for_tip"] = True
         if tip_episode_id is not None and not candidate.get("lifecycle_episode_id"):
             candidate["lifecycle_episode_id"] = tip_episode_id
+        _close_other_active_zones(zones, keep=candidate, tip_timestamp=tip_timestamp)
         return zones
 
-    zones.append(
-        {
-            "timeframe": timeframe,
-            "direction": direction,
-            "directional_state": tip,
-            "start_timestamp": tip_timestamp,
-            "end_timestamp": None,
-            "start_event_id": None,
-            "lifecycle_episode_id": tip_episode_id,
-            "context_price": None,
-            "bar_anchor_time": tip_timestamp,
-            "paper_epoch_id": None,
-            "source": "TIP_LIFECYCLE_ACTIVE",
-            "active": True,
-            "lifecycle_state": life,
-            "synthesized_for_tip": True,
-        }
-    )
+    synthesized = {
+        "timeframe": timeframe,
+        "direction": direction,
+        "directional_state": tip,
+        "start_timestamp": tip_timestamp,
+        "end_timestamp": None,
+        "start_event_id": None,
+        "lifecycle_episode_id": tip_episode_id,
+        "context_price": None,
+        "bar_anchor_time": tip_timestamp,
+        "paper_epoch_id": None,
+        "source": "TIP_LIFECYCLE_ACTIVE",
+        "active": True,
+        "lifecycle_state": life,
+        "synthesized_for_tip": True,
+    }
+    zones.append(synthesized)
+    _close_other_active_zones(zones, keep=synthesized, tip_timestamp=tip_timestamp)
     return zones
 
 

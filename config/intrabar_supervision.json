@@ -3,7 +3,8 @@
   "check_interval_seconds": 15,
   "health_stale_seconds": {
     "intrabar_cognition": 45,
-    "intrabar_paper_manager": 45
+    "intrabar_paper_manager": 45,
+    "timeframe_manager": 120
   },
   "restart_policy": {
     "window_seconds": 600,
@@ -33,6 +34,16 @@
       "stop_intent_file": "run/intrabar_paper_manager.stop_intent.json",
       "controlled_restart_file": "run/intrabar_paper_manager.controlled_restart.json",
       "log_file": "run/logs/intrabar_paper_manager.log"
+    },
+    "timeframe_manager": {
+      "display_name": "S4.1 timeframe manager",
+      "ctl_script": "scripts/live/timeframe_manager_ctl.py",
+      "runner_script": "scripts/live/timeframe_manager_daemon.py",
+      "pid_file": "run/timeframe_manager.pid",
+      "health_file": "data/runtime/timeframe_manager_health.json",
+      "stop_intent_file": "run/timeframe_manager.stop_intent.json",
+      "controlled_restart_file": "run/timeframe_manager.controlled_restart.json",
+      "log_file": "logs/timeframe_manager.log"
     }
   },
   "operational_status_file": "data/runtime/intrabar_operational_status.json",

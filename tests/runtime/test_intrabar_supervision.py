@@ -15,6 +15,7 @@ import pytest
 
 from btc_ml.runtime.intrabar_supervision import (
     ALERT_COGNITION_PROCESS_DOWN,
+    ALERT_MANAGER_PROCESS_DOWN,
     ALERT_PAPER_HEARTBEAT_STALE,
     ALERT_PAPER_RESTART_STORM,
     ProcessLifecycleState,
@@ -77,12 +78,15 @@ def _healthy_service(spec: ServiceSpec) -> int:
     return pid
 
 
+def _healthy_others(repo: Path, *names: str) -> list[int]:
+    return [_healthy_service(_spec(repo, name)) for name in names]
+
+
 def test_01_live1b_unexpected_death_restarts_same_epoch(repo: Path):
     from btc_ml.runtime.intrabar_supervision import IntrabarSupervisor
 
     spec = _spec(repo, "intrabar_paper_manager")
-    cog_spec = _spec(repo, "intrabar_cognition")
-    cog_pid = _healthy_service(cog_spec)
+    others = _healthy_others(repo, "intrabar_cognition", "timeframe_manager")
     started: list[str] = []
 
     def start_fn(s: ServiceSpec) -> dict:
@@ -101,15 +105,15 @@ def test_01_live1b_unexpected_death_restarts_same_epoch(repo: Path):
     assert started == ["intrabar_paper_manager"]
     svc = result["services"]["intrabar_paper_manager"]
     assert svc["paper_epoch_id"] == "PER_TF_EQUITY_1PCT_V1_20260802_155305"
-    os.kill(cog_pid, signal.SIGTERM)
+    os.kill(others[0], signal.SIGTERM)
+    os.kill(others[1], signal.SIGTERM)
 
 
 def test_02_live1a_unexpected_death_restarts(repo: Path):
     from btc_ml.runtime.intrabar_supervision import IntrabarSupervisor
 
     spec = _spec(repo, "intrabar_cognition")
-    paper_spec = _spec(repo, "intrabar_paper_manager")
-    paper_pid = _healthy_service(paper_spec)
+    others = _healthy_others(repo, "intrabar_paper_manager", "timeframe_manager")
     started: list[str] = []
 
     def start_fn(s: ServiceSpec) -> dict:
@@ -122,15 +126,15 @@ def test_02_live1a_unexpected_death_restarts(repo: Path):
     sup = IntrabarSupervisor.create(repo, start_fn=start_fn, stop_fn=lambda _s: {"ok": True})
     sup.supervise_once()
     assert started == ["intrabar_cognition"]
-    os.kill(paper_pid, signal.SIGTERM)
+    os.kill(others[0], signal.SIGTERM)
+    os.kill(others[1], signal.SIGTERM)
 
 
 def test_03_intentional_paper_stop_not_restarted(repo: Path):
     from btc_ml.runtime.intrabar_supervision import IntrabarSupervisor
 
     spec = _spec(repo, "intrabar_paper_manager")
-    cog_spec = _spec(repo, "intrabar_cognition")
-    cog_pid = _healthy_service(cog_spec)
+    others = _healthy_others(repo, "intrabar_cognition", "timeframe_manager")
     write_stop_intent(spec.stop_intent_file)
     started: list[str] = []
 
@@ -142,15 +146,15 @@ def test_03_intentional_paper_stop_not_restarted(repo: Path):
     snapshot = sup.supervise_once()
     assert started == []
     assert snapshot["services"]["intrabar_paper_manager"]["lifecycle_state"] == ProcessLifecycleState.STOPPED_EXPECTED.value
-    os.kill(cog_pid, signal.SIGTERM)
+    os.kill(others[0], signal.SIGTERM)
+    os.kill(others[1], signal.SIGTERM)
 
 
 def test_04_intentional_cognition_stop_not_restarted(repo: Path):
     from btc_ml.runtime.intrabar_supervision import IntrabarSupervisor
 
     spec = _spec(repo, "intrabar_cognition")
-    paper_spec = _spec(repo, "intrabar_paper_manager")
-    paper_pid = _healthy_service(paper_spec)
+    others = _healthy_others(repo, "intrabar_paper_manager", "timeframe_manager")
     write_stop_intent(spec.stop_intent_file)
     started: list[str] = []
 
@@ -162,7 +166,8 @@ def test_04_intentional_cognition_stop_not_restarted(repo: Path):
     snapshot = sup.supervise_once()
     assert started == []
     assert snapshot["services"]["intrabar_cognition"]["lifecycle_state"] == ProcessLifecycleState.STOPPED_EXPECTED.value
-    os.kill(paper_pid, signal.SIGTERM)
+    os.kill(others[0], signal.SIGTERM)
+    os.kill(others[1], signal.SIGTERM)
 
 
 def test_05_live1b_execution_degraded_does_not_restart(repo: Path):
@@ -235,8 +240,7 @@ def test_07_stale_heartbeat_triggers_restart(repo: Path):
     from btc_ml.runtime.intrabar_supervision import IntrabarSupervisor
 
     spec = _spec(repo, "intrabar_paper_manager")
-    cog_spec = _spec(repo, "intrabar_cognition")
-    cog_pid = _healthy_service(cog_spec)
+    others = _healthy_others(repo, "intrabar_cognition", "timeframe_manager")
     pid = os.spawnv(os.P_NOWAIT, sys.executable, [sys.executable, "-c", "import time; time.sleep(60)"])
     spec.pid_file.write_text(f"{pid}\n", encoding="utf-8")
     _write_health(spec.health_file, pid=pid, updated_at=_stale_ts())
@@ -253,7 +257,8 @@ def test_07_stale_heartbeat_triggers_restart(repo: Path):
         os.kill(pid, signal.SIGTERM)
     except OSError:
         pass
-    os.kill(cog_pid, signal.SIGTERM)
+    os.kill(others[0], signal.SIGTERM)
+    os.kill(others[1], signal.SIGTERM)
 
 
 def test_08_restart_storm_blocks_permanent(repo: Path):
@@ -272,6 +277,14 @@ def test_08_restart_storm_blocks_permanent(repo: Path):
     result = evaluate_service(spec, restart_entry=entry, policy=policy)
     assert result["lifecycle_state"] == ProcessLifecycleState.FAILED_PERMANENT.value
     assert ALERT_PAPER_RESTART_STORM in result["alerts"]
+
+
+def test_08b_manager_down_uses_manager_alert(repo: Path):
+    spec = _spec(repo, "timeframe_manager")
+    result = evaluate_service(spec, restart_entry=ServiceRestartState(), policy=RestartPolicy())
+    assert result["lifecycle_state"] == ProcessLifecycleState.FAILED.value
+    assert ALERT_MANAGER_PROCESS_DOWN in result["alerts"]
+    assert ALERT_COGNITION_PROCESS_DOWN not in result["alerts"]
 
 
 def test_09_stable_runtime_resets_restart_penalty():

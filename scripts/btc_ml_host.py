@@ -31,6 +31,7 @@ DRIFT_CTL = ROOT / "scripts/model_assurance/drift_monitoring_ctl.py"
 MODEL_CTLS: list[tuple[str, Path]] = [
     ("live1a", ROOT / "scripts/live/intrabar_cognition_ctl.py"),
     ("live1b", ROOT / "scripts/live/intrabar_paper_ctl.py"),
+    ("timeframe_manager", ROOT / "scripts/live/timeframe_manager_ctl.py"),
     ("intrabar_supervisor", ROOT / "scripts/live/intrabar_process_supervisor_ctl.py"),
     ("stp_be33", ROOT / "scripts/live/shadow_stp_be33_ctl.py"),
     ("trd_outcome2", ROOT / "scripts/live/trd_outcome2_ctl.py"),

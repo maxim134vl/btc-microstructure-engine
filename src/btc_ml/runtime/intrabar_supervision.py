@@ -1,4 +1,4 @@
-"""Canonical supervision lifecycle for LIVE1A cognition and LIVE1B paper manager."""
+"""Canonical supervision lifecycle for LIVE1A, LIVE1B, and S4.1 timeframe manager."""
 
 from __future__ import annotations
 
@@ -16,10 +16,13 @@ from typing import Any, Callable
 
 ALERT_COGNITION_PROCESS_DOWN = "INTRABAR_COGNITION_PROCESS_DOWN"
 ALERT_PAPER_PROCESS_DOWN = "INTRABAR_PAPER_MANAGER_PROCESS_DOWN"
+ALERT_MANAGER_PROCESS_DOWN = "TIMEFRAME_MANAGER_PROCESS_DOWN"
 ALERT_COGNITION_HEARTBEAT_STALE = "INTRABAR_COGNITION_HEARTBEAT_STALE"
 ALERT_PAPER_HEARTBEAT_STALE = "INTRABAR_PAPER_HEARTBEAT_STALE"
+ALERT_MANAGER_HEARTBEAT_STALE = "TIMEFRAME_MANAGER_HEARTBEAT_STALE"
 ALERT_COGNITION_RESTART_STORM = "INTRABAR_COGNITION_RESTART_STORM"
 ALERT_PAPER_RESTART_STORM = "INTRABAR_PAPER_RESTART_STORM"
+ALERT_MANAGER_RESTART_STORM = "TIMEFRAME_MANAGER_RESTART_STORM"
 ALERT_PAPER_EXECUTION_UNSAFE = "INTRABAR_PAPER_EXECUTION_UNSAFE"
 
 LIVE1B_PROCESS_ALIVE_EXECUTION_STATES = {"HEALTHY", "DEGRADED", "RECOVERING", "UNSAFE"}
@@ -398,6 +401,26 @@ def _paper_execution_state(health: dict[str, Any]) -> str | None:
     return str(raw) if raw is not None else None
 
 
+def _alert_for(service_name: str, *, kind: str) -> str:
+    if service_name == "intrabar_cognition":
+        return {
+            "down": ALERT_COGNITION_PROCESS_DOWN,
+            "stale": ALERT_COGNITION_HEARTBEAT_STALE,
+            "storm": ALERT_COGNITION_RESTART_STORM,
+        }[kind]
+    if service_name == "timeframe_manager":
+        return {
+            "down": ALERT_MANAGER_PROCESS_DOWN,
+            "stale": ALERT_MANAGER_HEARTBEAT_STALE,
+            "storm": ALERT_MANAGER_RESTART_STORM,
+        }[kind]
+    return {
+        "down": ALERT_PAPER_PROCESS_DOWN,
+        "stale": ALERT_PAPER_HEARTBEAT_STALE,
+        "storm": ALERT_PAPER_RESTART_STORM,
+    }[kind]
+
+
 def evaluate_service(
     spec: ServiceSpec,
     *,
@@ -433,24 +456,15 @@ def evaluate_service(
     elif restart_entry.blocked:
         lifecycle = ProcessLifecycleState.FAILED_PERMANENT
         detail = restart_entry.block_reason or "RESTART_STORM_BLOCKED"
-        if spec.name == "intrabar_cognition":
-            alerts.append(ALERT_COGNITION_RESTART_STORM)
-        else:
-            alerts.append(ALERT_PAPER_RESTART_STORM)
+        alerts.append(_alert_for(spec.name, kind="storm"))
     elif not alive:
         lifecycle = ProcessLifecycleState.FAILED
         detail = "process_not_running"
-        if spec.name == "intrabar_cognition":
-            alerts.append(ALERT_COGNITION_PROCESS_DOWN)
-        else:
-            alerts.append(ALERT_PAPER_PROCESS_DOWN)
+        alerts.append(_alert_for(spec.name, kind="down"))
     elif not health_fresh or not pid_matches:
         lifecycle = ProcessLifecycleState.FAILED
         detail = "heartbeat_stale_or_pid_mismatch"
-        if spec.name == "intrabar_cognition":
-            alerts.append(ALERT_COGNITION_HEARTBEAT_STALE)
-        else:
-            alerts.append(ALERT_PAPER_HEARTBEAT_STALE)
+        alerts.append(_alert_for(spec.name, kind="stale"))
     elif spec.name == "intrabar_paper_manager":
         if execution_state in {"DEGRADED", "RECOVERING", "UNSAFE"}:
             lifecycle = ProcessLifecycleState.RUNNING_DEGRADED

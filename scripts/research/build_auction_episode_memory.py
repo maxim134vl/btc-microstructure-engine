@@ -552,8 +552,16 @@ def classify_episode_status(
     eresult = _clean_text(effort_result).upper()
     if episode == "UNKNOWN":
         return "UNKNOWN"
-    # Without look-ahead confirmation, stay cautious.
+    # Without look-ahead confirmation, stay cautious — except accepted
+    # directional auction already confirmed on this bar's effort/result.
+    # Live FT is often UNKNOWN (no future closes); ACCEPTED_LOWER with
+    # ACCEPTED effort is still a fall, not a developing long absorption.
     if ft == "UNKNOWN":
+        if episode in {"ACCEPTANCE_HIGHER", "ACCEPTANCE_LOWER"} and eresult in {
+            "ACCEPTED",
+            "CONTINUED",
+        }:
+            return "CONFIRMED"
         return "DEVELOPING"
     if episode in {"UPPER_DISTRIBUTION", "LOWER_ABSORPTION", "FAILED_BREAKOUT", "FAILED_BREAKDOWN"}:
         if ft in {"FAILED", "NO"} or eresult in {"REJECTED", "ABSORBED", "NO_RESULT"}:

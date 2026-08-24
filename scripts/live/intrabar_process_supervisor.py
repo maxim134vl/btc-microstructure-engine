@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canonical process supervisor for LIVE1A cognition + LIVE1B paper manager."""
+"""Canonical process supervisor for LIVE1A, LIVE1B, and S4.1 timeframe manager."""
 
 from __future__ import annotations
 
