@@ -251,12 +251,20 @@ def main() -> int:
                     s41_consumer.poll()
             except Exception as exc:  # noqa: BLE001
                 engine.errors.append(f"poll:{exc}")
+            try:
+                processor.wal.maybe_periodic_flush()
+            except Exception as exc:  # noqa: BLE001
+                engine.errors.append(f"wal_periodic_fsync:{exc}")
             now = time.time()
             if now - last_health >= args.health_every_s:
                 engine.write_health()
                 last_health = now
             time.sleep(max(0.05, args.poll_ms / 1000.0))
     finally:
+        try:
+            processor.wal.flush_durable(reason="shutdown")
+        except Exception:
+            pass
         engine.write_health()
         if pid_path.exists():
             pid_path.unlink(missing_ok=True)

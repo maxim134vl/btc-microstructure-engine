@@ -38,6 +38,7 @@ def cfg(tmp_path: Path):
     raw["context_journal_root"] = "data/cognition/intrabar_context_events"
     raw["books_root"] = "data/trading/intrabar_paper"
     raw["epochs_root"] = "data/trading/paper_epochs"
+    raw["entry_source"] = "context_journal"
     (repo / "config" / "intrabar_paper_execution.json").write_text(
         json.dumps(raw, indent=2) + "\n", encoding="utf-8"
     )

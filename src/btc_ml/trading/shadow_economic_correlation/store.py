@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from btc_ml.runtime.io_cache import IoObserveStats, MtimeJsonlCache
+
 from .paths import assert_shadow_write_path, shadow_root
 
 
@@ -30,6 +32,8 @@ class ShadowStore:
         root: Path | None = None,
         *,
         repo: Path | None = None,
+        jsonl_cache: MtimeJsonlCache | None = None,
+        observe: IoObserveStats | None = None,
     ) -> None:
         self.repo = repo
         self.root = (
@@ -47,6 +51,8 @@ class ShadowStore:
         )
         self._lock = threading.Lock()
         self._lineage: dict[str, Any] = {}
+        self.observe = observe or IoObserveStats()
+        self.jsonl_cache = jsonl_cache or MtimeJsonlCache(stats=self.observe)
 
         for name in self.TABLES:
             (
@@ -126,6 +132,7 @@ class ShadowStore:
                 encoding="utf-8",
             ) as handle:
                 handle.write(line)
+            self.jsonl_cache.invalidate(path)
 
         return payload
 
@@ -133,24 +140,7 @@ class ShadowStore:
         self,
         table: str,
     ) -> list[dict[str, Any]]:
-        path = self._jsonl(table)
-        out: list[dict[str, Any]] = []
-
-        for line in path.read_text(
-            encoding="utf-8"
-        ).splitlines():
-            if not line.strip():
-                continue
-
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            if isinstance(value, dict):
-                out.append(value)
-
-        return out
+        return self.jsonl_cache.read_jsonl(self._jsonl(table))
 
     def write_json(
         self,
@@ -440,6 +430,7 @@ class ShadowStore:
                     handle.truncate(
                         target_i
                     )
+                self.jsonl_cache.invalidate(path)
 
             self._inflight_path().unlink(
                 missing_ok=True

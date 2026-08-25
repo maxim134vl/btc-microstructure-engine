@@ -232,10 +232,17 @@ class ExecutionMarketProcessor:
             "b" in data and "a" in data and "u" in data and data.get("e") != "aggTrade"
         )
 
-    def _append_with_retry(self, event: dict[str, Any], *, allow_degraded_protective: bool = False) -> WalAppendResult:
+    def _append_with_retry(
+        self,
+        event: dict[str, Any],
+        *,
+        allow_degraded_protective: bool = False,
+        fsync: bool = True,
+        update_state: bool = True,
+    ) -> WalAppendResult:
         last = WalAppendResult(ok=False, error="unknown", retryable=True)
         for _ in range(2):
-            last = self.wal.append(event)
+            last = self.wal.append(event, fsync=fsync, update_state=update_state)
             if last.ok:
                 self.state.on_wal_append_success()
                 if last.wal_offset is not None:
@@ -247,7 +254,9 @@ class ExecutionMarketProcessor:
         return last
 
     def _process_book_ticker(self, event: dict[str, Any]) -> dict[str, Any]:
-        append = self._append_with_retry(event)
+        # Phase C: soft durability for BBO ticks. Fill pricing uses in-memory
+        # BBO updated below; trade volume lives on AGG_TRADE (hard fsync).
+        append = self._append_with_retry(event, fsync=False, update_state=False)
         if not append.ok:
             return {"status": "WAL_APPEND_FAILED", "event_type": EVENT_BOOK_TICKER}
         bid = float(event["best_bid"])
@@ -256,6 +265,9 @@ class ExecutionMarketProcessor:
             return {"status": "INVALID_BBO"}
         self.state.note_book_ticker(receive_monotonic_ns=int(event["local_receive_monotonic_ns"]))
         self._dispatch_book_ticker(event, wal_offset=append.wal_offset)
+        self.wal.maybe_periodic_flush(
+            now_mono_ns=int(event["local_receive_monotonic_ns"])
+        )
         return {"status": "BOOK_TICKER_DISPATCHED", "wal_offset": append.wal_offset}
 
     def _process_agg_trade_live(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -337,6 +349,8 @@ class ExecutionMarketProcessor:
         return actions
 
     def _persist_and_dispatch_agg_trade(self, event: dict[str, Any]) -> dict[str, Any]:
+        # Harden soft BOOK_TICKER bytes before volume / TP-SL durable path.
+        self.wal.flush_durable(reason="pre_agg_trade")
         agg_id = int(event["aggregate_trade_id"])
         protective = self._agg_trade_crosses_protective(float(event["price"]))
         append = self._append_with_retry(event, allow_degraded_protective=protective)
@@ -457,6 +471,10 @@ class ExecutionMarketProcessor:
                 "wal_segments_count": self.wal.wal_segments_count,
                 "wal_oldest_event_timestamp": self.wal.wal_oldest_event_timestamp,
                 "wal_retention_status": self.wal.wal_retention_status,
+                "fsync_count": self.wal.fsync_count,
+                "periodic_fsync_count": self.wal.periodic_fsync_count,
+                "state_write_count": self.wal.state_write_count,
+                "soft_dirty": self.wal._soft_dirty,
             },
             "checkpoint": self.checkpoint.to_dict(),
             "state": self.state.snapshot(),

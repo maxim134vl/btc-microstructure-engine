@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +89,12 @@ class ExecutionMarketWAL:
         self._oldest_event_timestamp = self._discover_oldest_event_timestamp()
         self.last_confirmed_agg_trade_id: int | None = state.get("last_confirmed_agg_trade_id")
         self.fail_next_appends: int = 0
+        self.fsync_count: int = 0
+        self.state_write_count: int = 0
+        self.periodic_fsync_count: int = 0
+        self.soft_fsync_interval_ms: float = 250.0
+        self._soft_dirty: bool = False
+        self._last_durable_mono_ns: int = 0
         if self.segmented is not None and self.events_path.stat().st_size >= self.segmented.max_segment_bytes:
             closed = self.segmented.rotate(
                 first_offset=self._active_start_offset,
@@ -161,6 +168,7 @@ class ExecutionMarketWAL:
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         tmp.replace(self.state_path)
+        self.state_write_count += 1
 
     @property
     def last_offset(self) -> int:
@@ -254,13 +262,70 @@ class ExecutionMarketWAL:
             return None
         return self._event_timestamp(row) if row else None
 
-    def append(self, event: dict[str, Any], *, simulate_failure: bool = False) -> WalAppendResult:
+    def flush_durable(self, *, reason: str = "periodic") -> bool:
+        """Fsync the active WAL and persist state for any soft-appended bytes.
+
+        Soft BOOK_TICKER appends write+flush without fsync. This catches them up
+        on a timer, before AGG_TRADE, or on shutdown. AGG_TRADE hard-fsync also
+        clears soft dirtiness because it syncs the whole file.
+        """
+        with self._lock:
+            if not self._soft_dirty:
+                return False
+            try:
+                with self.events_path.open("a", encoding="utf-8") as fh:
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                self.fsync_count += 1
+                if reason == "periodic":
+                    self.periodic_fsync_count += 1
+                self._save_state(
+                    last_wal_offset=self.last_offset,
+                    active_segment_start_offset=self._active_start_offset,
+                    last_confirmed_agg_trade_id=self.last_confirmed_agg_trade_id,
+                )
+                self._soft_dirty = False
+                self._last_durable_mono_ns = time.monotonic_ns()
+                return True
+            except OSError:
+                return False
+
+    def maybe_periodic_flush(self, *, now_mono_ns: int | None = None) -> bool:
+        """Fsync soft BOOK_TICKER bytes when the interval has elapsed."""
+        now = int(now_mono_ns if now_mono_ns is not None else time.monotonic_ns())
+        if not self._soft_dirty:
+            return False
+        interval_ns = int(max(0.0, float(self.soft_fsync_interval_ms)) * 1_000_000.0)
+        last = int(self._last_durable_mono_ns or 0)
+        if last == 0:
+            self._last_durable_mono_ns = now
+            return False
+        if (now - last) < interval_ns:
+            return False
+        return self.flush_durable(reason="periodic")
+
+    def append(
+        self,
+        event: dict[str, Any],
+        *,
+        simulate_failure: bool = False,
+        fsync: bool = True,
+        update_state: bool = True,
+    ) -> WalAppendResult:
+        """Append one WAL event.
+
+        Phase C: BOOK_TICKER may pass ``fsync=False`` / ``update_state=False``
+        to drop per-tick durability cost. AGG_TRADE (volume + TP/SL trigger)
+        must keep ``fsync=True`` and ``update_state=True`` so quantity and
+        continuity ids remain crash-durable. Soft bytes are later hardened by
+        ``maybe_periodic_flush`` / ``flush_durable`` or the next hard fsync.
+        """
         payload = dict(event)
         payload.setdefault("schema_version", WAL_SCHEMA_VERSION)
         payload.setdefault("paper_epoch_id", self.paper_epoch_id)
         payload.setdefault("source", SOURCE_BINANCE_FUTURES)
         payload["durable_append_timestamp"] = _utc_iso()
-        line = json.dumps(payload, sort_keys=True, default=str) + "\n"
+        payload["wal_fsync"] = bool(fsync)
         with self._lock:
             if simulate_failure or self.fail_next_appends > 0:
                 if self.fail_next_appends > 0:
@@ -273,16 +338,33 @@ class ExecutionMarketWAL:
                 with self.events_path.open("a", encoding="utf-8") as fh:
                     fh.write(line)
                     fh.flush()
-                    os.fsync(fh.fileno())
+                    if fsync:
+                        os.fsync(fh.fileno())
+                        self.fsync_count += 1
+                        self._soft_dirty = False
+                        self._last_durable_mono_ns = time.monotonic_ns()
+                    else:
+                        self._soft_dirty = True
+                        if self._last_durable_mono_ns == 0:
+                            # Start the soft durability window on first soft write.
+                            self._last_durable_mono_ns = time.monotonic_ns()
                 self._next_offset = offset + 1
                 if self._oldest_event_timestamp is None:
                     self._oldest_event_timestamp = self._event_timestamp(payload)
                 if payload.get("event_type") == EVENT_AGG_TRADE and payload.get("aggregate_trade_id") is not None:
                     agg_id = int(payload["aggregate_trade_id"])
                     self.last_confirmed_agg_trade_id = agg_id
-                    self._save_state(last_confirmed_agg_trade_id=agg_id, last_wal_offset=offset, active_segment_start_offset=self._active_start_offset)
-                else:
-                    self._save_state(last_wal_offset=offset, active_segment_start_offset=self._active_start_offset)
+                    if update_state:
+                        self._save_state(
+                            last_confirmed_agg_trade_id=agg_id,
+                            last_wal_offset=offset,
+                            active_segment_start_offset=self._active_start_offset,
+                        )
+                elif update_state:
+                    self._save_state(
+                        last_wal_offset=offset,
+                        active_segment_start_offset=self._active_start_offset,
+                    )
                 if self.segmented is not None:
                     closed = self.segmented.rotate_if_due(
                         first_offset=self._active_start_offset, last_offset=offset

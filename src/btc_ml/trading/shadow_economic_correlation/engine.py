@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from pathlib import Path
 from typing import Any
 
+from btc_ml.runtime.io_cache import IoObserveStats, MtimeJsonlCache
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 
 from . import (
@@ -48,7 +50,13 @@ from .sleeves import (
 from .store import ShadowStore
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl(
+    path: Path,
+    *,
+    jsonl_cache: MtimeJsonlCache | None = None,
+) -> list[dict[str, Any]]:
+    if jsonl_cache is not None:
+        return jsonl_cache.read_jsonl(path)
     if not path.exists():
         return []
     out: list[dict[str, Any]] = []
@@ -67,14 +75,21 @@ class _ReadOnlyPaperBooks:
 
     TABLES = ("signals", "commands", "orders", "fills", "positions", "trades")
 
-    def __init__(self, root: Path, *, paper_epoch_id: str) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        paper_epoch_id: str,
+        jsonl_cache: MtimeJsonlCache | None = None,
+    ) -> None:
         self.root = Path(root)
         self.paper_epoch_id = paper_epoch_id
+        self.jsonl_cache = jsonl_cache
 
     def read_all(self, table: str) -> list[dict[str, Any]]:
         if table not in self.TABLES:
             raise ValueError(table)
-        return _read_jsonl(self.root / f"{table}.jsonl")
+        return _read_jsonl(self.root / f"{table}.jsonl", jsonl_cache=self.jsonl_cache)
 
 
 def _latest_positions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -86,11 +101,22 @@ def _latest_positions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [p for p in latest.values() if str(p.get("status") or "").upper() == "OPEN"]
 
 
-def _load_context_event(repo: Path, context_event_id: str | None) -> dict[str, Any] | None:
+def _load_context_event(
+    repo: Path,
+    context_event_id: str | None,
+    *,
+    jsonl_cache: MtimeJsonlCache | None = None,
+) -> dict[str, Any] | None:
     if not context_event_id:
         return None
     journal = repo / "data" / "cognition" / "intrabar_context_events" / "events.jsonl"
     if not journal.exists():
+        return None
+    if jsonl_cache is not None:
+        rows = jsonl_cache.read_jsonl(journal)
+        for row in reversed(rows[-20000:]):
+            if str(row.get("context_event_id") or "") == str(context_event_id):
+                return row
         return None
     # Scan tail first for speed.
     lines = journal.read_text(encoding="utf-8").splitlines()
@@ -220,6 +246,8 @@ class ShadowEconomicCorrelationEngine:
                 f"{self.parent_fp}"
             )
 
+        self.observe = IoObserveStats()
+        self.jsonl_cache = MtimeJsonlCache(stats=self.observe)
         self.store = ShadowStore(
             shadow_dir
             or shadow_epoch_root(
@@ -227,6 +255,8 @@ class ShadowEconomicCorrelationEngine:
                 epoch_id=self.epoch_id,
             ),
             repo=self.repo,
+            jsonl_cache=self.jsonl_cache,
+            observe=self.observe,
         )
         self.books = _ReadOnlyPaperBooks(
             paper_books_root(
@@ -234,6 +264,7 @@ class ShadowEconomicCorrelationEngine:
                 epoch_id=self.epoch_id,
             ),
             paper_epoch_id=self.epoch_id,
+            jsonl_cache=self.jsonl_cache,
         )
 
         previous_manifest = (
@@ -695,6 +726,7 @@ class ShadowEconomicCorrelationEngine:
             "checkpoint.json",
             payload,
         )
+        self.observe.checkpoint_writes += 1
 
         try:
             self.store.write_json(
@@ -760,6 +792,8 @@ class ShadowEconomicCorrelationEngine:
 
     def process_new_entries(
         self,
+        *,
+        write_health: bool = True,
     ) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
         committed_any = False
@@ -987,14 +1021,19 @@ class ShadowEconomicCorrelationEngine:
             committed_any = True
 
         if not committed_any:
-            self._save_checkpoint()
+            self.observe.idle_checkpoint_skips += 1
 
-        self.write_health()
+        if write_health:
+            self.write_health()
         return actions
 
     def _ingest_candidate(self, candidate: dict[str, Any], *, open_positions_before: list[dict[str, Any]]) -> dict[str, Any]:
         decision_ts = str(candidate.get("candidate_timestamp") or utc_now())
-        ctx = _load_context_event(self.repo, candidate.get("context_event_id"))
+        ctx = _load_context_event(
+            self.repo,
+            candidate.get("context_event_id"),
+            jsonl_cache=self.jsonl_cache,
+        )
         features = build_decision_time_features(
             candidate=candidate,
             context_event=ctx,
@@ -1153,13 +1192,27 @@ class ShadowEconomicCorrelationEngine:
         self.last_enrichment_timestamp = row.get("enriched_at")
         return row
 
-    def backfill_enrichments(self) -> list[dict[str, Any]]:
+    def backfill_enrichments(
+        self,
+        *,
+        write_health: bool = True,
+    ) -> list[dict[str, Any]]:
         """Causally enrich existing candidates without rewriting decisions/snapshots."""
         actions: list[dict[str, Any]] = []
-        for snap in self._active_rows("candidate_snapshots"):
+        active = self._active_rows("candidate_snapshots")
+        pending = [
+            snap
+            for snap in active
+            if str(snap.get("candidate_id") or "")
+            and str(snap.get("candidate_id") or "") not in self.processed_enrichments
+        ]
+        if not pending:
+            self.observe.idle_checkpoint_skips += 1
+            if write_health:
+                self.write_health()
+            return actions
+        for snap in pending:
             cid = str(snap.get("candidate_id") or "")
-            if not cid or cid in self.processed_enrichments:
-                continue
             decision_ts = str(snap.get("candidate_timestamp") or snap.get("entry_timestamp") or "")
             try:
                 row = self._enrich_candidate(snap, decision_timestamp=decision_ts, historical=True)
@@ -1168,8 +1221,12 @@ class ShadowEconomicCorrelationEngine:
             except Exception as exc:  # noqa: BLE001
                 self.errors.append(f"backfill_enrichment:{cid}:{exc}")
                 actions.append({"candidate_id": cid, "status": "FAILED", "error": str(exc)})
-        self._save_checkpoint()
-        self.write_health()
+        if actions:
+            self._save_checkpoint()
+        else:
+            self.observe.idle_checkpoint_skips += 1
+        if write_health:
+            self.write_health()
         return actions
 
     def _check_baseline_entry(self, candidate: dict[str, Any], virtual_pos: dict[str, Any]) -> None:
@@ -1186,6 +1243,8 @@ class ShadowEconomicCorrelationEngine:
 
     def process_new_closes(
         self,
+        *,
+        write_health: bool = True,
     ) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
         committed_any = False
@@ -1288,9 +1347,10 @@ class ShadowEconomicCorrelationEngine:
             committed_any = True
 
         if not committed_any:
-            self._save_checkpoint()
+            self.observe.idle_checkpoint_skips += 1
 
-        self.write_health()
+        if write_health:
+            self.write_health()
         return actions
 
     def _close_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
@@ -1456,10 +1516,20 @@ class ShadowEconomicCorrelationEngine:
         return {"status": "CLOSED", "trade_id": trade.get("trade_id"), "candidate_id": cand.get("candidate_id")}
 
     def poll_once(self) -> dict[str, Any]:
-        entries = self.process_new_entries()
-        closes = self.process_new_closes()
-        enrichments = self.backfill_enrichments()
-        return {"entries": len(entries), "closes": len(closes), "enrichments": len(enrichments)}
+        self.observe.reset_poll()
+        started = time.perf_counter()
+        entries = self.process_new_entries(write_health=False)
+        closes = self.process_new_closes(write_health=False)
+        enrichments = self.backfill_enrichments(write_health=False)
+        self.observe.poll_ms = (time.perf_counter() - started) * 1000.0
+        self.write_health()
+        return {
+            "entries": len(entries),
+            "closes": len(closes),
+            "enrichments": len(enrichments),
+            "poll_ms": self.observe.poll_ms,
+            "io_observe": self.observe.as_dict(),
+        }
 
     def same_direction_clusters(self) -> dict[str, Any]:
         opens = _latest_positions(self.books.read_all("positions"))
@@ -1584,8 +1654,10 @@ class ShadowEconomicCorrelationEngine:
             "research_valid": self.research_valid,
             **enrich_summary,
             "cognition_enrichment": "ACTIVE",
+            "io_observe": self.observe.as_dict(),
             "updated_at": utc_now(),
             "errors": self.errors[-20:],
         }
         self.store.write_json("health.json", payload)
+        self.observe.health_writes += 1
         return payload

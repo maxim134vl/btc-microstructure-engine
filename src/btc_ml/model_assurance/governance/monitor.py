@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +56,16 @@ def _persist_unique(path: Path, row: dict[str, Any], *, id_field: str, existing:
     append_jsonl(path, row)
     existing.add(rid)
     return True
+
+
+def _load_known_ids(checkpoint: dict[str, Any], path: Path, *, id_field: str) -> set[str]:
+    key = f"known_{id_field}s"
+    cached = {str(x) for x in (checkpoint.get(key) or []) if str(x)}
+    if cached:
+        return cached
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+    return {str(r.get(id_field) or "") for r in read_jsonl(path) if r.get(id_field)}
 
 
 def resolve_gate_status(
@@ -128,6 +140,7 @@ def build_latest_gate(
 
 
 def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
+    started = time.perf_counter()
     root = repo_root or _repo_root()
     p = paths(root)
     config = load_governance_config(root)
@@ -137,14 +150,32 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
     if p["active_model"].exists():
         active_before = p["active_model"].read_bytes()
 
+    prior_checkpoint: dict[str, Any] = {}
+    if p["checkpoint"].exists():
+        try:
+            raw = json.loads(p["checkpoint"].read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                prior_checkpoint = raw
+        except Exception:
+            prior_checkpoint = {}
+
     evidence = build_promotion_evidence_snapshot(repo_root=root, active=active)
     eligibility = evaluate_promotion_eligibility(evidence=evidence, config=config)
     evaluation = build_evaluation_record(evidence=evidence, eligibility=eligibility)
 
-    existing_ev = {str(r.get("evidence_snapshot_id")) for r in read_jsonl(p["evidence"])}
-    existing_eval = {str(r.get("evaluation_id")) for r in read_jsonl(p["evaluations"])}
-    _persist_unique(p["evidence"], evidence, id_field="evidence_snapshot_id", existing=existing_ev)
-    _persist_unique(p["evaluations"], evaluation, id_field="evaluation_id", existing=existing_eval)
+    existing_ev = _load_known_ids(
+        prior_checkpoint, p["evidence"], id_field="evidence_snapshot_id"
+    )
+    existing_eval = _load_known_ids(
+        prior_checkpoint, p["evaluations"], id_field="evaluation_id"
+    )
+
+    evidence_persisted = _persist_unique(
+        p["evidence"], evidence, id_field="evidence_snapshot_id", existing=existing_ev
+    )
+    evaluation_persisted = _persist_unique(
+        p["evaluations"], evaluation, id_field="evaluation_id", existing=existing_eval
+    )
 
     decisions = load_decisions(p["decisions"])
     # Track latest REJECT for governance_status
@@ -197,6 +228,7 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
 
     active_after = p["active_model"].read_bytes() if p["active_model"].exists() else None
     changed = active_before != active_after
+    poll_ms = (time.perf_counter() - started) * 1000.0
     atomic_write_json(
         p["checkpoint"],
         {
@@ -204,6 +236,11 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             "evidence_hash": evidence.get("evidence_hash"),
             "gate_status": gate.get("status"),
             "active_model_changed": changed,
+            "known_evidence_snapshot_ids": sorted(existing_ev),
+            "known_evaluation_ids": sorted(existing_eval),
+            "evidence_persisted": evidence_persisted,
+            "evaluation_persisted": evaluation_persisted,
+            "poll_ms": poll_ms,
             "updated_at": utc_now_iso(),
         },
     )
@@ -221,8 +258,20 @@ def run_once(*, repo_root: Path | None = None) -> dict[str, Any]:
             "paper_only": (active or {}).get("paper_only", True),
             "real_execution": (active or {}).get("real_execution", False),
             "active_model_change_performed": False,
+            "io_observe": {
+                "poll_ms": poll_ms,
+                "evidence_persisted": evidence_persisted,
+                "evaluation_persisted": evaluation_persisted,
+                "known_evidence_ids": len(existing_ev),
+                "known_evaluation_ids": len(existing_eval),
+            },
             "updated_at": utc_now_iso(),
         },
     )
     gate["active_model_file_changed"] = changed
+    gate["io_observe"] = {
+        "poll_ms": poll_ms,
+        "evidence_persisted": evidence_persisted,
+        "evaluation_persisted": evaluation_persisted,
+    }
     return gate

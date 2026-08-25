@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from btc_ml.runtime.io_cache import IoObserveStats, journal_tree_fingerprint
 
 from .entry_eligibility import is_stale_entry_signal
 
@@ -76,6 +77,10 @@ class ContextEventConsumer:
         self.activated_at_monotonic_ns = activated_at_monotonic_ns
         self.activated_at_iso = activated_at_iso
         self.checkpoint = self._load_or_create()
+        self.observe = IoObserveStats()
+        self._last_journal_fingerprint: tuple[tuple[str, int, int], ...] | None = None
+        self._last_scan_cursor: tuple[str | None, int, int] | None = None
+        self._last_scan_empty: bool = False
 
     def _load_or_create(self) -> ConsumerCheckpoint:
         if self.checkpoint_path.exists():
@@ -124,12 +129,33 @@ class ContextEventConsumer:
             return []
         return sorted(self.journal_root.rglob("*.jsonl"))
 
+    def _scan_cursor(self) -> tuple[str | None, int, int]:
+        return (
+            self.checkpoint.last_path,
+            int(self.checkpoint.last_offset or 0),
+            int(self.checkpoint.last_event_monotonic_ns or 0),
+        )
+
     def iter_new_events(
         self,
         *,
         max_entry_signal_age_seconds: float | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield events with event_monotonic_ns > checkpoint, sorted causally."""
+        fingerprint = journal_tree_fingerprint(self.journal_root)
+        cursor = self._scan_cursor()
+        # Only skip when the previous scan already proved this fingerprint+cursor
+        # has no pending events. Positive scans must remain re-iterable until the
+        # manager advances the checkpoint (peek + poll patterns in tests/runtime).
+        if (
+            self._last_scan_empty
+            and fingerprint == self._last_journal_fingerprint
+            and cursor == self._last_scan_cursor
+        ):
+            self.observe.cache_hits += 1
+            return
+        self.observe.cache_misses += 1
+
         pending: list[dict[str, Any]] = []
         last_mono = int(self.checkpoint.last_event_monotonic_ns or 0)
         last_offset = (
@@ -142,6 +168,8 @@ class ContextEventConsumer:
         for path in self._iter_files():
             try:
                 text = path.read_text(encoding="utf-8")
+                self.observe.files_read += 1
+                self.observe.bytes_read += len(text.encode("utf-8"))
             except OSError:
                 continue
             path_str = str(path)
@@ -192,5 +220,8 @@ class ContextEventConsumer:
                 str(e.get("context_event_id") or ""),
             )
         )
+        self._last_journal_fingerprint = fingerprint
+        self._last_scan_cursor = cursor
+        self._last_scan_empty = not pending
         for ev in pending:
             yield ev
