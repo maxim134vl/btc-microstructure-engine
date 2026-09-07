@@ -68,6 +68,45 @@ class MtimeJsonlCache:
             # Also drop unresolved / alternate forms.
             self._entries.pop(str(path), None)
 
+    def note_appended(self, path: Path | str, rows: list[dict[str, Any]]) -> None:
+        """Advance a cached entry over rows that were just appended to the file.
+
+        Callers that append and then read the same journal used to invalidate here,
+        which forced the next read to re-parse the file from the start. A writer
+        knows exactly which rows it added, so the cache can be advanced instead of
+        dropped. That is the difference between O(file) and O(appended) per read:
+        an EQCORR batch replay appends to journals that grow past 100k rows while
+        re-reading them ~20 times per closed trade, and was spending roughly 95% of
+        its runtime inside json.loads as a result.
+
+        `rows` must already be JSON round-tripped so the cached value is identical
+        to what re-reading the file would produce. If nothing is cached for this
+        path yet, this is a no-op and the next read populates the entry normally.
+        """
+        p = Path(path)
+        key = str(p)
+        try:
+            resolved = str(p.resolve())
+        except OSError:
+            resolved = key
+        try:
+            st = p.stat()
+        except OSError:
+            self.invalidate(p)
+            return
+
+        with self._lock:
+            entry = self._entries.get(resolved) or self._entries.get(key)
+            if entry is None:
+                return
+            entry.rows.extend(row for row in rows if isinstance(row, dict))
+            entry.size = int(st.st_size)
+            entry.mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
+            # Any retained text is now short by the appended lines.
+            entry.text = None
+            self._entries[resolved] = entry
+            self._entries[key] = entry
+
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()

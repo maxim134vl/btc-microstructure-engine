@@ -81,6 +81,7 @@ PARQUET_REGISTRY: dict[str, str] = {
     "htf_structure_memory.parquet": "diagnostics",
     "htf_ltf_context_memory.parquet": "diagnostics",
     "runtime_dependency_state.parquet": "diagnostics",
+    "runtime_engine_state.parquet": "diagnostics",
     # replay / artifacts (non-runtime research outputs)
     "research_master_dataset.parquet": "artifacts",
     "btc_15m.parquet": "artifacts",
@@ -88,7 +89,10 @@ PARQUET_REGISTRY: dict[str, str] = {
 
 # Additional legacy read locations (never written by canonical writers).
 EXTRA_LEGACY_READ_PATHS: dict[str, tuple[str, ...]] = {
-    "live_market_feed.parquet": ("datasets/live/latest.parquet",),
+    "live_market_feed.parquet": (
+        "data/live/latest.parquet",
+        "datasets/live/latest.parquet",
+    ),
 }
 
 # Backward-compatible string constants (resolve at read/write time via helpers).

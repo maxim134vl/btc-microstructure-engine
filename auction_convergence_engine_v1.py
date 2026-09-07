@@ -27,6 +27,11 @@ def run():
         "volume_response_state.parquet"
     )
 
+    if response is None or len(response) == 0:
+        print("SKIPPED: volume_response_state.parquet empty (cold start)")
+        print()
+        return
+
     latest = response.iloc[-1]
 
     # =====================================
@@ -314,4 +319,6 @@ def run():
         "auction_convergence_memory.parquet"
     )
 
-run()
+
+if __name__ == "__main__":
+    run()

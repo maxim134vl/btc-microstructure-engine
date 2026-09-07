@@ -175,8 +175,16 @@ def load_m15_observations(
             participation_state=_s(extra.get("participation_state")),
             unfinished_auction=_b(extra.get("unfinished_auction")),
             localized_behavior=_s(loc.get("localized_behavior") or extra.get("localized_behavior")),
-            upper_rejection=_b(loc.get("upper_rejection")),
-            lower_rejection=_b(loc.get("lower_rejection")),
+            upper_rejection=_b(
+                loc.get("upper_rejection")
+                if loc.get("upper_rejection") is not None
+                else extra.get("upper_rejection")
+            ),
+            lower_rejection=_b(
+                loc.get("lower_rejection")
+                if loc.get("lower_rejection") is not None
+                else extra.get("lower_rejection")
+            ),
             oi_change=None,
         )
         rows.append(obs)

@@ -59,11 +59,13 @@ def create_epoch(
     initial_equity_usd: float,
     rule_contract_version: str = "INTRABAR_RULES_V1",
     utc_stamp: str | None = None,
+    epoch_id_prefix: str = "INTRABAR_RULES_V1",
 ) -> PaperEpoch:
     epochs_root.mkdir(parents=True, exist_ok=True)
     stamp = utc_stamp or _ts()
+    prefix = str(epoch_id_prefix or "INTRABAR_RULES_V1").rstrip("_")
     epoch = PaperEpoch(
-        paper_epoch_id=f"INTRABAR_RULES_V1_{stamp}",
+        paper_epoch_id=f"{prefix}_{stamp}",
         epoch_status="CREATED",
         created_at=_utc_now().isoformat().replace("+00:00", "Z"),
         activated_at=None,

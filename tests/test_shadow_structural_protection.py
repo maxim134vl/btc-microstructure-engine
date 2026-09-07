@@ -1158,6 +1158,60 @@ def test_insufficient_history_is_not_catalog_defect():
     assert aggregate["legitimate_absence"] is False
 
 
+def test_age_ineligible_significant_is_not_catalog_defect():
+    from btc_ml.trading.shadow_structural_protection.catalog import (
+        audit_target_absence,
+    )
+    from btc_ml.trading.shadow_structural_protection.coverage import (
+        aggregate_target_absence,
+    )
+
+    audit = audit_target_absence(
+        zones=[],
+        side="LONG",
+        coverage={
+            "coverage_ok": True,
+            "coverage_status": "SUFFICIENT_CAUSAL_HISTORY",
+            "coverage_reasons": [],
+        },
+        search_stats={
+            "age_eligible_significant_count": 0,
+            "age_eligible_profiles_ok": 0,
+        },
+    )
+    assert (
+        audit["verdict"]
+        == "LEGITIMATE_ABSENCE_NO_AGE_ELIGIBLE_SIGNIFICANT"
+    )
+    aggregate = aggregate_target_absence([audit])
+    assert aggregate["search_or_catalog_defect"] is False
+    assert aggregate["legitimate_absence"] is True
+
+
+def test_age_eligible_profile_ok_without_zones_is_catalog_defect():
+    from btc_ml.trading.shadow_structural_protection.catalog import (
+        audit_target_absence,
+    )
+
+    audit = audit_target_absence(
+        zones=[],
+        side="SHORT",
+        coverage={
+            "coverage_ok": True,
+            "coverage_status": "SUFFICIENT_CAUSAL_HISTORY",
+            "coverage_reasons": [],
+        },
+        search_stats={
+            "age_eligible_significant_count": 2,
+            "age_eligible_profiles_ok": 2,
+        },
+    )
+    assert (
+        audit["verdict"]
+        == "SEARCH_OR_CATALOG_DEFECT_NO_ZONES_DETECTED"
+    )
+
+
 def test_coverage_integrity_checks_contract_consistency():
     from btc_ml.trading.shadow_structural_protection.coverage import (
         coverage_integrity_ok,

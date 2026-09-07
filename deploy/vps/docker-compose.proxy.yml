@@ -1,0 +1,49 @@
+# Optional TLS edge proxy (D6) — overlay on the model compose.
+# Does not start the model by itself. Usage:
+#
+#   docker compose --env-file deploy/vps/.env \
+#     -f deploy/vps/docker-compose.yml \
+#     -f deploy/vps/docker-compose.proxy.yml \
+#     --project-name btcml-vps up -d proxy
+#
+# Or via helper once wired:
+#   VPS_ENABLE_PROXY=1 ./scripts/deploy/vps_stack.sh up
+#
+# Public map:
+#   /        → dashboard-ui:80
+#   /api /ws → ops-api:8080
+#   /chart   → trade-chart:8765
+
+services:
+  proxy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "${VPS_HTTP_PORT:-80}:80"
+      - "${VPS_HTTPS_PORT:-443}:443"
+    environment:
+      VPS_PUBLIC_HOST: ${VPS_PUBLIC_HOST:-localhost}
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - vps_caddy_data:/data
+      - vps_caddy_config:/config
+    depends_on:
+      ops-api:
+        condition: service_healthy
+      dashboard-ui:
+        condition: service_healthy
+      trade-chart:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:size=16M,mode=1777
+
+volumes:
+  vps_caddy_data:
+  vps_caddy_config:

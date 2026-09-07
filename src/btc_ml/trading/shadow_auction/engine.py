@@ -488,14 +488,22 @@ class TimeframeAuctionEngine:
         if family_for_phase(phase) == FAMILY_BALANCE or phase == PHASE_TRANSITION:
             return self._balance_phase(obs, snap, phase, reasons)
 
-        # Entering balance from directional deterioration + balance support.
+        # B: stopping evidence beats balance escape while still deteriorating.
+        # (Previously balance_support≥enter always preempted *_STOPPING_CANDIDATE.)
+        if phase == PHASE_UP_CONTINUATION_DETERIORATING and _up_stopping_evidence(snap):
+            reasons += ["STOPPING_CANDIDATE_EVIDENCE", "STOPPING_BEFORE_BALANCE_ESCAPE"]
+            return PHASE_UP_STOPPING_CANDIDATE, reasons
+        if phase == PHASE_DOWN_CONTINUATION_DETERIORATING and _down_stopping_evidence(snap):
+            reasons += ["STOPPING_CANDIDATE_EVIDENCE", "STOPPING_BEFORE_BALANCE_ESCAPE"]
+            return PHASE_DOWN_STOPPING_CANDIDATE, reasons
+
+        # Entering balance from directional deterioration / post-stress + balance support.
+        # STOPPING_CANDIDATE intentionally omitted here — handled inside _directional_*.
         if phase in {
             PHASE_UP_CONTINUATION_DETERIORATING,
             PHASE_DOWN_CONTINUATION_DETERIORATING,
             PHASE_POST_UP_STRESS_REACTION,
             PHASE_POST_DOWN_STRESS_REACTION,
-            PHASE_UP_STOPPING_CANDIDATE,
-            PHASE_DOWN_STOPPING_CANDIDATE,
         } and snap.balance_support >= float(p["balance_support_enter"]):
             reasons += ["DIRECTIONAL_EFFICIENCY_DROPPING", "BALANCE_SUPPORT_RISING"]
             return PHASE_TRANSITION, reasons
@@ -569,6 +577,10 @@ class TimeframeAuctionEngine:
                 return PHASE_UP_CONTINUATION_ACCEPTED, reasons
             if snap.up_efficiency < weak_e:
                 reasons += ["EFFORT_HIGH_RESULT_WEAK"]
+                # C: same-bar promote when stopping evidence already present.
+                if _up_stopping_evidence(snap):
+                    reasons += ["STOPPING_CANDIDATE_EVIDENCE", "SAME_BAR_STOPPING_PROMOTE"]
+                    return PHASE_UP_STOPPING_CANDIDATE, reasons
                 return PHASE_UP_CONTINUATION_DETERIORATING, reasons
 
         # Deterioration: effort up, result down.
@@ -583,10 +595,14 @@ class TimeframeAuctionEngine:
                 PHASE_UP_PRESSURE_EXPANDING,
                 PHASE_EXTREME_UP_PARTICIPATION,
             }:
+                # C: same-bar promote when stopping evidence already present.
+                if _up_stopping_evidence(snap):
+                    reasons += ["STOPPING_CANDIDATE_EVIDENCE", "SAME_BAR_STOPPING_PROMOTE"]
+                    return PHASE_UP_STOPPING_CANDIDATE, reasons
                 return PHASE_UP_CONTINUATION_DETERIORATING, reasons
 
         if phase == PHASE_UP_CONTINUATION_DETERIORATING:
-            if snap.up_exhaustion_support >= 0.55 and snap.reaction_strength >= 0.3:
+            if _up_stopping_evidence(snap):
                 reasons += ["STOPPING_CANDIDATE_EVIDENCE"]
                 return PHASE_UP_STOPPING_CANDIDATE, reasons
             if snap.balance_support >= float(self.params["balance_support_enter"]):
@@ -655,6 +671,10 @@ class TimeframeAuctionEngine:
                 return PHASE_DOWN_CONTINUATION_ACCEPTED, reasons
             if snap.down_efficiency < weak_e:
                 reasons += ["EFFORT_HIGH_RESULT_WEAK"]
+                # C: same-bar promote when stopping evidence already present.
+                if _down_stopping_evidence(snap):
+                    reasons += ["STOPPING_CANDIDATE_EVIDENCE", "SAME_BAR_STOPPING_PROMOTE"]
+                    return PHASE_DOWN_STOPPING_CANDIDATE, reasons
                 return PHASE_DOWN_CONTINUATION_DETERIORATING, reasons
 
         if (
@@ -668,10 +688,14 @@ class TimeframeAuctionEngine:
                 PHASE_DOWN_PRESSURE_EXPANDING,
                 PHASE_EXTREME_DOWN_PARTICIPATION,
             }:
+                # C: same-bar promote when stopping evidence already present.
+                if _down_stopping_evidence(snap):
+                    reasons += ["STOPPING_CANDIDATE_EVIDENCE", "SAME_BAR_STOPPING_PROMOTE"]
+                    return PHASE_DOWN_STOPPING_CANDIDATE, reasons
                 return PHASE_DOWN_CONTINUATION_DETERIORATING, reasons
 
         if phase == PHASE_DOWN_CONTINUATION_DETERIORATING:
-            if snap.down_exhaustion_support >= 0.55 and snap.reaction_strength >= 0.3:
+            if _down_stopping_evidence(snap):
                 reasons += ["STOPPING_CANDIDATE_EVIDENCE"]
                 return PHASE_DOWN_STOPPING_CANDIDATE, reasons
             if snap.balance_support >= float(self.params["balance_support_enter"]):
@@ -825,6 +849,24 @@ DOWN_ACTIVE = {
     PHASE_DOWN_STOPPING_CANDIDATE,
     PHASE_POST_DOWN_STRESS_REACTION,
 }
+
+# Shared AES2 thresholds for directional stopping-candidate evidence.
+_STOPPING_EXHAUSTION_MIN = 0.55
+_STOPPING_REACTION_MIN = 0.3
+
+
+def _up_stopping_evidence(snap: FeatureSnapshot) -> bool:
+    return (
+        float(snap.up_exhaustion_support) >= _STOPPING_EXHAUSTION_MIN
+        and float(snap.reaction_strength) >= _STOPPING_REACTION_MIN
+    )
+
+
+def _down_stopping_evidence(snap: FeatureSnapshot) -> bool:
+    return (
+        float(snap.down_exhaustion_support) >= _STOPPING_EXHAUSTION_MIN
+        and float(snap.reaction_strength) >= _STOPPING_REACTION_MIN
+    )
 
 
 class ShadowAuctionAES2:

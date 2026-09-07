@@ -31,5 +31,9 @@
   "epochs_root": "data/trading/paper_epochs",
   "economics_source": "canonical_paper_trade_economics_v1",
   "entry_source": "s41_command_bus",
-  "s41_consume_commands_after": "2026-08-15T08:33:58.378788Z"
+  "s41_consume_commands_after": "2026-08-15T08:33:58.378788Z",
+  "hybrid_sizing": {
+    "enabled": true,
+    "artifacts_dir": "config/trading/hybrid_sizing"
+  }
 }

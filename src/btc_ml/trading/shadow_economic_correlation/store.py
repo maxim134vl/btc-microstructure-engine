@@ -132,7 +132,18 @@ class ShadowStore:
                 encoding="utf-8",
             ) as handle:
                 handle.write(line)
-            self.jsonl_cache.invalidate(path)
+            # Advance the cache over this one row rather than dropping the entry.
+            # read_all() is called ~20x per closed trade against journals that grow
+            # into six figures, so invalidating here made every read re-parse the
+            # whole file. Re-parse the line we just wrote so the cached row matches
+            # a re-read exactly (json.dumps used default=str).
+            try:
+                self.jsonl_cache.note_appended(
+                    path,
+                    [json.loads(line)],
+                )
+            except json.JSONDecodeError:
+                self.jsonl_cache.invalidate(path)
 
         return payload
 

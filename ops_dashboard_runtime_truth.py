@@ -1084,6 +1084,35 @@ def _sf(value: Any) -> float | None:
     return None if out != out else out
 
 
+def _ps_lines_from_proc() -> list[str]:
+    """Build ps-like lines from /proc when the `ps` binary is unavailable."""
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return []
+    lines: list[str] = []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            pid = int(entry.name)
+            cmdline = (
+                (entry / "cmdline")
+                .read_bytes()
+                .replace(b"\x00", b" ")
+                .decode("utf-8", errors="replace")
+                .strip()
+            )
+            if not cmdline:
+                continue
+            stat_fields = (entry / "stat").read_text(encoding="utf-8", errors="replace").split()
+            ppid = int(stat_fields[3]) if len(stat_fields) > 3 else 0
+            # etime placeholder — inspect_processes mainly needs pid/ppid/command.
+            lines.append(f"{pid} {ppid} 00:00 {cmdline}")
+        except Exception:
+            continue
+    return lines
+
+
 def _ps_lines() -> list[str]:
     try:
         return subprocess.check_output(
@@ -1091,7 +1120,297 @@ def _ps_lines() -> list[str]:
             text=True,
         ).splitlines()
     except Exception:
-        return []
+        return _ps_lines_from_proc()
+
+
+def _volume_health_max_age_s() -> float:
+    try:
+        return float(os.environ.get("BTC_ML_OPS_VOLUME_HEALTH_MAX_AGE_S") or 180.0)
+    except Exception:
+        return 180.0
+
+
+def _read_json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _iso_age_seconds(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()
+    except Exception:
+        return None
+
+
+def _read_pid_file(path: Path) -> int | None:
+    try:
+        raw = path.read_text(encoding="utf-8").strip().split()[0]
+        pid = int(raw)
+    except Exception:
+        return None
+    return pid if pid > 0 else None
+
+
+def _volume_process_alive(process_id: str) -> dict[str, Any] | None:
+    """Cross-container truth for Docker/VPS: shared volume health files, not local ps.
+
+    Ops-api runs in its own PID namespace; sibling services are invisible to `ps`.
+    PIDs are still surfaced from shared pid/health files (container-local identity).
+    """
+    max_age = _volume_health_max_age_s()
+    # Context refresher often writes only on sparse cycles.
+    if process_id == "context_refresher":
+        max_age = max(max_age, 900.0)
+    # process_id -> (relative health path, tip key)
+    mapping: dict[str, tuple[str, str]] = {
+        "intrabar_cognition": ("data/runtime/intrabar_cognition_health.json", "updated_at"),
+        "intrabar_paper_manager": ("data/runtime/intrabar_paper_health.json", "updated_at"),
+        "timeframe_manager": ("data/runtime/timeframe_manager_health.json", "updated_at"),
+        # Daemon often writes only on refresh cycles (can be minutes apart).
+        "context_refresher": ("data/live/context_refresh_daemon_status.json", "updated_at"),
+        "shadow_structural_protection": (
+            "data/trading/shadow_structural_protection/epochs",
+            "health.json",
+        ),
+        "shadow_economic_correlation": (
+            "data/trading/shadow_economic_correlation/epochs",
+            "health.json",
+        ),
+        "shadow_stp_be33": (
+            "data/trading/shadow_structural_protection/stp_be33/epochs",
+            "health.json",
+        ),
+        "shadow_auction": ("data/trading/shadow_auction/health/health.json", "updated_at"),
+    }
+
+    if process_id == "ops_backend":
+        # If this code is executing inside the API process, the backend is up.
+        return {
+            "pid": os.getpid(),
+            "alive": True,
+            "health": "RUNNING",
+            "health_reason": "ops_backend_self_volume_or_inprocess",
+            "last_heartbeat": utc_now(),
+            "command": "python run_api.py",
+        }
+
+    if process_id == "canonical_pipeline":
+        state_path = ROOT / "data" / "diagnostics" / "runtime_engine_state.parquet"
+        pid = _read_pid_file(ROOT / "data" / "runtime" / "canonical_pipeline.pid")
+        if state_path.exists():
+            age = time.time() - state_path.stat().st_mtime
+            if age <= max_age:
+                return {
+                    "pid": pid,
+                    "alive": True,
+                    "health": "RUNNING",
+                    "health_reason": "canonical_runtime_engine_state_fresh",
+                    "last_heartbeat": datetime.fromtimestamp(
+                        state_path.stat().st_mtime, timezone.utc
+                    )
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "command": "run.py (volume health)",
+                    "uptime_seconds": None,
+                }
+        return None
+
+    if process_id == "live_feed":
+        hb_path = ROOT / "data" / "live" / "collector_heartbeats" / "binance_live_feed.json"
+        hb = _read_json_file(hb_path)
+        if not hb:
+            return None
+        age = _iso_age_seconds(hb.get("timestamp"))
+        status = str(hb.get("status") or "").upper()
+        pids = _read_json_file(ROOT / "data" / "live" / "collector_pids.json") or {}
+        try:
+            pid = int(pids.get("binance_live_feed"))
+        except Exception:
+            pid = None
+        if age is not None and age <= max_age and status in {
+            "OK",
+            "RUNNING",
+            "CONNECTED",
+            "HEALTHY",
+            "STARTING",
+            "ALIVE",
+        }:
+            return {
+                "pid": pid if pid and pid > 0 else None,
+                "alive": True,
+                "health": "RUNNING",
+                "health_reason": "collector_heartbeat_volume_healthy",
+                "last_heartbeat": hb.get("timestamp"),
+                "command": "live_binance_feed_v2.py (volume heartbeat)",
+            }
+        return None
+
+    if process_id == "visual_refresher":
+        # Docker: context-refresher service writes visual_status.json on visual_public_data.
+        candidates = (
+            ROOT / "apps/context_visualizer/public/data/visual_status.json",
+            ROOT / "data/runtime/visual_refresher_health.json",
+        )
+        # Visual cycles are ~20s; allow a bit of slack beyond default max_age.
+        visual_max_age = max(max_age, 120.0)
+        shared_pid = _read_pid_file(ROOT / "data" / "runtime" / "visual_refresher.pid")
+        for path in candidates:
+            payload = _read_json_file(path)
+            tip = None
+            age = None
+            if payload:
+                tip = (
+                    payload.get("last_run_finished_at")
+                    or payload.get("generated_at_utc")
+                    or payload.get("updated_at")
+                    or payload.get("timestamp")
+                )
+                age = _iso_age_seconds(tip)
+            if age is None and path.exists():
+                age = time.time() - path.stat().st_mtime
+                tip = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat().replace(
+                    "+00:00", "Z"
+                )
+            if age is None or age > visual_max_age:
+                continue
+            pid = None
+            if payload and payload.get("pid") is not None:
+                try:
+                    pid = int(payload.get("pid"))
+                except Exception:
+                    pid = None
+            if pid is None:
+                pid = shared_pid
+            return {
+                "pid": pid,
+                "alive": True,
+                "health": "RUNNING",
+                "health_reason": "visual_refresher_volume_health_fresh",
+                "last_heartbeat": tip,
+                "command": "run_market_context_visual_refresher.py (volume health)",
+            }
+        return None
+
+    if process_id == "shadow_auction":
+        path = ROOT / "data/trading/shadow_auction/health/health.json"
+        payload = _read_json_file(path)
+        if not payload:
+            return None
+        tip = payload.get("updated_at") or payload.get("timestamp") or payload.get("generated_at")
+        age = _iso_age_seconds(tip)
+        if age is None and path.exists():
+            age = time.time() - path.stat().st_mtime
+            tip = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat().replace("+00:00", "Z")
+        alive_flag = payload.get("alive")
+        if alive_flag is False:
+            return None
+        if age is not None and age <= max_age:
+            return {
+                "pid": payload.get("pid"),
+                "alive": True,
+                "health": "RUNNING",
+                "health_reason": "shadow_auction_volume_health_fresh",
+                "last_heartbeat": tip,
+                "command": "run_shadow_auction.py (volume health)",
+            }
+        return None
+
+    # Epoch-scoped shadow health dirs: pick newest health.json
+    if process_id in {
+        "shadow_structural_protection",
+        "shadow_economic_correlation",
+        "shadow_stp_be33",
+    }:
+        rel_root, leaf = mapping[process_id]
+        root = ROOT / rel_root
+        if not root.exists():
+            return None
+        candidates = sorted(root.glob(f"*/{leaf}"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates and (ROOT / rel_root).name.endswith(".json"):
+            candidates = [ROOT / rel_root]
+        for path in candidates[:3]:
+            payload = _read_json_file(path)
+            if not payload:
+                # freshness by mtime alone
+                age = time.time() - path.stat().st_mtime
+                if age <= max_age:
+                    return {
+                        "pid": None,
+                        "alive": True,
+                        "health": "RUNNING",
+                        "health_reason": f"{process_id}_volume_health_mtime_fresh",
+                        "last_heartbeat": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "command": f"{process_id} (volume health)",
+                    }
+                continue
+            tip = (
+                payload.get("updated_at")
+                or payload.get("timestamp")
+                or payload.get("generated_at")
+                or payload.get("ts")
+            )
+            age = _iso_age_seconds(tip)
+            if age is None:
+                age = time.time() - path.stat().st_mtime
+            if payload.get("alive") is False:
+                continue
+            if age is not None and age <= max_age:
+                return {
+                    "pid": payload.get("pid"),
+                    "alive": True,
+                    "health": "RUNNING",
+                    "health_reason": f"{process_id}_volume_health_fresh",
+                    "last_heartbeat": tip,
+                    "command": f"{process_id} (volume health)",
+                }
+        return None
+
+    spec = mapping.get(process_id)
+    if not spec:
+        return None
+    rel, tip_key = spec
+    path = ROOT / rel
+    payload = _read_json_file(path)
+    if not payload:
+        return None
+    if payload.get("alive") is False:
+        return None
+    tip = payload.get(tip_key) or payload.get("updated_at") or payload.get("timestamp")
+    age = _iso_age_seconds(tip)
+    if age is None and path.exists():
+        age = time.time() - path.stat().st_mtime
+        tip = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat().replace("+00:00", "Z")
+    if age is None or age > max_age:
+        return None
+    pid = payload.get("pid")
+    if pid is None and process_id == "context_refresher":
+        pid = _read_pid_file(ROOT / "data" / "runtime" / "context_refresher.pid")
+    if pid is None:
+        # Common pattern: data/runtime/<process_id>.pid written by Docker entrypoints.
+        pid = _read_pid_file(ROOT / "data" / "runtime" / f"{process_id}.pid")
+    try:
+        pid = int(pid) if pid is not None else None
+    except Exception:
+        pid = None
+    return {
+        "pid": pid if pid and pid > 0 else None,
+        "alive": True,
+        "health": "RUNNING",
+        "health_reason": f"{process_id}_volume_health_fresh",
+        "last_heartbeat": tip,
+        "command": f"{process_id} (volume health)",
+    }
 
 
 def _process_create_time(pid: int) -> tuple[float | None, float | None, str | None]:
@@ -1105,6 +1424,29 @@ def _process_create_time(pid: int) -> tuple[float | None, float | None, str | No
         return created, uptime, None
     except Exception:
         pass
+    # /proc fallback (Linux containers without full psutils permissions)
+    try:
+        stat = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8", errors="replace").split()
+        # field 22 (1-based) = starttime in clock ticks
+        if len(stat) >= 22:
+            start_ticks = float(stat[21])
+            try:
+                ticks = float(os.sysconf("SC_CLK_TCK"))
+            except Exception:
+                ticks = 100.0
+            boot = None
+            try:
+                for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines():
+                    if line.startswith("btime "):
+                        boot = float(line.split()[1])
+                        break
+            except Exception:
+                boot = None
+            if boot is not None:
+                created = boot + (start_ticks / ticks)
+                return created, max(0.0, time.time() - created), None
+    except Exception:
+        pass
     try:
         # macOS/Linux fallback via ps etime is lossy; prefer lstart when available.
         out = subprocess.check_output(
@@ -1113,19 +1455,10 @@ def _process_create_time(pid: int) -> tuple[float | None, float | None, str | No
         ).strip()
         if not out:
             return None, None, "PIPELINE_PID_UNAVAILABLE"
-        import time as _time
-        from email.utils import parsedate_to_datetime
+        from datetime import datetime as _dt
 
-        # ps lstart format e.g. "Mon Jul 27 09:06:40 2026"
-        try:
-            from datetime import datetime as _dt
-
-            created_dt = _dt.strptime(out, "%a %b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc)
-            # lstart is local wall clock; convert via timestamp() using local interpretation:
-            created = _dt.strptime(out, "%a %b %d %H:%M:%S %Y").timestamp()
-        except Exception:
-            return None, None, "PIPELINE_PID_CREATE_TIME_UNPARSEABLE"
-        return created, max(0.0, _time.time() - created), None
+        created = _dt.strptime(out, "%a %b %d %H:%M:%S %Y").timestamp()
+        return created, max(0.0, time.time() - created), None
     except Exception:
         return None, None, "PIPELINE_PID_UNAVAILABLE"
 
@@ -1160,6 +1493,34 @@ def inspect_processes() -> list[dict[str, Any]]:
                     matched = text
                     break
         if matched is None:
+            volume = _volume_process_alive(process_id)
+            if volume and volume.get("alive"):
+                out.append(
+                    {
+                        "process_id": process_id,
+                        "display_name": process_id,
+                        "role": process_id,
+                        "pid": volume.get("pid"),
+                        "ppid": None,
+                        "alive": True,
+                        "process_state": "RUNNING",
+                        "interpreter": None,
+                        "cwd": str(ROOT),
+                        "command": volume.get("command"),
+                        "started_at": None,
+                        "create_time": None,
+                        "uptime_seconds": volume.get("uptime_seconds"),
+                        "uptime_reason": None,
+                        "last_heartbeat": volume.get("last_heartbeat") or heartbeat_ts,
+                        "restart_count": None,
+                        "owner": process_id,
+                        "health": "RUNNING",
+                        "health_reason": volume.get("health_reason") or "volume_health_fresh",
+                        "required": required,
+                        "entity_type": "PROCESS",
+                    }
+                )
+                continue
             out.append(
                 {
                     "process_id": process_id,
@@ -1208,7 +1569,15 @@ def inspect_processes() -> list[dict[str, Any]]:
                 health = "ZOMBIE"
                 reason = "pid_identity_matched_but_zombie"
         except Exception:
-            pass
+            # /proc state fallback
+            try:
+                st = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace").split()
+                if len(st) > 2 and "Z" in st[2]:
+                    proc_state = "ZOMBIE"
+                    health = "ZOMBIE"
+                    reason = "pid_identity_matched_but_zombie"
+            except Exception:
+                pass
         if health == "RUNNING" and interpreter:
             base = os.path.basename(interpreter)
             # Trading/model processes must not run under system python3 without project venv markers.
@@ -1222,7 +1591,7 @@ def inspect_processes() -> list[dict[str, Any]]:
             } or process_id.startswith("trader_"):
                 if base in {"python", "python3"} and "/.venv/" not in interpreter and "venv" not in interpreter:
                     # Allow bare python3 when cwd/command still bind to repo scripts (common launch style).
-                    if "btc-ml" not in command and str(ROOT) not in command:
+                    if "btc-ml" not in command and str(ROOT) not in command and "/app/" not in command:
                         proc_state = "WRONG_INTERPRETER"
                         health = "WRONG_INTERPRETER"
                         reason = "interpreter_identity_mismatch"

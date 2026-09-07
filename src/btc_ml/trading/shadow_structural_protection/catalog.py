@@ -37,8 +37,14 @@ def audit_target_absence(
     zones: list[dict[str, Any]],
     side: str,
     coverage: dict[str, Any] | None = None,
+    search_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Classify target absence without confusing missing history with a catalog defect."""
+    """Classify target absence without confusing missing history with a catalog defect.
+
+    Empty zones are a catalog defect only when age-eligible significant candles
+    produced profiles but no zones. Significant candles outside ZONE_AGE_8 are
+    lookback context, not a search failure.
+    """
     side_u = str(side).upper()
     target_side = "bearish" if side_u == "LONG" else "bullish"
     location_key = (
@@ -74,10 +80,17 @@ def audit_target_absence(
                 break
 
     coverage_row = dict(coverage or {})
+    stats = dict(search_stats or {})
     causal_history_ok = (
         bool(coverage_row.get("coverage_ok"))
         if coverage is not None
         else True
+    )
+    age_eligible_significant = int(
+        stats.get("age_eligible_significant_count") or 0
+    )
+    age_eligible_profiles_ok = int(
+        stats.get("age_eligible_profiles_ok") or 0
     )
 
     if not causal_history_ok:
@@ -85,9 +98,19 @@ def audit_target_absence(
             "INSUFFICIENT_CAUSAL_HISTORY_NOT_EVALUABLE"
         )
     elif not zones:
-        verdict = (
-            "SEARCH_OR_CATALOG_DEFECT_NO_ZONES_DETECTED"
-        )
+        if stats and age_eligible_significant == 0:
+            verdict = (
+                "LEGITIMATE_ABSENCE_NO_AGE_ELIGIBLE_SIGNIFICANT"
+            )
+        elif stats and age_eligible_profiles_ok == 0:
+            verdict = (
+                "SEARCH_OR_CATALOG_DEFECT_PROFILE_BUILD_FAILED"
+            )
+        else:
+            # Backward compatible when callers omit search_stats.
+            verdict = (
+                "SEARCH_OR_CATALOG_DEFECT_NO_ZONES_DETECTED"
+            )
     elif not opposite_location:
         verdict = (
             "LEGITIMATE_ABSENCE_NO_OPPOSITE_LOCATION_ZONES"
@@ -113,6 +136,8 @@ def audit_target_absence(
         "coverage_reasons": list(
             coverage_row.get("coverage_reasons") or []
         ),
+        "age_eligible_significant_count": age_eligible_significant,
+        "age_eligible_profiles_ok": age_eligible_profiles_ok,
         "opposite_location_zones": len(
             opposite_location
         ),
@@ -351,6 +376,8 @@ def build_candidate_catalog(
     profiles: list[dict[str, Any]] = []
     significant_count = 0
     exact_profiles = 0
+    age_eligible_significant_count = 0
+    age_eligible_profiles_ok = 0
 
     for bar in closed:
         cls = bar.get("shadow_volume_class")
@@ -366,6 +393,7 @@ def build_candidate_catalog(
             continue
         if cls not in {"CLIMAX", "STOPPING", "HIGH_AVERAGE_VOLUME"}:
             continue
+        age_eligible_significant_count += 1
 
         open_ts = parse_ts(bar["open_timestamp"])
         natural_close = parse_ts(bar["natural_close_timestamp"])
@@ -386,6 +414,7 @@ def build_candidate_catalog(
         if not profile.get("ok"):
             continue
         exact_profiles += 1
+        age_eligible_profiles_ok += 1
         profiles.append(
             {
                 "source_candle_id": bar["candle_id"],
@@ -487,11 +516,18 @@ def build_candidate_catalog(
         profiles = []
         exact_profiles = 0
         significant_count = 0
+        age_eligible_significant_count = 0
+        age_eligible_profiles_ok = 0
 
+    search_stats = {
+        "age_eligible_significant_count": age_eligible_significant_count,
+        "age_eligible_profiles_ok": age_eligible_profiles_ok,
+    }
     target_absence_audit = audit_target_absence(
         zones=zone_rows,
         side=side,
         coverage=coverage,
+        search_stats=search_stats,
     )
 
     return {
@@ -502,6 +538,8 @@ def build_candidate_catalog(
         "profiles": profiles,
         "significant_count": significant_count,
         "exact_profiles": exact_profiles,
+        "age_eligible_significant_count": age_eligible_significant_count,
+        "age_eligible_profiles_ok": age_eligible_profiles_ok,
         "events_for_reaction": "agg_trade",
         "lookback_coverage": coverage,
         "target_absence_audit": target_absence_audit,

@@ -1328,6 +1328,8 @@ class StructuralProtectionEngine:
                     **target_audit,
                 }
             )
+            # Keep a bounded window so one stale mislabel cannot block forever.
+            self.target_absence_audits = self.target_absence_audits[-32:]
         self._bar_coverage_dirty = True
 
         for z in zones:

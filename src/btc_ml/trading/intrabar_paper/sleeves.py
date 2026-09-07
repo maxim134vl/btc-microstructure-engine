@@ -82,13 +82,18 @@ class SleeveLedger:
         initial_equity_usd: float = DEFAULT_INITIAL,
         risk_pct_per_trade: float = DEFAULT_RISK_PCT,
         timeframes: tuple[str, ...] = TIMEFRAMES,
+        risk_pct_by_timeframe: dict[str, float] | None = None,
     ) -> "SleeveLedger":
+        risk_map = {
+            str(tf).upper(): float((risk_pct_by_timeframe or {}).get(tf, risk_pct_per_trade))
+            for tf in timeframes
+        }
         sleeves = {
             tf: SleeveState(
                 timeframe=tf,
                 initial_equity_usd=float(initial_equity_usd),
                 cumulative_realized_net_pnl_usd=0.0,
-                risk_pct_per_trade=float(risk_pct_per_trade),
+                risk_pct_per_trade=float(risk_map[tf]),
                 open_position_id=None,
                 open_position_risk_usd=0.0,
                 closed_trades_count=0,

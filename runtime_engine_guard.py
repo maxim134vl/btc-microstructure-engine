@@ -448,6 +448,42 @@ def run_engine_subprocess(
     )
 
 
+# Raising from SIGALRM inside these frames deadlocks CPython (_sigtramp +
+# pandas property_descr_set during DataFrame.__str__). Observed 2026-08-25:
+# stage2_cognition_runtime_v1 hung the canonical pipeline for >50 minutes.
+_UNSAFE_TIMEOUT_FRAME_NAMES = frozenset(
+    {
+        "__repr__",
+        "__str__",
+        "__format__",
+        "__setattr__",
+        "__delattr__",
+        "__getattribute__",
+        "__setitem__",
+        "__set__",
+        "write",
+        "to_string",
+        "_repr_html_",
+    }
+)
+_TIMEOUT_RETRY_ALARM_S = 1
+
+
+def _timeout_raise_is_unsafe(frame: Any) -> bool:
+    """True if raising EngineTimeoutError here can deadlock the interpreter."""
+
+    while frame is not None:
+        code = getattr(frame, "f_code", None)
+        if code is not None:
+            if code.co_name in _UNSAFE_TIMEOUT_FRAME_NAMES:
+                return True
+            filename = (code.co_filename or "").replace("\\", "/")
+            if "/pandas/" in filename or "site-packages/pandas" in filename:
+                return True
+        frame = getattr(frame, "f_back", None)
+    return False
+
+
 def run_inprocess_with_timeout(
     engine_name: str,
     fn: Callable[[], Any],
@@ -462,15 +498,32 @@ def run_inprocess_with_timeout(
     if not hasattr(signal, "SIGALRM"):
         return fn()
 
-    def _handler(signum, frame):
+    pending_timeout = False
+
+    def _raise_timeout() -> None:
         raise EngineTimeoutError(
             f"ENGINE TIMEOUT: {engine_name} exceeded {timeout}s"
         )
+
+    def _handler(signum, frame):
+        nonlocal pending_timeout
+        pending_timeout = True
+        if _timeout_raise_is_unsafe(frame):
+            # Defer: raising during pandas repr/setattr wedges run.py so no
+            # later engine (including candle_structure) can run.
+            try:
+                signal.alarm(_TIMEOUT_RETRY_ALARM_S)
+            except Exception:
+                pass
+            return
+        _raise_timeout()
 
     previous = signal.signal(signal.SIGALRM, _handler)
     signal.alarm(max(1, int(timeout)))
     try:
         result = fn()
+        if pending_timeout:
+            _raise_timeout()
     except EngineTimeoutError:
         duration = round(time.time() - started, 2)
         event = {

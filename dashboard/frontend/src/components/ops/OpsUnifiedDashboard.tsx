@@ -313,9 +313,9 @@ export function OpsUnifiedDashboard({
   const processMap = new Map((snapshot.processes || []).map((p) => [p.process_id, p]));
   const orderedProcesses = REQUIRED_PROCESS_ORDER.map((id) => {
     if (id === "visual_refresher") {
+      // Legacy alias: some snapshots still emit dashboard_refresher.
       return processMap.get("visual_refresher") || processMap.get("dashboard_refresher");
     }
-    if (id === "dashboard_refresher") return undefined;
     return processMap.get(id);
   }).filter(Boolean) as RuntimeTruthProcess[];
 

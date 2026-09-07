@@ -170,6 +170,12 @@ def main() -> int:
     ap.add_argument("--poll-ms", type=int, default=250)
     ap.add_argument("--health-every-s", type=float, default=2.0)
     ap.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional intrabar paper execution JSON (defaults to config/intrabar_paper_execution.json)",
+    )
+    ap.add_argument(
         "--wal-storage-config",
         type=Path,
         default=REPO / "config" / "execution_market_wal_storage.json",
@@ -179,7 +185,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
 
-    cfg = load_intrabar_paper_config(repo_root=REPO)
+    cfg = load_intrabar_paper_config(args.config, repo_root=REPO)
     wal_cfg = load_execution_market_wal_config(args.wal_storage_config)
     epoch = load_active_epoch(cfg.epochs_root)
     if epoch is None or epoch.epoch_status != "ACTIVE":

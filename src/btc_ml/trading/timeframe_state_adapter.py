@@ -40,6 +40,25 @@ SYNTHESIS_MEMORY = ROOT / "data/cognition/multi_timeframe_synthesis.parquet"
 
 _JOURNAL_CACHE: tuple[float, int, pd.DataFrame] | None = None
 _CONTEXT_EVENTS = frozenset({"CONTEXT_START", "CONTEXT_END", "CONTEXT_FLIP"})
+ACTIVATION_PATH = ROOT / "data/trading/manager/activation.json"
+
+
+def _hybrid_closed_bar_lifecycle_preferred() -> bool:
+    """S4.1↔LIVE1B hybrid: manager must not treat journal provisional tips as entry authority."""
+    try:
+        raw = json.loads(ACTIVATION_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    hybrid = raw.get("hybrid") if isinstance(raw.get("hybrid"), dict) else {}
+    owner = str(raw.get("execution_owner") or "").upper()
+    return bool(hybrid.get("enabled")) and owner == "LIVE1B_INTRABAR_PAPER"
+
+
+def _is_provisional_episode(episode: Any) -> bool:
+    text = str(episode or "").strip().lower()
+    return ":prov:" in text or text.startswith("prov:") or "/prov/" in text
 
 SUPPORTED_TIMEFRAMES = ("M15", "M30", "H1", "H4")
 UNSUPPORTED_TIMEFRAMES = ("D1",)
@@ -251,9 +270,10 @@ def load_sources(
         except Exception as exc:
             sources.load_errors[name] = f"SCHEMA_INVALID:{type(exc).__name__}"
     # Production default: prefer the per-TF LIVE1A journal over the M15 parquet.
+    # Hybrid S4.1↔LIVE1B: keep closed-bar parquet lifecycle; journal is observe-only.
     # Explicit lifecycle_path keeps fixtures / research reads on parquet.
     sources.lifecycle_source = "parquet"
-    if lifecycle_path is None:
+    if lifecycle_path is None and not _hybrid_closed_bar_lifecycle_preferred():
         journal = _lifecycle_from_context_journal(
             CONTEXT_JOURNAL if context_journal_path is None else context_journal_path
         )
@@ -477,6 +497,14 @@ def resolve_timeframe_state(
             "actionable": direction in {DIRECTION_LONG, DIRECTION_SHORT} and phase == "ACTIVE",
         }
     )
+    # Hybrid / safety: provisional journal episodes must not open S4.1→LIVE1B entries.
+    if (
+        base.get("actionable")
+        and getattr(sources, "lifecycle_source", "parquet") == "context_journal"
+        and _is_provisional_episode(episode)
+    ):
+        base["actionable"] = False
+        base["no_action_reason"] = "PROVISIONAL_CONTEXT_JOURNAL_NOT_ACTIONABLE"
     if not base["actionable"] and base["no_action_reason"] is None:
         if direction == DIRECTION_FLAT:
             base["no_action_reason"] = "NON_DIRECTIONAL_TIMEFRAME_STATE"

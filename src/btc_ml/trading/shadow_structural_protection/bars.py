@@ -42,8 +42,11 @@ def build_bars_from_trades(
         df = df.drop_duplicates(subset=["aggregate_trade_id"], keep="first")
     df = df.sort_values(["_ts", "aggregate_trade_id"] if "aggregate_trade_id" in df.columns else ["_ts"])
 
-    # Unix-second bar opens via Timestamp.timestamp() (tz-safe; avoids pandas int cast quirks).
-    opens_sec = pd.to_datetime(df["_ts"], utc=True).map(lambda x: int(x.timestamp())).to_numpy(dtype="int64")
+    # Unix-second bar opens, vectorised (a Python call per trade was ~10% of an
+    # STP2 pass). as_unit("s") truncates to whole seconds and the int64 cast then
+    # yields epoch seconds — the same value as int(Timestamp.timestamp()) without
+    # depending on the index's storage unit, which is microseconds on pandas 3.
+    opens_sec = pd.DatetimeIndex(df["_ts"]).as_unit("s").astype("int64").to_numpy(dtype="int64")
     bar_open_epoch = (opens_sec // int(tf_s)) * int(tf_s)
     df = df.assign(_bar_open_epoch=bar_open_epoch)
 

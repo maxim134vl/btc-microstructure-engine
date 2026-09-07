@@ -1,0 +1,29 @@
+# VPS edge proxy (D6 scaffold).
+# For local smoke without real DNS/certs, use HTTP on :80.
+# On a real VPS set VPS_PUBLIC_HOST and enable Caddy automatic HTTPS
+# by switching the site block to {$VPS_PUBLIC_HOST}.
+
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	encode gzip
+
+	handle_path /api/* {
+		reverse_proxy ops-api:8080
+	}
+
+	handle /ws* {
+		reverse_proxy ops-api:8080
+	}
+
+	handle_path /chart* {
+		reverse_proxy trade-chart:8765
+	}
+
+	handle {
+		reverse_proxy dashboard-ui:80
+	}
+}

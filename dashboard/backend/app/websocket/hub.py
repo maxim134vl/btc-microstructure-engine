@@ -10,7 +10,6 @@ from fastapi import WebSocket
 
 from app.config import POLL_INTERVAL_S
 from app.services.json_safety import to_json_safe
-from app.services.ops_monitor import build_ops_snapshot
 
 
 class WebSocketHub:
@@ -42,6 +41,15 @@ class WebSocketHub:
             self._task = None
 
     async def _poll_loop(self) -> None:
+        # Import off the event loop so /health stays responsive during cold start
+        # (ops_monitor pulls pandas + runtime stacks).
+        def _load_builder():
+            from app.services.ops_monitor import build_ops_snapshot as _builder
+
+            return _builder
+
+        build_ops_snapshot = await asyncio.to_thread(_load_builder)
+
         while True:
             try:
                 snapshot = await build_ops_snapshot(ws_connected=bool(self.connections), lite=True)

@@ -20,6 +20,10 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.4",
 ]
+hyperliquid = [
+    "hyperliquid-python-sdk>=0.14.0",
+    "eth-account>=0.11.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

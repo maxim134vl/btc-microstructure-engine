@@ -6,11 +6,16 @@ import pandas as pd
 from storage.path_registry import (
     CANONICAL_LIVE_FEED_PATH,
     LEGACY_LIVE_FEED_PATH,
+    data_root,
     resolve_read,
     resolve_write,
 )
 
-LEGACY_PARTITION_DIR = "datasets/live"
+# Writable under data/ (Docker/VPS root FS is read-only). Keep datasets/live as
+# a read-only fallback for host/legacy installs that still have partitions there.
+LEGACY_PARTITION_DIR = str(data_root() / "live" / "partitions")
+_HOST_LEGACY_PARTITION_DIR = "datasets/live"
+_CANONICAL_LEGACY_MIRROR = str(data_root() / "live" / "latest.parquet")
 
 # Backward-compatible exports (Phase 4B — canonical paths via registry).
 __all__ = [
@@ -33,13 +38,20 @@ def read_live_feed() -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _iter_partition_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    for raw in (LEGACY_PARTITION_DIR, _HOST_LEGACY_PARTITION_DIR):
+        path = Path(raw)
+        if path.exists() and path not in dirs:
+            dirs.append(path)
+    return dirs
+
+
 def read_live_feed_history() -> pd.DataFrame:
     """Merge daily partition files and the canonical snapshot into one timeline."""
 
     frames: list[pd.DataFrame] = []
-    partition_dir = Path(LEGACY_PARTITION_DIR)
-
-    if partition_dir.exists():
+    for partition_dir in _iter_partition_dirs():
         for path in sorted(partition_dir.glob("*.parquet")):
             if path.name == "latest.parquet":
                 continue
@@ -65,7 +77,7 @@ def read_live_feed_history() -> pd.DataFrame:
 
 
 def write_live_feed_snapshot(df: pd.DataFrame) -> None:
-    """Persist live feed to canonical path and legacy mirror (no silent duplication)."""
+    """Persist live feed to canonical path and best-effort legacy mirrors."""
 
     canonical = resolve_write(CANONICAL_LIVE_FEED_PATH)
     os.makedirs(LEGACY_PARTITION_DIR, exist_ok=True)
@@ -75,7 +87,13 @@ def write_live_feed_snapshot(df: pd.DataFrame) -> None:
         index=False,
     )
 
-    df.to_parquet(
-        LEGACY_LIVE_FEED_PATH,
-        index=False,
-    )
+    # Prefer writable data/ mirror; fall back to datasets/ only when possible.
+    for mirror in (_CANONICAL_LEGACY_MIRROR, LEGACY_LIVE_FEED_PATH):
+        try:
+            parent = os.path.dirname(mirror)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            df.to_parquet(mirror, index=False)
+            break
+        except OSError:
+            continue

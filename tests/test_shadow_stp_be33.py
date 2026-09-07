@@ -323,6 +323,22 @@ def test_formula_examples_are_exact() -> None:
     assert partial_trigger_price(side="SHORT", entry_price=100.0, take_price=70.0) == 90.0
 
 
+def test_streaming_reader_tolerates_non_monotonic_receive_order(tmp_path: Path) -> None:
+    """BOOK_TICKER/AGG_TRADE are appended in receive order; offsets may interleave."""
+    root = tmp_path / "wal"
+    root.mkdir()
+    path = root / "events.jsonl"
+    path.write_bytes(
+        b'{"wal_offset": 100, "event_type": "BOOK_TICKER"}\n'
+        b'{"wal_offset": 102, "event_type": "AGG_TRADE"}\n'
+        b'{"wal_offset": 101, "event_type": "BOOK_TICKER"}\n'
+        b'{"wal_offset": 103, "event_type": "AGG_TRADE"}\n'
+    )
+    wal = ReadOnlyWal(root)
+    rows = list(wal.iter_from_offset(100))
+    assert [row["wal_offset"] for row in rows] == [102, 101, 103]
+
+
 def test_streaming_reader_reseeds_when_checkpoint_is_below_rotated_file(tmp_path: Path) -> None:
     root = tmp_path / "wal"
     root.mkdir()

@@ -62,6 +62,8 @@ MODEL_STOP_PATTERNS: list[tuple[str, str]] = [
     ("eqcorr", r"run_shadow_economic_correlation\.py"),
     ("collector_watchdog", r"collector_watchdog\.py"),
     ("run.py", str(ROOT / "run.py")),
+    # Legacy/canonical cognition worker — not always under run.py argv.
+    ("runtime_cognition_engine", r"runtime_cognition_engine_v1\.py"),
     ("context_refresh_daemon", r"run_context_refresh_daemon\.py"),
 ]
 

@@ -339,9 +339,10 @@ class ReadOnlyWal:
                 if row is None:
                     raise RuntimeError("STP_BE33_WAL_MALFORMED_COMPLETE_RECORD")
                 current = int(row.get("wal_offset") or 0)
-                if current <= self._cached_last_offset:
-                    raise RuntimeError("STP_BE33_WAL_OFFSET_ORDER_VIOLATION")
-                self._cached_last_offset = current
+                # LIVE1B appends BOOK_TICKER / AGG_TRADE in receive order. Exchange
+                # wal_offset is not guaranteed monotonic in file order, so never
+                # hard-fail here — watermark via max and filter in iter_from_offset.
+                self._cached_last_offset = max(self._cached_last_offset, current)
                 self._cursor_bytes = handle.tell()
                 self.rows_replayed += 1
                 yield row

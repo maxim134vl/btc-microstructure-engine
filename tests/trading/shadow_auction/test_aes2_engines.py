@@ -1124,3 +1124,105 @@ def test_aes2_external_memory_write():
     assert before_event.stat().st_size > before_size
     assert str(before_event).startswith(str(REAL_DATA_ROOT / "replay"))
     assert (store.data_root / "memory" / "tf_episode_memory.jsonl").exists()
+
+
+def test_bc_stopping_beats_balance_escape():
+    """B: deteriorating + stopping evidence promotes even when balance_support high."""
+    eng = TimeframeAuctionEngine("M15")
+    eng.process(
+        _bar(
+            0,
+            o=100,
+            h=101,
+            l=99.9,
+            c=100.8,
+            overrides={"force_phase": PHASE_UP_CONTINUATION_DETERIORATING, "balance_support": 0.2},
+        )
+    )
+    r = eng.process(
+        _bar(
+            1,
+            o=100.8,
+            h=100.9,
+            l=100.4,
+            c=100.5,
+            overrides={
+                "up_exhaustion_support": 0.7,
+                "reaction_strength": 0.4,
+                "balance_support": 0.85,
+                "up_efficiency": 0.2,
+            },
+        )
+    )
+    assert r.episode_phase == PHASE_UP_STOPPING_CANDIDATE
+    assert "STOPPING_CANDIDATE_EVIDENCE" in r.reason_codes
+    assert "STOPPING_BEFORE_BALANCE_ESCAPE" in r.reason_codes
+
+
+def test_bc_same_bar_promote_extreme_to_stopping():
+    """C: EXTREME with weak efficiency + stopping evidence → STOPPING same bar."""
+    eng = TimeframeAuctionEngine("M15")
+    eng.process(
+        _bar(
+            0,
+            o=100,
+            h=101.5,
+            l=99.9,
+            c=101.2,
+            overrides={
+                "force_phase": PHASE_EXTREME_UP_PARTICIPATION,
+                "up_efficiency": 0.7,
+                "balance_support": 0.2,
+            },
+        )
+    )
+    r = eng.process(
+        _bar(
+            1,
+            o=101.2,
+            h=101.3,
+            l=100.6,
+            c=100.7,
+            overrides={
+                "up_efficiency": 0.15,  # < weak_efficiency 0.28
+                "up_exhaustion_support": 0.6,
+                "reaction_strength": 0.35,
+                "balance_support": 0.8,
+                "follow_through": 0.4,
+            },
+        )
+    )
+    assert r.episode_phase == PHASE_UP_STOPPING_CANDIDATE
+    assert "SAME_BAR_STOPPING_PROMOTE" in r.reason_codes
+
+
+def test_bc_balance_escape_still_works_without_stopping_evidence():
+    """Without stopping evidence, deteriorating + high balance still → TRANSITION."""
+    eng = TimeframeAuctionEngine("M15")
+    eng.process(
+        _bar(
+            0,
+            o=100,
+            h=101,
+            l=99.9,
+            c=100.8,
+            overrides={"force_phase": PHASE_UP_CONTINUATION_DETERIORATING, "balance_support": 0.2},
+        )
+    )
+    r = eng.process(
+        _bar(
+            1,
+            o=100.8,
+            h=100.9,
+            l=100.5,
+            c=100.6,
+            overrides={
+                "up_exhaustion_support": 0.3,
+                "reaction_strength": 0.1,
+                "balance_support": 0.7,
+                "up_efficiency": 0.2,
+            },
+        )
+    )
+    assert r.episode_phase == PHASE_TRANSITION
+    assert "BALANCE_SUPPORT_RISING" in r.reason_codes

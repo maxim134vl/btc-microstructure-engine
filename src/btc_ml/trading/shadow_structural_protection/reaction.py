@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from . import DEFAULT_TICK_SIZE
@@ -121,49 +122,58 @@ def prove_zone_reaction(
     displacement = None
     too_small = False
 
-    for i, (_, row) in enumerate(window.iterrows()):
-        p = float(px.iloc[i])
-        a = float(ask.iloc[i])
-        b = float(bid.iloc[i])
-        ts = row["_ts"].to_pydatetime()
+    # The sequential form of this scan cost ~53% of an STP2 pass (5.8M pandas
+    # iterrows/iloc calls). It is a two-phase state machine, so it vectorises
+    # exactly: find the touch, then race invalidation against proof after it.
+    px_a = px.to_numpy(dtype="float64", copy=False)
+    ask_a = ask.to_numpy(dtype="float64", copy=False)
+    bid_a = bid.to_numpy(dtype="float64", copy=False)
+    ts_a = pd.DatetimeIndex(window["_ts"])
 
+    if direction == "BULLISH":
+        touch_mask = (px_a <= upper + 1e-12) & ((px_a >= lower - 1e-12) | (bid_a <= upper))
+    else:
+        touch_mask = (px_a >= lower - 1e-12) & ((px_a <= upper + 1e-12) | (ask_a >= lower))
+
+    if touch_mask.any():
+        t = int(np.argmax(touch_mask))
+        touched = True
+        touch_ts = ts_a[t].to_pydatetime()
+
+        # Everything after the touch row: the loop `continue`s on the touch itself,
+        # so the proof window opens on the next event.
         if direction == "BULLISH":
-            # Invalidation: fully through distal (below lower)
-            if touched and (not proven) and b < lower - 1e-12:
-                invalidated_before = True
-                break
-            if (not touched) and (p <= upper + 1e-12) and (p >= lower - 1e-12 or b <= upper):
-                touched = True
-                touch_ts = ts
-                continue
-            if touched and not proven:
-                disp = a - upper
-                if disp + 1e-12 >= thr:
-                    proven = True
-                    reaction_ts = ts
-                    displacement = disp
-                    break
-                if a > upper + 1e-12:
+            inval = bid_a[t + 1 :] < lower - 1e-12
+            disp = ask_a[t + 1 :] - upper
+        else:
+            inval = ask_a[t + 1 :] > upper + 1e-12
+            disp = lower - bid_a[t + 1 :]
+
+        proven_mask = disp + 1e-12 >= thr
+        # Invalidation is tested before proof inside the loop body, so it wins a tie
+        # at the same event.
+        i_inval = int(np.argmax(inval)) if inval.any() else -1
+        i_proven = int(np.argmax(proven_mask)) if proven_mask.any() else -1
+
+        if i_inval >= 0 and (i_proven < 0 or i_inval <= i_proven):
+            invalidated_before = True
+            stop = i_inval
+        elif i_proven >= 0:
+            proven = True
+            reaction_ts = ts_a[t + 1 + i_proven].to_pydatetime()
+            displacement = float(disp[i_proven])
+            stop = None
+        else:
+            stop = len(disp)
+
+        if stop is not None:
+            # `too_small` rows are those that pushed past the boundary but short of
+            # the threshold; the loop kept overwriting, so the last one survives.
+            if stop > 0:
+                small = ((disp > 1e-12) & ~proven_mask)[:stop]
+                if small.any():
                     too_small = True
-                    displacement = disp
-        else:  # BEARISH
-            if touched and (not proven) and a > upper + 1e-12:
-                invalidated_before = True
-                break
-            if (not touched) and (p >= lower - 1e-12) and (p <= upper + 1e-12 or a >= lower):
-                touched = True
-                touch_ts = ts
-                continue
-            if touched and not proven:
-                disp = lower - b
-                if disp + 1e-12 >= thr:
-                    proven = True
-                    reaction_ts = ts
-                    displacement = disp
-                    break
-                if b < lower - 1e-12:
-                    too_small = True
-                    displacement = disp
+                    displacement = float(disp[:stop][small][-1])
 
     out["touch_timestamp"] = iso(touch_ts)
     out["reaction_timestamp"] = iso(reaction_ts)

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "artifact_id": "etll_hybrid_calibration_split",
+  "purpose": "Frozen chronological split governing every Shadow / Anti-Saw / EQCORR calibration on the canonical Hybrid tick book. Any tuning reads these boundaries; the holdout is opened exactly once, at the end.",
+  "reference_book": {
+    "paper_epoch_id": "ETLL_HYBRID_TICK_V1_20260905_092610",
+    "arm": "A_flip_close_on",
+    "lifecycle_align": "bar_close",
+    "entry_price_refresh": "every_cycle",
+    "trades": 6172,
+    "market_span": ["2023-12-17T03:15:00Z", "2026-07-24T13:30:59Z"],
+    "expectancy_r": 0.494,
+    "r_std": 0.846
+  },
+  "timestamp_field": "context_occurrence_timestamp",
+  "timestamp_parse": "ISO8601 required: manager closes are stamped on the bar boundary, protective exits carry fractional-second exchange tick time. Inferring one format silently NaTs every TP/SL exit.",
+  "purge": {
+    "days": 7,
+    "basis": "Longest information horizon measured on this book: max hold 92.3h and max lifecycle-episode span 93.8h (both H4). 7 days clears the observed maximum with ~80% margin, so no training label's outcome window can reach into the next segment.",
+    "measured": {
+      "hold_hours": {"median": 2.60, "p95": 15.54, "p99": 32.70, "max": 92.3},
+      "episode_span_hours": {"median": 3.98, "p95": 21.93, "p99": 39.69, "max": 93.8}
+    }
+  },
+  "segments": {
+    "train": {
+      "from": "2023-12-17T00:00:00Z",
+      "to": "2025-02-28T00:00:00Z",
+      "trades": 3179,
+      "share_pct": 51.5,
+      "expectancy_r": 0.494,
+      "use": "Optuna / CatBoost search space. Use purged walk-forward folds INSIDE this window; do not fit on it as one block."
+    },
+    "validation": {
+      "from": "2025-03-07T00:00:00Z",
+      "to": "2025-12-31T00:00:00Z",
+      "trades": 1547,
+      "share_pct": 25.1,
+      "expectancy_r": 0.513,
+      "standard_error_r": 0.022,
+      "use": "Model selection between candidates that already survived train folds. Repeated probing here erodes it into a second training set."
+    },
+    "holdout": {
+      "from": "2026-01-07T00:00:00Z",
+      "to": "2026-07-24T23:59:59Z",
+      "trades": 1299,
+      "share_pct": 21.0,
+      "expectancy_r": 0.492,
+      "standard_error_r": 0.023,
+      "use": "SEALED. One single evaluation of the one final configuration. Any second look invalidates it as an out-of-sample estimate."
+    }
+  },
+  "statistical_power": {
+    "detectable_effect_r_95pct_holdout": 0.046,
+    "note": "2x standard error on the holdout mean. Effects smaller than ~0.05 R cannot be distinguished from noise on this book, so candidate improvements below that threshold must not be declared wins. For scale: disabling the flip-close mechanism cost 0.125 R, comfortably detectable."
+  },
+  "regime_check": {
+    "result": "no break",
+    "detail": "Expectancy is flat across all three segments (0.494 / 0.513 / 0.492), so no segment is unrepresentative of the others and the split does not itself advantage or handicap a candidate."
+  },
+  "trades_sacrificed_to_purge": 147,
+  "known_open_issues": {
+    "eqcorr_blocked": "shadow_economic_correlation reads multi_timeframe_synthesis (alignment_score, persistence_score, structural_rank, location_bias, synthesis_state) from the hard-coded production path data/cognition/multi_timeframe_synthesis.parquet, which holds 227 rows covering only 2026-05-02..2026-08-28. No research pack contains a synthesis memory. Running EQCORR before rebuilding it over the full span yields FIELD_NOT_AVAILABLE for ~85% of trades without erroring, and the feature then encodes the date rather than market structure.",
+    "no_entry_time_in_trades": "trades.jsonl has entry_ts=None; entry market time must be joined from positions.jsonl on position_id (status OPEN vs CLOSED).",
+    "context_builder_nondeterminism": "Auxiliary context fields differ between identical rebuilds while decision-critical fields (active_market_context, lifecycle_state) stay stable. Decisions are unaffected, but an Optuna study whose objective depends on auxiliary fields would not be reproducible."
+  }
+}

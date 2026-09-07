@@ -120,117 +120,119 @@ def aggregate_behavioral_timeframe(
 
     return aggregated
 
-dataset = pd.read_parquet(
-    "research_master_dataset.parquet"
-)
 
-# =====================================
-# M15
-# =====================================
+if __name__ == "__main__":
+    dataset = pd.read_parquet(
+        "research_master_dataset.parquet"
+    )
 
-m15_result = process_auction_climax(
-    dataset=dataset.copy(),
-    timeframe="M15"
-)
+    # =====================================
+    # M15
+    # =====================================
 
-# =====================================
-# M30
-# =====================================
+    m15_result = process_auction_climax(
+        dataset=dataset.copy(),
+        timeframe="M15"
+    )
 
-m30_dataset = aggregate_behavioral_timeframe(
-    dataset.copy(),
-    "M30"
-)
+    # =====================================
+    # M30
+    # =====================================
 
-m30_result = process_auction_climax(
-    dataset=m30_dataset,
-    timeframe="M30"
-)
+    m30_dataset = aggregate_behavioral_timeframe(
+        dataset.copy(),
+        "M30"
+    )
 
-# =====================================
-# H1
-# =====================================
+    m30_result = process_auction_climax(
+        dataset=m30_dataset,
+        timeframe="M30"
+    )
 
-h1_dataset = aggregate_behavioral_timeframe(
-    dataset.copy(),
-    "H1"
-)
+    # =====================================
+    # H1
+    # =====================================
 
-h1_result = process_auction_climax(
-    dataset=h1_dataset,
-    timeframe="H1"
-)
+    h1_dataset = aggregate_behavioral_timeframe(
+        dataset.copy(),
+        "H1"
+    )
 
-# =====================================
-# H4
-# =====================================
+    h1_result = process_auction_climax(
+        dataset=h1_dataset,
+        timeframe="H1"
+    )
 
-h4_dataset = aggregate_behavioral_timeframe(
-    dataset.copy(),
-    "H4"
-)
+    # =====================================
+    # H4
+    # =====================================
 
-h4_result = process_auction_climax(
-    dataset=h4_dataset,
-    timeframe="H4"
-)
+    h4_dataset = aggregate_behavioral_timeframe(
+        dataset.copy(),
+        "H4"
+    )
 
-# =====================================
-# OUTPUT
-# =====================================
+    h4_result = process_auction_climax(
+        dataset=h4_dataset,
+        timeframe="H4"
+    )
 
-print()
-print("M15 EVENTS")
-print()
+    # =====================================
+    # OUTPUT
+    # =====================================
 
-print(
-    m15_result[
-        "auction_states"
-    ][[
-        "timestamp",
-        "auction_event_type",
-        "event_strength"
-    ]].tail(10)
-)
+    print()
+    print("M15 EVENTS")
+    print()
 
-print()
-print("M30 EVENTS")
-print()
+    print(
+        m15_result[
+            "auction_states"
+        ][[
+            "timestamp",
+            "auction_event_type",
+            "event_strength"
+        ]].tail(10)
+    )
 
-print(
-    m30_result[
-        "auction_states"
-    ][[
-        "timestamp",
-        "auction_event_type",
-        "event_strength"
-    ]].tail(10)
-)
+    print()
+    print("M30 EVENTS")
+    print()
 
-print()
-print("H1 EVENTS")
-print()
+    print(
+        m30_result[
+            "auction_states"
+        ][[
+            "timestamp",
+            "auction_event_type",
+            "event_strength"
+        ]].tail(10)
+    )
 
-print(
-    h1_result[
-        "auction_states"
-    ][[
-        "timestamp",
-        "auction_event_type",
-        "event_strength"
-    ]].tail(10)
-)
+    print()
+    print("H1 EVENTS")
+    print()
 
-print()
-print("H4 EVENTS")
-print()
+    print(
+        h1_result[
+            "auction_states"
+        ][[
+            "timestamp",
+            "auction_event_type",
+            "event_strength"
+        ]].tail(10)
+    )
 
-print(
-    h4_result[
-        "auction_states"
-    ][[
-        "timestamp",
-        "auction_event_type",
-        "event_strength"
-    ]].tail(10)
-)
+    print()
+    print("H4 EVENTS")
+    print()
+
+    print(
+        h4_result[
+            "auction_states"
+        ][[
+            "timestamp",
+            "auction_event_type",
+            "event_strength"
+        ]].tail(10)
+    )

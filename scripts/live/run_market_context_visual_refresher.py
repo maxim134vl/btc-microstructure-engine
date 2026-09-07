@@ -2060,6 +2060,7 @@ def refresh_once(*, visual_stale_seconds: float, last_good: dict[str, Any]) -> d
         visual_status = {
             "generated_at_utc": refresh_ts,
             "status": "OK",
+            "pid": os.getpid(),
             "visual_data_status": freshness["visual_data_status"],
             "last_error": None,
             "last_success_at": refresh_ts,
@@ -2275,6 +2276,7 @@ def refresh_once(*, visual_stale_seconds: float, last_good: dict[str, Any]) -> d
         visual_status = {
             "generated_at_utc": refresh_ts,
             "status": "DEGRADED_LAST_GOOD_DATA",
+            "pid": os.getpid(),
             "visual_data_status": "DEGRADED_LAST_GOOD_DATA",
             "last_error": err[:2000],
             "last_error_at": refresh_ts,

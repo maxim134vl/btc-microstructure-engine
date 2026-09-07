@@ -20,13 +20,19 @@ export function getApiBase(): string {
   const fromEnv = import.meta.env.VITE_DASHBOARD_API_BASE || import.meta.env.DASHBOARD_API_BASE;
   if (fromEnv) return trimSlash(String(fromEnv));
   if (useViteProxy()) return "/api/v1";
+  // Same-origin relative API when served behind nginx (Docker/VPS UI), not Vite :5173.
+  if (typeof window !== "undefined") {
+    const port = window.location.port;
+    const isViteDev = port === "5173" || port === "5174";
+    if (!isViteDev) return "/api/v1";
+  }
   return "http://127.0.0.1:8080/api/v1";
 }
 
 export function getWsUrl(): string {
   const fromEnv = import.meta.env.VITE_DASHBOARD_WS_URL || import.meta.env.DASHBOARD_WS_URL;
   if (fromEnv) return String(fromEnv);
-  if (useViteProxy()) {
+  if (useViteProxy() || (typeof window !== "undefined" && window.location.port !== "5173" && window.location.port !== "5174")) {
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     return `${protocol}://${window.location.host}/ws/live`;
   }

@@ -207,6 +207,26 @@ def _pid_exists(pid: int) -> bool:
         return False
 
 
+def _proc_stat_command(pid: int) -> tuple[str | None, str | None]:
+    """Fallback when `ps` is missing (slim container images)."""
+    proc = Path(f"/proc/{int(pid)}")
+    if not proc.exists():
+        return None, None
+    try:
+        # /proc/<pid>/stat field 3 is state (R/S/D/Z/T/...)
+        stat_fields = (proc / "stat").read_text(encoding="utf-8", errors="replace").split()
+        state = stat_fields[2] if len(stat_fields) > 2 else "S"
+    except Exception:
+        state = "S"
+    try:
+        cmd = (proc / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+    except Exception:
+        cmd = ""
+    if not cmd and not _pid_exists(pid):
+        return None, None
+    return state, cmd
+
+
 def _ps_stat_command(pid: int) -> tuple[str | None, str | None]:
     try:
         out = subprocess.check_output(
@@ -214,9 +234,9 @@ def _ps_stat_command(pid: int) -> tuple[str | None, str | None]:
             text=True,
         ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return None, None
+        return _proc_stat_command(pid)
     if not out:
-        return None, None
+        return _proc_stat_command(pid)
     # First token is STAT; remainder is COMMAND (may be "<defunct>").
     parts = out.split(None, 1)
     stat = parts[0] if parts else None
@@ -237,7 +257,7 @@ def classify_process_state(
         return "MISSING"
     stat, cmd = _ps_stat_command(pid)
     if stat is None:
-        # kill(0) true but ps gone → treat as missing/racy
+        # kill(0) true but neither ps nor /proc readable → treat as missing/racy
         return "MISSING"
     if "Z" in stat:
         return "ZOMBIE"
@@ -256,7 +276,14 @@ def classify_process_state(
             if out and int(out) != expected_ppid:
                 return "WRONG_PARENT"
         except Exception:
-            pass
+            # /proc fallback for ppid
+            try:
+                stat_fields = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8", errors="replace").split()
+                # field 4 is ppid
+                if len(stat_fields) > 3 and int(stat_fields[3]) != expected_ppid:
+                    return "WRONG_PARENT"
+            except Exception:
+                pass
     return "RUNNING"
 
 

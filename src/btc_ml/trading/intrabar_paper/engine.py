@@ -20,6 +20,7 @@ from .consumer import (
     idempotency_key,
 )
 from .economics import closed_trade_economics, resolve_risk_sizing
+from btc_ml.trading.hybrid_sizing import load_sizer
 from .entry_eligibility import replay_entry_block_reason, stale_entry_block_reason
 from btc_ml.live.intrabar.context_event_freshness import entry_freshness_block_reason
 from .epoch import PaperEpoch
@@ -135,6 +136,7 @@ class IntrabarPaperEngine:
         self.last_health_write_error: str | None = None
         self.trading_contract = self._load_trading_contract(epoch_root)
         self.sleeves = SleeveLedger.load(epoch_root)
+        self.sizer = load_sizer(cfg_raw=cfg.raw, repo_root=cfg.books_root.parents[2])
         self.capital_model = str(
             ((self.trading_contract or {}).get("capital") or {}).get("capital_model")
             or ("PER_TIMEFRAME_REALIZED_EQUITY" if self.sleeves is not None else "SHARED_MASTER_REALIZED_EQUITY")
@@ -437,6 +439,13 @@ class IntrabarPaperEngine:
             "context_event_price": command.get("context_origin_price"),
             "from_manager_command": True,
             "approved_risk_usd": command.get("approved_risk_usd"),
+            "requested_risk_usd": command.get("requested_risk_usd"),
+            "portfolio_open_risk_usd": command.get("portfolio_open_risk_usd"),
+            "cross_timeframe_metadata": command.get("cross_timeframe_metadata"),
+            "timeframe_direction": command.get("timeframe_direction"),
+            "source_bar_close": command.get("source_bar_close"),
+            "evaluation_timestamp": command.get("evaluation_timestamp"),
+            "context_started_at": command.get("context_started_at"),
             "decision_id": command.get("decision_id"),
         }
         if intent in {"OPEN_LONG", "OPEN_SHORT"}:
@@ -603,24 +612,31 @@ class IntrabarPaperEngine:
 
         equity_at_entry = float(self.equity)
         risk_pct_at_entry = float(self.cfg.max_risk_per_trade_pct)
-        risk_budget_usd: float | None = None
+        canonical_risk_budget_usd: float
         if self._uses_sleeves() and self.sleeves is not None:
             sleeve = self.sleeves.get(tf)
             equity_at_entry = float(sleeve.current_equity_usd)
             risk_pct_at_entry = float(sleeve.risk_pct_per_trade)
-            risk_budget_usd = float(sleeve.next_risk_budget_usd)
-            sizing = resolve_risk_sizing(
-                cfg=self.cfg,
-                side=side,
-                entry_price=fill_px,
-                equity_usd=equity_at_entry,
-                risk_budget_usd=risk_budget_usd,
-            )
+            canonical_risk_budget_usd = float(sleeve.next_risk_budget_usd)
         else:
-            sizing = resolve_risk_sizing(
-                cfg=self.cfg, side=side, entry_price=fill_px, equity_usd=self.equity
-            )
-            risk_budget_usd = float(sizing.risk_amount_usd)
+            risk_pct = equity_at_entry * (self.cfg.max_risk_per_trade_pct / 100.0)
+            canonical_risk_budget_usd = min(risk_pct, float(self.cfg.max_risk_per_trade_usd))
+
+        sizing_decision = self.sizer.decide(
+            event,
+            side=side,
+            timeframe=tf,
+            stop_loss_bps=self.cfg.stop_loss_bps,
+            take_profit_bps=self.cfg.take_profit_bps,
+        )
+        risk_budget_usd = float(canonical_risk_budget_usd) * float(sizing_decision.multiplier)
+        sizing = resolve_risk_sizing(
+            cfg=self.cfg,
+            side=side,
+            entry_price=fill_px,
+            equity_usd=equity_at_entry,
+            risk_budget_usd=risk_budget_usd,
+        )
         if not sizing.ok or sizing.quantity is None:
             self._block(sizing.block_reason or "ENTRY_BLOCKED_RISK", tf, context_event_id, side)
             self.consumer.mark_processed(
@@ -646,6 +662,10 @@ class IntrabarPaperEngine:
             "equity_at_entry_usd": equity_at_entry,
             "risk_pct_at_entry": risk_pct_at_entry,
             "risk_budget_usd": float(risk_budget_usd or sizing.risk_amount_usd),
+            "canonical_risk_budget_usd": float(canonical_risk_budget_usd),
+            "sizing_multiplier": float(sizing_decision.multiplier),
+            "sizing_probability": sizing_decision.probability,
+            "sizing_reason": sizing_decision.reason,
             "stop_distance_usd": stop_distance_usd,
             "notional_usd": notional_usd,
         }
