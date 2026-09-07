@@ -75,9 +75,15 @@ def _iso(ts: Any) -> str | None:
 def latest_parquet_timestamp(path: Path, col: str = "timestamp") -> pd.Timestamp | None:
     if not path.exists():
         raise RefreshError(f"Missing required artifact: {path}")
-    frame = pd.read_parquet(path, columns=[col] if col else None)
+    frame = pd.read_parquet(path)
     if col not in frame.columns or len(frame) == 0:
         return None
+    # Live feed is M15. A mixed lifecycle file must not look fresh because an
+    # older/newer higher-TF stamp sits at iloc[-1].
+    if col == "timestamp" and "timeframe" in frame.columns:
+        m15 = frame.loc[frame["timeframe"].astype(str).str.upper().eq("M15")]
+        if len(m15):
+            frame = m15
     series = pd.to_datetime(frame[col], utc=True, errors="coerce").dropna()
     if len(series) == 0:
         return None
@@ -125,12 +131,45 @@ def _write_parquet_atomic(frame: pd.DataFrame, path: Path) -> None:
     os.replace(tmp, path)
 
 
+def _timeframe_timestamp_keys(frame: pd.DataFrame, ts_col: str) -> list[tuple[str, str]]:
+    tf = frame["timeframe"].astype(str).str.upper()
+    ts = pd.to_datetime(frame[ts_col], utc=True, errors="coerce")
+    iso = ts.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return list(zip(tf.tolist(), iso.fillna("").tolist()))
+
+
 def tail_merge_existing_wins(prod: pd.DataFrame, cand: pd.DataFrame, ts_col: str) -> pd.DataFrame:
-    """Preserve immutable production prefix; append only candidate rows after prod tip."""
+    """Preserve immutable production prefix; append only candidate rows after prod tip.
+
+    When ``timeframe`` is present, the key is (timeframe, timestamp) so M30/H1/H4
+    rows are not dropped because an M15 bar shares the same clock stamp.
+    Untagged production is treated as M15.
+    """
     if prod is None or len(prod) == 0:
         return cand.copy()
     if cand is None or len(cand) == 0:
         return prod.copy()
+    prod = prod.copy()
+    cand = cand.copy()
+    tagged = "timeframe" in cand.columns or "timeframe" in prod.columns
+    if tagged:
+        if "timeframe" not in prod.columns:
+            prod["timeframe"] = "M15"
+        if "timeframe" not in cand.columns:
+            cand["timeframe"] = "M15"
+        prod_keys = set(_timeframe_timestamp_keys(prod, ts_col))
+        cand_keys = _timeframe_timestamp_keys(cand, ts_col)
+        keep = [key not in prod_keys for key in cand_keys]
+        extra = cand.loc[keep].copy()
+        for col in prod.columns:
+            if col not in extra.columns:
+                extra[col] = None
+        extra = extra[list(prod.columns)]
+        out = pd.concat([prod, extra], ignore_index=True, sort=False)
+        out = out.drop_duplicates(subset=["timeframe", ts_col], keep="first")
+        out["_sort"] = pd.to_datetime(out[ts_col], utc=True, errors="coerce")
+        out = out.sort_values(["_sort", "timeframe"]).drop(columns=["_sort"]).reset_index(drop=True)
+        return out
     prod_ts = pd.to_datetime(prod[ts_col], utc=True, errors="coerce")
     cand_ts = pd.to_datetime(cand[ts_col], utc=True, errors="coerce")
     prod_tip = prod_ts.max()
@@ -195,15 +234,28 @@ def restore_prefix_after_shadow(
         # Safety: prefix row count through prior tip must match snapshot.
         prior_tip = snap["tip"]
         if prior_tip is not None:
-            p_ts = pd.to_datetime(prod[ts_col], utc=True, errors="coerce")
-            m_ts = pd.to_datetime(merged[ts_col], utc=True, errors="coerce")
-            p_pref = prod.loc[p_ts <= prior_tip]
-            m_pref = merged.loc[m_ts <= prior_tip]
-            if len(p_pref) != len(m_pref):
-                raise RefreshError(
-                    f"prefix row count changed after tail_merge for {path.name}: "
-                    f"{len(p_pref)} -> {len(m_pref)}"
-                )
+            if "timeframe" in merged.columns:
+                prod_work = prod.copy()
+                if "timeframe" not in prod_work.columns:
+                    prod_work["timeframe"] = "M15"
+                prod_keys = set(_timeframe_timestamp_keys(prod_work, ts_col))
+                merged_keys = _timeframe_timestamp_keys(merged, ts_col)
+                merged_existing = merged.loc[[key in prod_keys for key in merged_keys]]
+                if len(merged_existing) != len(prod):
+                    raise RefreshError(
+                        f"prefix row count changed after tail_merge for {path.name}: "
+                        f"{len(prod)} -> {len(merged_existing)}"
+                    )
+            else:
+                p_ts = pd.to_datetime(prod[ts_col], utc=True, errors="coerce")
+                m_ts = pd.to_datetime(merged[ts_col], utc=True, errors="coerce")
+                p_pref = prod.loc[p_ts <= prior_tip]
+                m_pref = merged.loc[m_ts <= prior_tip]
+                if len(p_pref) != len(m_pref):
+                    raise RefreshError(
+                        f"prefix row count changed after tail_merge for {path.name}: "
+                        f"{len(p_pref)} -> {len(m_pref)}"
+                    )
         _write_parquet_atomic(merged, path)
         new_tip = latest_parquet_timestamp(path, col=ts_col)
         entry = {
@@ -223,9 +275,11 @@ def restore_prefix_after_shadow(
     return report
 
 
-def run_python_script(script: Path, *, cwd: Path = ROOT, timeout_s: int = 600) -> dict[str, Any]:
+def run_python_script(script: Path, *, cwd: Path = ROOT, timeout_s: int | None = None) -> dict[str, Any]:
     if not script.exists():
         raise RefreshError(f"Missing script: {script}")
+    if timeout_s is None:
+        timeout_s = int(os.environ.get("BTC_ML_REFRESH_SCRIPT_TIMEOUT_S", "1800"))
     python = Path(sys.executable)
     started = _utc_now()
     proc = subprocess.run(
@@ -264,7 +318,12 @@ def run_refresh_once(
     append_log("START live_context_refresh_once", log_path=log_path)
 
     live_ts = latest_parquet_timestamp(live_path)
-    life_ts = latest_parquet_timestamp(lifecycle_path)
+    # Fresh VPS volumes have a feed before lifecycle exists. Treat a missing
+    # lifecycle file as "no tip" so the shadow chain can seed instead of dying.
+    if not lifecycle_path.exists():
+        life_ts = None
+    else:
+        life_ts = latest_parquet_timestamp(lifecycle_path)
     lag = lag_seconds(live_ts, life_ts)
     was_stale = lifecycle_is_stale(live_ts, life_ts)
     needs_rebuild = bool(force_rebuild or (was_stale and not skip_rebuild))

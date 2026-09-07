@@ -124,8 +124,9 @@
     "applies_to": "LIVE1B sleeve next_risk_budget_usd at _enter_position",
     "note": "Realised multipliers top out near 1.7 because the model does not emit probabilities confident enough to reach the ceiling; the clip mostly binds below."
   },
-  "guards": {
+    "guards": {
     "missing_feature": "fall back to multiplier 1.0 (canonical sizing) — never block the trade",
+    "incomplete_xtf_lifecycle": "if any of M15/M30/H1/H4 has no lifecycle_phase, multiplier 1.0 — do not score a silent-TF snapshot as if it were the training book",
     "stale_command": "if the cross-timeframe snapshot is older than one bar of the trade's timeframe, use 1.0",
     "probability_out_of_range": "if p is not in (0,1), use 1.0",
     "rationale": "The canonical book is profitable unmodified, so every failure mode must degrade to canonical behaviour rather than to no trade."

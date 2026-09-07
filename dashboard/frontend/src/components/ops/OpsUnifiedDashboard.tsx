@@ -45,6 +45,10 @@ import { TradingDirectionMixPanel } from "./TradingDirectionMixPanel";
 
 const TRADING_STATE_TIMEFRAMES = ["M15", "M30", "H1", "H4"] as const;
 
+/** Closed research overlays. EQCORR / STP / Auction / BE33 and MODEL-7/9
+ *  promotion are off the LIVE1B hybrid path after the sizing audit. */
+const SHOW_CLOSED_RESEARCH_OVERLAYS = false;
+
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <h2 className="px-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-ds-text-tertiary">
@@ -658,6 +662,8 @@ export function OpsUnifiedDashboard({
           </SectionCard>
         </section>
 
+        {SHOW_CLOSED_RESEARCH_OVERLAYS ? (
+          <>
         {/* 3b2. Structural Stop/Take Shadow (read-only research) */}
         <section className="space-y-2.5" data-section="shadow-structural-protection">
           <SectionLabel>Structural Stop/Take Shadow</SectionLabel>
@@ -1122,6 +1128,8 @@ export function OpsUnifiedDashboard({
             </Panel>
           </SectionCard>
         </section>
+          </>
+        ) : null}
 
         {/* 4. Market Context */}
         <section className="space-y-2.5" data-section="market-context">
@@ -1326,7 +1334,7 @@ export function OpsUnifiedDashboard({
           </SectionCard>
         </section>
 
-        {/* 7. MODEL ASSURANCE (canonical MODEL-9 payload — full replace each refresh) */}
+        {SHOW_CLOSED_RESEARCH_OVERLAYS ? (
         <section className="space-y-2.5" data-section="model-assurance">
           <SectionLabel>Model Assurance</SectionLabel>
           <SectionCard>
@@ -1477,6 +1485,7 @@ export function OpsUnifiedDashboard({
             ) : null}
           </SectionCard>
         </section>
+        ) : null}
 
         {/* 9. Historical Audit */}
         <section className="space-y-2.5" data-section="historical-audit">

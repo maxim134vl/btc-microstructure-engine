@@ -122,6 +122,13 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _m15_closed_bar_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or not len(frame) or "timeframe" not in frame.columns:
+        return frame
+    tf = frame["timeframe"].astype(str).str.upper()
+    return frame.loc[tf.eq("M15")].copy()
+
+
 def load_candles(feed_path: Path) -> pd.DataFrame:
     frame = pd.read_parquet(feed_path)
     if "timestamp" not in frame.columns:
@@ -764,8 +771,8 @@ def main() -> int:
         return 1
 
     candles = load_candles(feed_path)
-    memory = pd.read_parquet(LIFECYCLE_MEMORY_PATH)
-    episodes_frame = pd.read_parquet(LIFECYCLE_EPISODES_PATH)
+    memory = _m15_closed_bar_rows(pd.read_parquet(LIFECYCLE_MEMORY_PATH))
+    episodes_frame = _m15_closed_bar_rows(pd.read_parquet(LIFECYCLE_EPISODES_PATH))
 
     volume_events = load_volume_events()
     candle_rows = build_candle_rows(candles, memory, volume_events=volume_events)

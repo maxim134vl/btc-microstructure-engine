@@ -85,9 +85,10 @@ test("15 phantom modules excluded from required process list", () => {
   assert.match(src, /Legacy \/ Excluded Modules/);
 });
 
-test("16 model assurance non-blocking observational copy", () => {
+test("16 closed research overlays stay off the live dashboard", () => {
   const src = readFileSync(join(root, "src/components/ops/OpsUnifiedDashboard.tsx"), "utf8");
-  assert.match(src, /non-blocking for paper runtime/);
+  assert.match(src, /const SHOW_CLOSED_RESEARCH_OVERLAYS = false/);
+  assert.match(src, /\{SHOW_CLOSED_RESEARCH_OVERLAYS \?/);
   assert.match(src, /mapOverallAssuranceSeverity/);
   assert.match(src, /mapRuntimeSafetySeverity/);
 });

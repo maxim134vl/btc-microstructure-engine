@@ -977,3 +977,19 @@ def test_existing_decision_rows_not_rewritten_when_origin_added(tmp_path: Path):
     after = pd.read_parquet(paths["log"])
     assert list(before["decision_id"]) == list(after["decision_id"])
     assert list(before["decision_payload_hash"]) == list(after["decision_payload_hash"])
+
+
+def test_m15_closed_bar_lifecycle_ignores_h4_row_at_same_timestamp():
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2026-07-01T12:00:00Z", "2026-07-01T12:00:00Z", "2026-07-01T12:15:00Z"],
+                utc=True,
+            ),
+            "timeframe": ["M15", "H4", "M15"],
+            "active_market_context": ["LONG_CONTEXT", "SHORT_CONTEXT", "LONG_CONTEXT"],
+        }
+    )
+    out = mod.m15_closed_bar_lifecycle(frame)
+    assert list(out["active_market_context"]) == ["LONG_CONTEXT", "LONG_CONTEXT"]
+    assert int(pd.to_datetime(out["timestamp"], utc=True).duplicated().sum()) == 0

@@ -6,10 +6,13 @@ refused so two writers can never share a book.
 
 from __future__ import annotations
 
+import fcntl
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_SHARED_LOCKS: dict[str, object] = {}
 
 ROOT = Path(__file__).resolve().parents[3]
 RUN_DIR = ROOT / "run"
@@ -75,6 +78,35 @@ def acquire(role: str, *, pid: int | None = None) -> dict[str, Any]:
         "pid_path": str(targets["pid"]),
         "lock_path": str(targets["lock"]),
         "log_path": str(targets["log"]),
+        "acquired_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def acquire_shared(path: Path, *, pid: int | None = None) -> dict[str, Any]:
+    """Exclusive lock on a shared data-volume file. Survives Docker PID namespaces."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    own = int(pid or os.getpid())
+    key = str(target.resolve())
+    fh = target.open("a+")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return {
+            "acquired": False,
+            "reason": "ALREADY_RUNNING",
+            "path": str(target),
+        }
+    fh.seek(0)
+    fh.truncate()
+    fh.write(f"{own}\n")
+    fh.flush()
+    _SHARED_LOCKS[key] = fh
+    return {
+        "acquired": True,
+        "path": str(target),
+        "pid": own,
         "acquired_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 

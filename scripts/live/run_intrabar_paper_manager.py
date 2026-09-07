@@ -17,6 +17,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from btc_ml.trading.process_lock import acquire_shared
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
 from btc_ml.trading.intrabar_paper.epoch import load_active_epoch
@@ -194,6 +195,18 @@ def main() -> int:
     if cfg.real_execution_enabled:
         print(json.dumps({"error": "real_execution_must_be_false"}))
         return 3
+
+    writer_lock = acquire_shared(REPO / "data" / "runtime" / "intrabar_paper_manager.lock")
+    if not writer_lock.get("acquired"):
+        print(
+            json.dumps(
+                {
+                    "error": "paper_manager_already_running",
+                    "lock": writer_lock,
+                }
+            )
+        )
+        return 4
 
     engine = IntrabarPaperEngine(cfg=cfg, epoch=epoch)
     epoch_root = cfg.books_root / epoch.paper_epoch_id

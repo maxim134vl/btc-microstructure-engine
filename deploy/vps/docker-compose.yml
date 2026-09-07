@@ -131,7 +131,7 @@ services:
           "--name",
           "context-refresh-daemon",
           "--pid-file",
-          "run/context_refresh_daemon.pid",
+          "data/runtime/context_refresher.pid",
           "--allow-missing-health",
         ]
       interval: ${HEALTH_INTERVAL:-15s}
@@ -356,8 +356,12 @@ services:
       retries: ${HEALTH_RETRIES:-12}
       start_period: ${HEALTH_START_PERIOD:-60s}
 
+  # MODEL-7/9 promotion suite. Off the LIVE1B hybrid path (CatBoost sizing is
+  # not a candidate-model swap). Start with --profile assurance if needed.
   assurance-runtime:
     <<: *runtime_base
+    profiles:
+      - assurance
     environment:
       <<: *runtime_env
     volumes:

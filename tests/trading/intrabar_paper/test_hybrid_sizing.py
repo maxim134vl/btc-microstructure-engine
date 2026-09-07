@@ -24,6 +24,152 @@ def _fresh(seconds_ago: int = 20) -> str:
     return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat().replace("+00:00", "Z")
 
 
+def test_incomplete_xtf_does_not_score_as_training_book():
+    artifacts = Path(__file__).resolve().parents[3] / "config" / "trading" / "hybrid_sizing"
+    sizer = HybridSizer(artifacts, enabled=True)
+    if sizer._model is None:
+        pytest.skip("sizing_model.cbm not loadable in this environment")
+    command = {
+        "timeframe": "M15",
+        "timeframe_direction": "LONG",
+        "source_bar_close": "2026-07-01T16:00:00Z",
+        "evaluation_timestamp": "2026-07-01T16:00:00Z",
+        "context_started_at": "2026-07-01T12:00:00Z",
+        "portfolio_open_risk_usd": 0,
+        "cross_timeframe_metadata": json.dumps(
+            {
+                "M15": {
+                    "direction": "LONG",
+                    "availability": "FRESH_EVENT",
+                    "lifecycle_phase": "ACTIVE",
+                },
+                "M30": {
+                    "direction": "NON_DIRECTIONAL",
+                    "availability": "FRESH_EVENT",
+                    "lifecycle_phase": None,
+                },
+                "H1": {
+                    "direction": "NON_DIRECTIONAL",
+                    "availability": "FRESH_EVENT",
+                    "lifecycle_phase": None,
+                },
+                "H4": {
+                    "direction": "NON_DIRECTIONAL",
+                    "availability": "FRESH_EVENT",
+                    "lifecycle_phase": None,
+                },
+            }
+        ),
+    }
+    decision = sizer.decide(command, side="LONG", timeframe="M15", stop_loss_bps=100.0, take_profit_bps=150.0)
+    assert decision.multiplier == pytest.approx(1.0)
+    assert decision.probability is None
+    assert decision.reason.startswith("fallback:incomplete_xtf_lifecycle")
+    assert decision.xtf_coverage_complete is False
+    assert decision.xtf_missing_timeframes == ("M30", "H1", "H4")
+
+
+def test_complete_xtf_scores_with_frozen_model(tmp_path: Path):
+    artifacts = Path(__file__).resolve().parents[3] / "config" / "trading" / "hybrid_sizing"
+    sizer = HybridSizer(artifacts, enabled=True)
+    if sizer._model is None:
+        pytest.skip("sizing_model.cbm not loadable in this environment")
+    feed = pd.DataFrame(
+        [
+            {
+                "timestamp": "2026-07-01T15:30:00Z",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.5,
+                "close": 100.4,
+            },
+            {
+                "timestamp": "2026-07-01T15:45:00Z",
+                "open": 100.4,
+                "high": 101.2,
+                "low": 100.0,
+                "close": 100.8,
+            },
+        ]
+    )
+    feed_path = tmp_path / "live_market_feed.parquet"
+    feed.to_parquet(feed_path, index=False)
+    command = {
+        "timeframe": "M15",
+        "timeframe_direction": "LONG",
+        "source_bar_close": "2026-07-01T16:00:00Z",
+        "evaluation_timestamp": "2026-07-01T16:00:00Z",
+        "context_started_at": "2026-07-01T12:00:00Z",
+        "portfolio_open_risk_usd": 0,
+        "cross_timeframe_metadata": json.dumps(
+            {
+                "M15": {
+                    "direction": "LONG",
+                    "availability": "FRESH_EVENT",
+                    "lifecycle_phase": "ACTIVE",
+                },
+                "M30": {
+                    "direction": "LONG",
+                    "availability": "FRESH_EVENT",
+                    "lifecycle_phase": "ACTIVE",
+                },
+                "H1": {
+                    "direction": "SHORT",
+                    "availability": "AVAILABLE_LAST_CONFIRMED",
+                    "lifecycle_phase": "CHALLENGED",
+                },
+                "H4": {
+                    "direction": "NON_DIRECTIONAL",
+                    "availability": "FRESH_EVENT",
+                    "lifecycle_phase": "NO_ACTIVE_CONTEXT",
+                },
+            }
+        ),
+    }
+    decision = sizer.decide(
+        command,
+        side="LONG",
+        timeframe="M15",
+        stop_loss_bps=100.0,
+        take_profit_bps=150.0,
+        feed_path=feed_path,
+    )
+    assert decision.reason == "model"
+    assert decision.xtf_coverage_complete is True
+    assert decision.xtf_missing_timeframes == ()
+    assert decision.probability is not None
+    assert 0.5 <= float(decision.multiplier) <= 1.5
+
+
+def test_untagged_lifecycle_parquet_is_incomplete_coverage(tmp_path: Path):
+    from btc_ml.trading.hybrid_sizing.serve import lifecycle_parquet_xtf_status
+
+    path = tmp_path / "life.parquet"
+    pd.DataFrame({"timestamp": ["2026-07-01T15:45:00Z"], "active_market_context": ["LONG_CONTEXT"]}).to_parquet(
+        path, index=False
+    )
+    status = lifecycle_parquet_xtf_status(path)
+    assert status["tagged"] is False
+    assert status["complete"] is False
+    assert status["counts"]["M15"] == 1
+    assert status["counts"]["H4"] == 0
+
+
+def test_tagged_lifecycle_parquet_is_complete_coverage(tmp_path: Path):
+    from btc_ml.trading.hybrid_sizing.serve import lifecycle_parquet_xtf_status
+
+    path = tmp_path / "life.parquet"
+    pd.DataFrame(
+        {
+            "timestamp": ["2026-07-01T15:45:00Z"] * 4,
+            "timeframe": ["M15", "M30", "H1", "H4"],
+        }
+    ).to_parquet(path, index=False)
+    status = lifecycle_parquet_xtf_status(path)
+    assert status["complete"] is True
+    assert status["counts"]["H4"] == 1
+
+
 def test_cross_tf_agreement_counts():
     meta = {
         "M15": {"direction": "LONG", "availability": "FRESH_EVENT", "lifecycle_phase": "ACTIVE"},

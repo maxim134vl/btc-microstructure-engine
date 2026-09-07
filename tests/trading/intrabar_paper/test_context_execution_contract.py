@@ -366,6 +366,47 @@ def test_s41_open_retries_after_missing_local_bbo(cfg):
     assert eng.apply_s41_manager_command(cmd)["status"] == "ENTERED"
 
 
+def test_s41_second_engine_cannot_open_second_m15(cfg):
+    import time as time_mod
+
+    c, _ = cfg
+    first = _engine(c)
+    now = time_mod.monotonic_ns()
+    first.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="dual_a",
+    )
+    cmd = {
+        "command_id": "TF_CMD_dual_a",
+        "timeframe": "M15",
+        "intent": "OPEN_SHORT",
+        "action_allowed": True,
+        "lifecycle_episode_id": "M15:128",
+        "evaluation_timestamp": _fresh(20),
+        "context_origin_price": 100.1,
+    }
+    assert first.apply_s41_manager_command(cmd)["status"] == "ENTERED"
+    second = IntrabarPaperEngine(cfg=c, epoch=first.epoch, activation_monotonic_ns=2_000_000)
+    now2 = time_mod.monotonic_ns()
+    second.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now2 - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="dual_b",
+    )
+    other = dict(cmd)
+    other["command_id"] = "TF_CMD_dual_b"
+    result = second.apply_s41_manager_command(other)
+    assert result["status"] == "ENTRY_BLOCKED_ACTIVE_POSITION"
+    opens = second.books.open_positions()
+    assert len(opens) == 1
+    assert opens[0]["entry_context_event_id"] == "TF_CMD_dual_a"
+
+
 def test_s41_open_reenters_after_tp(cfg):
     c, _ = cfg
     eng = _engine(c)

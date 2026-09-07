@@ -17,7 +17,6 @@ REQUIRED_SERVICES=(
   timeframe-manager
   intrabar-supervisor
   trd-outcome2
-  assurance-runtime
   ops-api
   dashboard-ui
   context-refresher

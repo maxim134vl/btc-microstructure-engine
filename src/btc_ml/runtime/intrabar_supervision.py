@@ -458,9 +458,42 @@ def evaluate_service(
         detail = restart_entry.block_reason or "RESTART_STORM_BLOCKED"
         alerts.append(_alert_for(spec.name, kind="storm"))
     elif not alive:
-        lifecycle = ProcessLifecycleState.FAILED
-        detail = "process_not_running"
-        alerts.append(_alert_for(spec.name, kind="down"))
+        health_pid_int = None
+        try:
+            health_pid_int = int(health_pid) if health_pid is not None else None
+        except (TypeError, ValueError):
+            health_pid_int = None
+        local_pid = int(pid) if pid is not None else None
+        file_pid = read_pid(spec.pid_file)
+        our_dead_writer = bool(
+            file_pid is not None
+            and not pid_alive(file_pid)
+            and health_pid_int == int(file_pid)
+        )
+        foreign_health = bool(
+            health_fresh
+            and health_pid_int is not None
+            and not our_dead_writer
+            and health_pid_int != local_pid
+            and not pid_alive(health_pid_int)
+        )
+        if foreign_health:
+            detail = "foreign_process_health_fresh"
+            if spec.name == "intrabar_paper_manager":
+                if execution_state in {"DEGRADED", "RECOVERING", "UNSAFE"}:
+                    lifecycle = ProcessLifecycleState.RUNNING_DEGRADED
+                    detail = f"foreign_health execution_state={execution_state}"
+                else:
+                    lifecycle = ProcessLifecycleState.RUNNING_HEALTHY
+                    detail = f"foreign_health execution_state={execution_state or 'unknown'}"
+            elif spec.name == "intrabar_cognition" and _cognition_internal_degraded(health):
+                lifecycle = ProcessLifecycleState.RUNNING_DEGRADED
+            else:
+                lifecycle = ProcessLifecycleState.RUNNING_HEALTHY
+        else:
+            lifecycle = ProcessLifecycleState.FAILED
+            detail = "process_not_running"
+            alerts.append(_alert_for(spec.name, kind="down"))
     elif not health_fresh or not pid_matches:
         lifecycle = ProcessLifecycleState.FAILED
         detail = "heartbeat_stale_or_pid_mismatch"

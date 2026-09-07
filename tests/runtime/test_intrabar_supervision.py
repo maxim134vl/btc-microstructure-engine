@@ -279,6 +279,19 @@ def test_08_restart_storm_blocks_permanent(repo: Path):
     assert ALERT_PAPER_RESTART_STORM in result["alerts"]
 
 
+def test_08b_foreign_fresh_health_does_not_start_second_paper_manager(repo: Path):
+    spec = _spec(repo, "intrabar_paper_manager")
+    _write_health(
+        spec.health_file,
+        pid=999999,
+        extra={"execution_market": {"state": {"state": "HEALTHY"}}},
+    )
+    result = evaluate_service(spec, restart_entry=ServiceRestartState(), policy=RestartPolicy())
+    assert result["needs_restart"] is False
+    assert result["lifecycle_state"] == ProcessLifecycleState.RUNNING_HEALTHY.value
+    assert "foreign" in str(result["detail"])
+
+
 def test_08b_manager_down_uses_manager_alert(repo: Path):
     spec = _spec(repo, "timeframe_manager")
     result = evaluate_service(spec, restart_entry=ServiceRestartState(), policy=RestartPolicy())

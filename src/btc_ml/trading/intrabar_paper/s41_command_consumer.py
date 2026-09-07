@@ -86,7 +86,6 @@ class S41CommandConsumer:
         processed = {str(x) for x in (self._state.get("processed_command_ids") or [])}
         after = self._state.get("consume_after") or self.consume_after
         actions: list[dict[str, Any]] = []
-        dirty = False
         for tf in self.engine.cfg.timeframes:
             pending = self.bus.pending_for_timeframe(
                 tf,
@@ -124,7 +123,5 @@ class S41CommandConsumer:
                     actions.append(result)
                 self._mark(command_id)
                 processed.add(command_id)
-                dirty = True
-        if dirty:
-            self._save()
+                self._save()
         return actions

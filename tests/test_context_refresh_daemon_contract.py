@@ -16,6 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DAEMON_PATH = ROOT / "scripts" / "live" / "run_context_refresh_daemon.py"
+REFRESH_PATH = ROOT / "scripts" / "live" / "run_live_context_refresh_once.py"
 CTL_PATH = ROOT / "scripts" / "ops" / "context_refresh_daemon_ctl.sh"
 
 spec = importlib.util.spec_from_file_location("run_context_refresh_daemon", DAEMON_PATH)
@@ -23,6 +24,12 @@ assert spec and spec.loader
 daemon = importlib.util.module_from_spec(spec)
 sys.modules["run_context_refresh_daemon"] = daemon
 spec.loader.exec_module(daemon)
+
+refresh_spec = importlib.util.spec_from_file_location("run_live_context_refresh_once", REFRESH_PATH)
+assert refresh_spec and refresh_spec.loader
+refresh_mod = importlib.util.module_from_spec(refresh_spec)
+sys.modules["run_live_context_refresh_once"] = refresh_mod
+refresh_spec.loader.exec_module(refresh_mod)
 
 
 def _write_ts(path: Path, timestamps: list[str], col: str = "timestamp") -> None:
@@ -119,7 +126,7 @@ def test_08_lock_prevents_overlap_alive(tmp_path: Path):
 
 
 def test_08b_tail_merge_existing_rows_win():
-    from run_live_context_refresh_once import tail_merge_existing_wins
+    tail_merge_existing_wins = refresh_mod.tail_merge_existing_wins
 
     prod = pd.DataFrame(
         {
@@ -141,6 +148,40 @@ def test_08b_tail_merge_existing_rows_win():
     merged = tail_merge_existing_wins(prod, cand, "timestamp")
     assert list(merged["v"]) == [1, 2, 3]
     assert len(merged) == 3
+
+
+def test_08c_tail_merge_keeps_m15_prefix_and_adds_independent_h4():
+    tail_merge_existing_wins = refresh_mod.tail_merge_existing_wins
+
+    prod = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2026-07-24T14:00:00Z", "2026-07-24T14:15:00Z"], utc=True
+            ),
+            "v": [1, 2],
+        }
+    )
+    cand = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [
+                    "2026-07-24T14:00:00Z",
+                    "2026-07-24T14:15:00Z",
+                    "2026-07-24T14:00:00Z",
+                    "2026-07-24T14:30:00Z",
+                ],
+                utc=True,
+            ),
+            "timeframe": ["M15", "M15", "H4", "M15"],
+            "v": [9, 9, 4, 3],
+        }
+    )
+    merged = tail_merge_existing_wins(prod, cand, "timestamp")
+    m15 = merged[merged["timeframe"].astype(str).str.upper() == "M15"]
+    h4 = merged[merged["timeframe"].astype(str).str.upper() == "H4"]
+    assert list(m15["v"]) == [1, 2, 3]
+    assert list(h4["v"]) == [4]
+    assert len(merged) == 4
 
 
 def test_09_no_new_safe_upstream_noop_classification():

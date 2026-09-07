@@ -316,6 +316,14 @@ def load_parquet(path: Path) -> pd.DataFrame:
     return frame
 
 
+def m15_closed_bar_lifecycle(frame: pd.DataFrame) -> pd.DataFrame:
+    """Decision log stays on the M15 closed-bar series. Higher TFs are independent."""
+    if frame is None or not len(frame) or "timeframe" not in frame.columns:
+        return frame
+    tf = frame["timeframe"].astype(str).str.upper()
+    return frame.loc[tf.eq("M15")].copy()
+
+
 def latest_timestamp(frame: pd.DataFrame, col: str = "timestamp") -> pd.Timestamp | None:
     if frame is None or len(frame) == 0 or col not in frame.columns:
         return None
@@ -2129,7 +2137,7 @@ def apply_confirmation_catchup(
     auction = load_parquet(auction_path)
     cognitive = load_parquet(cognitive_path)
     final = load_parquet(final_path)
-    lifecycle = load_parquet(lifecycle_path)
+    lifecycle = m15_closed_bar_lifecycle(load_parquet(lifecycle_path))
     runtime = parse_runtime_cycles(runtime_log_path)
     src_hash = source_files_hash(
         [live_path, auction_path, cognitive_path, final_path, lifecycle_path]
@@ -2262,7 +2270,7 @@ def backfill_missing_decisions(
     auction = load_parquet(auction_path)
     cognitive = load_parquet(cognitive_path)
     final = load_parquet(final_path)
-    lifecycle = load_parquet(lifecycle_path)
+    lifecycle = m15_closed_bar_lifecycle(load_parquet(lifecycle_path))
     runtime = parse_runtime_cycles(runtime_log_path)
     src_hash = source_files_hash(
         [live_path, auction_path, cognitive_path, final_path, lifecycle_path]
@@ -2566,7 +2574,7 @@ def run_once(
     auction = load_parquet(auction_path)
     cognitive = load_parquet(cognitive_path)
     final = load_parquet(final_path)
-    lifecycle = load_parquet(lifecycle_path)
+    lifecycle = m15_closed_bar_lifecycle(load_parquet(lifecycle_path))
     runtime = parse_runtime_cycles(runtime_log_path)
     src_hash = source_files_hash(
         [live_path, auction_path, cognitive_path, final_path, lifecycle_path]

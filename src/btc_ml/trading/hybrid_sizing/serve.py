@@ -30,10 +30,85 @@ class SizingDecision:
     probability: float | None
     reason: str
     features: dict[str, Any]
+    xtf_coverage_complete: bool = True
+    xtf_missing_timeframes: tuple[str, ...] = ()
 
 
-def _fallback(reason: str, features: dict[str, Any] | None = None) -> SizingDecision:
-    return SizingDecision(1.0, None, f"fallback:{reason}", features or {})
+def _fallback(
+    reason: str,
+    features: dict[str, Any] | None = None,
+    *,
+    xtf_coverage_complete: bool = True,
+    xtf_missing_timeframes: tuple[str, ...] = (),
+) -> SizingDecision:
+    return SizingDecision(
+        1.0,
+        None,
+        f"fallback:{reason}",
+        features or {},
+        xtf_coverage_complete,
+        tuple(xtf_missing_timeframes),
+    )
+
+
+_EMPTY_PHASE = frozenset({"", "NA", "NONE", "NAN", "NULL", "UNKNOWN"})
+
+
+def xtf_lifecycle_coverage(meta: dict[str, Any] | None) -> tuple[bool, tuple[str, ...]]:
+    """True only when every live TF has a real lifecycle_phase.
+
+    Missing higher-TF rows currently arrive as NON_DIRECTIONAL + empty phase.
+    Scoring that snapshot is not the training distribution — fail-open instead.
+    """
+    payload = meta if isinstance(meta, dict) else {}
+    missing: list[str] = []
+    for tf in TIMEFRAMES:
+        slot = payload.get(tf)
+        slot = slot if isinstance(slot, dict) else {}
+        phase = slot.get("lifecycle_phase")
+        text = "" if phase is None else str(phase).strip().upper()
+        if text in _EMPTY_PHASE:
+            missing.append(tf)
+    return (not missing, tuple(missing))
+
+
+def lifecycle_parquet_xtf_status(path: Path | None = None) -> dict[str, Any]:
+    """Ops view: which TFs actually exist in closed-bar lifecycle parquet."""
+    target = Path(path) if path is not None else ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
+    counts = {tf: 0 for tf in TIMEFRAMES}
+    if not target.exists():
+        return {
+            "path": str(target),
+            "exists": False,
+            "tagged": False,
+            "complete": False,
+            "counts": counts,
+        }
+    try:
+        frame = pd.read_parquet(target)
+    except Exception as exc:  # noqa: BLE001 — health path must not raise
+        return {
+            "path": str(target),
+            "exists": True,
+            "tagged": False,
+            "complete": False,
+            "counts": counts,
+            "error": f"{type(exc).__name__}:{exc}",
+        }
+    tagged = "timeframe" in frame.columns
+    if not tagged:
+        counts["M15"] = int(len(frame))
+    else:
+        vc = frame["timeframe"].astype(str).str.upper().value_counts().to_dict()
+        for tf in TIMEFRAMES:
+            counts[tf] = int(vc.get(tf, 0))
+    return {
+        "path": str(target),
+        "exists": True,
+        "tagged": tagged,
+        "complete": all(counts[tf] > 0 for tf in TIMEFRAMES),
+        "counts": counts,
+    }
 
 
 def _ts(value: Any) -> pd.Timestamp | None:
@@ -225,7 +300,11 @@ class HybridSizer:
 
         meta = _parse_meta(command.get("cross_timeframe_metadata"))
         if not meta:
-            return _fallback("missing_xtf")
+            return _fallback(
+                "missing_xtf",
+                xtf_coverage_complete=False,
+                xtf_missing_timeframes=TIMEFRAMES,
+            )
 
         own_tf = str(timeframe or command.get("timeframe") or "").upper()
         own_dir = str(command.get("timeframe_direction") or side or "").upper()
@@ -234,6 +313,14 @@ class HybridSizer:
         elif own_dir in {"OPEN_SHORT", "SHORT_CONTEXT"}:
             own_dir = "SHORT"
         row = cross_tf_features(meta, own_tf=own_tf, own_dir=own_dir)
+        complete, missing = xtf_lifecycle_coverage(meta)
+        if not complete:
+            return _fallback(
+                "incomplete_xtf_lifecycle:" + ",".join(missing),
+                row,
+                xtf_coverage_complete=False,
+                xtf_missing_timeframes=missing,
+            )
 
         cutoff = _ts(command.get("source_bar_close") or command.get("evaluation_timestamp"))
         started = _ts(command.get("context_started_at"))
@@ -304,7 +391,14 @@ class HybridSizer:
         )
         if multiplier is None:
             return _fallback("probability_out_of_range", row)
-        return SizingDecision(float(multiplier), float(proba), "model", row)
+        return SizingDecision(
+            float(multiplier),
+            float(proba),
+            "model",
+            row,
+            xtf_coverage_complete=True,
+            xtf_missing_timeframes=(),
+        )
 
 
 def load_sizer(*, cfg_raw: dict[str, Any] | None = None, repo_root: Path | None = None) -> HybridSizer:

@@ -52,6 +52,14 @@ CHAIN_STEPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "name": "independent_higher_tf_lifecycle",
+        "script": ROOT / "scripts" / "research" / "extend_live_lifecycle_independent_timeframes.py",
+        "outputs": [
+            ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet",
+            ROOT / "data" / "cognition" / "market_context_lifecycle_episodes.parquet",
+        ],
+    },
+    {
         "name": "lifecycle_visual_data",
         "script": ROOT
         / "apps"
@@ -87,6 +95,10 @@ SHADOW_PARQUET_LAYERS = [
     ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet",
     ROOT / "data" / "cognition" / "market_context_lifecycle_episodes.parquet",
 ]
+
+# Display-only. A read-only visualizer directory must not fail the parquet chain
+# or block append_context_decision_log.py (VPS image has EROFS on apps/).
+VISUAL_STEP_NAME = "lifecycle_visual_data"
 
 VISUAL_JSON_PATHS = [
     ROOT
@@ -145,6 +157,8 @@ class ChainResult:
     shadow_only: bool = True
     error: str | None = None
     steps_run: list[str] = field(default_factory=list)
+    visual_data_skipped: bool = False
+    visual_skip_reason: str | None = None
 
     def to_status_dict(self) -> dict[str, Any]:
         payload = {
@@ -158,10 +172,19 @@ class ChainResult:
             "shadow_only": True,
             "sandbox_url": SANDBOX_URL,
             "steps_run": self.steps_run,
+            "visual_data_skipped": self.visual_data_skipped,
         }
         if self.error:
             payload["error"] = self.error
+        if self.visual_skip_reason:
+            payload["visual_skip_reason"] = self.visual_skip_reason
         return payload
+
+
+def is_readonly_visual_output_error(message: str) -> bool:
+    """True only for EROFS on visualizer output (the VPS image failure)."""
+    text = str(message or "")
+    return "[Errno 30]" in text or "Read-only file system" in text
 
 
 def _iso_ts(value: Any) -> str | None:
@@ -311,7 +334,14 @@ def run_step(script: Path, *, runner: Any = None) -> None:
     runner(cmd)
 
 
-def validate_cross_checks() -> tuple[dict[str, bool], dict[str, Any], int, int]:
+def _m15_closed_bar_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or not len(frame) or "timeframe" not in frame.columns:
+        return frame
+    tf = frame["timeframe"].astype(str).str.upper()
+    return frame.loc[tf.eq("M15")].copy()
+
+
+def validate_cross_checks(*, require_visual: bool = True) -> tuple[dict[str, bool], dict[str, Any], int, int]:
     checks: dict[str, bool] = {}
     final_path = ROOT / "data" / "cognition" / "final_market_context_memory.parquet"
     life_mem_path = ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
@@ -326,9 +356,11 @@ def validate_cross_checks() -> tuple[dict[str, bool], dict[str, Any], int, int]:
     )
 
     final_df = pd.read_parquet(final_path)
-    life_df = pd.read_parquet(life_mem_path)
-    life_ep_df = pd.read_parquet(life_ep_path)
-    visual_latest = json.loads(visual_latest_path.read_text(encoding="utf-8"))
+    life_df = _m15_closed_bar_rows(pd.read_parquet(life_mem_path))
+    life_ep_df = _m15_closed_bar_rows(pd.read_parquet(life_ep_path))
+    visual_latest: dict[str, Any] = {}
+    if require_visual:
+        visual_latest = json.loads(visual_latest_path.read_text(encoding="utf-8"))
 
     final_ts = _to_utc(final_df["timestamp"].iloc[-1])
     life_ts = _to_utc(life_df["timestamp"].iloc[-1])
@@ -348,15 +380,16 @@ def validate_cross_checks() -> tuple[dict[str, bool], dict[str, Any], int, int]:
         "active_context_age_bars": int(life_latest["active_context_age_bars"]),
         "action_allowed": bool(life_latest["action_allowed"]),
     }
-    actual = {
-        "active_market_context": str(visual_latest.get("active_market_context")),
-        "lifecycle_state": str(visual_latest.get("lifecycle_state")),
-        "active_context_age_bars": int(visual_latest.get("active_context_age_bars") or 0),
-        "action_allowed": bool(visual_latest.get("action_allowed")),
-    }
-    checks["visual_latest_matches_lifecycle_memory"] = expected == actual
-    if not checks["visual_latest_matches_lifecycle_memory"]:
-        raise ChainError(f"lifecycle visual latest mismatch: expected={expected} actual={actual}")
+    if require_visual:
+        actual = {
+            "active_market_context": str(visual_latest.get("active_market_context")),
+            "lifecycle_state": str(visual_latest.get("lifecycle_state")),
+            "active_context_age_bars": int(visual_latest.get("active_context_age_bars") or 0),
+            "action_allowed": bool(visual_latest.get("action_allowed")),
+        }
+        checks["visual_latest_matches_lifecycle_memory"] = expected == actual
+        if not checks["visual_latest_matches_lifecycle_memory"]:
+            raise ChainError(f"lifecycle visual latest mismatch: expected={expected} actual={actual}")
 
     # Raw episode count from current final memory (contiguous market_context runs).
     # Equivalent to rebuilding final_market_context_episodes without adding it to the chain.
@@ -378,7 +411,7 @@ def validate_cross_checks() -> tuple[dict[str, bool], dict[str, Any], int, int]:
         if "action_allowed_any" in frame.columns and bool(frame["action_allowed_any"].astype(bool).any()):
             action_ok = False
             break
-    if visual_latest.get("action_allowed") is True:
+    if require_visual and visual_latest.get("action_allowed") is True:
         action_ok = False
     checks["action_allowed_false"] = action_ok
     if not action_ok:
@@ -392,22 +425,23 @@ def validate_cross_checks() -> tuple[dict[str, bool], dict[str, Any], int, int]:
     if not checks["no_failed_short_reprice"]:
         raise ChainError("FAILED_SHORT_REPRICE found in shadow parquet outputs")
 
-    # Visual JSON must not contain arbitration / chosen / calibrated fields.
-    visual_forbidden: list[str] = []
-    for path in VISUAL_JSON_PATHS:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        visual_forbidden.extend(_contains_forbidden(payload))
-    checks["visual_no_arbitration_fields"] = (
-        "raw_chosen_context" not in visual_forbidden
-        and "calibrated_context" not in visual_forbidden
-    )
-    if not checks["visual_no_arbitration_fields"]:
-        raise ChainError(
-            f"lifecycle visual json contains forbidden fields: {sorted(set(visual_forbidden))}"
+    if require_visual:
+        # Visual JSON must not contain arbitration / chosen / calibrated fields.
+        visual_forbidden: list[str] = []
+        for path in VISUAL_JSON_PATHS:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            visual_forbidden.extend(_contains_forbidden(payload))
+        checks["visual_no_arbitration_fields"] = (
+            "raw_chosen_context" not in visual_forbidden
+            and "calibrated_context" not in visual_forbidden
         )
-    checks["visual_no_failed_short_reprice"] = "FAILED_SHORT_REPRICE" not in visual_forbidden
-    if not checks["visual_no_failed_short_reprice"]:
-        raise ChainError("FAILED_SHORT_REPRICE found in lifecycle visual json")
+        if not checks["visual_no_arbitration_fields"]:
+            raise ChainError(
+                f"lifecycle visual json contains forbidden fields: {sorted(set(visual_forbidden))}"
+            )
+        checks["visual_no_failed_short_reprice"] = "FAILED_SHORT_REPRICE" not in visual_forbidden
+        if not checks["visual_no_failed_short_reprice"]:
+            raise ChainError("FAILED_SHORT_REPRICE found in lifecycle visual json")
 
     latest_context = {
         "timestamp": _iso_ts(life_latest["timestamp"]),
@@ -415,7 +449,7 @@ def validate_cross_checks() -> tuple[dict[str, bool], dict[str, Any], int, int]:
         "lifecycle_state": expected["lifecycle_state"],
         "active_context_age_bars": expected["active_context_age_bars"],
         "action_allowed": expected["action_allowed"],
-        "challenge_ratio": visual_latest.get("open_episode_challenge_ratio"),
+        "challenge_ratio": visual_latest.get("open_episode_challenge_ratio") if require_visual else None,
         "raw_market_context": str(life_latest.get("raw_market_context")),
     }
     return checks, latest_context, raw_episodes_count, lifecycle_episodes_count
@@ -442,7 +476,19 @@ def run_shadow_chain(*, runner: Any = None, skip_steps: bool = False) -> ChainRe
             outputs: list[Path] = step["outputs"]
             print(f"\n=== step: {name} ===")
             if not skip_steps:
-                run_step(script, runner=runner)
+                try:
+                    run_step(script, runner=runner)
+                except ChainError as exc:
+                    if name == VISUAL_STEP_NAME and is_readonly_visual_output_error(str(exc)):
+                        result.visual_data_skipped = True
+                        result.visual_skip_reason = str(exc)
+                        result.steps_run.append(name)
+                        print(
+                            f"WARN skip display-only {name}: visualizer output is read-only; "
+                            "parquet chain continues"
+                        )
+                        continue
+                    raise
             result.steps_run.append(name)
             for output in outputs:
                 info = inspect_artifact(output)
@@ -461,7 +507,9 @@ def run_shadow_chain(*, runner: Any = None, skip_steps: bool = False) -> ChainRe
                     f"latest={info.latest_timestamp} shadow_only_ok={info.shadow_only_ok}"
                 )
 
-        checks, latest_context, raw_count, life_count = validate_cross_checks()
+        checks, latest_context, raw_count, life_count = validate_cross_checks(
+            require_visual=not result.visual_data_skipped
+        )
         result.artifacts = artifacts
         result.checks = checks
         result.latest_context = latest_context
@@ -481,6 +529,8 @@ def print_summary(result: ChainResult) -> None:
     print(f"chain status: {result.status}")
     if result.error:
         print(f"error: {result.error}")
+    if result.visual_data_skipped:
+        print(f"visual data skipped: {result.visual_skip_reason}")
     print("rows per artifact:")
     for item in result.artifacts:
         print(

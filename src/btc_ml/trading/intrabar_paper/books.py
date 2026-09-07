@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .performance_eligibility import is_void_position_row
 
@@ -32,6 +34,19 @@ class EpochBooks:
         self._lock = threading.Lock()
         for name in self.TABLES:
             (self.root / f"{name}.jsonl").touch(exist_ok=True)
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Cross-process lock so two paper managers cannot enter the same TF."""
+        lock_path = self.root / ".writer.lock"
+        lock_path.touch(exist_ok=True)
+        fh = lock_path.open("a+")
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
 
     def _path(self, table: str) -> Path:
         if table not in self.TABLES:

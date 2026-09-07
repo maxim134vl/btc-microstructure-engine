@@ -82,6 +82,54 @@ def test_refresh_runs_rebuild_when_stale(tmp_path: Path):
     assert payload["orders_created"] is False
 
 
+def test_refresh_runs_decision_logger_when_shadow_chain_ok_after_visual_skip(tmp_path: Path):
+    """Step 1 contract: shadow chain PASS (visual EROFS skipped) still appends decision log."""
+    live = tmp_path / "live.parquet"
+    life = tmp_path / "life.parquet"
+    _write_ts(live, ["2026-07-19T12:00:00Z", "2026-07-19T12:45:00Z"])
+    _write_ts(life, ["2026-07-19T12:00:00Z", "2026-07-19T12:30:00Z"])
+    calls: list[str] = []
+
+    def fake_run(script: Path, **_kwargs):
+        calls.append(Path(script).name)
+        if Path(script).name.startswith("build_market_context_shadow_chain"):
+            _write_ts(life, ["2026-07-19T12:00:00Z", "2026-07-19T12:45:00Z"])
+            return {
+                "script": str(script),
+                "returncode": 0,
+                "ok": True,
+                "started_at_utc": "2026-07-19T14:00:00Z",
+                "ended_at_utc": "2026-07-19T14:00:01Z",
+                "stdout_tail": "WARN skip display-only lifecycle_visual_data: visualizer output is read-only",
+                "stderr_tail": "",
+            }
+        return {
+            "script": str(script),
+            "returncode": 0,
+            "ok": True,
+            "started_at_utc": "2026-07-19T14:00:00Z",
+            "ended_at_utc": "2026-07-19T14:00:01Z",
+            "stdout_tail": "ok",
+            "stderr_tail": "",
+        }
+
+    payload = mod.run_refresh_once(
+        live_path=live,
+        lifecycle_path=life,
+        shadow_script=tmp_path / "build_market_context_shadow_chain.py",
+        decision_script=tmp_path / "append_context_decision_log.py",
+        status_path=tmp_path / "status.json",
+        log_path=tmp_path / "refresh.log",
+        run_script=fake_run,
+    )
+    assert payload["status"] == "OK"
+    assert payload["shadow_chain_rebuild_ok"] is True
+    assert payload["decision_logger_ran"] is True
+    assert calls == ["build_market_context_shadow_chain.py", "append_context_decision_log.py"]
+    assert payload["execution_enabled"] is False
+    assert payload["orders_created"] is False
+
+
 def test_refresh_skips_rebuild_when_fresh(tmp_path: Path):
     live = tmp_path / "live.parquet"
     life = tmp_path / "life.parquet"
@@ -163,6 +211,22 @@ def test_refresh_errors_when_rebuild_fails(tmp_path: Path):
 def test_missing_live_feed_fails_safely(tmp_path: Path):
     with pytest.raises(mod.RefreshError, match="Missing required artifact"):
         mod.latest_parquet_timestamp(tmp_path / "missing.parquet")
+
+
+def test_latest_lifecycle_timestamp_uses_m15_when_tagged(tmp_path: Path):
+    path = tmp_path / "life.parquet"
+    pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2026-07-01T15:45:00Z", "2026-07-01T12:00:00Z", "2026-07-01T16:00:00Z"],
+                utc=True,
+            ),
+            "timeframe": ["M15", "H4", "H4"],
+            "close": [1.0, 2.0, 3.0],
+        }
+    ).to_parquet(path, index=False)
+    tip = mod.latest_parquet_timestamp(path)
+    assert tip == pd.Timestamp("2026-07-01T15:45:00Z")
 
 
 def test_script_is_shadow_only_and_does_not_start_servers():

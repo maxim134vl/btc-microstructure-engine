@@ -12,6 +12,7 @@ from typing import Any
 
 from .bbo import CausalBBOStore, fill_price_for, resolve_context_entry_price
 from .books import EpochBooks
+from .performance_eligibility import is_void_position_row
 from .config import IntrabarPaperConfig
 from .consumer import (
     ENTRY_EVENTS,
@@ -137,6 +138,7 @@ class IntrabarPaperEngine:
         self.trading_contract = self._load_trading_contract(epoch_root)
         self.sleeves = SleeveLedger.load(epoch_root)
         self.sizer = load_sizer(cfg_raw=cfg.raw, repo_root=cfg.books_root.parents[2])
+        self.last_sizing: dict[str, Any] | None = None
         self.capital_model = str(
             ((self.trading_contract or {}).get("capital") or {}).get("capital_model")
             or ("PER_TIMEFRAME_REALIZED_EQUITY" if self.sleeves is not None else "SHARED_MASTER_REALIZED_EQUITY")
@@ -569,9 +571,78 @@ class IntrabarPaperEngine:
                     event_monotonic_ns=event_monotonic_ns,
                 )
                 return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
-        if tf in self.positions:
+        with self.books.exclusive():
+            return self._enter_position_locked(
+                tf=tf,
+                side=side,
+                event_type=event_type,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+                event_timestamp=event_timestamp,
+                context_event_price=context_event_price,
+                episode_id=episode_id,
+                event=event,
+                from_manager_command=from_manager_command,
+                key=key,
+            )
+
+    def _open_book_rows_for_tf(self, tf: str) -> list[dict[str, Any]]:
+        wanted = str(tf or "").upper()
+        return [
+            row
+            for row in self.books.open_positions()
+            if str(row.get("timeframe") or "").upper() == wanted
+        ]
+
+    def _command_already_opened(self, context_event_id: str) -> bool:
+        command_id = str(context_event_id or "").strip()
+        if not command_id:
+            return False
+        for row in self.books.latest_positions().values():
+            if is_void_position_row(row):
+                continue
+            existing = str(
+                row.get("entry_context_event_id") or row.get("manager_command_id") or ""
+            ).strip()
+            if existing == command_id:
+                return True
+        return False
+
+    def _enter_position_locked(
+        self,
+        *,
+        tf: str,
+        side: str,
+        event_type: str,
+        context_event_id: str,
+        event_monotonic_ns: int,
+        event_timestamp: str | None,
+        context_event_price: Any,
+        episode_id: str | None,
+        event: dict[str, Any],
+        from_manager_command: bool,
+        key: str,
+    ) -> dict[str, Any] | None:
+        if tf in self.positions or self._open_book_rows_for_tf(tf):
             self._block("ENTRY_BLOCKED_ACTIVE_POSITION", tf, context_event_id, side)
-            return None
+            return {
+                "status": "ENTRY_BLOCKED_ACTIVE_POSITION",
+                "timeframe": tf,
+                "context_event_id": context_event_id,
+            }
+        if self._command_already_opened(context_event_id):
+            self._block("ENTRY_BLOCKED_DUPLICATE_COMMAND", tf, context_event_id, side)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            self.consumer.save()
+            return {
+                "status": "ENTRY_BLOCKED_DUPLICATE_COMMAND",
+                "timeframe": tf,
+                "context_event_id": context_event_id,
+            }
         if not self.execution_market_ready_for_entry():
             self._block("ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", tf, context_event_id, side, event=event)
             return {"status": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", "timeframe": tf}
@@ -629,6 +700,13 @@ class IntrabarPaperEngine:
             stop_loss_bps=self.cfg.stop_loss_bps,
             take_profit_bps=self.cfg.take_profit_bps,
         )
+        self.last_sizing = {
+            "reason": sizing_decision.reason,
+            "multiplier": float(sizing_decision.multiplier),
+            "probability": sizing_decision.probability,
+            "xtf_coverage_complete": bool(sizing_decision.xtf_coverage_complete),
+            "xtf_missing_timeframes": list(sizing_decision.xtf_missing_timeframes),
+        }
         risk_budget_usd = float(canonical_risk_budget_usd) * float(sizing_decision.multiplier)
         sizing = resolve_risk_sizing(
             cfg=self.cfg,
@@ -666,6 +744,9 @@ class IntrabarPaperEngine:
             "sizing_multiplier": float(sizing_decision.multiplier),
             "sizing_probability": sizing_decision.probability,
             "sizing_reason": sizing_decision.reason,
+            "sizing_xtf_coverage_complete": bool(sizing_decision.xtf_coverage_complete),
+            "sizing_xtf_missing": ",".join(sizing_decision.xtf_missing_timeframes),
+            "sizing_features_json": json.dumps(sizing_decision.features, default=str, sort_keys=True),
             "stop_distance_usd": stop_distance_usd,
             "notional_usd": notional_usd,
         }
@@ -813,6 +894,7 @@ class IntrabarPaperEngine:
             context_event_id=context_event_id,
             event_monotonic_ns=event_monotonic_ns,
         )
+        self.consumer.save()
         self.last_command = command
         self.last_fill = fill
         return {"status": "ENTERED", "position": pos_row, "fill": fill, "signal": signal}
@@ -1278,6 +1360,22 @@ class IntrabarPaperEngine:
             payload["lifecycle_episode_id"] = event.get("lifecycle_episode_id")
         self.books.append("blocked", payload)
 
+    def _hybrid_sizing_health(self) -> dict[str, Any]:
+        from btc_ml.trading.hybrid_sizing import lifecycle_parquet_xtf_status
+
+        sizer = self.sizer
+        try:
+            lifecycle = lifecycle_parquet_xtf_status()
+        except Exception as exc:  # noqa: BLE001
+            lifecycle = {"complete": False, "error": f"{type(exc).__name__}:{exc}"}
+        return {
+            "enabled": bool(getattr(sizer, "enabled", False)),
+            "load_error": getattr(sizer, "_load_error", None),
+            "model_loaded": getattr(sizer, "_model", None) is not None,
+            "lifecycle": lifecycle,
+            "last_decision": self.last_sizing,
+        }
+
     def health(self) -> dict[str, Any]:
         import os
 
@@ -1345,6 +1443,7 @@ class IntrabarPaperEngine:
             "capital_model": self.capital_model,
             "updated_at": _utc_iso(),
             "health_write_error": self.last_health_write_error,
+            "hybrid_sizing": self._hybrid_sizing_health(),
         }
         if self.execution_market is not None:
             payload["execution_market"] = self.execution_market.snapshot()
