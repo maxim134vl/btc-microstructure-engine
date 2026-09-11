@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "artifact_id": "logic1_a_lag_execution",
+  "candidate_id": "LOGIC1_A_LAG_EXECUTION",
+  "stage": 2,
+  "purpose": "A_LAG is an execution property of the lagged S4.1 book. Do not train a chase skip-filter on that book. Live enters via S4.1 command-bus at execution BBO, hold=0, and does not re-open the same episode after TP/SL.",
+  "follows": "config/research/logic1_loser_origin_audit.json",
+  "train_finding": {
+    "losers": 907,
+    "A_EVENT": 0,
+    "A_LAG": 576,
+    "A_LAG_reentry": 301,
+    "A_LAG_first_late": 191,
+    "A_LAG_first_birth_one_tf_bar": 84,
+    "remaining_no_chase": 331
+  },
+  "what_live_must_do": [
+    "entry_source=s41_command_bus",
+    "MIN_ACTIVE_CONTEXT_HOLD_BARS=0 and ANTI_SAW_ENABLED=false",
+    "CONTEXT_START is one-shot per lifecycle_episode_id, including after TP/SL",
+    "CONTEXT_FLIP still opens the new origin",
+    "do not wait one M15 bar to confirm an OPEN"
+  ],
+  "what_we_do_not_do": [
+    "Train a chase allow/block gate on the lagged Hybrid tick book",
+    "Score skip-filters on total R",
+    "Retrain config/trading/hybrid_sizing CatBoost",
+    "Open the holdout",
+    "Restore LIVE1A journal as production entry_source"
+  ],
+  "holdout": "SEALED",
+  "forbidden": [
+    "scripts/research/train_hybrid_trade_sizing_catboost.py",
+    "scripts/research/freeze_live_sizing_model.py",
+    "config/trading/hybrid_sizing/",
+    "scripts/research/train_logic1_s41_open_gate_optuna.py",
+    "scripts/research/train_logic1_m15_perception_optuna.py",
+    "scripts/research/train_logic1_chase_optuna.py"
+  ],
+  "next": "Step 3 skipped (A_EVENT=0). Step 4 dead-birth is not trainable. Step 5 is continuation fade on the 255 no-chase C losers."
+}

@@ -72,7 +72,7 @@ def load_intrabar_paper_config(
         raise ValueError(f"intrabar_paper_execution.json missing required keys: {missing}")
     if bool(raw.get("real_execution_enabled", False)):
         raise ValueError("real_execution_enabled must be false for LIVE1B paper-only activation")
-    entry_source = str(raw.get("entry_source") or "context_journal").strip().lower()
+    entry_source = str(raw.get("entry_source") or "s41_command_bus").strip().lower()
     if entry_source not in {"context_journal", "s41_command_bus"}:
         raise ValueError(f"unsupported entry_source={entry_source!r}")
     consume_after = raw.get("s41_consume_commands_after")

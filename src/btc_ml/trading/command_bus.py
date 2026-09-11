@@ -20,6 +20,14 @@ ROOT = Path(__file__).resolve().parents[3]
 
 COMMAND_SCHEMA_VERSION = "timeframe_manager_command_v1"
 
+_INTENT_CONSUME_RANK = {
+    "CLOSE": 0,
+    "OPEN_LONG": 1,
+    "OPEN_SHORT": 1,
+    "HOLD": 2,
+    "NO_ACTION": 3,
+}
+
 PRODUCTION_COMMAND_MEMORY = ROOT / "data" / "trading" / "manager" / "timeframe_command_memory.parquet"
 PRODUCTION_LATEST_SNAPSHOT = ROOT / "data" / "runtime" / "timeframe_manager_latest.json"
 PRODUCTION_MANAGER_STATE = ROOT / "data" / "trading" / "manager" / "manager_state.json"
@@ -158,14 +166,23 @@ class CommandBus:
         if not len(frame):
             return []
         stamps = pd.to_datetime(frame["evaluation_timestamp"], utc=True, errors="coerce")
-        frame = frame.assign(_ts=stamps).sort_values("_ts")
+        if "intent" in frame.columns:
+            intent_rank = frame["intent"].astype(str).str.upper().map(_INTENT_CONSUME_RANK).fillna(9)
+        else:
+            intent_rank = 9
+        sort_cols = ["_ts", "_intent_rank"]
+        frame = frame.assign(_ts=stamps, _intent_rank=intent_rank)
+        if "command_id" in frame.columns:
+            sort_cols.append("command_id")
+        frame = frame.sort_values(sort_cols, kind="mergesort")
         if after_evaluation_timestamp is not None:
             boundary = pd.Timestamp(after_evaluation_timestamp)
             boundary = boundary.tz_localize("UTC") if boundary.tzinfo is None else boundary.tz_convert("UTC")
             frame = frame[frame["_ts"] >= boundary]
         out: list[dict[str, Any]] = []
+        drop = {"_ts", "_intent_rank"}
         for _, row in frame.iterrows():
-            record = {k: v for k, v in row.to_dict().items() if k != "_ts"}
+            record = {k: v for k, v in row.to_dict().items() if k not in drop}
             if str(record.get("command_id")) in processed_command_ids:
                 continue
             out.append(record)

@@ -30,8 +30,8 @@
   "books_root": "data/trading/intrabar_paper",
   "epochs_root": "data/trading/paper_epochs",
   "economics_source": "canonical_paper_trade_economics_v1",
-  "entry_source": "context_journal",
-  "s41_consume_commands_after": "2026-08-15T08:33:58.378788Z",
+  "entry_source": "s41_command_bus",
+  "s41_consume_commands_after": "2026-09-11T20:50:00Z",
   "hybrid_sizing": {
     "enabled": true,
     "artifacts_dir": "config/trading/hybrid_sizing"

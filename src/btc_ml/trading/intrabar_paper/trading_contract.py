@@ -49,7 +49,7 @@ SLEEVE2_CAPITAL_CONTRACT_MISMATCH = "TRD_SLEEVE2_BLOCKED_CAPITAL_CONTRACT_MISMAT
 SLEEVE2_AWAITING_FLAT = "TRD_SLEEVE2_READY_AWAITING_FLAT"
 SLEEVE2_ACTIVE = "TRD_SLEEVE2_PER_TIMEFRAME_CAPITAL_ACTIVE"
 SLEEVE2_FREEZE = "TRD_SLEEVE2_ACTIVATION_FREEZE_REQUIRED"
-EXPECTED_SOURCE_FINGERPRINT = "b20fa15bf4a3126f0322b9b64658fa5e672ba0a61c3a09f64dce49615008a5db"
+EXPECTED_SOURCE_FINGERPRINT = "dfacbf3f8cca37e9f8cc314d28b035b9f0c5dba726f500c4cec02649d66d4406"
 EPOCH_PREFIX_SLEEVE2 = "PER_TF_EQUITY_1PCT_V1_"
 
 # Capital / risk deltas that may differ between parent and derived contracts.
@@ -205,8 +205,8 @@ def _hardcoded_rules() -> dict[str, Any]:
         "episode_dedup_key": "lifecycle_episode_id",
         "already_traded_episode_behavior": (
             "CONTEXT_END closes the episode: later CONTEXT_START/S4.1 OPEN blocked "
-            "with ENTRY_BLOCKED_EPISODE_ALREADY_TRADED; TP/SL leave the episode "
-            "open for re-entry while the directional context remains; "
+            "with ENTRY_BLOCKED_EPISODE_ALREADY_TRADED; live journal CONTEXT_START "
+            "and S4.1 OPEN are one-shot per episode so TP/SL do not re-open a chase; "
             "one position per timeframe still applies; "
             "CONTEXT_FLIP close→open is not blocked by episode lock"
         ),
@@ -238,7 +238,10 @@ def _hardcoded_rules() -> dict[str, Any]:
         "short_geometry_validation": "take < entry < stop",
         "tp_trigger": "LONG: bid|trade >= take; SHORT: ask|trade <= take",
         "sl_trigger": "LONG: bid|trade <= stop; SHORT: ask|trade >= stop",
-        "context_end": "exit open position on CONTEXT_END for matching side",
+        "context_end": (
+            "exit open position on closed-bar CONTEXT_END for matching side; "
+            "provisional/intrabar CONTEXT_END does not flatten"
+        ),
         "context_flip": "exit then enter opposite (or to_side) on CONTEXT_FLIP",
         "opposite_direction_handling": "via CONTEXT_FLIP path only; OBSERVE tip does not exit",
         "exit_price_source": (
@@ -254,7 +257,10 @@ def _hardcoded_rules() -> dict[str, Any]:
         "short_entry": "bid",
         "long_exit": "bid",
         "short_exit": "ask",
-        "trade_fallback_behavior": "aggTrade price may confirm TP/SL hit alongside BBO",
+        "trade_fallback_behavior": (
+            "aggTrade price may confirm TP/SL hit alongside BBO; "
+            "exchange_trade_timestamp before position.opened_at is ignored"
+        ),
         "stale_bbo_behavior": "ENTRY_BLOCKED_NO_CAUSAL_BBO / EXIT_PENDING_NO_CAUSAL_BBO",
         "gross_net_pnl_semantics": "net = gross - fees - slippage; realized_pnl accumulates net_pnl_usd",
         "realized_net_pnl_definition": (

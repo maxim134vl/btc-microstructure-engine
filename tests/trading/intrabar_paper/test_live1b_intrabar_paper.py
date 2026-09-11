@@ -14,6 +14,28 @@ from btc_ml.trading.intrabar_paper.consumer import ContextEventConsumer, idempot
 from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
 from btc_ml.trading.intrabar_paper.epoch import PaperEpoch, activate_epoch, create_epoch
 
+REPO = Path(__file__).resolve().parents[3]
+
+
+def test_production_entry_source_is_s41_command_bus():
+    raw = json.loads((REPO / "config" / "intrabar_paper_execution.json").read_text(encoding="utf-8"))
+    assert raw["entry_source"] == "s41_command_bus"
+    cfg = load_intrabar_paper_config(repo_root=REPO)
+    assert cfg.entry_source == "s41_command_bus"
+
+
+def test_sandbox_may_still_select_context_journal_for_research(tmp_path: Path):
+    payload = json.loads(
+        (REPO / "config" / "intrabar_paper_execution.json").read_text(encoding="utf-8")
+    )
+    payload["entry_source"] = "context_journal"
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "intrabar_paper_execution.json").write_text(
+        json.dumps(payload) + "\n", encoding="utf-8"
+    )
+    cfg = load_intrabar_paper_config(repo_root=tmp_path)
+    assert cfg.entry_source == "context_journal"
+
 
 @pytest.fixture
 def cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

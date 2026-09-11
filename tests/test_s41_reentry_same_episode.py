@@ -1,7 +1,8 @@
-"""Same directional episode may OPEN again after the slot is free."""
+"""Same directional episode must not OPEN again after the slot is free."""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from btc_ml.trading.timeframe_manager import TimeframeManager  # noqa: E402
 from test_s4_1_manager_independent_timeframe_traders import synthetic_sources  # noqa: E402
 
 
-def test_manager_reopens_same_episode_on_later_cycle_when_flat(tmp_path, monkeypatch):
+def test_manager_does_not_reopen_same_episode_on_later_cycle_when_flat(tmp_path, monkeypatch):
     monkeypatch.setattr(
         TimeframeManager,
         "_use_live1b_position_views",
@@ -34,6 +35,6 @@ def test_manager_reopens_same_episode_on_later_cycle_when_flat(tmp_path, monkeyp
     m15_first = next(cmd for cmd in first["commands"] if cmd["timeframe"] == "M15")
     m15_second = next(cmd for cmd in second["commands"] if cmd["timeframe"] == "M15")
     assert m15_first["intent"] == "OPEN_LONG"
-    assert m15_second["intent"] == "OPEN_LONG"
-    assert "EPISODE_ALREADY_TRADED" not in m15_second["reason_codes"]
+    assert m15_second["intent"] != "OPEN_LONG"
+    assert "EPISODE_ALREADY_TRADED" in json.loads(m15_second["reason_codes"])
     assert m15_first["command_id"] != m15_second["command_id"]

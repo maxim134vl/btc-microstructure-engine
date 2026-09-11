@@ -62,6 +62,18 @@ def _is_provisional_episode(episode: Any) -> bool:
 
 SUPPORTED_TIMEFRAMES = ("M15", "M30", "H1", "H4")
 UNSUPPORTED_TIMEFRAMES = ("D1",)
+# Same closed-bar chain as the hybrid book packs: M15 from the live shadow
+# chain; M30/H1/H4 from resampled M15 OHLCV run through the independent
+# auction→lifecycle builder. Each TF is its own entry authority. Do not copy
+# M15 direction onto higher TFs. D1 stays unsupported.
+LIVE_ENTRY_AUTHORITY_TIMEFRAMES = frozenset(SUPPORTED_TIMEFRAMES)
+INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY = (
+    "INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY"
+)
+
+
+def timeframe_is_live_entry_authority(timeframe: str) -> bool:
+    return str(timeframe or "").upper() in LIVE_ENTRY_AUTHORITY_TIMEFRAMES
 
 OPERATIONAL_AVAILABILITY = {
     "FRESH_EVENT",
@@ -505,6 +517,10 @@ def resolve_timeframe_state(
     ):
         base["actionable"] = False
         base["no_action_reason"] = "PROVISIONAL_CONTEXT_JOURNAL_NOT_ACTIONABLE"
+    # D1 / unknown TF must not open even if a lifecycle row looks ACTIVE.
+    if base.get("actionable") and not timeframe_is_live_entry_authority(tf):
+        base["actionable"] = False
+        base["no_action_reason"] = INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY
     if not base["actionable"] and base["no_action_reason"] is None:
         if direction == DIRECTION_FLAT:
             base["no_action_reason"] = "NON_DIRECTIONAL_TIMEFRAME_STATE"

@@ -154,7 +154,7 @@ def _write_hybrid_activation(manager_root: Path, *, consume_after: str) -> None:
                 "entry_source": "s41_command_bus",
                 "consume_commands_after": consume_after,
                 "cutover_at": consume_after,
-                "note": "S4.1 manager commands; LIVE1B books/capital/PnL (VPS cleanroom hybrid)",
+                "note": "S4.1 TimeframeManager is entry authority; LIVE1B books/BBO/TP/SL; journal observe-only",
             },
             "vps_bootstrap": True,
         }
@@ -376,8 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         "entry_source": "s41_command_bus",
         "s41_consume_commands_after": consume_after,
         "seed_note": (
-            "VPS cleanroom hybrid epoch: PER_TF_EQUITY sleeves ($400k) + "
-            "activation.json (S4.1 manager → LIVE1B books). No live Mac epoch copied."
+            "VPS cleanroom LIVE1B epoch: PER_TF_EQUITY sleeves ($400k) + "
+            "S4.1 command-bus OPEN/CLOSE at bid/ask. Journal observe-only. "
+            "No live Mac epoch copied."
         ),
     }
     (data_root / "deployment" / "bootstrap.json").write_text(

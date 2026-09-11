@@ -128,7 +128,7 @@ def main() -> int:
         "entry_source": "s41_command_bus",
         "consume_commands_after": consume_after,
         "cutover_at": consume_after,
-        "note": "S4.1 manager commands; LIVE1B books/capital/PnL",
+        "note": "S4.1 TimeframeManager is entry authority; LIVE1B books/BBO/TP/SL; journal observe-only",
     }
     activation_path.write_text(json.dumps(activation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

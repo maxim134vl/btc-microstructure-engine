@@ -31,8 +31,24 @@ FUTURES_PUBLIC_WS_URL = "wss://fstream.binance.com/public/stream?streams={symbol
 FUTURES_MARKET_WS_URL = "wss://fstream.binance.com/market/stream?streams={symbol}@aggTrade"
 
 
-def _utc() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+def _first_s41_consume_after(configured: str | None, checkpoint: Path) -> str:
+    """Skip void command-bus history on the first hybrid cursor.
+
+    S4.1 kept writing while journal was entry authority. Replaying that
+    prefix would duplicate a live journal position (M15 short). Restarts
+    that already have a cursor keep the configured floor.
+    """
+    if checkpoint.exists():
+        return configured or _utc()
+    now = _utc()
+    if not configured:
+        return now
+    try:
+        cfg_ts = datetime.fromisoformat(configured.replace("Z", "+00:00"))
+        now_ts = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    except ValueError:
+        return now
+    return now if cfg_ts < now_ts else configured
 
 
 def _handle_stop(*_args: object) -> None:
@@ -229,11 +245,14 @@ def main() -> int:
     engine.write_health()
 
     s41_consumer: S41CommandConsumer | None = None
+    s41_consume_after = cfg.s41_consume_commands_after
     if cfg.entry_source == "s41_command_bus":
+        cursor_path = epoch_root / "s41_command_cursor.json"
+        s41_consume_after = _first_s41_consume_after(cfg.s41_consume_commands_after, cursor_path)
         s41_consumer = S41CommandConsumer(
             engine,
-            checkpoint_path=epoch_root / "s41_command_cursor.json",
-            consume_after=cfg.s41_consume_commands_after,
+            checkpoint_path=cursor_path,
+            consume_after=s41_consume_after,
         )
 
     pid_path = REPO / "run" / "intrabar_paper_manager.pid"
@@ -249,7 +268,7 @@ def main() -> int:
                 "paper_only": True,
                 "real_execution_enabled": False,
                 "entry_source": cfg.entry_source,
-                "s41_consume_commands_after": cfg.s41_consume_commands_after,
+                "s41_consume_commands_after": s41_consume_after,
                 "max_bbo_age_ms": cfg.max_bbo_age_ms,
                 "max_agg_trade_age_ms": cfg.max_agg_trade_age_ms,
                 "execution_market_wal": str(epoch_root / "execution_market_wal"),

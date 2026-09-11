@@ -68,6 +68,39 @@ def _ts_key(value: Any) -> pd.Timestamp | None:
     return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
 
 
+def _same_evaluation(left: Any, right: Any) -> bool:
+    a = _ts_key(left)
+    b = _ts_key(right)
+    if a is None or b is None:
+        return str(left or "") == str(right or "")
+    return a == b
+
+
+def _episode_already_traded(
+    per_tf_state: dict[str, Any],
+    *,
+    episode: Any,
+    evaluation_timestamp: Any,
+) -> bool:
+    """True when this episode already received an OPEN on a prior evaluation.
+
+    Same-evaluation replay stays idempotent: the original OPEN command_id is
+    re-emitted so the command bus can reject duplicates. A later cycle, even
+    with a free slot after TP/SL, must not OPEN the same episode again.
+    """
+    ep = str(episode or "").strip()
+    if not ep:
+        return False
+    traded = {str(x).strip() for x in (per_tf_state.get("traded_episode_ids") or []) if str(x).strip()}
+    last = str(per_tf_state.get("last_entry_episode_id") or "").strip()
+    if ep not in traded and ep != last:
+        return False
+    last_eval = per_tf_state.get("last_entry_evaluation_timestamp")
+    if last_eval is not None and ep == last and _same_evaluation(last_eval, evaluation_timestamp):
+        return False
+    return True
+
+
 LINEAGE_EXACT_UNIQUE_MATCH = "EXACT_UNIQUE_MATCH"
 LINEAGE_NO_EXACT_DECISION_MATCH = "NO_EXACT_DECISION_MATCH"
 LINEAGE_AMBIGUOUS_EXACT_DECISION_MATCH = "AMBIGUOUS_EXACT_DECISION_MATCH"
@@ -262,17 +295,16 @@ def _preview_context_for_open_position(side: str, timeframe_state: str) -> str:
 
 
 def _is_context_flip_close(preview: dict[str, Any]) -> bool:
+    """Opposite directional context close — not TP/SL and not OBSERVE/END."""
     if not preview.get("is_close"):
         return False
-    if preview.get("exited_on_flip"):
-        return True
     action = str(preview.get("exit_preview_action") or "").upper()
     reason = str(preview.get("exit_preview_reason") or "").upper()
-    if "CONTEXT_EXIT" in action or "CONTEXT_FLIP" in reason:
-        return True
     if "STOP_LOSS" in action or "TAKE_PROFIT" in action or "STOP_LOSS" in reason or "TAKE_PROFIT" in reason:
         return False
-    return bool(preview.get("context_exit_preview"))
+    if preview.get("exited_on_flip") or "CONTEXT_FLIP" in reason:
+        return True
+    return False
 
 
 def _record_entry(
@@ -288,6 +320,13 @@ def _record_entry(
     per_tf_state["last_entry_side"] = str(side or "").upper()
     if context_started_at is not None:
         per_tf_state["last_entry_context_started_at"] = str(context_started_at)
+    ep = str(episode).strip() if episode is not None else ""
+    if not ep:
+        return
+    traded = [str(x) for x in (per_tf_state.get("traded_episode_ids") or []) if str(x).strip()]
+    if ep not in traded:
+        traded.append(ep)
+    per_tf_state["traded_episode_ids"] = traded
 
 
 FEED_BAR_SECONDS = 900
@@ -424,7 +463,7 @@ class TimeframeManager:
         )
         commands: list[dict[str, Any]] = []
         for tf in self.timeframes:
-            command = self._build_command(
+            built = self._build_command(
                 timeframe=tf,
                 state=states[tf],
                 view=views[tf],
@@ -438,10 +477,15 @@ class TimeframeManager:
                 activation_boundary=activation_boundary,
                 decision_index=resolved_decision_index,
             )
-            approved = float(safe_float(command.get("approved_risk_usd")) or 0.0)
-            if command.get("intent") in {"OPEN_LONG", "OPEN_SHORT"} and approved > 0:
-                reserved_risk[tf] = reserved_risk.get(tf, 0.0) + approved
-            commands.append(command)
+            for command in built:
+                approved = float(safe_float(command.get("approved_risk_usd")) or 0.0)
+                if command.get("intent") in {"OPEN_LONG", "OPEN_SHORT"} and approved > 0:
+                    reserved_risk[tf] = reserved_risk.get(tf, 0.0) + approved
+                    open_positions[tf] = 1
+                elif command.get("intent") == "CLOSE":
+                    reserved_risk[tf] = 0.0
+                    open_positions[tf] = 0
+                commands.append(command)
 
         for tf in UNSUPPORTED_TIMEFRAMES:
             tf_state.pop(tf, None)
@@ -533,7 +577,7 @@ class TimeframeManager:
         decision_index: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]]
         | dict[tuple[pd.Timestamp, str], dict[str, Any]]
         | None = None,
-    ) -> dict[str, Any]:
+    ) -> list[dict[str, Any]]:
         reasons: list[str] = []
         intent = "NO_ACTION"
         exit_reason = None
@@ -551,6 +595,16 @@ class TimeframeManager:
 
         open_position = view.get("open_position")
         bar_close = state.get("source_bar_close")
+        shared = dict(
+            timeframe=timeframe,
+            state=state,
+            manager_cycle_id=manager_cycle_id,
+            evaluation_timestamp=evaluation_timestamp,
+            cross_metadata=cross_metadata,
+            decision_index=decision_index,
+            bar_close=bar_close,
+            invalidation_reference=invalidation_reference,
+        )
 
         if activation_boundary is not None and bar_close is not None:
             boundary = pd.Timestamp(activation_boundary)
@@ -563,6 +617,7 @@ class TimeframeManager:
         if open_position:
             observation = _market_observation(feed, at_or_before=evaluation_timestamp)
             meta = self._position_meta(timeframe)
+            preview = None
             if observation is None or observation.get("close") is None:
                 intent = "HOLD"
                 reasons.append("NO_MARKET_OBSERVATION_HOLD")
@@ -606,52 +661,171 @@ class TimeframeManager:
                 else:
                     intent = "HOLD"
                     reasons.append(str(preview.get("exit_preview_reason") or "HOLD"))
-        elif not state.get("actionable"):
+            primary = self._compose_command(
+                **shared,
+                intent=intent,
+                reasons=reasons,
+                exit_reason=exit_reason,
+                requested_risk=requested_risk,
+                approved_risk=approved_risk,
+                portfolio_open_risk=portfolio_open_risk,
+                stop_reference=stop_reference,
+            )
+            if intent == "CLOSE" and preview is not None and _is_context_flip_close(preview):
+                follow_risk = dict(reserved_risk)
+                follow_risk[timeframe] = 0.0
+                follow_positions = dict(open_positions)
+                follow_positions[timeframe] = 0
+                follow = self._build_flat_open_command(
+                    timeframe=timeframe,
+                    state=state,
+                    manager_cycle_id=manager_cycle_id,
+                    evaluation_timestamp=evaluation_timestamp,
+                    feed=feed,
+                    reserved_risk=follow_risk,
+                    open_positions=follow_positions,
+                    per_tf_state=per_tf_state,
+                    cross_metadata=cross_metadata,
+                    decision_index=decision_index,
+                    extra_reasons=["ATOMIC_FLIP_OPEN"],
+                )
+                if follow.get("intent") in {"OPEN_LONG", "OPEN_SHORT"}:
+                    return [primary, follow]
+            return [primary]
+
+        return [
+            self._build_flat_open_command(
+                timeframe=timeframe,
+                state=state,
+                manager_cycle_id=manager_cycle_id,
+                evaluation_timestamp=evaluation_timestamp,
+                feed=feed,
+                reserved_risk=reserved_risk,
+                open_positions=open_positions,
+                per_tf_state=per_tf_state,
+                cross_metadata=cross_metadata,
+                decision_index=decision_index,
+                extra_reasons=reasons,
+            )
+        ]
+
+    def _build_flat_open_command(
+        self,
+        *,
+        timeframe: str,
+        state: dict[str, Any],
+        manager_cycle_id: str,
+        evaluation_timestamp: Any,
+        feed: pd.DataFrame,
+        reserved_risk: dict[str, float],
+        open_positions: dict[str, int],
+        per_tf_state: dict[str, Any],
+        cross_metadata: dict[str, Any],
+        decision_index: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]]
+        | dict[tuple[pd.Timestamp, str], dict[str, Any]]
+        | None = None,
+        extra_reasons: list[str] | None = None,
+    ) -> dict[str, Any]:
+        reasons = list(extra_reasons or [])
+        intent = "NO_ACTION"
+        requested_risk = 0.0
+        approved_risk = 0.0
+        stop_reference = None
+        risk_view = self.risk.evaluate(
+            timeframe=timeframe,
+            requested_risk_usd=self.risk.trader_budget(timeframe),
+            open_risk_by_timeframe=reserved_risk,
+            open_positions_by_timeframe=open_positions,
+        )
+        portfolio_open_risk = risk_view.portfolio_open_risk_usd
+        eval_ts = state.get("evaluation_timestamp") or evaluation_timestamp
+        episode = state.get("lifecycle_episode_id")
+
+        if not state.get("actionable"):
             intent = "NO_ACTION"
             reasons.append(str(state.get("no_action_reason") or "NOT_ACTIONABLE"))
         elif "BEFORE_ACTIVATION_BOUNDARY" in reasons:
             intent = "NO_ACTION"
-        else:
-            episode = state.get("lifecycle_episode_id")
-            # One open slot per TF is enforced by `if open_position` above.
-            # After TP/SL the slot is free: the same live episode may OPEN again.
-            # CONTEXT_END makes the timeframe non-actionable, so this branch is not used.
+        elif not timeframe_is_live_entry_authority(timeframe):
             # Each supported TF opens from its own ACTIVE direction. D1 stays out.
-            if not timeframe_is_live_entry_authority(timeframe):
-                intent = "NO_ACTION"
-                reasons.append(INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY)
-            else:
-                direction = str(state.get("timeframe_direction") or "").upper()
-                candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
-                requested_risk = self.risk.trader_budget(timeframe)
-                decision = self.risk.evaluate(
-                    timeframe=timeframe,
-                    requested_risk_usd=requested_risk,
-                    open_risk_by_timeframe=reserved_risk,
-                    open_positions_by_timeframe=open_positions,
+            intent = "NO_ACTION"
+            reasons.append(INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY)
+        elif _episode_already_traded(per_tf_state, episode=episode, evaluation_timestamp=eval_ts):
+            # One-shot: TP/SL frees the slot but the same episode must not chase.
+            # FLIP opens a different opposite episode and is not this gate.
+            intent = "NO_ACTION"
+            reasons.append("EPISODE_ALREADY_TRADED")
+        else:
+            direction = str(state.get("timeframe_direction") or "").upper()
+            candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
+            requested_risk = self.risk.trader_budget(timeframe)
+            decision = self.risk.evaluate(
+                timeframe=timeframe,
+                requested_risk_usd=requested_risk,
+                open_risk_by_timeframe=reserved_risk,
+                open_positions_by_timeframe=open_positions,
+            )
+            portfolio_open_risk = decision.portfolio_open_risk_usd
+            if decision.approved:
+                intent = candidate_intent
+                approved_risk = decision.approved_risk_usd
+                reasons.append(f"TIMEFRAME_DIRECTIONAL_ENTRY:{direction}")
+                _record_entry(
+                    per_tf_state,
+                    evaluation_timestamp=eval_ts,
+                    side=direction,
+                    episode=episode,
+                    context_started_at=state.get("context_started_at"),
                 )
-                portfolio_open_risk = decision.portfolio_open_risk_usd
-                if decision.approved:
-                    intent = candidate_intent
-                    approved_risk = decision.approved_risk_usd
-                    reasons.append(f"TIMEFRAME_DIRECTIONAL_ENTRY:{direction}")
-                    _record_entry(
-                        per_tf_state,
-                        evaluation_timestamp=state.get("evaluation_timestamp") or evaluation_timestamp,
-                        side=direction,
-                        episode=episode,
-                        context_started_at=state.get("context_started_at"),
-                    )
-                    observation = _market_observation(feed, at_or_before=evaluation_timestamp)
-                    if observation and observation.get("close"):
-                        stop_reference = compute_stop_take(
-                            "LONG" if candidate_intent == "OPEN_LONG" else "SHORT",
-                            float(observation["close"]),
-                        )[0]
-                else:
-                    intent = "NO_ACTION"
-                    reasons.append(str(decision.reason))
+                observation = _market_observation(feed, at_or_before=evaluation_timestamp)
+                if observation and observation.get("close"):
+                    stop_reference = compute_stop_take(
+                        "LONG" if candidate_intent == "OPEN_LONG" else "SHORT",
+                        float(observation["close"]),
+                    )[0]
+            else:
+                intent = "NO_ACTION"
+                reasons.append(str(decision.reason))
 
+        return self._compose_command(
+            timeframe=timeframe,
+            state=state,
+            manager_cycle_id=manager_cycle_id,
+            evaluation_timestamp=evaluation_timestamp,
+            cross_metadata=cross_metadata,
+            decision_index=decision_index,
+            bar_close=state.get("source_bar_close"),
+            invalidation_reference=state.get("invalidation_reason"),
+            intent=intent,
+            reasons=reasons,
+            exit_reason=None,
+            requested_risk=requested_risk,
+            approved_risk=approved_risk,
+            portfolio_open_risk=portfolio_open_risk,
+            stop_reference=stop_reference,
+        )
+
+    def _compose_command(
+        self,
+        *,
+        timeframe: str,
+        state: dict[str, Any],
+        manager_cycle_id: str,
+        evaluation_timestamp: Any,
+        cross_metadata: dict[str, Any],
+        decision_index: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]]
+        | dict[tuple[pd.Timestamp, str], dict[str, Any]]
+        | None,
+        bar_close: Any,
+        invalidation_reference: Any,
+        intent: str,
+        reasons: list[str],
+        exit_reason: str | None,
+        requested_risk: float,
+        approved_risk: float,
+        portfolio_open_risk: float,
+        stop_reference: Any,
+    ) -> dict[str, Any]:
         action_allowed = intent in {"OPEN_LONG", "OPEN_SHORT", "CLOSE"}
         if not reasons:
             reasons.append(intent)
@@ -666,7 +840,6 @@ class TimeframeManager:
             episode=episode,
             intent=intent,
         )
-        # Additive identity passthrough — never invent decision_id; never alias command_id.
         identity = resolve_decision_identity(
             timeframe=timeframe,
             source_bar_open=state.get("source_bar_open"),

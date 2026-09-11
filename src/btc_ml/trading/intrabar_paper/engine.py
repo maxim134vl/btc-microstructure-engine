@@ -43,9 +43,9 @@ def _utc_iso() -> str:
 def context_episode_is_closed(exit_reason: Any) -> bool:
     """True when CONTEXT_END closed the episode.
 
-    Journal CONTEXT_START is one-shot per episode via traded_episodes (TP/SL
-    must not re-open a chase). S4.1 command-bus re-entry after TP/SL is a
-    research-book behaviour and is not gated by this helper.
+    Journal CONTEXT_START and S4.1 OPEN are one-shot per episode via
+    traded_episodes (TP/SL must not re-open a chase). CONTEXT_FLIP to a
+    new opposite episode is not this helper.
     """
     text = str(exit_reason or "").upper()
     return text.startswith("CONTEXT_END")
@@ -53,6 +53,53 @@ def context_episode_is_closed(exit_reason: Any) -> bool:
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    """Parse ISO or unix seconds/ms/ns into UTC. None if unknown."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            n = float(value)
+        else:
+            text = str(value).strip()
+            if not text or text.lower() in {"nan", "nat", "none", "null"}:
+                return None
+            if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+                n = float(text)
+            else:
+                stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                return stamp.astimezone(timezone.utc)
+        if n <= 1e9:
+            # Not a unix-second clock (Binance T is ms ~1.7e12). Fixture stubs use T=1.
+            return None
+        if n > 1e18:
+            n /= 1e9
+        elif n > 1e12:
+            n /= 1e3
+        return datetime.fromtimestamp(n, tz=timezone.utc)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+
+
+def protective_trade_datetime(
+    *,
+    market_provenance: dict[str, Any] | None,
+    receive_timestamp: str | None,
+) -> datetime | None:
+    """Exchange trade clock for TP/SL. Receive time is not the tape clock."""
+    if market_provenance:
+        trade_ts = _as_utc_datetime(market_provenance.get("exchange_trade_timestamp"))
+        if trade_ts is not None:
+            return trade_ts
+        if bool(market_provenance.get("backfill")):
+            return None
+    return _as_utc_datetime(receive_timestamp)
 
 
 def _occurrence_timestamp(event: dict[str, Any], event_timestamp: str | None) -> str | None:
@@ -85,6 +132,7 @@ class OpenPosition:
     entry_fill_id: str
     entry_command_id: str
     entry_monotonic_ns: int
+    opened_at: str | None = None
     traded_episode_ids: set[str] = field(default_factory=set)
 
 
@@ -203,6 +251,7 @@ class IntrabarPaperEngine:
                 entry_fill_id=str(row.get("entry_fill_id") or ""),
                 entry_command_id=str(row.get("entry_command_id") or ""),
                 entry_monotonic_ns=int(row.get("entry_monotonic_ns") or 0),
+                opened_at=str(row.get("opened_at") or row.get("execution_timestamp") or "") or None,
             )
             if ep:
                 self.traded_episodes.add(str(ep))
@@ -709,15 +758,24 @@ class IntrabarPaperEngine:
         ):
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
             return None
-        # Live journal: one START per episode. Re-entry after TP/SL is A_LAG chase
-        # (301/907 train losers). FLIP and S4.1 command-bus are not this gate.
+        # Journal START and S4.1 OPEN are one-shot per episode so TP/SL
+        # do not re-open a chase (301/907 train losers). CONTEXT_FLIP to a
+        # new opposite episode is not this gate.
         if (
-            event_type == "CONTEXT_START"
-            and not from_manager_command
-            and episode_id
+            episode_id
             and episode_id in self.traded_episodes
+            and (
+                (event_type == "CONTEXT_START" and not from_manager_command)
+                or (from_manager_command and event_type == "S41_COMMAND_OPEN")
+            )
         ):
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
+            if from_manager_command:
+                return {
+                    "status": "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED",
+                    "timeframe": tf,
+                    "context_event_id": context_event_id,
+                }
             return None
 
         occurrence_px = resolve_context_entry_price(event, context_event_price)
@@ -949,6 +1007,7 @@ class IntrabarPaperEngine:
             entry_fill_id=fill_id,
             entry_command_id=cmd_id,
             entry_monotonic_ns=cmd_mono,
+            opened_at=execution_ts,
         )
         if self._uses_sleeves() and self.sleeves is not None:
             self.sleeves.mark_open(tf, pos_id, float(sizing.risk_amount_usd))
@@ -1357,14 +1416,25 @@ class IntrabarPaperEngine:
         use_local_bbo: bool = False,
         market_provenance: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Protective TP/SL is triggered by the market trade price only."""
+        """Protective TP/SL is triggered by the market trade price only.
+
+        Gap-recovery may replay aggTrades whose exchange time is before the
+        position existed. Receive time is when the process saw the row, not
+        when the tape printed. Pre-entry prints must not stop a later entry.
+        """
         actions: list[dict[str, Any]] = []
         if trade_price is None:
             return actions
 
         px = float(trade_price)
+        trade_ts = None
+        if market_provenance:
+            trade_ts = _as_utc_datetime(market_provenance.get("exchange_trade_timestamp"))
 
         for tf, pos in list(self.positions.items()):
+            opened_ts = _as_utc_datetime(pos.opened_at)
+            if trade_ts is not None and opened_ts is not None and trade_ts < opened_ts:
+                continue
             if pos.side == "LONG":
                 hit_tp = px >= pos.take_profit_price
                 hit_sl = px <= pos.stop_loss_price

@@ -564,7 +564,7 @@ def test_s41_close_higher_tf_not_blocked_by_entry_authority(cfg):
     assert not str(result.get("status") or "").startswith("ENTRY_BLOCKED_")
 
 
-def test_s41_open_reenters_after_tp(cfg):
+def test_s41_open_does_not_reenter_after_tp(cfg):
     c, _ = cfg
     eng = _engine(c)
     episode = "M15:live"
@@ -609,7 +609,11 @@ def test_s41_open_reenters_after_tp(cfg):
     )
     second = dict(first)
     second["command_id"] = "TF_CMD_reentry_b"
-    assert eng.apply_s41_manager_command(second)["status"] == "ENTERED"
+    result = eng.apply_s41_manager_command(second) or {}
+    assert result.get("status") == "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED"
+    assert "M15" not in eng.positions
+    blocked = eng.books.read_all("blocked")
+    assert blocked and blocked[-1]["reason"] == "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED"
 
 
 def test_c_ended_episode_cannot_reenter(cfg):

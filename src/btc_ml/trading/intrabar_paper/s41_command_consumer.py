@@ -92,6 +92,12 @@ class S41CommandConsumer:
                 processed_command_ids=processed,
                 after_evaluation_timestamp=after,
             )
+            pending.sort(
+                key=lambda c: (
+                    0 if str(c.get("intent") or "").upper() == "CLOSE" else 1,
+                    str(c.get("command_id") or ""),
+                )
+            )
             for command in pending:
                 command_id = str(command.get("command_id") or "").strip()
                 if not command_id:

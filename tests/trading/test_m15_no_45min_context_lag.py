@@ -53,9 +53,9 @@ def _bar(i: int, context: str, status: str, **overrides) -> dict:
     return base
 
 
-def test_production_live_fills_from_context_journal() -> None:
+def test_production_live_fills_from_s41_command_bus() -> None:
     raw = json.loads((ROOT / "config" / "intrabar_paper_execution.json").read_text(encoding="utf-8"))
-    assert raw["entry_source"] == "context_journal"
+    assert raw["entry_source"] == "s41_command_bus"
 
 
 def test_lifecycle_constants_forbid_m15_45min_hold() -> None:

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "contract_id": "S41_LIVE1B_CHAIN_V1",
+  "phase": 2,
+  "status": "ACTIVE",
+  "purpose": "Single entry authority: closed-bar cognition with volume classes → S4.1 commands → LIVE1B books. LIVE1A journal is never an entry source.",
+  "owners": {
+    "context_truth": "market_context_lifecycle_memory.parquet",
+    "volume_classes": "volume_classification_memory.parquet → volume_response_state.parquet → auction_episode_memory",
+    "entry_authority": "S4.1_TIMEFRAME_MANAGER",
+    "execution_owner": "LIVE1B_INTRABAR_PAPER",
+    "journal_role": "OBSERVE_ONLY"
+  },
+  "entry_source": "s41_command_bus",
+  "forbidden_production_entry_source": "context_journal",
+  "mutual_exclusion": "journal_entry XOR s41_entry; never both",
+  "do_not_restore": [
+    "MIN_ACTIVE_CONTEXT_HOLD_BARS=3",
+    "bar-count anti-saw",
+    "M15 inheritance onto M30/H1/H4",
+    "LIVE1A journal OPEN/FLIP/END fills",
+    "wait-one-bar OPEN"
+  ],
+  "invariants": [
+    {
+      "id": "OWNER_SINGLE",
+      "must": "production entry_source is s41_command_bus; LIVE1B S41CommandConsumer is constructed; journal poll is observe-only"
+    },
+    {
+      "id": "JOURNAL_OBSERVE_ONLY",
+      "must": "when entry_source=s41_command_bus, CONTEXT_START/FLIP must not open a LIVE1B position"
+    },
+    {
+      "id": "PROVISIONAL_NOT_MANAGER",
+      "must": "PROVISIONAL_INTRABAR resolve_timeframe_state is not actionable for S4.1"
+    },
+    {
+      "id": "NO_M15_INHERITANCE",
+      "must": "untagged lifecycle parquet is M15-only; H1 without own rows is NO_LIFECYCLE_ROW, not M15 direction"
+    },
+    {
+      "id": "HOLD_ZERO",
+      "must": "MIN_ACTIVE_CONTEXT_HOLD_BARS=0; CONFIRMED_OPPOSITE_CONFIRM_BARS=1; ANTI_SAW_ENABLED=false"
+    },
+    {
+      "id": "EPISODE_ONESHOT",
+      "must": "same lifecycle_episode_id must not OPEN again after TP/SL/CLOSE; FLIP to opposite episode still allowed"
+    },
+    {
+      "id": "ATOMIC_FLIP",
+      "must": "LONG open + SHORT_CONTEXT ACTIVE in one manager cycle emits CLOSE and opposite OPEN (or intent FLIP), not CLOSE alone"
+    },
+    {
+      "id": "RETRY_MARKET",
+      "must": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY and missing local BBO must not consume the command_id"
+    },
+    {
+      "id": "VOLUME_CLASS_LINEAGE",
+      "must": "S4.1 actionable context is closed-bar parquet lineage, not LIVE1A volume_class=unknown"
+    },
+    {
+      "id": "CHART_FOLLOWS_OWNER",
+      "must": "entry_source=s41_command_bus paints parquet lifecycle bands, not LIVE1A journal"
+    },
+    {
+      "id": "CUTOVER_SCRIPTS",
+      "must": "hybrid cutover and VPS bootstrap write entry_source=s41_command_bus and do not say S4.1 is not entry authority"
+    },
+    {
+      "id": "LOADER_ALLOWS_S41",
+      "must": "canonical load_intrabar_paper_config accepts production s41_command_bus"
+    }
+  ]
+}
