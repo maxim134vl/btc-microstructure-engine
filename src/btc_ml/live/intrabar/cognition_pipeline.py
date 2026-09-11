@@ -8,7 +8,10 @@ import pandas as pd
 
 from btc_ml.cognition.volume_localization_engine_v1 import localize_bar
 from btc_ml.cognition.volume_response_evaluate import evaluate_response_row
-from btc_ml.live.intrabar.closed_bar_context_authority import ClosedBarContextAuthority
+from btc_ml.live.intrabar.closed_bar_context_authority import (
+    ClosedBarContextAuthority,
+    closed_bar_still_directional,
+)
 from btc_ml.live.intrabar.context_event_journal import ContextEventJournal
 from btc_ml.live.intrabar.event_time_lifecycle import (
     detect_context_transition,
@@ -188,21 +191,36 @@ class IntrabarCognitionEngine:
         )
         transition = detect_context_transition(self.lifecycle_prev[timeframe], life)
         closed_bar_active = self.closed_bar.active_market_context(timeframe)
+        closed_bar_ts = self.closed_bar.tip_timestamp(timeframe)
+        event_timestamp = str(bar.causal_cutoff_timestamp or trade.get("local_receive_timestamp"))
+        hold_end = hold_provisional_end_for_closed_bar(
+            closed_bar_active=closed_bar_active,
+            closed_bar_timestamp=closed_bar_ts,
+            event_timestamp=event_timestamp,
+            timeframe=timeframe,
+        )
         held_end = False
         if (
             transition is not None
             and transition["event_type"] == "CONTEXT_END"
-            and hold_provisional_end_for_closed_bar(closed_bar_active=closed_bar_active)
+            and hold_end
         ):
-            # Closed-bar book still LONG/SHORT: empty-bar INVALIDATED is flicker.
+            # Closed-bar book still LONG/SHORT, or its tip is stale: not death.
             # Keep the same episode. Anti-saw is not involved.
+            if closed_bar_still_directional(closed_bar_active):
+                hold_reason = (
+                    "provisional CONTEXT_END held: closed-bar still "
+                    f"{closed_bar_active}"
+                )
+            else:
+                hold_reason = (
+                    "provisional CONTEXT_END held: closed-bar tip stale "
+                    f"{closed_bar_ts} vs {event_timestamp}"
+                )
             life = retain_directional_lifecycle(
                 self.lifecycle_prev[timeframe],
                 life,
-                hold_reason=(
-                    "provisional CONTEXT_END held: closed-bar still "
-                    f"{closed_bar_active}"
-                ),
+                hold_reason=hold_reason,
             )
             transition = None
             held_end = True
@@ -211,7 +229,7 @@ class IntrabarCognitionEngine:
             transition is not None
             and transition["event_type"] == "CONTEXT_END"
             and self.closed_bar.known(timeframe)
-            and not hold_provisional_end_for_closed_bar(closed_bar_active=closed_bar_active)
+            and not hold_end
         )
         state = resolve_timeframe_state(
             timeframe=timeframe,
@@ -234,6 +252,7 @@ class IntrabarCognitionEngine:
             "prev_close": prev_close,
             "geometry_history_rows": int(len(geometry_history)),
             "closed_bar_active": closed_bar_active,
+            "closed_bar_timestamp": None if closed_bar_ts is None else str(closed_bar_ts),
             "provisional_end_held": held_end,
             "closed_bar_confirms_end": closed_bar_confirms_end,
         }
@@ -300,6 +319,9 @@ class IntrabarCognitionEngine:
                 "context_occurrence_timestamp": event_timestamp,
                 "closed_bar_confirms_end": closed_bar_confirms_end,
                 "closed_bar_active_market_context": closed_bar_active,
+                "closed_bar_timestamp": None
+                if closed_bar_ts is None
+                else pd.Timestamp(closed_bar_ts).isoformat().replace("+00:00", "Z"),
             },
             **bbo_fields,
         )

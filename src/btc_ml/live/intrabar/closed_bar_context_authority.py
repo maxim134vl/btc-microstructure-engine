@@ -11,7 +11,7 @@ from typing import Mapping
 
 import pandas as pd
 
-from btc_ml.live.intrabar.partial_bar_state import TIMEFRAMES
+from btc_ml.live.intrabar.partial_bar_state import TIMEFRAMES, TF_SECONDS, bar_open_for
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_LIFECYCLE_MEMORY = ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
@@ -35,6 +35,38 @@ def closed_bar_still_directional(active_market_context: str | None) -> bool:
     return _clean_context(active_market_context) in DIRECTIONAL_CONTEXTS
 
 
+def _as_utc(value: object) -> pd.Timestamp | None:
+    if value is None:
+        return None
+    ts = pd.Timestamp(value)
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def closed_bar_tip_is_current(
+    *,
+    closed_bar_timestamp: object,
+    event_timestamp: object,
+    timeframe: str,
+) -> bool:
+    """True when the tip is the bar that has just closed (or newer).
+
+    Lifecycle ``timestamp`` is bar open. At 09:45:00.011 the current M15
+    bucket is 09:45, so the just-closed bar is 09:30. A tip of 08:45 is
+    stale and must not confirm idea-death.
+    """
+    event = _as_utc(event_timestamp)
+    tip = _as_utc(closed_bar_timestamp)
+    tf = str(timeframe or "").upper()
+    if event is None or tip is None or tf not in TIMEFRAMES:
+        return False
+    just_closed = bar_open_for(event, tf) - pd.Timedelta(seconds=TF_SECONDS[tf])
+    return tip >= just_closed
+
+
 class ClosedBarContextAuthority:
     """Latest closed-bar ``active_market_context`` per timeframe.
 
@@ -53,6 +85,7 @@ class ClosedBarContextAuthority:
         self._mtime_ns: int | None = None
         self._size: int | None = None
         self._by_tf: dict[str, str] = {}
+        self._ts_by_tf: dict[str, pd.Timestamp] = {}
 
     def set_snapshot(self, snapshot: Mapping[str, str] | None) -> None:
         self._snapshot = None if snapshot is None else dict(snapshot)
@@ -73,9 +106,18 @@ class ClosedBarContextAuthority:
         """True when this TF has a closed-bar row we can read."""
         return self.active_market_context(timeframe) is not None
 
+    def tip_timestamp(self, timeframe: str) -> pd.Timestamp | None:
+        """Bar-open timestamp of the latest closed-bar row, if known."""
+        tf = str(timeframe or "").upper()
+        if self._snapshot is not None:
+            return None
+        self._refresh()
+        return self._ts_by_tf.get(tf)
+
     def _refresh(self) -> None:
         if self.path is None or not self.path.exists():
             self._by_tf = {}
+            self._ts_by_tf = {}
             self._mtime_ns = None
             self._size = None
             return
@@ -94,15 +136,18 @@ class ClosedBarContextAuthority:
                 frame = pd.read_parquet(self.path)
             except Exception:
                 return
-        by_tf = _latest_active_by_timeframe(frame)
+        by_tf, ts_by_tf = _latest_active_by_timeframe(frame)
         self._by_tf = by_tf
+        self._ts_by_tf = ts_by_tf
         self._mtime_ns = mtime_ns
         self._size = size
 
 
-def _latest_active_by_timeframe(frame: pd.DataFrame) -> dict[str, str]:
+def _latest_active_by_timeframe(
+    frame: pd.DataFrame,
+) -> tuple[dict[str, str], dict[str, pd.Timestamp]]:
     if frame is None or len(frame) == 0:
-        return {}
+        return {}, {}
     work = frame.copy()
     if "timestamp" in work.columns:
         work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
@@ -113,11 +158,17 @@ def _latest_active_by_timeframe(frame: pd.DataFrame) -> dict[str, str]:
     work["timeframe"] = work["timeframe"].astype(str).str.upper()
     work["active_market_context"] = work["active_market_context"].map(_clean_context)
     out: dict[str, str] = {}
+    ts_out: dict[str, pd.Timestamp] = {}
     for tf in TIMEFRAMES:
         part = work.loc[work["timeframe"] == tf]
         if len(part) == 0:
             continue
-        ctx = str(part.iloc[-1]["active_market_context"] or "")
+        last = part.iloc[-1]
+        ctx = str(last["active_market_context"] or "")
         if ctx:
             out[tf] = ctx
-    return out
+        if "timestamp" in part.columns:
+            tip = _as_utc(last["timestamp"])
+            if tip is not None:
+                ts_out[tf] = tip
+    return out, ts_out

@@ -16,7 +16,10 @@ from build_market_context_lifecycle_memory import (  # noqa: E402
     step_lifecycle,
 )
 
-from .closed_bar_context_authority import closed_bar_still_directional
+from .closed_bar_context_authority import (
+    closed_bar_still_directional,
+    closed_bar_tip_is_current,
+)
 from .partial_bar_state import TF_SECONDS
 
 DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
@@ -76,14 +79,29 @@ def step_event_time_lifecycle(
 def hold_provisional_end_for_closed_bar(
     *,
     closed_bar_active: str | None,
+    closed_bar_timestamp: Any = None,
+    event_timestamp: Any = None,
+    timeframe: str | None = None,
 ) -> bool:
     """Journal must not emit CONTEXT_END while the closed-bar book is still directional.
 
     Anti-Saw is not this gate. This is idea-death authority: the completed-bar
     lifecycle still holds LONG/SHORT, so a provisional empty-bar INVALIDATED
     is flicker, not death.
+
+    A stale OBSERVE tip (older than the just-closed bar) is also not death.
+    M15_10 opened on a live FLIP then died because the authority still showed
+    08:45 OBSERVE at 09:45 while the real book was already SHORT.
     """
-    return closed_bar_still_directional(closed_bar_active)
+    if closed_bar_still_directional(closed_bar_active):
+        return True
+    if closed_bar_timestamp is None or event_timestamp is None or not timeframe:
+        return False
+    return not closed_bar_tip_is_current(
+        closed_bar_timestamp=closed_bar_timestamp,
+        event_timestamp=event_timestamp,
+        timeframe=timeframe,
+    )
 
 
 def retain_directional_lifecycle(
