@@ -23,7 +23,7 @@ from btc_ml.trading.intrabar_paper.engine import IntrabarPaperEngine
 from btc_ml.trading.intrabar_paper.epoch import load_active_epoch
 from btc_ml.trading.intrabar_paper.execution_market_processor import ExecutionMarketProcessor
 from btc_ml.trading.intrabar_paper.execution_market_wal_config import load_execution_market_wal_config
-from btc_ml.trading.intrabar_paper.s41_command_consumer import S41CommandConsumer
+from btc_ml.trading.intrabar_paper.s41_command_consumer import S41CommandConsumer, later_iso
 
 STOP = False
 
@@ -31,16 +31,28 @@ FUTURES_PUBLIC_WS_URL = "wss://fstream.binance.com/public/stream?streams={symbol
 FUTURES_MARKET_WS_URL = "wss://fstream.binance.com/market/stream?streams={symbol}@aggTrade"
 
 
+def _utc() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _first_s41_consume_after(configured: str | None, checkpoint: Path) -> str:
     """Skip void command-bus history on the first hybrid cursor.
 
     S4.1 kept writing while journal was entry authority. Replaying that
     prefix would duplicate a live journal position (M15 short). Restarts
-    that already have a cursor keep the configured floor.
+    that already have a cursor keep the later of the configured overlay
+    floor and the cursor floor — never the older of the two.
     """
-    if checkpoint.exists():
-        return configured or _utc()
     now = _utc()
+    file_after = None
+    if checkpoint.exists():
+        try:
+            payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                file_after = payload.get("consume_after")
+        except (OSError, json.JSONDecodeError, TypeError):
+            file_after = None
+        return later_iso(configured, file_after) or configured or now
     if not configured:
         return now
     try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +20,31 @@ _TRANSIENT_OPEN_BLOCKS = frozenset(
 
 
 def _utc_iso() -> str:
-    from datetime import datetime, timezone
-
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def later_iso(*values: str | None) -> str | None:
+    """Return the latest parseable UTC timestamp among *values*."""
+    best_text: str | None = None
+    best_ts: datetime | None = None
+    for raw in values:
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        try:
+            ts = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        else:
+            ts = ts.astimezone(timezone.utc)
+        if best_ts is None or ts > best_ts:
+            best_ts = ts
+            best_text = text
+    return best_text
 
 
 class S41CommandConsumer:
@@ -40,6 +63,8 @@ class S41CommandConsumer:
         self.consume_after = consume_after
         self.bus = bus or CommandBus(CommandBusPaths.production())
         self._state = self._load()
+        if self._state.get("consume_after"):
+            self._save()
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -48,7 +73,8 @@ class S41CommandConsumer:
                 ids = payload.get("processed_command_ids") or []
                 return {
                     "processed_command_ids": [str(x) for x in ids if str(x).strip()],
-                    "consume_after": payload.get("consume_after") or self.consume_after,
+                    "consume_after": later_iso(payload.get("consume_after"), self.consume_after)
+                    or self.consume_after,
                     "updated_at": payload.get("updated_at"),
                 }
         except (OSError, json.JSONDecodeError):

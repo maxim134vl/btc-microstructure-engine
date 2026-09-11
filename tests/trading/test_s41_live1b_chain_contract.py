@@ -277,6 +277,44 @@ def test_retry_market_does_not_consume_command_id(tmp_path: Path):
         assert command["command_id"] not in stored.get("processed_command_ids", [])
 
 
+def test_consumer_raises_stale_cursor_floor_to_configured(tmp_path: Path):
+    from btc_ml.trading.intrabar_paper.s41_command_consumer import later_iso
+
+    assert later_iso("2026-09-07T09:54:42.626102Z", "2026-09-11T20:50:00Z") == (
+        "2026-09-11T20:50:00Z"
+    )
+    cursor = tmp_path / "s41_command_cursor.json"
+    cursor.write_text(
+        json.dumps(
+            {
+                "consume_after": "2026-09-07T09:54:42.626102Z",
+                "processed_command_ids": ["TF_CMD_OLD"],
+                "schema_version": "s41_live1b_command_cursor_v1",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class _Cfg:
+        timeframes = ("M15",)
+        max_bbo_age_ms = 2000.0
+
+    class _Engine:
+        cfg = _Cfg()
+
+    consumer = S41CommandConsumer(
+        _Engine(),
+        checkpoint_path=cursor,
+        consume_after="2026-09-11T22:28:00Z",
+        bus=type("Bus", (), {})(),
+    )
+    assert consumer._state["consume_after"] == "2026-09-11T22:28:00Z"
+    assert consumer._state["processed_command_ids"] == ["TF_CMD_OLD"]
+    stored = json.loads(cursor.read_text(encoding="utf-8"))
+    assert stored["consume_after"] == "2026-09-11T22:28:00Z"
+
+
 def test_journal_start_does_not_open_when_entry_source_is_s41(tmp_path: Path):
     from datetime import datetime, timedelta, timezone
 
