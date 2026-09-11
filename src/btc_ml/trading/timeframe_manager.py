@@ -24,11 +24,13 @@ from .paper_core import compute_stop_take, evaluate_exit_preview, make_id, safe_
 from .paper_trader_engine import PaperTraderEngine
 from .portfolio_risk import PortfolioRiskCoordinator
 from .timeframe_state_adapter import (
+    INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY,
     SUPPORTED_TIMEFRAMES,
     UNSUPPORTED_TIMEFRAMES,
     TimeframeSources,
     load_sources,
     resolve_all_states,
+    timeframe_is_live_entry_authority,
 )
 from .trader_book import TraderBook, repo_relative
 
@@ -40,13 +42,10 @@ ASSET = "BTCUSDT"
 TIMEFRAME_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
 _SOURCE_TF_TO_MANAGER = {"15m": "M15", "30m": "M30", "1h": "H1", "4h": "H4"}
 
-# Anti-saw rails (symmetric LONG/SHORT). Conservative defaults; tune later from logs.
-# Blocks the Aug 22–23 style flip→reopen→flip loop without waiting on a large sample.
-ANTI_SAW_ENABLED = True
-# Do not context-close a position until it has lived at least N bars of that TF.
-ANTI_SAW_MIN_HOLD_BARS = {"M15": 4, "M30": 3, "H1": 2, "H4": 1}
-# After a context-flip close, block any new entry on that TF for N bars.
-ANTI_SAW_ENTRY_COOLDOWN_BARS = {"M15": 4, "M30": 3, "H1": 2, "H4": 1}
+# Bar-count anti-saw is archived. Path-density saw filter lives on paper OPEN
+# (`btc_ml.trading.anti_saw_path_density`). Do not restore min-hold/cooldown.
+# Do not mix either into journal START/END/FLIP.
+ANTI_SAW_ENABLED = False
 
 
 def _canonical_episode_id(*, namespace: str, original: str, timeframe: str | None) -> str:
@@ -262,18 +261,6 @@ def _preview_context_for_open_position(side: str, timeframe_state: str) -> str:
     return ctx
 
 
-def _bars_elapsed(timeframe: str, start: Any, end: Any) -> float | None:
-    """Elapsed TF bars between two timestamps (fractional OK)."""
-    seconds = TIMEFRAME_SECONDS.get(str(timeframe).upper())
-    if not seconds:
-        return None
-    a = _ts_key(start)
-    b = _ts_key(end)
-    if a is None or b is None:
-        return None
-    return max(0.0, (b - a).total_seconds() / float(seconds))
-
-
 def _is_context_flip_close(preview: dict[str, Any]) -> bool:
     if not preview.get("is_close"):
         return False
@@ -288,86 +275,7 @@ def _is_context_flip_close(preview: dict[str, Any]) -> bool:
     return bool(preview.get("context_exit_preview"))
 
 
-def _position_entry_anchor(open_position: dict[str, Any], per_tf_state: dict[str, Any], meta: dict[str, Any]) -> Any:
-    """Prefer manager-recorded entry time; fall back to book/meta fields."""
-    for key in (
-        "anti_saw_entry_at",
-        "last_entry_evaluation_timestamp",
-    ):
-        if per_tf_state.get(key):
-            return per_tf_state.get(key)
-    for key in (
-        "entry_timestamp",
-        "opened_at",
-        "entry_time",
-        "fill_timestamp",
-        "created_at",
-    ):
-        if open_position.get(key):
-            return open_position.get(key)
-        if meta.get(key):
-            return meta.get(key)
-    return None
-
-
-def _anti_saw_block_context_close(
-    *,
-    timeframe: str,
-    evaluation_timestamp: Any,
-    open_position: dict[str, Any],
-    per_tf_state: dict[str, Any],
-    meta: dict[str, Any],
-) -> tuple[bool, str | None]:
-    if not ANTI_SAW_ENABLED:
-        return False, None
-    need = float(ANTI_SAW_MIN_HOLD_BARS.get(str(timeframe).upper(), 0) or 0)
-    if need <= 0:
-        return False, None
-    anchor = _position_entry_anchor(open_position, per_tf_state, meta)
-    held = _bars_elapsed(timeframe, anchor, evaluation_timestamp)
-    if held is None:
-        return False, None
-    if held < need:
-        return True, f"ANTI_SAW_MIN_HOLD:{held:.2f}<{need:g}"
-    return False, None
-
-
-def _anti_saw_block_entry(
-    *,
-    timeframe: str,
-    evaluation_timestamp: Any,
-    per_tf_state: dict[str, Any],
-) -> tuple[bool, str | None]:
-    if not ANTI_SAW_ENABLED:
-        return False, None
-    need = float(ANTI_SAW_ENTRY_COOLDOWN_BARS.get(str(timeframe).upper(), 0) or 0)
-    if need <= 0:
-        return False, None
-    closed_at = per_tf_state.get("anti_saw_last_context_close_at")
-    if not closed_at:
-        return False, None
-    elapsed = _bars_elapsed(timeframe, closed_at, evaluation_timestamp)
-    if elapsed is None:
-        return False, None
-    if elapsed < need:
-        return True, f"ANTI_SAW_ENTRY_COOLDOWN:{elapsed:.2f}<{need:g}"
-    return False, None
-
-
-def _record_anti_saw_context_close(
-    per_tf_state: dict[str, Any],
-    *,
-    evaluation_timestamp: Any,
-    side: str,
-    episode: Any,
-) -> None:
-    per_tf_state["anti_saw_last_context_close_at"] = str(evaluation_timestamp)
-    per_tf_state["anti_saw_last_context_close_side"] = str(side or "").upper()
-    per_tf_state["anti_saw_last_context_close_episode"] = episode
-    per_tf_state["anti_saw_last_context_close_kind"] = "CONTEXT_FLIP"
-
-
-def _record_anti_saw_entry(
+def _record_entry(
     per_tf_state: dict[str, Any],
     *,
     evaluation_timestamp: Any,
@@ -377,11 +285,9 @@ def _record_anti_saw_entry(
 ) -> None:
     per_tf_state["last_entry_episode_id"] = episode
     per_tf_state["last_entry_evaluation_timestamp"] = str(evaluation_timestamp)
-    per_tf_state["anti_saw_entry_at"] = str(evaluation_timestamp)
-    per_tf_state["anti_saw_entry_side"] = str(side or "").upper()
-    per_tf_state["anti_saw_entry_episode_id"] = episode
+    per_tf_state["last_entry_side"] = str(side or "").upper()
     if context_started_at is not None:
-        per_tf_state["anti_saw_entry_context_started_at"] = str(context_started_at)
+        per_tf_state["last_entry_context_started_at"] = str(context_started_at)
 
 
 FEED_BAR_SECONDS = 900
@@ -693,29 +599,7 @@ class TimeframeManager:
                     ),
                     latest_lifecycle_state=str(state.get("lifecycle_phase") or ""),
                 )
-                if preview.get("is_close") and _is_context_flip_close(preview):
-                    blocked, block_reason = _anti_saw_block_context_close(
-                        timeframe=timeframe,
-                        evaluation_timestamp=evaluation_timestamp,
-                        open_position=open_position if isinstance(open_position, dict) else {},
-                        per_tf_state=per_tf_state,
-                        meta=meta if isinstance(meta, dict) else {},
-                    )
-                    if blocked:
-                        intent = "HOLD"
-                        reasons.append(str(block_reason))
-                        reasons.append("ANTI_SAW_SUPPRESS_CONTEXT_FLIP_CLOSE")
-                    else:
-                        intent = "CLOSE"
-                        exit_reason = str(preview.get("exit_preview_reason") or "CONTEXT_EXIT")
-                        reasons.append(str(preview.get("exit_preview_action")))
-                        _record_anti_saw_context_close(
-                            per_tf_state,
-                            evaluation_timestamp=state.get("evaluation_timestamp") or evaluation_timestamp,
-                            side=side,
-                            episode=state.get("lifecycle_episode_id"),
-                        )
-                elif preview.get("is_close"):
+                if preview.get("is_close"):
                     intent = "CLOSE"
                     exit_reason = str(preview.get("exit_preview_reason") or "CONTEXT_EXIT")
                     reasons.append(str(preview.get("exit_preview_action")))
@@ -732,17 +616,13 @@ class TimeframeManager:
             # One open slot per TF is enforced by `if open_position` above.
             # After TP/SL the slot is free: the same live episode may OPEN again.
             # CONTEXT_END makes the timeframe non-actionable, so this branch is not used.
-            direction = str(state.get("timeframe_direction") or "").upper()
-            candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
-            cooldown_block, cooldown_reason = _anti_saw_block_entry(
-                timeframe=timeframe,
-                evaluation_timestamp=evaluation_timestamp,
-                per_tf_state=per_tf_state,
-            )
-            if cooldown_block:
+            # Each supported TF opens from its own ACTIVE direction. D1 stays out.
+            if not timeframe_is_live_entry_authority(timeframe):
                 intent = "NO_ACTION"
-                reasons.append(str(cooldown_reason))
+                reasons.append(INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY)
             else:
+                direction = str(state.get("timeframe_direction") or "").upper()
+                candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
                 requested_risk = self.risk.trader_budget(timeframe)
                 decision = self.risk.evaluate(
                     timeframe=timeframe,
@@ -755,7 +635,7 @@ class TimeframeManager:
                     intent = candidate_intent
                     approved_risk = decision.approved_risk_usd
                     reasons.append(f"TIMEFRAME_DIRECTIONAL_ENTRY:{direction}")
-                    _record_anti_saw_entry(
+                    _record_entry(
                         per_tf_state,
                         evaluation_timestamp=state.get("evaluation_timestamp") or evaluation_timestamp,
                         side=direction,

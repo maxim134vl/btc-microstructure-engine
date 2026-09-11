@@ -16,7 +16,10 @@ from build_market_context_lifecycle_memory import (  # noqa: E402
     step_lifecycle,
 )
 
+from .closed_bar_context_authority import closed_bar_still_directional
 from .partial_bar_state import TF_SECONDS
+
+DIRECTIONAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT"})
 
 
 def age_bars_from_elapsed(elapsed_seconds: float, timeframe: str) -> int:
@@ -68,6 +71,41 @@ def step_event_time_lifecycle(
     out["_min_hold_seconds"] = MIN_ACTIVE_CONTEXT_HOLD_BARS * TF_SECONDS[timeframe]
     out["evaluation_mode"] = "PROVISIONAL_INTRABAR"
     return out
+
+
+def hold_provisional_end_for_closed_bar(
+    *,
+    closed_bar_active: str | None,
+) -> bool:
+    """Journal must not emit CONTEXT_END while the closed-bar book is still directional.
+
+    Anti-Saw is not this gate. This is idea-death authority: the completed-bar
+    lifecycle still holds LONG/SHORT, so a provisional empty-bar INVALIDATED
+    is flicker, not death.
+    """
+    return closed_bar_still_directional(closed_bar_active)
+
+
+def retain_directional_lifecycle(
+    prev: Optional[Mapping[str, Any]],
+    new_lifecycle: Mapping[str, Any],
+    *,
+    hold_reason: str,
+) -> dict[str, Any]:
+    """Keep the living directional active context; mark it challenged."""
+    retained = dict(prev or {})
+    retained.update(dict(new_lifecycle))
+    prev_active = str((prev or {}).get("active_market_context") or "OBSERVE")
+    retained["active_market_context"] = prev_active
+    retained["lifecycle_state"] = "CHALLENGED"
+    retained["transition_reason"] = hold_reason
+    retained["_provisional_end_held"] = True
+    if prev:
+        if prev.get("active_context_started_at") is not None:
+            retained["active_context_started_at"] = prev.get("active_context_started_at")
+        if prev.get("active_context_age_bars") is not None:
+            retained["active_context_age_bars"] = prev.get("active_context_age_bars")
+    return retained
 
 
 def detect_context_transition(

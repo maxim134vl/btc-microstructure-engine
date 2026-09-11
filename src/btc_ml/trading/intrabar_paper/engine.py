@@ -22,8 +22,16 @@ from .consumer import (
 )
 from .economics import closed_trade_economics, resolve_risk_sizing
 from btc_ml.trading.hybrid_sizing import load_sizer
+from btc_ml.trading.timeframe_state_adapter import (
+    INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY,
+    timeframe_is_live_entry_authority,
+)
 from .entry_eligibility import replay_entry_block_reason, stale_entry_block_reason
-from btc_ml.live.intrabar.context_event_freshness import entry_freshness_block_reason
+from btc_ml.trading.anti_saw_path_density import PathDensitySawFilter
+from btc_ml.live.intrabar.context_event_freshness import (
+    entry_freshness_block_reason,
+    is_provisional_context_end,
+)
 from .epoch import PaperEpoch
 from .sleeves import SleeveLedger
 
@@ -33,7 +41,12 @@ def _utc_iso() -> str:
 
 
 def context_episode_is_closed(exit_reason: Any) -> bool:
-    """True when the episode itself ended; TP/SL/FLIP leave it tradable."""
+    """True when CONTEXT_END closed the episode.
+
+    Journal CONTEXT_START is one-shot per episode via traded_episodes (TP/SL
+    must not re-open a chase). S4.1 command-bus re-entry after TP/SL is a
+    research-book behaviour and is not gated by this helper.
+    """
     text = str(exit_reason or "").upper()
     return text.startswith("CONTEXT_END")
 
@@ -101,6 +114,7 @@ class IntrabarPaperEngine:
         books: EpochBooks | None = None,
         consumer: ContextEventConsumer | None = None,
         activation_monotonic_ns: int | None = None,
+        saw_filter: PathDensitySawFilter | None = None,
     ) -> None:
         self.cfg = cfg
         self.epoch = epoch
@@ -139,6 +153,11 @@ class IntrabarPaperEngine:
         self.sleeves = SleeveLedger.load(epoch_root)
         self.sizer = load_sizer(cfg_raw=cfg.raw, repo_root=cfg.books_root.parents[2])
         self.last_sizing: dict[str, Any] | None = None
+        self.saw_filter = saw_filter or PathDensitySawFilter(
+            cfg_raw=cfg.raw,
+            repo_root=cfg.books_root.parents[2],
+        )
+        self.last_saw: dict[str, Any] | None = None
         self.capital_model = str(
             ((self.trading_contract or {}).get("capital") or {}).get("capital_model")
             or ("PER_TIMEFRAME_REALIZED_EQUITY" if self.sleeves is not None else "SHARED_MASTER_REALIZED_EQUITY")
@@ -189,19 +208,16 @@ class IntrabarPaperEngine:
                 self.traded_episodes.add(str(ep))
                 pos.traded_episode_ids.add(str(ep))
             self.positions[tf] = pos
-        if self._uses_sleeves():
-            # Sleeve ledger is the equity source of truth; recover ended episodes only.
-            for t in self.books.closed_trades():
-                ep = t.get("lifecycle_episode_id")
-                if ep and context_episode_is_closed(t.get("exit_reason")):
-                    self.ended_episodes.add(str(ep))
-            return
         for t in self.books.closed_trades():
-            self.realized_pnl += float(t.get("net_pnl_usd") or 0.0)
             ep = t.get("lifecycle_episode_id")
-            if ep and context_episode_is_closed(t.get("exit_reason")):
-                self.ended_episodes.add(str(ep))
-        self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
+            if ep:
+                self.traded_episodes.add(str(ep))
+                if context_episode_is_closed(t.get("exit_reason")):
+                    self.ended_episodes.add(str(ep))
+            if not self._uses_sleeves():
+                self.realized_pnl += float(t.get("net_pnl_usd") or 0.0)
+        if not self._uses_sleeves():
+            self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
 
     def execution_market_ready_for_entry(self) -> bool:
         if self.execution_market is None:
@@ -343,6 +359,16 @@ class IntrabarPaperEngine:
                 return actions
             if episode:
                 self.ended_episodes.add(str(episode))
+            if is_provisional_context_end(event):
+                actions.append(
+                    {
+                        "status": "EXIT_IGNORED_PROVISIONAL_CONTEXT_END",
+                        "timeframe": tf,
+                        "context_event_id": eid,
+                        "lifecycle_episode_id": str(episode) if episode else None,
+                    }
+                )
+                return actions
             if pos and (not side or side == pos.side or side in {"OBSERVE", "STAND_ASIDE", ""}):
                 # END for matching side (or end of episode)
                 end_side = side if side in {"LONG", "SHORT"} else pos.side
@@ -451,6 +477,13 @@ class IntrabarPaperEngine:
             "decision_id": command.get("decision_id"),
         }
         if intent in {"OPEN_LONG", "OPEN_SHORT"}:
+            if not timeframe_is_live_entry_authority(tf):
+                return {
+                    "status": f"ENTRY_BLOCKED_{INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY}",
+                    "command_id": command_id,
+                    "timeframe": tf,
+                    "intent": intent,
+                }
             side = "LONG" if intent == "OPEN_LONG" else "SHORT"
             return self._enter_position(
                 tf=tf,
@@ -571,6 +604,28 @@ class IntrabarPaperEngine:
                     event_monotonic_ns=event_monotonic_ns,
                 )
                 return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
+        saw = self.saw_filter.evaluate(timeframe=tf, as_of=event_timestamp)
+        self.last_saw = saw.to_dict()
+        if saw.block:
+            self._block(
+                saw.reason or "ENTRY_BLOCKED_SAW_PATH_DENSITY",
+                tf,
+                context_event_id,
+                side,
+                event=event,
+                extra={"saw": saw.to_dict()},
+            )
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {
+                "status": saw.reason or "ENTRY_BLOCKED_SAW_PATH_DENSITY",
+                "timeframe": tf,
+                "context_event_id": context_event_id,
+                "saw": saw.to_dict(),
+            }
         with self.books.exclusive():
             return self._enter_position_locked(
                 tf=tf,
@@ -646,11 +701,21 @@ class IntrabarPaperEngine:
         if not self.execution_market_ready_for_entry():
             self._block("ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", tf, context_event_id, side, event=event)
             return {"status": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", "timeframe": tf}
-        # Episode lock only after CONTEXT_END. TP/SL leave the episode tradable.
+        # CONTEXT_END kills the episode for both journal START and S4.1 OPEN.
         if (
             (event_type == "CONTEXT_START" or from_manager_command)
             and episode_id
             and episode_id in self.ended_episodes
+        ):
+            self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
+            return None
+        # Live journal: one START per episode. Re-entry after TP/SL is A_LAG chase
+        # (301/907 train losers). FLIP and S4.1 command-bus are not this gate.
+        if (
+            event_type == "CONTEXT_START"
+            and not from_manager_command
+            and episode_id
+            and episode_id in self.traded_episodes
         ):
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
             return None
@@ -1341,6 +1406,7 @@ class IntrabarPaperEngine:
         side: str,
         *,
         event: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self.blocked_commands += 1
         payload: dict[str, Any] = {
@@ -1350,6 +1416,8 @@ class IntrabarPaperEngine:
             "context_event_id": context_event_id,
             "side": side,
         }
+        if extra:
+            payload.update(extra)
         if event:
             payload["decision_available_at"] = event.get("decision_available_at")
             payload["event_timestamp"] = event.get("event_timestamp")
@@ -1444,6 +1512,11 @@ class IntrabarPaperEngine:
             "updated_at": _utc_iso(),
             "health_write_error": self.last_health_write_error,
             "hybrid_sizing": self._hybrid_sizing_health(),
+            "anti_saw_path_density": {
+                "enabled": bool((self.cfg.raw.get("anti_saw_path_density") or {}).get("enabled")),
+                "mode": str((self.cfg.raw.get("anti_saw_path_density") or {}).get("mode") or "off"),
+                "last_decision": self.last_saw,
+            },
         }
         if self.execution_market is not None:
             payload["execution_market"] = self.execution_market.snapshot()

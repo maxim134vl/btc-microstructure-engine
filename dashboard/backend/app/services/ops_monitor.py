@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from collections import deque
 import os
 import time
@@ -128,11 +130,52 @@ def _age_seconds(value: Any, *, now: float | None = None) -> float | None:
     if age < 0:
         return 0.0
     return age
-_LITE_SNAPSHOT_TTL = 5.0
-_FULL_SNAPSHOT_TTL = 3.0
+
+
+_LITE_SNAPSHOT_TTL = 8.0
+_FULL_SNAPSHOT_TTL = 8.0
 _RESEARCH_CACHE_TTL = 30.0
+# Runtime-truth is the expensive sync section (~10–25s live). Cache + single-flight
+# so UI polls and the WS hub cannot stampede the event loop into OFFLINE.
+_RUNTIME_TRUTH_TTL = 8.0
 _OPS_SNAPSHOT_CACHE: dict[str, dict[str, Any]] = {}
 _RESEARCH_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+_RUNTIME_TRUTH_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+_RUNTIME_TRUTH_LOCK = threading.Lock()
+_SNAPSHOT_BUILDING: set[str] = set()
+_SNAPSHOT_BUILDING_LOCK = threading.Lock()
+
+
+def clear_ops_snapshot_caches() -> None:
+    """Drop in-process OPS caches (tests / forced refresh)."""
+    _OPS_SNAPSHOT_CACHE.clear()
+    _RESEARCH_CACHE["ts"] = 0.0
+    _RESEARCH_CACHE["data"] = None
+    _RUNTIME_TRUTH_CACHE["ts"] = 0.0
+    _RUNTIME_TRUTH_CACHE["data"] = None
+
+
+def _build_runtime_truth_cached_sync(*, force: bool = False) -> dict[str, Any]:
+    """Single-flight sync builder. Call via asyncio.to_thread from the event loop."""
+    from ops_dashboard_runtime_truth import build_runtime_truth_snapshot
+
+    now = time.time()
+    if not force:
+        cached = _RUNTIME_TRUTH_CACHE.get("data")
+        ts = float(_RUNTIME_TRUTH_CACHE.get("ts") or 0.0)
+        if cached is not None and now - ts < _RUNTIME_TRUTH_TTL:
+            return cached
+    with _RUNTIME_TRUTH_LOCK:
+        now = time.time()
+        if not force:
+            cached = _RUNTIME_TRUTH_CACHE.get("data")
+            ts = float(_RUNTIME_TRUTH_CACHE.get("ts") or 0.0)
+            if cached is not None and now - ts < _RUNTIME_TRUTH_TTL:
+                return cached
+        data = build_runtime_truth_snapshot()
+        _RUNTIME_TRUTH_CACHE["ts"] = now
+        _RUNTIME_TRUTH_CACHE["data"] = data
+        return data
 
 
 async def _research_pipeline_cached(*, force: bool = False) -> dict[str, Any]:
@@ -1422,6 +1465,51 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
     cached = _OPS_SNAPSHOT_CACHE.get(cache_key)
     if cached and now - cached["ts"] < cache_ttl:
         return cached["data"]
+    # Stale-while-revalidate: one builder per key; everyone else gets last snapshot.
+    with _SNAPSHOT_BUILDING_LOCK:
+        cached = _OPS_SNAPSHOT_CACHE.get(cache_key)
+        now = time.time()
+        if cached and now - cached["ts"] < cache_ttl:
+            return cached["data"]
+        already_building = cache_key in _SNAPSHOT_BUILDING
+        if already_building:
+            if cached:
+                return cached["data"]
+        else:
+            _SNAPSHOT_BUILDING.add(cache_key)
+    if already_building:
+        for _ in range(250):
+            await asyncio.sleep(0.1)
+            cached = _OPS_SNAPSHOT_CACHE.get(cache_key)
+            if cached:
+                return cached["data"]
+        # Builder still not done. Fall through only if the owner dropped the flag
+        # without publishing (crash). Otherwise keep serving as a second builder;
+        # runtime-truth single-flight prevents a CPU stampede.
+        with _SNAPSHOT_BUILDING_LOCK:
+            cached = _OPS_SNAPSHOT_CACHE.get(cache_key)
+            if cached:
+                return cached["data"]
+            _SNAPSHOT_BUILDING.add(cache_key)
+    try:
+        return await _build_ops_snapshot_uncached(
+            ws_connected=ws_connected,
+            lite=lite,
+            cache_key=cache_key,
+            now=now,
+        )
+    finally:
+        with _SNAPSHOT_BUILDING_LOCK:
+            _SNAPSHOT_BUILDING.discard(cache_key)
+
+
+async def _build_ops_snapshot_uncached(
+    *,
+    ws_connected: bool,
+    lite: bool,
+    cache_key: str,
+    now: float,
+) -> dict[str, Any]:
 
     ws_alive, _ = _ws_alive()
     collectors = await build_collector_status()
@@ -1519,12 +1607,9 @@ async def build_ops_snapshot(ws_connected: bool = True, *, lite: bool = False) -
     runtime_truth: dict[str, Any] | None = None
     runtime_truth_warning = None
     try:
-        from ops_dashboard_runtime_truth import (
-            build_runtime_truth_snapshot,
-            overall_health_to_ops_level,
-        )
+        from ops_dashboard_runtime_truth import overall_health_to_ops_level
 
-        runtime_truth = build_runtime_truth_snapshot()
+        runtime_truth = await asyncio.to_thread(_build_runtime_truth_cached_sync)
     except Exception as exc:  # noqa: BLE001
         overall_health_to_ops_level = lambda overall: "GREY"  # noqa: E731
         runtime_truth_warning = f"runtime_truth_unavailable: {type(exc).__name__}: {exc}"

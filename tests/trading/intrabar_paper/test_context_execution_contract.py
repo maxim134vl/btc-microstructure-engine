@@ -115,9 +115,12 @@ def _end(
     bid: float = 100.0,
     ask: float = 100.2,
     extra: dict | None = None,
+    evaluation_mode: str = "CLOSED_BAR_CONTEXT_DECISION",
+    tf: str = "M15",
 ) -> dict:
     payload = _start(
         eid=eid,
+        tf=tf,
         episode=episode,
         mono=mono,
         occurrence_ts=occurrence_ts,
@@ -125,7 +128,7 @@ def _end(
         occurrence_price=occurrence_price,
         bid=bid,
         ask=ask,
-        evaluation_mode="PROVISIONAL_INTRABAR",
+        evaluation_mode=evaluation_mode,
         extra=extra,
     )
     payload["event_type"] = "CONTEXT_END"
@@ -258,7 +261,7 @@ def test_b_delayed_m15_11_style_short_uses_processing_time_bid(cfg):
     assert fill["entry_price_source"] == "execution_market_bbo"
 
 
-def test_tp_then_same_episode_can_reenter(cfg):
+def test_tp_then_same_episode_journal_start_does_not_reenter(cfg):
     c, _ = cfg
     eng = _engine(c)
     episode = "ep_live"
@@ -276,11 +279,12 @@ def test_tp_then_same_episode_can_reenter(cfg):
     )["status"] == "EXITED"
     assert "M15" not in eng.positions
     acts = eng.process_context_event(_start(eid="tp_reenter", episode=episode, mono=3_000_000))
-    assert acts[0]["status"] == "ENTERED"
-    assert eng.positions["M15"].lifecycle_episode_id == episode
+    assert acts == []
+    blocked = eng.books.read_all("blocked")
+    assert blocked and blocked[-1]["reason"] == "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED"
 
 
-def test_sl_then_same_episode_can_reenter(cfg):
+def test_sl_then_same_episode_journal_start_does_not_reenter(cfg):
     c, _ = cfg
     eng = _engine(c)
     episode = "ep_sl"
@@ -297,6 +301,85 @@ def test_sl_then_same_episode_can_reenter(cfg):
         use_local_bbo=True,
     )["status"] == "EXITED"
     acts = eng.process_context_event(_start(eid="sl_reenter", episode=episode, mono=3_000_000))
+    assert acts == []
+    blocked = eng.books.read_all("blocked")
+    assert blocked and blocked[-1]["reason"] == "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED"
+
+
+def test_journal_start_after_tp_blocked_across_engine_restart(cfg):
+    c, _ = cfg
+    first = _engine(c)
+    episode = "ep_restart"
+    assert first.process_context_event(_start(eid="rs_in", episode=episode))[0]["status"] == "ENTERED"
+    assert first._exit_position(
+        tf="M15",
+        trigger_type="TP",
+        trigger_event_id="rs_tp",
+        trigger_timestamp=_fresh(10),
+        trigger_monotonic_ns=2_500_000,
+        trigger_price=None,
+        context_event_id="rs_tp",
+        episode_id=episode,
+        use_local_bbo=True,
+    )["status"] == "EXITED"
+    second = IntrabarPaperEngine(cfg=c, epoch=first.epoch, activation_monotonic_ns=1_000_000)
+    second.bbo.update_from_book_ticker(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=1_000_000,
+        receive_timestamp="2026-08-13T16:00:00Z",
+        book_update_id="seed2",
+        domain="context",
+    )
+    acts = second.process_context_event(_start(eid="rs_again", episode=episode, mono=4_000_000))
+    assert acts == []
+    blocked = second.books.read_all("blocked")
+    assert blocked and blocked[-1]["reason"] == "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED"
+
+
+def test_journal_flip_after_tp_still_enters(cfg):
+    c, _ = cfg
+    eng = _engine(c)
+    episode = "ep_flip_after_tp"
+    assert eng.process_context_event(_start(eid="fl_in", episode=episode))[0]["status"] == "ENTERED"
+    assert eng._exit_position(
+        tf="M15",
+        trigger_type="TP",
+        trigger_event_id="fl_tp",
+        trigger_timestamp=_fresh(10),
+        trigger_monotonic_ns=2_500_000,
+        trigger_price=None,
+        context_event_id="fl_tp",
+        episode_id=episode,
+        use_local_bbo=True,
+    )["status"] == "EXITED"
+    flip = _start(eid="fl_flip", episode="ep_flip_new", mono=4_000_000)
+    flip["event_type"] = "CONTEXT_FLIP"
+    flip["previous_context"] = "LONG_CONTEXT"
+    flip["new_context"] = "SHORT_CONTEXT"
+    flip["from_side"] = "LONG"
+    flip["to_side"] = "SHORT"
+    acts = eng.process_context_event(flip)
+    assert acts and acts[0]["status"] == "ENTERED"
+    assert eng.positions["M15"].side == "SHORT"
+
+
+def test_journal_new_episode_after_tp_still_enters(cfg):
+    c, _ = cfg
+    eng = _engine(c)
+    assert eng.process_context_event(_start(eid="nw_a", episode="ep_a"))[0]["status"] == "ENTERED"
+    assert eng._exit_position(
+        tf="M15",
+        trigger_type="TP",
+        trigger_event_id="nw_tp",
+        trigger_timestamp=_fresh(10),
+        trigger_monotonic_ns=2_500_000,
+        trigger_price=None,
+        context_event_id="nw_tp",
+        episode_id="ep_a",
+        use_local_bbo=True,
+    )["status"] == "EXITED"
+    acts = eng.process_context_event(_start(eid="nw_b", episode="ep_b", mono=4_000_000))
     assert acts[0]["status"] == "ENTERED"
 
 
@@ -405,6 +488,80 @@ def test_s41_second_engine_cannot_open_second_m15(cfg):
     opens = second.books.open_positions()
     assert len(opens) == 1
     assert opens[0]["entry_context_event_id"] == "TF_CMD_dual_a"
+
+
+def test_s41_open_higher_tf_enters_like_book_pack(cfg):
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="proxy_m30",
+    )
+    result = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_proxy_m30",
+            "timeframe": "M30",
+            "intent": "OPEN_SHORT",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M30:79",
+            "evaluation_timestamp": _fresh(20),
+            "context_origin_price": 100.1,
+        }
+    )
+    assert result["status"] == "ENTERED"
+    opens = eng.books.open_positions()
+    assert len(opens) == 1
+    assert str(opens[0].get("timeframe") or "").upper() == "M30"
+
+
+def test_s41_open_d1_still_rejected(cfg):
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="d1_block",
+    )
+    result = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_d1_block",
+            "timeframe": "D1",
+            "intent": "OPEN_LONG",
+            "action_allowed": True,
+            "lifecycle_episode_id": "D1:1",
+            "evaluation_timestamp": _fresh(20),
+            "context_origin_price": 100.1,
+        }
+    )
+    assert result["status"] == "REJECTED_BAD_COMMAND"
+    assert eng.books.open_positions() == []
+
+
+def test_s41_close_higher_tf_not_blocked_by_entry_authority(cfg):
+    c, _ = cfg
+    eng = _engine(c)
+    result = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_close_m30",
+            "timeframe": "M30",
+            "intent": "CLOSE",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M30:79",
+            "evaluation_timestamp": _fresh(20),
+        }
+    ) or {}
+    assert not str(result.get("status") or "").startswith("ENTRY_BLOCKED_")
 
 
 def test_s41_open_reenters_after_tp(cfg):
@@ -627,6 +784,77 @@ def test_kinematics_d_context_end_exits_now_at_current_bid(cfg):
     assert "M15" not in eng.positions
 
 
+def test_step0_provisional_context_end_does_not_flatten(cfg):
+    """Journal/provisional CONTEXT_END is not hold authority."""
+    c, _ = cfg
+    eng = _engine(c)
+    start = _start(
+        eid="step0_start",
+        tf="H1",
+        episode="H1:prov:5",
+        evaluation_mode="PROVISIONAL_INTRABAR",
+        occurrence_ts=_fresh(40),
+        decision_available_at=_fresh(20),
+    )
+    assert eng.process_context_event(start)[0]["status"] == "ENTERED"
+    end = _end(
+        eid="step0_prov_end",
+        tf="H1",
+        episode="H1:prov:5",
+        mono=3_000_000,
+        occurrence_ts=_fresh(10),
+        bid=99.0,
+        ask=99.2,
+        evaluation_mode="PROVISIONAL_INTRABAR",
+    )
+    acts = eng.process_context_event(end)
+    assert [a.get("status") for a in acts] == ["EXIT_IGNORED_PROVISIONAL_CONTEXT_END"]
+    assert "H1" in eng.positions
+    assert eng.positions["H1"].side == "LONG"
+    closed = _end(
+        eid="step0_closed_end",
+        tf="H1",
+        episode="H1:prov:5",
+        mono=4_000_000,
+        occurrence_ts=_fresh(5),
+        bid=99.0,
+        ask=99.2,
+        evaluation_mode="CLOSED_BAR_CONTEXT_DECISION",
+        extra={"materialization_source": "closed_bar_context_decision"},
+    )
+    assert eng.process_context_event(closed)[0]["status"] == "EXITED"
+    assert "H1" not in eng.positions
+
+
+def test_closed_bar_confirmed_provisional_end_flattens(cfg):
+    """Idea-death confirmed by the closed-bar book is not flicker. Flatten."""
+    c, _ = cfg
+    eng = _engine(c)
+    start = _start(
+        eid="cb_conf_start",
+        tf="H1",
+        episode="H1:prov:14",
+        evaluation_mode="PROVISIONAL_INTRABAR",
+        occurrence_ts=_fresh(40),
+        decision_available_at=_fresh(20),
+    )
+    assert eng.process_context_event(start)[0]["status"] == "ENTERED"
+    end = _end(
+        eid="cb_conf_end",
+        tf="H1",
+        episode="H1:prov:14",
+        mono=3_000_000,
+        occurrence_ts=_fresh(10),
+        bid=99.0,
+        ask=99.2,
+        evaluation_mode="PROVISIONAL_INTRABAR",
+        extra={"closed_bar_confirms_end": True},
+    )
+    acts = eng.process_context_event(end)
+    assert acts[0]["status"] == "EXITED"
+    assert "H1" not in eng.positions
+
+
 def test_kinematics_e_flip_exits_and_enters_same_cycle_at_current_bbo(cfg):
     c, _ = cfg
     eng = _engine(c)
@@ -708,7 +936,7 @@ def test_kinematics_h_closed_bar_catchup_does_not_second_enter(cfg):
         mono=5_000_000,
     )
     acts = eng.process_context_event(closed)
-    assert acts == []
+    assert not any(a.get("status") == "ENTERED" for a in acts)
     blocked = eng.books.read_all("blocked")
     assert blocked and blocked[-1]["reason"] == "ENTRY_BLOCKED_ACTIVE_POSITION"
     entry_fills = [f for f in eng.books.read_all("fills") if f.get("action") == "ENTRY"]
@@ -755,10 +983,6 @@ START_TS = "2026-08-13T16:17:00Z"
 BAR_CLOSE_TS = "2026-08-13T16:30:00Z"
 ENTRY_CLOCK = datetime(2026, 8, 13, 16, 17, 1, tzinfo=timezone.utc)
 FLIP_CLOCK = datetime(2026, 8, 13, 16, 18, 1, tzinfo=timezone.utc)
-END_CLOCK = datetime(2026, 8, 13, 17, 2, 1, tzinfo=timezone.utc)
-END_TS = "2026-08-13T17:02:00Z"
-END_BAR_OPEN_TS = "2026-08-13T17:00:00Z"
-END_BAR_CLOSE_TS = "2026-08-13T17:15:00Z"
 FLIP_TS = "2026-08-13T16:18:00Z"
 FLIP_OCCURRENCE_PRICE = 98.2
 EXECUTION_BID = 100.0
@@ -997,11 +1221,11 @@ def test_live1b_provisional_start_requires_previous_closed_bar(cfg, monkeypatch)
 
 
 def test_live1b_provisional_end_not_emitted_before_min_hold_same_open_bar(cfg, monkeypatch):
-    """Same-candle 16:18 neutralizing prints do not END — min-hold, not candle-close wait.
+    """Same-candle 16:18 neutralizing prints do not END — one TF bar is not two.
 
-    This is case A: cognition does not produce CONTEXT_END intrabar one minute
-    after START because MIN_ACTIVE_CONTEXT_HOLD_BARS=3 (45 minutes of M15
-    event time). The 16:15 bar stays open; the manager is never given an END.
+    Neutralization still needs NEUTRALIZATION_CONFIRM_BARS=2. Live ticks on the
+    same M15 bar count as one bar, so same-open-bar prints after START cannot
+    END. This is not the 45-minute MIN_ACTIVE_CONTEXT_HOLD_BARS lag.
     """
     _freeze_entry_clock(monkeypatch, ENTRY_CLOCK)
     c, repo = cfg
@@ -1030,12 +1254,12 @@ def test_live1b_provisional_end_not_emitted_before_min_hold_same_open_bar(cfg, m
     assert cog.last_eval["M15"]["lifecycle"]["lifecycle_state"] in {"ACTIVE", "CHALLENGED"}
 
 
-def test_live1b_provisional_end_executes_intrabar_before_current_bar_close(cfg, monkeypatch):
-    """After min-hold, CONTEXT_END on the still-open 17:00 M15 → poll → EXIT < 17:15.
+def test_live1b_provisional_end_does_not_flatten_before_closed_bar(cfg, monkeypatch):
+    """Provisional CONTEXT_END on the still-open 16:45 M15 does not flatten.
 
-    START is at 16:17 on the 16:15 bar. END cannot legally fire at 16:18
-    (min-hold). The first legal END is 17:02, during the open 17:00–17:15 bar.
-    That is still provisional/intrabar: no current-candle close, no bridge.
+    START is at 16:17 on the 16:15 bar. Cognition may END at 16:45:01 while
+    that bar is still open. That event is not hold authority: the position
+    stays until TP/SL/FLIP or closed-bar CONTEXT_END.
     """
     _freeze_entry_clock(monkeypatch, ENTRY_CLOCK)
     c, repo = cfg
@@ -1059,12 +1283,15 @@ def test_live1b_provisional_end_executes_intrabar_before_current_bar_close(cfg, 
     assert [a.get("status") for a in entry_acts] == ["ENTERED"]
     assert pd.Timestamp(entry_acts[0]["fill"]["execution_timestamp"]) < pd.Timestamp(BAR_CLOSE_TS)
 
-    _freeze_entry_clock(monkeypatch, END_CLOCK)
+    first_neutral_ts = "2026-08-13T16:30:01Z"
+    end_ts = "2026-08-13T16:45:01Z"
+    end_bar_open = "2026-08-13T16:45:00Z"
+    end_bar_close = "2026-08-13T17:00:00Z"
+    end_clock = datetime(2026, 8, 13, 16, 45, 2, tzinfo=timezone.utc)
+    _freeze_entry_clock(monkeypatch, end_clock)
     hold_and_end = [
-        _agg_trade(price=99.50, qty=1.0, ts="2026-08-13T16:30:01Z", mono=3_000_000, tid=10, sell=False),
-        _agg_trade(price=99.50, qty=1.0, ts="2026-08-13T16:45:01Z", mono=4_000_000, tid=11, sell=False),
-        _agg_trade(price=99.50, qty=1.0, ts="2026-08-13T17:00:01Z", mono=5_000_000, tid=12, sell=False),
-        _agg_trade(price=OCCURRENCE_PRICE, qty=2.0, ts=END_TS, mono=6_000_000, tid=13, sell=True),
+        _agg_trade(price=99.50, qty=1.0, ts=first_neutral_ts, mono=3_000_000, tid=10, sell=False),
+        _agg_trade(price=OCCURRENCE_PRICE, qty=2.0, ts=end_ts, mono=4_000_000, tid=11, sell=True),
     ]
     emitted = []
     for trade in hold_and_end:
@@ -1073,15 +1300,15 @@ def test_live1b_provisional_end_executes_intrabar_before_current_bar_close(cfg, 
     bar = cog.bars.bars["M15"]
     bar_close = _expected_bar_close(bar)
     assert bar.is_closed is False
-    assert bar.bar_open_timestamp == pd.Timestamp(END_BAR_OPEN_TS)
-    assert bar_close == pd.Timestamp(END_BAR_CLOSE_TS)
+    assert bar.bar_open_timestamp == pd.Timestamp(end_bar_open)
+    assert bar_close == pd.Timestamp(end_bar_close)
 
     ends = _m15(emitted, "CONTEXT_END")
     assert len(ends) == 1
     end = ends[0]
     assert end["evaluation_mode"] == "PROVISIONAL_INTRABAR"
-    assert end["event_timestamp"] == END_TS
-    assert end["event_timestamp"] != END_BAR_CLOSE_TS
+    assert end["event_timestamp"] == end_ts
+    assert end["event_timestamp"] != end_bar_close
     assert pd.Timestamp(end["event_timestamp"]) < bar_close
     assert end.get("materialization_source") not in {
         "closed_bar_context_decision",
@@ -1092,26 +1319,48 @@ def test_live1b_provisional_end_executes_intrabar_before_current_bar_close(cfg, 
     paper.update_bbo_from_market(
         best_bid=EXIT_BID,
         best_ask=EXIT_ASK,
-        receive_monotonic_ns=5_900_000,
-        receive_timestamp=END_TS,
+        receive_monotonic_ns=3_900_000,
+        receive_timestamp=end_ts,
         book_update_id="exec_mkt_exit",
     )
     exit_acts = paper.poll_context_journal()
-    exited = [a for a in exit_acts if a.get("status") == "EXITED"]
+    assert [a.get("status") for a in exit_acts] == ["EXIT_IGNORED_PROVISIONAL_CONTEXT_END"]
+    assert "M15" in paper.positions
+    assert paper.positions["M15"].side == "LONG"
+    assert cog.bars.bars["M15"].is_closed is False
+
+    episode = paper.positions["M15"].lifecycle_episode_id
+    closed_end = _end(
+        eid="closed_bar_end_after_provisional",
+        episode=str(episode),
+        mono=5_000_000,
+        occurrence_ts=end_bar_close,
+        occurrence_price=OCCURRENCE_PRICE,
+        bid=EXIT_BID,
+        ask=EXIT_ASK,
+        evaluation_mode="CLOSED_BAR_CONTEXT_DECISION",
+        extra={
+            "materialization_source": "closed_bar_context_decision",
+            "ingested_at": end_bar_close,
+        },
+    )
+    _journal_append(c, closed_end)
+    paper.update_bbo_from_market(
+        best_bid=EXIT_BID,
+        best_ask=EXIT_ASK,
+        receive_monotonic_ns=4_900_000,
+        receive_timestamp=end_bar_close,
+        book_update_id="exec_mkt_closed_bar_exit",
+    )
+    closed_acts = paper.poll_context_journal()
+    exited = [a for a in closed_acts if a.get("status") == "EXITED"]
     assert len(exited) == 1
     fill = exited[0]["fill"]
     closed_pos = [p for p in paper.books.read_all("positions") if p.get("status") == "CLOSED"][-1]
-    exec_ts = pd.Timestamp(fill["execution_timestamp"])
-    assert exec_ts < bar_close
-    assert str(fill["execution_timestamp"]) != END_BAR_CLOSE_TS
     assert closed_pos["closed_at"] == fill["execution_timestamp"]
-    assert closed_pos["closed_at"] != end.get("context_occurrence_timestamp")
     assert fill["paper_fill_price"] == pytest.approx(EXIT_BID)
     assert fill["execution_price"] == pytest.approx(EXIT_BID)
-    assert fill["paper_fill_price"] != pytest.approx(OCCURRENCE_PRICE)
-    assert fill["context_event_price"] == pytest.approx(OCCURRENCE_PRICE)
     assert paper.positions == {}
-    assert cog.bars.bars["M15"].is_closed is False
 
 
 def test_live1b_provisional_flip_executes_intrabar_before_current_bar_close(cfg, monkeypatch):

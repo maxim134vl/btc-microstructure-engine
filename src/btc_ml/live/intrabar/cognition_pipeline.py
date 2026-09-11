@@ -8,9 +8,12 @@ import pandas as pd
 
 from btc_ml.cognition.volume_localization_engine_v1 import localize_bar
 from btc_ml.cognition.volume_response_evaluate import evaluate_response_row
+from btc_ml.live.intrabar.closed_bar_context_authority import ClosedBarContextAuthority
 from btc_ml.live.intrabar.context_event_journal import ContextEventJournal
 from btc_ml.live.intrabar.event_time_lifecycle import (
     detect_context_transition,
+    hold_provisional_end_for_closed_bar,
+    retain_directional_lifecycle,
     step_event_time_lifecycle,
 )
 from btc_ml.live.intrabar.partial_bar_state import TIMEFRAMES, PartialBarStateEngine
@@ -30,9 +33,15 @@ class IntrabarCognitionEngine:
         localization_history: Optional[pd.DataFrame] = None,
         geometry_history: Optional[pd.DataFrame] = None,
         reactions_history: Optional[pd.DataFrame] = None,
+        closed_bar_authority: ClosedBarContextAuthority | None = None,
+        closed_bar_memory_path: Any = None,
     ):
         self.bars = PartialBarStateEngine()
         self.journal = context_journal
+        if closed_bar_authority is not None:
+            self.closed_bar = closed_bar_authority
+        else:
+            self.closed_bar = ClosedBarContextAuthority(closed_bar_memory_path)
         self.localization_history = localization_history if localization_history is not None else pd.DataFrame()
         # Per-TF completed-bar geometry. Shared legacy frame (if provided) seeds every TF
         # for tests; live service starts empty and accumulates closed bars only.
@@ -47,6 +56,7 @@ class IntrabarCognitionEngine:
         self.last_eval: dict[str, dict[str, Any]] = {}
         self.last_context_event: dict[str, dict[str, Any]] = {}
         self.event_counts = {"CONTEXT_START": 0, "CONTEXT_END": 0, "CONTEXT_FLIP": 0}
+        self.end_holds = 0
         self.bbo: dict[str, Any] = {}
         self._active_episode: dict[str, str] = {}
         self._episode_seq = 0
@@ -177,6 +187,32 @@ class IntrabarCognitionEngine:
             else None,
         )
         transition = detect_context_transition(self.lifecycle_prev[timeframe], life)
+        closed_bar_active = self.closed_bar.active_market_context(timeframe)
+        held_end = False
+        if (
+            transition is not None
+            and transition["event_type"] == "CONTEXT_END"
+            and hold_provisional_end_for_closed_bar(closed_bar_active=closed_bar_active)
+        ):
+            # Closed-bar book still LONG/SHORT: empty-bar INVALIDATED is flicker.
+            # Keep the same episode. Anti-saw is not involved.
+            life = retain_directional_lifecycle(
+                self.lifecycle_prev[timeframe],
+                life,
+                hold_reason=(
+                    "provisional CONTEXT_END held: closed-bar still "
+                    f"{closed_bar_active}"
+                ),
+            )
+            transition = None
+            held_end = True
+            self.end_holds += 1
+        closed_bar_confirms_end = bool(
+            transition is not None
+            and transition["event_type"] == "CONTEXT_END"
+            and self.closed_bar.known(timeframe)
+            and not hold_provisional_end_for_closed_bar(closed_bar_active=closed_bar_active)
+        )
         state = resolve_timeframe_state(
             timeframe=timeframe,
             evaluation_timestamp=bar.causal_cutoff_timestamp,
@@ -197,6 +233,9 @@ class IntrabarCognitionEngine:
             "state": state,
             "prev_close": prev_close,
             "geometry_history_rows": int(len(geometry_history)),
+            "closed_bar_active": closed_bar_active,
+            "provisional_end_held": held_end,
+            "closed_bar_confirms_end": closed_bar_confirms_end,
         }
         self.lifecycle_prev[timeframe] = life
         if transition is None:
@@ -259,6 +298,8 @@ class IntrabarCognitionEngine:
             extra_metadata={
                 "delivery_mode": "LIVE",
                 "context_occurrence_timestamp": event_timestamp,
+                "closed_bar_confirms_end": closed_bar_confirms_end,
+                "closed_bar_active_market_context": closed_bar_active,
             },
             **bbo_fields,
         )

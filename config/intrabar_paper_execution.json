@@ -30,10 +30,19 @@
   "books_root": "data/trading/intrabar_paper",
   "epochs_root": "data/trading/paper_epochs",
   "economics_source": "canonical_paper_trade_economics_v1",
-  "entry_source": "s41_command_bus",
+  "entry_source": "context_journal",
   "s41_consume_commands_after": "2026-08-15T08:33:58.378788Z",
   "hybrid_sizing": {
     "enabled": true,
     "artifacts_dir": "config/trading/hybrid_sizing"
+  },
+  "anti_saw_path_density": {
+    "enabled": true,
+    "mode": "enforce",
+    "window_bars": {"M15": 8, "M30": 8, "H1": 6, "H4": 4},
+    "balance_support_enter": 0.55,
+    "balance_max_net_disp_ratio": 0.40,
+    "min_bars": 3,
+    "candle_structure_path": "data/cognition/candle_structure_memory.parquet"
   }
 }

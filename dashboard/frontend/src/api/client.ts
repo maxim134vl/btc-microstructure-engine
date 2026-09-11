@@ -18,9 +18,10 @@ async function opsWsUrl(): Promise<string> {
  * Evidence (VIS1D/OPS2A): `build_runtime_truth_snapshot()` locally observed up to ~1.86s;
  * warm HTTP snapshots are usually ~10–50ms, but cold/full builds (incl. MODEL-9 research
  * pipeline) were observed ~9s and exceeded the legacy 5000ms abort, latching the UI offline.
- * 15000ms covers observed cold builds with margin without unbounded waits.
+ * Live VPS (2026-09-11) cold runtime-truth was ~22s; 15000ms aborted every poll, stampeded
+ * ops-api, and latched LIVE DATA UNAVAILABLE. 25000ms covers that cold build with margin.
  */
-export const DEFAULT_SOFT_FETCH_TIMEOUT_MS = 15000;
+export const DEFAULT_SOFT_FETCH_TIMEOUT_MS = 25000;
 
 /** Normal poll while reconnecting / offline. */
 export const OPS_RECONNECT_POLL_MS = 4000;

@@ -14,6 +14,7 @@ ENTRY_EVENT_TYPES = frozenset({"CONTEXT_START", "CONTEXT_FLIP"})
 DELIVERY_MODE_RECOVERY = "RECOVERY"
 CLOSED_BAR_CONTEXT_DECISION = "CLOSED_BAR_CONTEXT_DECISION"
 CLOSED_BAR_MATERIALIZATION_SOURCE = "closed_bar_context_decision"
+PROVISIONAL_INTRABAR = "PROVISIONAL_INTRABAR"
 
 FRESHNESS_FRESH = "FRESH"
 FRESHNESS_STALE_AGE = "STALE_AGE"
@@ -59,6 +60,37 @@ def is_closed_bar_context_decision(event: Mapping[str, Any]) -> bool:
     if source.lower() == CLOSED_BAR_MATERIALIZATION_SOURCE:
         return True
     return False
+
+
+def is_provisional_intrabar_event(event: Mapping[str, Any]) -> bool:
+    """True when the event came from live provisional cognition, not a closed bar."""
+    if is_closed_bar_context_decision(event):
+        return False
+    mode = str(event.get("evaluation_mode") or "").strip().upper()
+    return mode == PROVISIONAL_INTRABAR
+
+
+def _flag(value: Any) -> bool:
+    if value is True:
+        return True
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes"}
+
+
+def is_provisional_context_end(event: Mapping[str, Any]) -> bool:
+    """Journal CONTEXT_END at bar flicker is not hold authority.
+
+    Closed-bar CONTEXT_END, CONTEXT_FLIP, TP and SL still flatten.
+    A provisional END that the closed-bar book already confirms as idea-death
+    also flattens (``closed_bar_confirms_end``). Untagged events keep the
+    historical flatten path.
+    """
+    etype = str(event.get("event_type") or event.get("type") or "").upper()
+    if etype != "CONTEXT_END":
+        return False
+    if _flag(event.get("closed_bar_confirms_end")):
+        return False
+    return is_provisional_intrabar_event(event)
 
 
 def resolve_context_event_max_age_seconds(

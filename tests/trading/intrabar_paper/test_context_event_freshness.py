@@ -19,6 +19,7 @@ from btc_ml.live.intrabar.context_event_freshness import (
     entry_freshness_block_reason,
     evaluate_entry_freshness,
     is_entry_execution_eligible,
+    is_provisional_context_end,
 )
 from btc_ml.live.intrabar.context_event_journal import ContextEventJournal
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
@@ -488,3 +489,39 @@ def test_restart_backfill_explicit_false_remains_authoritative():
         entry_freshness_block_reason(event, max_age_seconds=300.0, consumption_time=now)
         == "ENTRY_BLOCKED_RESTART_BACKFILL"
     )
+
+
+def test_provisional_context_end_is_not_closed_bar_decision():
+    assert is_provisional_context_end(
+        {
+            "event_type": "CONTEXT_END",
+            "evaluation_mode": "PROVISIONAL_INTRABAR",
+        }
+    )
+    assert not is_provisional_context_end(
+        {
+            "event_type": "CONTEXT_END",
+            "evaluation_mode": "CLOSED_BAR_CONTEXT_DECISION",
+        }
+    )
+    assert not is_provisional_context_end(
+        {
+            "event_type": "CONTEXT_END",
+            "evaluation_mode": "PROVISIONAL_INTRABAR",
+            "materialization_source": "closed_bar_context_decision",
+        }
+    )
+    assert not is_provisional_context_end(
+        {
+            "event_type": "CONTEXT_FLIP",
+            "evaluation_mode": "PROVISIONAL_INTRABAR",
+        }
+    )
+    assert not is_provisional_context_end(
+        {
+            "event_type": "CONTEXT_END",
+            "evaluation_mode": "PROVISIONAL_INTRABAR",
+            "closed_bar_confirms_end": True,
+        }
+    )
+    assert not is_provisional_context_end({"event_type": "CONTEXT_END"})

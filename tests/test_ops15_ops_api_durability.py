@@ -65,9 +65,7 @@ def test_optional_section_error_does_not_kill_endpoint(monkeypatch) -> None:
             "current_toxic_events": [],
         },
     )
-    ops_monitor._OPS_SNAPSHOT_CACHE.clear()
-    ops_monitor._RESEARCH_CACHE["ts"] = 0.0
-    ops_monitor._RESEARCH_CACHE["data"] = None
+    ops_monitor.clear_ops_snapshot_caches()
     client = TestClient(app)
     resp = client.get("/api/v1/ops/snapshot")
     assert resp.status_code == 200

@@ -82,6 +82,7 @@ class IntrabarCognitionService:
         self.session = SessionManager()
         self.engine = IntrabarCognitionEngine(
             context_journal=ContextEventJournal(self.context_root),
+            closed_bar_memory_path=ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet",
         )
         self.closed_bar_bridge = ClosedBarContextEventBridge(
             repo_root=ROOT,
