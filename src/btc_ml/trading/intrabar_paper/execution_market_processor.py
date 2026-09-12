@@ -429,6 +429,7 @@ class ExecutionMarketProcessor:
             "connection_session_id": event.get("connection_session_id"),
             "exchange_event_timestamp": event.get("exchange_event_timestamp"),
             "exchange_trade_timestamp": event.get("exchange_trade_timestamp"),
+            "backfill": bool(event.get("backfill")),
         }
         if wal_offset is not None:
             prov["execution_market_wal_offset"] = wal_offset
