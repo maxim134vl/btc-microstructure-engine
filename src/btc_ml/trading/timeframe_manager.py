@@ -19,6 +19,7 @@ from typing import Any
 
 import pandas as pd
 
+from .anti_saw_path_density import BLOCK_REASON as SAW_PATH_DENSITY_BLOCK, PathDensitySawFilter
 from .command_bus import COMMAND_SCHEMA_VERSION, VALID_INTENTS, CommandBus, CommandBusPaths, utc_now
 from .paper_core import compute_stop_take, evaluate_exit_preview, make_id, safe_float
 from .paper_trader_engine import PaperTraderEngine
@@ -54,8 +55,8 @@ _CONTEXT_END_STATES = {
     "INVALIDATED",
 }
 
-# Bar-count anti-saw is archived. Path-density saw filter lives on paper OPEN
-# (`btc_ml.trading.anti_saw_path_density`). Do not restore min-hold/cooldown.
+# Bar-count anti-saw is archived. Path-density (ATR churn + failed breakouts)
+# gates OPEN on S4.1 and LIVE1B. Do not restore min-hold/cooldown.
 # Do not mix either into journal START/END/FLIP.
 ANTI_SAW_ENABLED = False
 
@@ -411,6 +412,16 @@ def _is_stop_or_take_close(preview: dict[str, Any] | None) -> bool:
 FEED_BAR_SECONDS = 900
 
 
+def _production_saw_filter() -> PathDensitySawFilter | None:
+    try:
+        from .intrabar_paper.config import load_intrabar_paper_config
+
+        cfg = load_intrabar_paper_config()
+    except Exception:
+        return None
+    return PathDensitySawFilter(cfg.raw)
+
+
 def with_bar_close(feed: pd.DataFrame, *, bar_seconds: int = FEED_BAR_SECONDS) -> pd.DataFrame:
     """Feed timestamps are bar-open labels; derive the completed-bar clock."""
     if feed is None or not len(feed) or "timestamp" not in feed.columns:
@@ -442,12 +453,14 @@ class TimeframeManager:
         risk: PortfolioRiskCoordinator,
         asset: str = ASSET,
         timeframes: tuple[str, ...] = SUPPORTED_TIMEFRAMES,
+        saw_filter: PathDensitySawFilter | None = None,
     ) -> None:
         self.bus = bus
         self.books = books
         self.risk = risk
         self.asset = asset
         self.timeframes = timeframes
+        self.saw_filter = saw_filter
 
     @classmethod
     def production(cls) -> "TimeframeManager":
@@ -455,6 +468,7 @@ class TimeframeManager:
             bus=CommandBus(CommandBusPaths.production()),
             books={tf: TraderBook.production(tf) for tf in SUPPORTED_TIMEFRAMES},
             risk=PortfolioRiskCoordinator.load(),
+            saw_filter=_production_saw_filter(),
         )
 
     @classmethod
@@ -463,6 +477,7 @@ class TimeframeManager:
             bus=CommandBus(CommandBusPaths.candidate()),
             books={tf: TraderBook.candidate(tf) for tf in SUPPORTED_TIMEFRAMES},
             risk=PortfolioRiskCoordinator.load(),
+            saw_filter=_production_saw_filter(),
         )
 
     # --- read-only trader views ---------------------------------------------
@@ -878,6 +893,9 @@ class TimeframeManager:
             # Restated opposite on this bar is not a new flip.
             intent = "NO_ACTION"
             reasons.append(SAME_CLOSED_BAR_ALREADY_ACTED)
+        elif self._saw_blocks_open(timeframe, state=state, evaluation_timestamp=eval_ts):
+            intent = "NO_ACTION"
+            reasons.append(SAW_PATH_DENSITY_BLOCK)
         else:
             direction = str(state.get("timeframe_direction") or "").upper()
             candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
@@ -1034,6 +1052,19 @@ class TimeframeManager:
             or evaluation_timestamp,
             "lineage_lookup_status": lineage_lookup_status,
         }
+
+    def _saw_blocks_open(
+        self,
+        timeframe: str,
+        *,
+        state: dict[str, Any],
+        evaluation_timestamp: Any,
+    ) -> bool:
+        if self.saw_filter is None:
+            return False
+        as_of = state.get("source_bar_close") or state.get("evaluation_timestamp") or evaluation_timestamp
+        decision = self.saw_filter.evaluate(timeframe=timeframe, as_of=as_of)
+        return bool(decision.block)
 
     def _position_meta(self, timeframe: str) -> dict[str, Any]:
         position = self.books[timeframe].open_position()

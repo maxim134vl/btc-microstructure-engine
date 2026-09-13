@@ -59,7 +59,39 @@ def test_chop_is_saw() -> None:
     assert score.reason == BLOCK_REASON
     assert score.balance_support >= 0.55
     assert score.net_over_path <= 0.40
-    assert score.path_atr > 0
+    assert score.path_atr >= 2.0
+    assert score.failed_breakouts >= 1
+
+
+def test_tiny_chop_without_atr_churn_is_not_saw() -> None:
+    rows = []
+    for i in range(8):
+        up = i % 2 == 0
+        open_ = 100.0
+        close = 100.05 if up else 99.95
+        rows.append(
+            {
+                "timestamp": f"2026-09-11T00:{i:02d}:00Z",
+                "open": open_,
+                "low": 98.0,
+                "high": 102.0,
+                "close": close,
+            }
+        )
+    score = score_bars(rows)
+    assert score.is_saw is False
+    assert score.path_atr < 2.0
+
+
+def test_failed_breakouts_count_rejected_range_probes() -> None:
+    from btc_ml.trading.anti_saw_path_density import count_failed_breakouts
+
+    highs = [100.0, 102.0, 101.0, 99.0, 100.5]
+    lows = [99.0, 100.0, 99.5, 97.0, 99.0]
+    closes = [99.5, 101.5, 100.2, 97.5, 100.0]
+    up, down = count_failed_breakouts(highs, lows, closes)
+    assert up >= 1
+    assert down >= 1
 
 
 def test_short_history_fails_open() -> None:
@@ -98,3 +130,83 @@ def test_filter_disabled_or_missing_bars_allows() -> None:
         bars_by_tf={"M15": []},
     )
     assert empty.evaluate(timeframe="M15").block is False
+
+
+def test_manager_open_blocked_on_saw_close_still_fires(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from btc_ml.trading.portfolio_risk import PortfolioRiskCoordinator
+    from btc_ml.trading.proofs import build_synthetic_feed, isolated_environment
+    from btc_ml.trading.timeframe_manager import TimeframeManager
+    from btc_ml.trading.timeframe_state_adapter import TimeframeSources
+
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    saw_bars = []
+    for i in range(8):
+        up = i % 2 == 0
+        open_ = 100.0
+        close = 101.5 if up else 98.5
+        minute = i * 15
+        hour = 2 + minute // 60
+        minute = minute % 60
+        saw_bars.append(
+            {
+                "timestamp": f"2026-07-01T{hour:02d}:{minute:02d}:00Z",
+                "open": open_,
+                "low": min(open_, close) - 0.1,
+                "high": max(open_, close) + 0.1,
+                "close": close,
+            }
+        )
+    saw = PathDensitySawFilter(
+        {"anti_saw_path_density": {"enabled": True, "mode": "enforce"}},
+        bars_by_tf={"M15": saw_bars, "M30": saw_bars, "H1": saw_bars, "H4": saw_bars},
+    )
+    manager = TimeframeManager(
+        bus=bus,
+        books=books,
+        risk=PortfolioRiskCoordinator.load(),
+        saw_filter=saw,
+    )
+
+    def _availability(tf: str) -> dict:
+        return {
+            "evaluation_timestamp": "2026-07-01T04:00:00Z",
+            "timeframe": tf,
+            "source_bar_open": "2026-07-01T03:45:00Z",
+            "source_bar_close": "2026-07-01T04:00:00Z",
+            "source_state_timestamp": "2026-07-01T03:45:00Z",
+            "source_event_timestamp": "2026-07-01T03:45:00Z",
+            "availability_status": "FRESH_EVENT",
+            "availability_reason": "completed_bar_closed_at_or_before_evaluation",
+            "is_new_event": True,
+            "writer_state": "RUNNING",
+        }
+
+    def _life(tf: str, context: str) -> dict:
+        return {
+            "timestamp": "2026-07-01T03:45:00Z",
+            "timeframe": tf,
+            "active_market_context": context,
+            "lifecycle_state": "ACTIVE",
+            "context_episode_id": f"{tf}-ep",
+            "active_context_started_at": "2026-07-01T03:45:00Z",
+            "context_origin_price": 60500.0,
+        }
+
+    sources = TimeframeSources(
+        availability=pd.DataFrame([_availability(tf) for tf in ("M15", "M30", "H1", "H4")]),
+        lifecycle=pd.DataFrame([_life(tf, "LONG_CONTEXT") for tf in ("M15", "M30", "H1", "H4")]),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-07-01T04:00:00Z",
+        sources=sources,
+        feed=build_synthetic_feed(),
+        persist=True,
+        decision_index={},
+    )
+    m15 = next(cmd for cmd in cycle["commands"] if cmd["timeframe"] == "M15")
+    assert m15["intent"] != "OPEN_LONG"
+    assert BLOCK_REASON in str(m15["reason_codes"])

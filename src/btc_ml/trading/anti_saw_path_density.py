@@ -1,10 +1,10 @@
-"""Trade-filter candidate: is the market in a saw right now?
+"""Path-density anti-saw: is this closed-bar window a saw right now?
 
-This is not a bar-count delay. It scores a closed-bar window:
+Not a bar-count delay. Scores a closed-bar window:
 
 - rotation / path density: 1 - |net| / path (same family as auction balance_support)
-- ATR density: how many ATR units of path packed into that net
-- two-sided effort from signed bodies
+- ATR density: how many ATR units of body-path packed into that net
+- failed breakouts: range high/low taken, then close back inside
 
 Gate OPEN only. CONTEXT_END / FLIP-close / TP / SL stay untouched.
 Missing history fails open: no bars → do not block.
@@ -32,6 +32,9 @@ class SawScore:
     path_atr: float
     net_atr: float
     atr: float
+    failed_breakouts: int
+    failed_up_breakouts: int
+    failed_down_breakouts: int
     is_saw: bool
     reason: str | None
 
@@ -65,29 +68,68 @@ def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, float(value)))
 
 
+def count_failed_breakouts(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+) -> tuple[int, int]:
+    """Failed probes of the running range: take the extreme, close back inside."""
+    if len(highs) < 2:
+        return 0, 0
+    run_high = float(highs[0])
+    run_low = float(lows[0])
+    pending_up: float | None = None
+    pending_down: float | None = None
+    failed_up = 0
+    failed_down = 0
+    for high, low, close in zip(highs[1:], lows[1:], closes[1:]):
+        high_f = float(high)
+        low_f = float(low)
+        close_f = float(close)
+        if high_f > run_high:
+            pending_up = run_high
+            run_high = high_f
+        if low_f < run_low:
+            pending_down = run_low
+            run_low = low_f
+        if pending_up is not None and close_f < pending_up:
+            failed_up += 1
+            pending_up = None
+        if pending_down is not None and close_f > pending_down:
+            failed_down += 1
+            pending_down = None
+    return failed_up, failed_down
+
+
 def score_bars(
     bars: Sequence[Mapping[str, Any]],
     *,
     balance_support_enter: float = 0.55,
     balance_max_net_disp_ratio: float = 0.40,
+    min_path_atr: float = 2.0,
+    min_failed_breakouts: int = 1,
     min_bars: int = 3,
 ) -> SawScore:
     """Score a chronological window of closed OHLC bars."""
     rows = [b for b in bars if _finite_ohlc(b)]
     n = len(rows)
+    empty = dict(
+        n_bars=n,
+        rotation=0.0,
+        two_sided=0.0,
+        balance_support=0.0,
+        net_over_path=1.0,
+        path_atr=0.0,
+        net_atr=0.0,
+        atr=0.0,
+        failed_breakouts=0,
+        failed_up_breakouts=0,
+        failed_down_breakouts=0,
+        is_saw=False,
+        reason="INSUFFICIENT_HISTORY",
+    )
     if n < int(min_bars):
-        return SawScore(
-            n_bars=n,
-            rotation=0.0,
-            two_sided=0.0,
-            balance_support=0.0,
-            net_over_path=1.0,
-            path_atr=0.0,
-            net_atr=0.0,
-            atr=0.0,
-            is_saw=False,
-            reason="INSUFFICIENT_HISTORY",
-        )
+        return SawScore(**empty)
     opens = [float(b["open"]) for b in rows]
     highs = [float(b["high"]) for b in rows]
     lows = [float(b["low"]) for b in rows]
@@ -105,10 +147,15 @@ def score_bars(
     atr = _median(ranges) if ranges else 0.0
     path_atr = 0.0 if atr <= 1e-12 else path / atr
     net_atr = 0.0 if atr <= 1e-12 else net / atr
-    is_saw = (
+    failed_up, failed_down = count_failed_breakouts(highs, lows, closes)
+    failed_breakouts = failed_up + failed_down
+    chop = (
         balance_support >= float(balance_support_enter)
         and net_over_path <= float(balance_max_net_disp_ratio)
     )
+    atr_dense = path_atr >= float(min_path_atr)
+    rejected = failed_breakouts >= int(min_failed_breakouts)
+    is_saw = bool(chop and atr_dense and rejected)
     return SawScore(
         n_bars=n,
         rotation=round(rotation, 6),
@@ -118,6 +165,9 @@ def score_bars(
         path_atr=round(path_atr, 6),
         net_atr=round(net_atr, 6),
         atr=round(atr, 6),
+        failed_breakouts=int(failed_breakouts),
+        failed_up_breakouts=int(failed_up),
+        failed_down_breakouts=int(failed_down),
         is_saw=bool(is_saw),
         reason=BLOCK_REASON if is_saw else None,
     )
@@ -157,6 +207,8 @@ def _parse_cfg(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "window_bars": windows,
         "balance_support_enter": float(block.get("balance_support_enter", 0.55)),
         "balance_max_net_disp_ratio": float(block.get("balance_max_net_disp_ratio", 0.40)),
+        "min_path_atr": float(block.get("min_path_atr", 2.0)),
+        "min_failed_breakouts": int(block.get("min_failed_breakouts", 1)),
         "min_bars": int(block.get("min_bars", 3)),
         "candle_structure_path": str(
             block.get("candle_structure_path") or DEFAULT_CANDLE_PATH
@@ -210,6 +262,8 @@ class PathDensitySawFilter:
             bars,
             balance_support_enter=float(self.params["balance_support_enter"]),
             balance_max_net_disp_ratio=float(self.params["balance_max_net_disp_ratio"]),
+            min_path_atr=float(self.params["min_path_atr"]),
+            min_failed_breakouts=int(self.params["min_failed_breakouts"]),
             min_bars=int(self.params["min_bars"]),
         )
         mode = str(self.params["mode"])
@@ -364,3 +418,31 @@ def _resample(m15: Sequence[Mapping[str, Any]], timeframe: str) -> list[dict[str
             }
         )
     return out
+
+
+def snapshot_for_candles(
+    timeframe: str,
+    candles: Sequence[Mapping[str, Any]],
+    *,
+    cfg_raw: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Observability snapshot for chart / OPS. Does not gate."""
+    tf = str(timeframe or "").upper()
+    params = _parse_cfg(cfg_raw if cfg_raw is not None else {"anti_saw_path_density": {"enabled": True}})
+    window = int(params["window_bars"].get(tf, DEFAULT_WINDOW_BARS.get(tf, 8)))
+    rows = [row for row in candles if _finite_ohlc(row)][-window:]
+    score = score_bars(
+        rows,
+        balance_support_enter=float(params["balance_support_enter"]),
+        balance_max_net_disp_ratio=float(params["balance_max_net_disp_ratio"]),
+        min_path_atr=float(params["min_path_atr"]),
+        min_failed_breakouts=int(params["min_failed_breakouts"]),
+        min_bars=int(params["min_bars"]),
+    )
+    return {
+        "timeframe": tf,
+        "is_saw": bool(score.is_saw),
+        "window_bars": window,
+        "source": "path_density",
+        "score": score.to_dict(),
+    }

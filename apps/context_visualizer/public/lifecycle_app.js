@@ -1001,12 +1001,18 @@ function renderHeader(tf, tfBlock) {
   const bar = contract.latest_confirmed_close || "—";
   const barShort = String(bar).replace(/:\d{2}Z$/, "Z");
   const segCount = contextBandSegments(tfBlock).length;
+  const saw = tfBlock.anti_saw || {};
+  const sawScore = saw.score || {};
+  const sawLabel = saw.is_saw
+    ? `пила ${Number(sawScore.path_atr || 0).toFixed(1)}ATR · ${sawScore.failed_breakouts || 0} пробоя`
+    : `path ${Number(sawScore.path_atr || 0).toFixed(1)}ATR`;
   chart.header.innerHTML = `
     <span class="tf-name">${tf}</span>
     <span class="tf-context">${canonicalVisualContext(st.directional_state) || "OBSERVE"}</span>
     <span>${side} · ${pstatus}</span>
     <span title="Historical TF context segments">${segCount} ctx</span>
     <span title="Latest confirmed bar close (UTC)">bar ${barShort}</span>
+    <span title="Path-density anti-saw: ATR churn and failed breakouts">${sawLabel}</span>
     <span>R ${fmtPnl(perf.realised_net_pnl_usd)} / U ${fmtPnl(perf.unrealised_net_pnl_usd ?? perf.unrealised_gross_pnl_usd)}</span>
   `;
 }

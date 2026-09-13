@@ -42,6 +42,8 @@
     "window_bars": {"M15": 8, "M30": 8, "H1": 6, "H4": 4},
     "balance_support_enter": 0.55,
     "balance_max_net_disp_ratio": 0.40,
+    "min_path_atr": 2.0,
+    "min_failed_breakouts": 1,
     "min_bars": 3,
     "candle_structure_path": "data/cognition/candle_structure_memory.parquet"
   }

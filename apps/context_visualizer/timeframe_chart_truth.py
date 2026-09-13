@@ -2075,6 +2075,24 @@ def load_performance_by_tf() -> dict[str, dict[str, Any]]:
     return out
 
 
+def _anti_saw_snapshot(timeframe: str, candles: list[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        from btc_ml.trading.anti_saw_path_density import snapshot_for_candles
+    except Exception as exc:
+        return {"timeframe": timeframe, "is_saw": False, "error": f"{type(exc).__name__}:{exc}"}
+    cfg_raw = None
+    cfg_path = ROOT / "config" / "intrabar_paper_execution.json"
+    if cfg_path.exists():
+        try:
+            cfg_raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg_raw = None
+    try:
+        return snapshot_for_candles(timeframe, candles, cfg_raw=cfg_raw)
+    except Exception as exc:
+        return {"timeframe": timeframe, "is_saw": False, "error": f"{type(exc).__name__}:{exc}"}
+
+
 def build_timeframe_chart_truth(
     *,
     feed_path: Path | None = None,
@@ -2415,6 +2433,7 @@ def build_timeframe_chart_truth(
             "panel_status": panel_status,
             "contamination": contaminants,
             "performance": perf.get(tf) or {},
+            "anti_saw": _anti_saw_snapshot(tf, candle_block.get("candles") or []),
             "freshness": {
                 "latest_confirmed_close": candle_block.get("latest_confirmed_close"),
                 "source_tip": candle_block.get("latest_confirmed_open"),
