@@ -299,17 +299,26 @@ def run_restart_proof(root: Path) -> dict[str, Any]:
 
 
 def run_portfolio_risk_proof() -> dict[str, Any]:
-    """Per-trader and aggregate gross limits, invalid stop, no netting."""
+    """Independent per-TF sleeve budgets. Shared $1000 cap must not block another TF."""
     risk = PortfolioRiskCoordinator.load()
-    per_trader = risk.evaluate(timeframe="M15", requested_risk_usd=250.0, open_risk_by_timeframe={})
-    over_trader = risk.evaluate(timeframe="M15", requested_risk_usd=400.0, open_risk_by_timeframe={})
-    gross = {"M15": 250.0, "M30": 250.0, "H1": 250.0}
-    within = risk.evaluate(timeframe="H4", requested_risk_usd=250.0, open_risk_by_timeframe=gross)
-    # Portfolio gate is only reachable when per-trader budgets oversubscribe the
-    # portfolio budget, so it is proven against an explicit oversubscribed config.
+    per_trader = risk.evaluate(timeframe="M15", requested_risk_usd=500.0, open_risk_by_timeframe={})
+    over_trader = risk.evaluate(timeframe="M15", requested_risk_usd=600.0, open_risk_by_timeframe={})
+    h1_with_m15_m30_open = risk.evaluate(
+        timeframe="H1",
+        requested_risk_usd=1000.0,
+        open_risk_by_timeframe={"M15": 594.27, "M30": 387.14},
+    )
+    h4_with_three_open = risk.evaluate(
+        timeframe="H4",
+        requested_risk_usd=1000.0,
+        open_risk_by_timeframe={"M15": 500.0, "M30": 500.0, "H1": 1000.0},
+    )
+    # Portfolio gate is only reachable on an explicit shared-cap config.
     oversubscribed = PortfolioRiskCoordinator(
         {
             **risk.config,
+            "risk_aggregation": "GROSS_NO_NETTING",
+            "portfolio_max_risk_usd": 1000.0,
             "weights": {"M15": 0.4, "M30": 0.4, "H1": 0.4, "H4": 0.4},
             "per_trader_max_risk_usd": {"M15": 400.0, "M30": 400.0, "H1": 400.0, "H4": 400.0},
         }
@@ -321,24 +330,26 @@ def run_portfolio_risk_proof() -> dict[str, Any]:
     )
     trader_saturated = risk.evaluate(
         timeframe="H4",
-        requested_risk_usd=250.0,
-        open_risk_by_timeframe={"M15": 250.0, "M30": 250.0, "H1": 250.0, "H4": 250.0},
+        requested_risk_usd=1000.0,
+        open_risk_by_timeframe={"H4": 1000.0},
     )
-    invalid_stop = risk.evaluate(timeframe="M15", requested_risk_usd=250.0, stop_valid=False)
+    invalid_stop = risk.evaluate(timeframe="M15", requested_risk_usd=500.0, stop_valid=False)
     opposite_gross = risk.gross_open_risk({"M15": 250.0, "H1": 250.0})
     checks = {
-        "per_trader_limit_ok": per_trader.approved and per_trader.approved_risk_usd == 250.0,
+        "per_trader_limit_ok": per_trader.approved and per_trader.approved_risk_usd == 500.0,
         "per_trader_over_limit_rejected": (not over_trader.approved) and over_trader.reason == "TRADER_RISK_LIMIT",
-        "aggregate_within_limit_ok": within.approved and within.portfolio_open_risk_usd == 750.0,
+        "h1_not_blocked_by_other_tf_open_risk": h1_with_m15_m30_open.approved
+        and h1_with_m15_m30_open.reason is None,
+        "h4_not_blocked_by_three_other_sleeves": h4_with_three_open.approved,
         "aggregate_limit_rejected": (not saturated.approved) and saturated.reason == "PORTFOLIO_RISK_LIMIT",
         "trader_budget_exhausted_rejected": (not trader_saturated.approved)
         and trader_saturated.reason == "TRADER_RISK_LIMIT",
-        "aggregate_never_exceeds_1000": saturated.portfolio_open_risk_usd + saturated.approved_risk_usd <= 1000.0,
         "invalid_stop_rejected": (not invalid_stop.approved) and invalid_stop.reason == "INVALID_STOP_DISTANCE",
         "opposite_risk_counted_gross": opposite_gross == 500.0,
         "no_auto_reallocation": risk.auto_reallocation is False,
-        "aggregate_budget_1000": risk.portfolio_max_risk_usd == 1000.0,
-        "per_trader_budget_250": all(v == 250.0 for v in risk.per_trader_max_risk_usd.values()),
+        "independent_aggregation": risk.independent_timeframes is True,
+        "per_trader_budget_matches_sleeves": risk.per_trader_max_risk_usd
+        == {"M15": 500.0, "M30": 500.0, "H1": 1000.0, "H4": 1000.0},
     }
     return {
         "generated_at": utc_now(),
@@ -348,7 +359,8 @@ def run_portfolio_risk_proof() -> dict[str, Any]:
         "decisions": {
             "per_trader": per_trader.to_dict(),
             "over_trader": over_trader.to_dict(),
-            "aggregate_within": within.to_dict(),
+            "h1_with_m15_m30_open": h1_with_m15_m30_open.to_dict(),
+            "h4_with_three_open": h4_with_three_open.to_dict(),
             "aggregate_saturated": saturated.to_dict(),
             "trader_saturated": trader_saturated.to_dict(),
             "invalid_stop": invalid_stop.to_dict(),

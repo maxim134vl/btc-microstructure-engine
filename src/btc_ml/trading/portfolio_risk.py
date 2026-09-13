@@ -1,7 +1,8 @@
-"""Portfolio risk coordinator (S4.1).
+"""S4.1 OPEN-gate risk coordinator.
 
-Gross risk only: an M15 LONG and an H1 SHORT both consume budget. Opposite
-directions are never netted, and unused budget is never reallocated.
+Hybrid live capital is four independent $100k sleeves (M15 0.5%, M30 0.5%,
+H1 1%, H4 1%). CatBoost only multiplies that sleeve budget at LIVE1B fill.
+This coordinator must not block one TF because another TF is already open.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ REASON_PORTFOLIO_LIMIT = "PORTFOLIO_RISK_LIMIT"
 REASON_TRADER_LIMIT = "TRADER_RISK_LIMIT"
 REASON_INVALID_STOP = "INVALID_STOP_DISTANCE"
 REASON_POSITION_LIMIT = "TRADER_POSITION_LIMIT"
+INDEPENDENT_AGGREGATION = frozenset({"PER_TIMEFRAME_INDEPENDENT", "PER_TF_SLEEVE"})
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,7 @@ class RiskDecision:
     available_portfolio_risk_usd: float
     available_trader_risk_usd: float
     reason: str | None
+    risk_aggregation: str = "PER_TIMEFRAME_INDEPENDENT"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -41,7 +44,7 @@ class RiskDecision:
             "available_portfolio_risk_usd": self.available_portfolio_risk_usd,
             "available_trader_risk_usd": self.available_trader_risk_usd,
             "reason": self.reason,
-            "risk_aggregation": "GROSS_NO_NETTING",
+            "risk_aggregation": self.risk_aggregation,
         }
 
 
@@ -59,6 +62,8 @@ class PortfolioRiskCoordinator:
         }
         self.max_open_positions_per_trader = int(config.get("max_open_positions_per_trader") or 1)
         self.auto_reallocation = bool(config.get("auto_reallocation_of_unused_risk"))
+        self.risk_aggregation = str(config.get("risk_aggregation") or "GROSS_NO_NETTING").upper()
+        self.independent_timeframes = self.risk_aggregation in INDEPENDENT_AGGREGATION
 
     @classmethod
     def load(cls, path: Path | None = None) -> "PortfolioRiskCoordinator":
@@ -100,6 +105,7 @@ class PortfolioRiskCoordinator:
                 available_portfolio,
                 available_trader,
                 reason,
+                self.risk_aggregation,
             )
 
         if not stop_valid:
@@ -111,12 +117,17 @@ class PortfolioRiskCoordinator:
             return deny(REASON_TRADER_LIMIT)
         if requested > budget or available_trader <= 0:
             return deny(REASON_TRADER_LIMIT)
-        if requested > available_portfolio:
+        if not self.independent_timeframes and requested > available_portfolio:
             return deny(REASON_PORTFOLIO_LIMIT)
 
-        approved = min(requested, available_trader, available_portfolio)
-        if approved <= 0:
-            return deny(REASON_PORTFOLIO_LIMIT)
+        if self.independent_timeframes:
+            approved = min(requested, available_trader)
+            if approved <= 0:
+                return deny(REASON_TRADER_LIMIT)
+        else:
+            approved = min(requested, available_trader, available_portfolio)
+            if approved <= 0:
+                return deny(REASON_PORTFOLIO_LIMIT)
         return RiskDecision(
             True,
             requested,
@@ -126,4 +137,5 @@ class PortfolioRiskCoordinator:
             available_portfolio,
             available_trader,
             None,
+            self.risk_aggregation,
         )

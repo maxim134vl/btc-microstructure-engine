@@ -1,15 +1,16 @@
 {
-  "schema_version": "timeframe_trader_risk_v1",
+  "schema_version": "timeframe_trader_risk_v2_independent_sleeves",
   "asset": "BTCUSDT",
   "deposit_usd": 100000.0,
-  "portfolio_max_risk_pct": 1.0,
-  "portfolio_max_risk_usd": 1000.0,
+  "deposit_usd_per_timeframe": 100000.0,
+  "portfolio_max_risk_pct": null,
+  "portfolio_max_risk_usd": 3000.0,
   "sizing_method": "RISK_BASED_STOP_LOSS_COST_AWARE",
   "cost_aware_stop_sizing": true,
   "fixed_notional_used": false,
   "entry_fee_rate_pct": 0.02,
   "exit_fee_rate_pct": 0.05,
-  "risk_aggregation": "GROSS_NO_NETTING",
+  "risk_aggregation": "PER_TIMEFRAME_INDEPENDENT",
   "auto_reallocation_of_unused_risk": false,
   "supported_timeframes": ["M15", "M30", "H1", "H4"],
   "unsupported_timeframes": ["D1"],
@@ -19,17 +20,23 @@
       "availability_reason": "NO_LIVE_STAGE2_WRITER"
     }
   },
+  "risk_pct_per_trade": {
+    "M15": 0.5,
+    "M30": 0.5,
+    "H1": 1.0,
+    "H4": 1.0
+  },
   "weights": {
-    "M15": 0.25,
-    "M30": 0.25,
-    "H1": 0.25,
-    "H4": 0.25
+    "M15": 0.5,
+    "M30": 0.5,
+    "H1": 1.0,
+    "H4": 1.0
   },
   "per_trader_max_risk_usd": {
-    "M15": 250.0,
-    "M30": 250.0,
-    "H1": 250.0,
-    "H4": 250.0
+    "M15": 500.0,
+    "M30": 500.0,
+    "H1": 1000.0,
+    "H4": 1000.0
   },
   "max_open_positions_per_trader": 1,
   "max_open_positions_portfolio": 4,
@@ -38,6 +45,7 @@
     "trader_limit": "TRADER_RISK_LIMIT",
     "invalid_stop": "INVALID_STOP_DISTANCE"
   },
+  "note": "S4.1 OPEN gate only. LIVE1B sizes from the per-TF sleeve * CatBoost multiplier. TFs do not share a $1000 cap.",
   "paper_only": true,
   "execution_enabled": false,
   "exchange_enabled": false
