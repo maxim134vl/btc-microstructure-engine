@@ -22,10 +22,7 @@ Shipped: `2ed7b46`, `cf8f80f`. Volume overlay/activation/cursor persisted withou
 
 | ID | Symptom | Why it remains | Do not |
 | --- | --- | --- | --- |
-| S41-LIVE1B-RESTART-GAP | After paper-manager recreate, execution market stays `RECOVERING` with `entry_allowed=false` while REST backfill walks a large aggTrade gap. Each recovered trade fsyncs WAL. ~10^5 ids can take hours. OPEN waits on `HEALTHY`. | Correct safety gate. Speed is the debt. | Do not skip the gap to force OPEN. Do not run `bootstrap_vps_environment.py --allow-existing` on this volume. |
-| S41-LIVE1B-PUBLIC-WS-PONG | `live1b-futures-public_error:ping/pong timed out` during recovery; public WS drops, then reconnects with a new gap. | Transport flapping widens the backfill window. | Do not disable the BBO age / HEALTHY entry gate. |
 | S41-LIVE1B-CURSOR-CLOBBER | A running consumer `_save()` can rewrite `consume_after` from in-memory state and undo a volume persist. Mitigated: stop process, persist, start. Code now takes `later_iso(file, overlay)`. | Restart procedure must still stop the writer first. | Do not persist cursor while the old paper-manager is still polling. |
-| S41-LIVE1B-PRE-ENTRY-BACKFILL-SL | REST gap-recovery can print prices from before `opened_at`. Live H4 SL on 2026-09-11 used an aggTrade whose tape time was pre-entry. | Engine skips `trade_ts < opened_at`. Processor now forwards `backfill` on provenance. Test locks it. Watch live fills after the next HEALTHY. | Do not restore journal as entry_source to “avoid” backfill SLs. |
 
 ## Closed in this cutover
 
@@ -34,6 +31,10 @@ Shipped: `2ed7b46`, `cf8f80f`. Volume overlay/activation/cursor persisted withou
 - Atomic FLIP emits CLOSE then opposite OPEN in one cycle.
 - Overlay/activation on the live volume match the image: S4.1 is entry authority.
 - Cursor floor no longer rolls back below overlay (`later_iso`).
+- Public BBO WS payloads are queued off the ping thread (`queued_payloads=True`); ping_timeout 20s.
+- Gap recovery still walks every missing aggTrade, but WAL fsync is batched (`BACKFILL_WAL_DURABLE_EVERY=128` plus batch end). Do not skip the gap.
+- Engine ignores backfill prints with `trade_ts < opened_at`.
+- paper-manager no longer `depends_on` LIVE1A `cognition-runtime` health. Journal stays observe-only.
 
 ## Do not restore
 

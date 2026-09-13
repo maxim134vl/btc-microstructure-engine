@@ -364,6 +364,15 @@ def write_json(path: Path, payload: Any) -> None:
     tmp.replace(path)
 
 
+def _write_xlsx_optional(frame: Any, path: Path) -> None:
+    """Diagnostic xlsx only. Missing openpyxl must not freeze chart JSON."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_excel(path, index=False)
+    except Exception:
+        pass
+
+
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -462,6 +471,7 @@ def run_lifecycle_visual_generate() -> dict[str, Any]:
     """Rebuild lifecycle_* visual JSON only (no cognition rebuild, no ledger writes)."""
     import generate_lifecycle_context_data as gen
 
+    os.environ["ENABLE_TIMEFRAME_CHART_TRUTH"] = "1"
     code = int(gen.main())
     if code != 0:
         raise RuntimeError(f"generate_lifecycle_context_data exit={code}")
@@ -1053,8 +1063,7 @@ def build_normalized_trade_render_layer(generated_at: str, mark_price: float | N
     frame = pd.DataFrame(rows, columns=columns)
     NORMALIZED_TRADE_RENDER_LAYER_PARQUET.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(NORMALIZED_TRADE_RENDER_LAYER_PARQUET, index=False)
-    NORMALIZED_TRADE_RENDER_LAYER_XLSX.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_excel(NORMALIZED_TRADE_RENDER_LAYER_XLSX, index=False)
+    _write_xlsx_optional(frame, NORMALIZED_TRADE_RENDER_LAYER_XLSX)
     trade_ids = [str(row.get("trade_id")) for row in rows if row.get("trade_id")]
     duplicate_ids = sorted({tid for tid in trade_ids if trade_ids.count(tid) > 1})
     missing_required = [
@@ -1135,8 +1144,7 @@ def build_closed_trade_report(render_layer: dict[str, Any]) -> dict[str, Any]:
     frame = pd.DataFrame(closed_rows, columns=CLOSED_TRADE_REPORT_COLUMNS)
     CLOSED_TRADE_REPORT_PARQUET.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(CLOSED_TRADE_REPORT_PARQUET, index=False)
-    CLOSED_TRADE_REPORT_XLSX.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_excel(CLOSED_TRADE_REPORT_XLSX, index=False)
+    _write_xlsx_optional(frame, CLOSED_TRADE_REPORT_XLSX)
     trade_ids = [str(row.get("trade_id")) for row in closed_rows if row.get("trade_id")]
     payload = {
         "generated_at_utc": render_layer.get("generated_at_utc"),
@@ -1508,8 +1516,7 @@ def build_trade_layer_reconciliation(render_layer: dict[str, Any], closed_report
     frame = pd.DataFrame(rows, columns=RECONCILIATION_COLUMNS)
     TRADE_LAYER_RECONCILIATION_PARQUET.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(TRADE_LAYER_RECONCILIATION_PARQUET, index=False)
-    TRADE_LAYER_RECONCILIATION_XLSX.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_excel(TRADE_LAYER_RECONCILIATION_XLSX, index=False)
+    _write_xlsx_optional(frame, TRADE_LAYER_RECONCILIATION_XLSX)
     issue_series = frame.get("issue_type", pd.Series(dtype=object))
     return {
         "generated_at_utc": render_layer.get("generated_at_utc"),

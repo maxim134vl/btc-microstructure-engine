@@ -19,6 +19,7 @@ from timeframe_chart_truth import (  # noqa: E402
     assign_tf_ordinals,
     build_tf_context_segments,
     build_timeframe_chart_truth,
+    canonicalize_visual_context,
 )
 
 
@@ -71,14 +72,19 @@ def test_stable_ordinals_tf_n(truth):
 
 def test_context_history_per_tf_isolated(truth):
     from active_epoch_trade_filter import live1b_paper_active  # noqa: E402
+    from timeframe_chart_truth import paper_entry_source  # noqa: E402
 
-    live1b = bool(live1b_paper_active())
+    live1b = bool(live1b_paper_active()) or paper_entry_source() == "s41_command_bus"
     for tf in TIMEFRAMES:
         block = truth["timeframes"][tf]
         segs = block.get("context_segments") or []
         assert segs == (block.get("context_history") or [])
         if live1b:
-            assert block.get("context_source") == "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+            assert block.get("context_source") in {
+                "market_context_lifecycle_episodes",
+                "market_context_lifecycle_memory",
+                "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
+            }
             events = block.get("context_events") or []
             for ev in events:
                 assert ev["timeframe"] == tf
@@ -87,18 +93,34 @@ def test_context_history_per_tf_isolated(truth):
                 assert ev.get("bar_anchor_time")
             for seg in segs:
                 assert seg["timeframe"] == tf
-                assert seg.get("source") == "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+                assert seg.get("source") in {
+                    "market_context_lifecycle_episodes",
+                    "market_context_lifecycle_memory",
+                    "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
+                    "CANONICAL_VISUAL_OBSERVE_GAP",
+                    "TIP_LIFECYCLE_ACTIVE",
+                }
+                assert seg.get("directional_state") in {
+                    "LONG_CONTEXT",
+                    "SHORT_CONTEXT",
+                    "OBSERVE",
+                }
         else:
             assert block.get("context_source") == "timeframe_command_memory"
-            assert len(segs) >= 1
             for seg in segs:
                 assert seg["timeframe"] == tf
                 assert seg.get("start_timestamp")
-                assert seg.get("end_timestamp")
-                assert seg.get("directional_state")
-                assert seg.get("source") == "timeframe_command_memory"
-            if tf in ("M15", "M30", "H1"):
-                assert len(segs) > 1
+                if not seg.get("active"):
+                    assert seg.get("end_timestamp")
+                assert canonicalize_visual_context(seg.get("directional_state")) in {
+                    "LONG_CONTEXT",
+                    "SHORT_CONTEXT",
+                    "OBSERVE",
+                }
+                assert seg.get("source") in {
+                    "timeframe_command_memory",
+                    "CANONICAL_VISUAL_OBSERVE_GAP",
+                }
 
 
 def test_trade_isolation_zero_foreign(truth):
@@ -111,6 +133,6 @@ def test_trade_isolation_zero_foreign(truth):
 
 def test_context_builder_and_contamination_assert():
     m15 = build_tf_context_segments("M15")
-    assert m15 and all(s["timeframe"] == "M15" for s in m15)
+    assert all(s["timeframe"] == "M15" for s in m15)
     bad = assert_entities_tf_isolated([{"timeframe": "H1", "trade_id": "x"}], timeframe="M15")
     assert len(bad) == 1

@@ -27,6 +27,9 @@ if False:  # pragma: no cover - typing only
     from .engine import IntrabarPaperEngine
 
 
+BACKFILL_WAL_DURABLE_EVERY = 128
+
+
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -320,7 +323,7 @@ class ExecutionMarketProcessor:
             )
             self.state.on_backfill_failed(error)
             return [{"status": "BACKFILL_INCOMPLETE", "error": error}]
-        for row in rows:
+        for index, row in enumerate(rows, start=1):
             backfill_event = normalize_rest_agg_trade(
                 row,
                 symbol=self.symbol,
@@ -328,7 +331,10 @@ class ExecutionMarketProcessor:
                 receive_monotonic_ns=int(live_event["local_receive_monotonic_ns"]),
                 receive_timestamp=str(live_event["local_receive_timestamp"]),
             )
-            action = self._persist_and_dispatch_agg_trade(backfill_event)
+            last_gap_row = index == len(rows)
+            protective = self._agg_trade_crosses_protective(float(backfill_event["price"]))
+            durable = last_gap_row or protective or (index % BACKFILL_WAL_DURABLE_EVERY == 0)
+            action = self._persist_and_dispatch_agg_trade(backfill_event, durable=durable)
             actions.append(action)
             if action.get("status") != "AGG_TRADE_DISPATCHED":
                 self.state.on_backfill_failed(
@@ -338,6 +344,7 @@ class ExecutionMarketProcessor:
             self.state.on_backfill_progress(
                 aggregate_trade_id=int(backfill_event["aggregate_trade_id"])
             )
+        self.wal.flush_durable(reason="backfill_batch_end")
         live_action = self._persist_and_dispatch_agg_trade(live_event)
         actions.append(live_action)
         if live_action.get("status") == "AGG_TRADE_DISPATCHED":
@@ -348,12 +355,25 @@ class ExecutionMarketProcessor:
             )
         return actions
 
-    def _persist_and_dispatch_agg_trade(self, event: dict[str, Any]) -> dict[str, Any]:
+    def _persist_and_dispatch_agg_trade(
+        self,
+        event: dict[str, Any],
+        *,
+        durable: bool = True,
+    ) -> dict[str, Any]:
         # Harden soft BOOK_TICKER bytes before volume / TP-SL durable path.
-        self.wal.flush_durable(reason="pre_agg_trade")
+        # Gap recovery may skip per-trade fsync; crash resumes from last
+        # confirmed id. Do not skip the gap itself.
+        if durable:
+            self.wal.flush_durable(reason="pre_agg_trade")
         agg_id = int(event["aggregate_trade_id"])
         protective = self._agg_trade_crosses_protective(float(event["price"]))
-        append = self._append_with_retry(event, allow_degraded_protective=protective)
+        append = self._append_with_retry(
+            event,
+            allow_degraded_protective=protective,
+            fsync=durable or protective,
+            update_state=durable or protective,
+        )
         if not append.ok:
             if protective:
                 action = self._dispatch_agg_trade(

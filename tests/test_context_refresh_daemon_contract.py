@@ -310,6 +310,132 @@ def test_08d_restep_uncertain_keeps_production_long_episode():
     assert out.iloc[2]["transition_reason"] == "insufficient auction evidence keeps active"
 
 
+def test_08f_replace_higher_tf_keeps_m15_settled_prefix():
+    tail_merge_existing_wins = refresh_mod.tail_merge_existing_wins
+    stamps = pd.to_datetime(
+        [
+            "2026-07-24T12:00:00Z",
+            "2026-07-24T12:15:00Z",
+            "2026-07-24T12:30:00Z",
+            "2026-07-24T12:45:00Z",
+            "2026-07-24T13:00:00Z",
+            "2026-07-24T13:15:00Z",
+        ],
+        utc=True,
+    )
+    prod = pd.DataFrame(
+        {
+            "timestamp": list(stamps) + [stamps[0], stamps[2]],
+            "timeframe": ["M15"] * 6 + ["H4", "H4"],
+            "v": [1, 2, 3, 4, 5, 6, 70, 71],
+            "active_market_context": ["LONG_CONTEXT"] * 6 + ["OBSERVE", "OBSERVE"],
+        }
+    )
+    cand = pd.DataFrame(
+        {
+            "timestamp": list(stamps) + [stamps[0], stamps[2]],
+            "timeframe": ["M15"] * 6 + ["H4", "H4"],
+            "v": [9, 9, 9, 9, 9, 9, 80, 81],
+            "active_market_context": ["SHORT_CONTEXT"] * 6 + ["LONG_CONTEXT", "LONG_CONTEXT"],
+        }
+    )
+    merged = tail_merge_existing_wins(
+        prod,
+        cand,
+        "timestamp",
+        replace_timeframes=refresh_mod.INDEPENDENT_REPLACE_TIMEFRAMES,
+    )
+    m15 = merged[merged["timeframe"].astype(str).str.upper() == "M15"]
+    h4 = merged[merged["timeframe"].astype(str).str.upper() == "H4"]
+    assert list(m15["v"]) == [1, 2, 9, 9, 9, 9]
+    assert list(h4["v"]) == [80, 81]
+    assert list(h4["active_market_context"]) == ["LONG_CONTEXT", "LONG_CONTEXT"]
+
+
+def test_08g_replaced_h4_keeps_living_episode_when_direction_stays():
+    stamps = pd.to_datetime(
+        ["2026-07-24T08:00:00Z", "2026-07-24T12:00:00Z"],
+        utc=True,
+    )
+
+    def _h4(ts, *, raw, active, episode, source):
+        return {
+            "timestamp": ts,
+            "timeframe": "H4",
+            "raw_market_context": raw,
+            "raw_context_status": "ACTIVE",
+            "raw_context_reason": f"{raw}/ACTIVE",
+            "raw_cognitive_market_state": "LOWER_ABSORPTION",
+            "raw_state_direction": "LONG",
+            "raw_auction_episode": "LOWER_ABSORPTION",
+            "auction_episode": "LOWER_ABSORPTION",
+            "active_market_context": active,
+            "lifecycle_state": "ACTIVE",
+            "context_episode_id": episode,
+            "lifecycle_source": source,
+        }
+
+    prod = pd.DataFrame(
+        [
+            _h4(stamps[0], raw="LONG_CONTEXT", active="LONG_CONTEXT", episode=22, source="INDEPENDENT_OHLCV_PROXY"),
+            _h4(stamps[1], raw="LONG_CONTEXT", active="LONG_CONTEXT", episode=22, source="INDEPENDENT_OHLCV_PROXY"),
+        ]
+    )
+    cand = pd.DataFrame(
+        [
+            _h4(stamps[0], raw="LONG_CONTEXT", active="LONG_CONTEXT", episode=1, source="INDEPENDENT_CLOSED_BAR_VOLUME"),
+            _h4(stamps[1], raw="LONG_CONTEXT", active="LONG_CONTEXT", episode=1, source="INDEPENDENT_CLOSED_BAR_VOLUME"),
+        ]
+    )
+    merged = refresh_mod.tail_merge_existing_wins(
+        prod,
+        cand,
+        "timestamp",
+        replace_timeframes=refresh_mod.INDEPENDENT_REPLACE_TIMEFRAMES,
+    )
+    out = refresh_mod.restep_lifecycle_tail(
+        prod,
+        merged,
+        "timestamp",
+        replace_timeframes=refresh_mod.INDEPENDENT_REPLACE_TIMEFRAMES,
+    )
+    assert list(out["lifecycle_source"]) == ["INDEPENDENT_CLOSED_BAR_VOLUME"] * 2
+    assert list(out["active_market_context"]) == ["LONG_CONTEXT", "LONG_CONTEXT"]
+    assert list(out["context_episode_id"]) == [22, 22]
+
+
+def test_08h_m15_episodes_stay_when_higher_tf_rebuilt():
+    prod = pd.DataFrame(
+        {
+            "episode_id": [314, 9],
+            "timeframe": ["M15", "H1"],
+            "active_market_context": ["LONG_CONTEXT", "OBSERVE"],
+            "start_time": pd.to_datetime(["2026-07-01T00:00:00Z", "2026-07-01T00:00:00Z"], utc=True),
+            "end_time": pd.to_datetime(["2026-07-01T04:00:00Z", "2026-07-01T04:00:00Z"], utc=True),
+        }
+    )
+    life = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2026-07-01T00:00:00Z", "2026-07-01T01:00:00Z"], utc=True),
+            "timeframe": ["H1", "H1"],
+            "close": [100.0, 101.0],
+            "active_market_context": ["SHORT_CONTEXT", "SHORT_CONTEXT"],
+            "lifecycle_state": ["ACTIVE", "ACTIVE"],
+            "context_episode_id": [3, 3],
+            "transition_reason": ["seed", "hold"],
+            "action_allowed": [False, False],
+            "lifecycle_source": ["INDEPENDENT_CLOSED_BAR_VOLUME"] * 2,
+        }
+    )
+    out = refresh_mod.merge_episodes_keep_m15_rebuild_higher(prod, life)
+    m15 = out[out["timeframe"].astype(str).str.upper() == "M15"]
+    h1 = out[out["timeframe"].astype(str).str.upper() == "H1"]
+    assert list(m15["episode_id"]) == [314]
+    assert len(h1) == 1
+    assert list(h1["active_market_context"]) == ["SHORT_CONTEXT"]
+    assert list(h1["lifecycle_source"]) == ["INDEPENDENT_CLOSED_BAR_VOLUME"]
+
+
 def test_08e_refresh_interval_fits_inside_one_m15_bar():
     daemon_src = DAEMON_PATH.read_text(encoding="utf-8")
     assert 'CONTEXT_REFRESH_INTERVAL_SECONDS", "60"' in daemon_src

@@ -432,6 +432,22 @@ def test_journal_open_is_not_production_lock():
     assert "assert raw[\"entry_source\"] == \"context_journal\"" not in lag
 
 
+def test_public_ws_payloads_are_queued_off_the_ping_thread():
+    src = (ROOT / "scripts" / "live" / "run_intrabar_paper_manager.py").read_text(encoding="utf-8")
+    public_block = src.split("thread_name=\"live1b-futures-public\"", 1)[1].split(
+        "thread_name=\"live1b-futures-market\"", 1
+    )[0]
+    assert "queued_payloads=True" in public_block
+    assert "ping_timeout=20" in src
+
+
+def test_paper_manager_does_not_wait_on_live1a_health():
+    compose = (ROOT / "deploy" / "vps" / "docker-compose.yml").read_text(encoding="utf-8")
+    paper = compose.split("paper-manager:", 1)[1].split("timeframe-manager:", 1)[0]
+    assert "cognition-runtime:" not in paper
+    assert "check_paper_manager.py" in paper
+
+
 def test_episode_oneshot_manager_does_not_reopen_same_episode(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
     bus, books, _ = isolated_environment(tmp_path / "books")

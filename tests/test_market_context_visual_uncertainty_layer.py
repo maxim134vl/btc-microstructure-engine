@@ -212,24 +212,16 @@ def test_episode_fill_confirmed_rendering_unchanged():
 
 def test_viewer_js_renders_uncertainty_as_hatched_regions_only():
     src = APP_JS.read_text(encoding="utf-8")
-    assert "drawUncertaintySegments" in src
-    assert "state.uncertainty" in src
-    assert "lifecycle_uncertainty_segments.json" in src
-    assert "cache: \"no-store\"" in src
-    # Clean mode: no vertical marker spam, no chart text labels on regions.
-    assert "drawUncertaintyMarkers" not in src
+    assert "drawUncertaintySegments" not in src
+    assert "lifecycle_uncertainty_segments.json" not in src
+    assert "function canonicalVisualContext" in src
+    assert 'fillText("CHALLENGED"' not in src
     assert "AUCTION NEUTRALIZATION" not in src
-    assert "fillText(String(segment.label" not in src
-    assert "pinnedRow" not in src
-    assert "renderInspector" not in src
 
 
 def test_viewer_js_compact_hover_only():
     src = APP_JS.read_text(encoding="utf-8")
-    assert "updateHover" in src
-    assert "active_market_context" in src
-    assert "lifecycle_state" in src
-    # Bulky multi-field inspector card must not be the default clean hover.
+    assert "canonicalVisualContext" in src
     assert "inspectorField" not in src
     assert "auction_episode_status" not in src
 
@@ -248,31 +240,28 @@ def test_generator_candle_rows_carry_inspector_fields():
 
 def test_viewer_legend_is_compact_clean():
     html = INDEX_HTML.read_text(encoding="utf-8")
-    assert "Green = active long context" in html
-    assert "Red = active short context" in html
-    assert "Faded = uncertain / challenged" in html
-    assert "No fill = observe" in html
-    # Clean legend must not advertise neutralization / candidate sub-types.
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "canonical-lso-2" in html
+    assert "observeZone" in js
+    assert 'vis === "LONG_CONTEXT"' in js
+    assert "Faded = uncertain / challenged" not in html
     assert "Auction Neutralization" not in html
     assert "Candidate Long" not in html
 
 
 def test_viewer_css_clean_no_marker_legend():
     css = LIFECYCLE_CSS.read_text(encoding="utf-8")
-    assert ".swatch.long" in css
-    assert ".swatch.short" in css
-    assert ".swatch.faded" in css
-    assert ".swatch.observe" in css
     assert ".swatch.neutralization" not in css
     assert ".lifecycle-inspector-row" not in css
 
 
 def test_clean_mode_hatch_mapping_in_js():
     src = APP_JS.read_text(encoding="utf-8")
-    assert "uncertaintyHatchColor" in src
-    assert 'direction === "LONG_CONTEXT"' in src
-    assert 'direction === "SHORT_CONTEXT"' in src
-    assert 'type !== "CANDIDATE" && type !== "CHALLENGED"' in src
+    assert "function canonicalVisualContext" in src
+    assert 'vis === "LONG_CONTEXT"' in src
+    assert 'vis === "SHORT_CONTEXT"' in src
+    assert "observeZone" in src
+    assert 'fillText("CHALLENGED"' not in src
 
 
 if __name__ == "__main__":

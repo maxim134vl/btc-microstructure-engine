@@ -174,6 +174,33 @@ def test_03_gap_successful_backfill(env):
     assert proc.wal.last_confirmed_agg_trade_id == 105
 
 
+def test_03b_gap_backfill_does_not_fsync_every_trade(env):
+    def fetch(_symbol: str, start: int, end: int):
+        return [{"a": i, "p": "100.0", "q": "0.01", "T": 1, "m": False} for i in range(start, end + 1)]
+
+    proc = _processor(env, fetch_agg_trades=fetch)
+    _book(proc)
+    _agg(proc, 100, 100.0)
+    before = proc.wal.fsync_count
+    proc.state._set(ExecutionMarketState.HEALTHY, "seed")
+    actions = proc._process_agg_trade_live(
+        normalize_futures_agg_trade(
+            {"a": 140, "p": "100.0", "q": "0.01", "T": 1, "m": False},
+            symbol="BTCUSDT",
+            connection_session_id=proc.market_connection_session_id,
+            receive_monotonic_ns=time.monotonic_ns(),
+            receive_timestamp="2026-08-07T00:00:00Z",
+        )
+    )
+    missing = 39
+    fsyncs = proc.wal.fsync_count - before
+    assert fsyncs < missing
+    assert proc.wal.last_confirmed_agg_trade_id == 140
+    dispatched = [a for a in actions if a.get("status") == "AGG_TRADE_DISPATCHED"]
+    assert len(dispatched) == missing + 1
+    assert proc.state.state == ExecutionMarketState.HEALTHY
+
+
 def test_04_unresolved_gap_blocks_entry(env):
     def fetch_fail(*_args, **_kwargs):
         raise RuntimeError("backfill unavailable")

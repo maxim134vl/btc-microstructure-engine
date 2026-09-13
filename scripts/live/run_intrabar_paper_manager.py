@@ -145,7 +145,7 @@ def _start_routed_ws_feed(
                     on_close=on_close,
                     on_error=on_error,
                 )
-                ws.run_forever(sslopt=sslopt, ping_interval=15, ping_timeout=10)
+                ws.run_forever(sslopt=sslopt, ping_interval=30, ping_timeout=20)
             except Exception as exc:  # noqa: BLE001
                 processor.engine.errors.append(f"{thread_name}_reconnect:{exc}")
             on_disconnected()
@@ -171,8 +171,9 @@ def _start_execution_market_feeds(
         thread_name="live1b-futures-public",
         on_connected=processor.on_public_websocket_connected,
         on_disconnected=processor.on_public_websocket_disconnected,
-        on_payload=processor.handle_public_ws_payload,
+        on_payload=lambda payload, session_id=None: processor.handle_public_ws_payload(payload),
         processor=processor,
+        queued_payloads=True,
     )
     market = _start_routed_ws_feed(
         url=market_url,

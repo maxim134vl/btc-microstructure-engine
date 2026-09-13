@@ -1,8 +1,12 @@
 """Rebuild historical BTC M15 context into the ETLL market pack (shadow chain).
 
 Writes ONLY under the pack directory. Does not touch live data/cognition.
-Fidelity note: volume_response / stage-2 tip planes are not historically
-backfilled — auction quality is OHLCV-degraded vs live tip stack.
+Historical pack rebuild uses OHLCV proxy — volume_response / stage-2 tip
+planes are not backfilled there.
+
+Live M30/H1/H4 lifecycle is separate: it rolls live M15 volume classifiers
+onto each closed higher-TF bar, then runs the same auction chain. It does
+not copy M15 LONG/SHORT onto those timeframes.
 """
 
 from __future__ import annotations
@@ -523,20 +527,147 @@ def rebuild_btc_tf_historical_context(
 
 HIGHER_TIMEFRAMES = ("M30", "H1", "H4")
 _M15_OHLCV = ("timestamp", "open", "high", "low", "close", "volume")
+_LIVE_VOLUME_RESPONSE = ROOT / "data" / "cognition" / "volume_response_state.parquet"
+_LIVE_CONVERGENCE = ROOT / "data" / "reinforcement" / "auction_convergence_memory.parquet"
+_LIVE_PROBABILISTIC = ROOT / "data" / "probabilistic" / "probabilistic_auction_memory.parquet"
+_LIVE_COGNITION = ROOT / "data" / "cognition" / "runtime_cognition_memory.parquet"
+_LIVE_COGNITION_COMPOSITE = ROOT / "data" / "cognition" / "runtime_cognition_composite.parquet"
+_SALIENT_SKIP = frozenset(
+    {
+        "",
+        "UNKNOWN",
+        "NONE",
+        "NAN",
+        "NULL",
+        "NEUTRAL_VOLUME",
+        "NO_CLIMAX",
+        "BALANCED_RESPONSE",
+        "NEUTRAL",
+        "MIDDLE",
+    }
+)
+
+
+def _read_optional_parquet(path: Path) -> pd.DataFrame:
+    if path is None or not path.exists() or not path.is_file():
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _last_salient(values: pd.Series) -> Any:
+    cleaned: list[str] = []
+    raw: list[Any] = []
+    for value in values.tolist():
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        raw.append(value)
+        cleaned.append(text.upper())
+    salient = [raw[i] for i, token in enumerate(cleaned) if token not in _SALIENT_SKIP]
+    if salient:
+        return salient[-1]
+    return raw[-1] if raw else None
+
+
+def rollup_m15_frame_to_tf(
+    m15: pd.DataFrame,
+    tf_bars: pd.DataFrame,
+    *,
+    timeframe: str,
+) -> pd.DataFrame:
+    """Map M15 classifier rows onto closed higher-TF bars.
+
+    Does not copy M15 LONG/SHORT. Categorical fields keep the last salient
+    event inside the TF bar; relative_volume is max; delta is sum.
+    """
+    tf = str(timeframe or "").upper()
+    minutes = TF_BAR_MINUTES.get(tf)
+    if minutes is None or minutes <= 15:
+        raise ValueError(f"unsupported target timeframe: {tf}")
+    if m15 is None or not len(m15) or "timestamp" not in m15.columns:
+        return pd.DataFrame()
+    if tf_bars is None or not len(tf_bars) or "timestamp" not in tf_bars.columns:
+        return pd.DataFrame()
+    work = m15.copy()
+    work["_ts"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
+    work = work.dropna(subset=["_ts"])
+    if not len(work):
+        return pd.DataFrame()
+    work["_tf_open"] = work["_ts"].dt.floor(f"{int(minutes)}min")
+    numeric_max = [c for c in ("relative_volume", "relative_spread") if c in work.columns]
+    numeric_sum = [c for c in ("delta",) if c in work.columns]
+    cat_cols = [
+        c
+        for c in (
+            "volume_event",
+            "climax_state",
+            "effort_result_state",
+            "volume_class",
+            "localized_behavior",
+            "continuation_quality",
+            "participation_state",
+            "convergence_state",
+            "auction_regime",
+            "trigger_event",
+            "location_bias",
+            "tier1_trigger_event",
+            "tier1_location_bias",
+        )
+        if c in work.columns
+    ]
+    last_num = [
+        c
+        for c in ("distribution_probability", "absorption_probability")
+        if c in work.columns
+    ]
+    grouped = work.groupby("_tf_open", sort=True)
+    rows: list[dict[str, Any]] = []
+    for tf_open, grp in grouped:
+        rec: dict[str, Any] = {"timestamp": pd.Timestamp(tf_open)}
+        for col in cat_cols:
+            rec[col] = _last_salient(grp[col])
+        for col in numeric_max:
+            series = pd.to_numeric(grp[col], errors="coerce")
+            rec[col] = None if series.dropna().empty else float(series.max())
+        for col in numeric_sum:
+            series = pd.to_numeric(grp[col], errors="coerce").fillna(0.0)
+            rec[col] = float(series.sum())
+        for col in last_num:
+            series = pd.to_numeric(grp[col], errors="coerce").dropna()
+            rec[col] = None if series.empty else float(series.iloc[-1])
+        rows.append(rec)
+    if not rows:
+        return pd.DataFrame()
+    rolled = pd.DataFrame(rows)
+    tf_ts = pd.to_datetime(tf_bars["timestamp"], utc=True, errors="coerce")
+    out = pd.DataFrame({"timestamp": tf_ts.dropna().drop_duplicates().sort_values()})
+    out = out.merge(rolled, on="timestamp", how="left")
+    return out
 
 
 def build_independent_tf_lifecycle(
     feed: pd.DataFrame,
     *,
     timeframe: str,
+    volume_response_m15: pd.DataFrame | None = None,
+    convergence_m15: pd.DataFrame | None = None,
+    probabilistic_m15: pd.DataFrame | None = None,
+    cognition_m15: pd.DataFrame | None = None,
+    cognition_composite_m15: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Same auction→cognitive→final→lifecycle chain as TF historical packs.
 
     Runs on that TF's closed bars only. Tags ``timeframe``. Does not copy M15
-    lifecycle rows onto M30/H1/H4.
+    lifecycle rows onto M30/H1/H4. Live M15 volume classifiers are rolled onto
+    the TF bar when present; OHLCV proxy is the fallback only.
     """
     tf = str(timeframe or "").upper()
-    if tf not in TF_BAR_MINUTES:
+    if tf not in HIGHER_TIMEFRAMES:
         raise ValueError(f"unsupported timeframe: {tf}")
     auction_mod = _load_script(
         "etll_build_auction_episode_memory",
@@ -555,18 +686,45 @@ def build_independent_tf_lifecycle(
         ROOT / "scripts/research/build_market_context_lifecycle_memory.py",
     )
     candle = build_candle_structure(feed)
-    volume_response = synthesize_volume_response_v2(candle)
-    cognition_proxy = synthesize_cognition_triggers(candle)
-    empty = pd.DataFrame()
+    if volume_response_m15 is None:
+        volume_response_m15 = _read_optional_parquet(_LIVE_VOLUME_RESPONSE)
+    if convergence_m15 is None:
+        convergence_m15 = _read_optional_parquet(_LIVE_CONVERGENCE)
+    if probabilistic_m15 is None:
+        probabilistic_m15 = _read_optional_parquet(_LIVE_PROBABILISTIC)
+    if cognition_m15 is None:
+        cognition_m15 = _read_optional_parquet(_LIVE_COGNITION)
+    if cognition_composite_m15 is None:
+        cognition_composite_m15 = _read_optional_parquet(_LIVE_COGNITION_COMPOSITE)
+
+    volume_response = rollup_m15_frame_to_tf(volume_response_m15, candle, timeframe=tf)
+    used_live_volume = bool(
+        volume_response is not None
+        and len(volume_response)
+        and "volume_event" in volume_response.columns
+        and bool(volume_response["volume_event"].notna().any())
+    )
+    if not used_live_volume:
+        volume_response = synthesize_volume_response_v2(candle)
+    cognition_proxy = rollup_m15_frame_to_tf(cognition_m15, candle, timeframe=tf)
+    if cognition_proxy is None or not len(cognition_proxy) or "trigger_event" not in cognition_proxy.columns:
+        cognition_proxy = synthesize_cognition_triggers(candle)
+    else:
+        missing_trig = cognition_proxy["trigger_event"].isna().all()
+        if missing_trig:
+            cognition_proxy = synthesize_cognition_triggers(candle)
+    convergence = rollup_m15_frame_to_tf(convergence_m15, candle, timeframe=tf)
+    probabilistic = rollup_m15_frame_to_tf(probabilistic_m15, candle, timeframe=tf)
+    cognition_composite = rollup_m15_frame_to_tf(cognition_composite_m15, candle, timeframe=tf)
     auction = auction_mod.build_auction_episode_rows(
         frames={
             "candles": candle,
             "live": feed,
             "volume_response": volume_response,
-            "convergence": empty,
-            "probabilistic": empty,
+            "convergence": convergence,
+            "probabilistic": probabilistic,
             "cognition": cognition_proxy,
-            "cognition_composite": empty,
+            "cognition_composite": cognition_composite,
         }
     )
     cognitive = cog_mod.build_cognitive_market_state_rows(auction)
@@ -580,9 +738,13 @@ def build_independent_tf_lifecycle(
     episodes = life_mod.build_lifecycle_episodes(lifecycle)
     lifecycle = lifecycle.copy()
     lifecycle["timeframe"] = tf
+    lifecycle["lifecycle_source"] = (
+        "INDEPENDENT_CLOSED_BAR_VOLUME" if used_live_volume else "INDEPENDENT_OHLCV_PROXY"
+    )
     if len(episodes):
         episodes = episodes.copy()
         episodes["timeframe"] = tf
+        episodes["lifecycle_source"] = lifecycle["lifecycle_source"].iloc[0]
     return lifecycle, episodes
 
 
@@ -590,9 +752,16 @@ def _tag_m15(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     if "timeframe" not in out.columns:
         out["timeframe"] = "M15"
-        return out
-    tf = out["timeframe"].astype(str).str.upper()
-    return out.loc[tf.eq("M15")].copy()
+    else:
+        tf = out["timeframe"].astype(str).str.upper()
+        out = out.loc[tf.eq("M15")].copy()
+    if "lifecycle_source" not in out.columns:
+        out["lifecycle_source"] = "LIVE_SHADOW_CHAIN"
+    else:
+        out["lifecycle_source"] = out["lifecycle_source"].fillna("LIVE_SHADOW_CHAIN")
+        blank = out["lifecycle_source"].astype(str).str.strip().isin(("", "nan", "None", "NONE"))
+        out.loc[blank, "lifecycle_source"] = "LIVE_SHADOW_CHAIN"
+    return out
 
 
 def extend_m15_lifecycle_with_independent_higher_timeframes(
@@ -614,12 +783,25 @@ def extend_m15_lifecycle_with_independent_higher_timeframes(
         if parts_ep:
             return m15_life, pd.concat(parts_ep, ignore_index=True, sort=False)
         return m15_life, m15_episodes
+    volume_response_m15 = _read_optional_parquet(_LIVE_VOLUME_RESPONSE)
+    convergence_m15 = _read_optional_parquet(_LIVE_CONVERGENCE)
+    probabilistic_m15 = _read_optional_parquet(_LIVE_PROBABILISTIC)
+    cognition_m15 = _read_optional_parquet(_LIVE_COGNITION)
+    cognition_composite_m15 = _read_optional_parquet(_LIVE_COGNITION_COMPOSITE)
     for tf in HIGHER_TIMEFRAMES:
         try:
             feed_tf = resample_m15_feed_to_tf(feed_m15, tf)
             if feed_tf is None or not len(feed_tf):
                 continue
-            life_tf, ep_tf = build_independent_tf_lifecycle(feed_tf, timeframe=tf)
+            life_tf, ep_tf = build_independent_tf_lifecycle(
+                feed_tf,
+                timeframe=tf,
+                volume_response_m15=volume_response_m15,
+                convergence_m15=convergence_m15,
+                probabilistic_m15=probabilistic_m15,
+                cognition_m15=cognition_m15,
+                cognition_composite_m15=cognition_composite_m15,
+            )
         except Exception as exc:  # noqa: BLE001 — do not fail the live M15 parquet chain
             print(f"WARN skip {tf} independent lifecycle: {exc}", file=sys.stderr)
             continue
@@ -641,16 +823,46 @@ def extend_m15_lifecycle_with_independent_higher_timeframes(
 
 
 def load_m15_closed_bars_for_resample(root: Path | None = None) -> pd.DataFrame:
+    """Union every available closed-bar M15 OHLCV source.
+
+    Book packs resampled the full M15 feed. Live must not rebuild higher-TF
+    lifecycle from whichever single snapshot file happens to come first.
+    Overlapping timestamps keep candle-structure columns (taker/derived).
+    Extra timestamps from the live feed / partitions are appended.
+    """
     base = Path(root) if root is not None else ROOT
-    candidates = (
-        base / "data" / "cognition" / "candle_structure_memory.parquet",
-        base / "data" / "live" / "live_market_feed.parquet",
-    )
     needed = set(_M15_OHLCV)
-    for path in candidates:
-        if not path.exists():
-            continue
-        frame = pd.read_parquet(path)
+    ranked: list[tuple[int, pd.DataFrame]] = []
+
+    def _maybe_add(path: Path, rank: int) -> None:
+        if not path.exists() or not path.is_file():
+            return
+        try:
+            frame = pd.read_parquet(path)
+        except Exception:
+            return
         if needed.issubset(set(frame.columns)):
-            return frame
-    raise FileNotFoundError("no M15 OHLCV closed-bar feed for higher-TF resample")
+            ranked.append((rank, frame))
+
+    _maybe_add(base / "data" / "cognition" / "candle_structure_memory.parquet", 0)
+    _maybe_add(base / "data" / "live" / "live_market_feed.parquet", 1)
+    _maybe_add(base / "data" / "live" / "latest.parquet", 1)
+    partition_dir = base / "data" / "live" / "partitions"
+    if partition_dir.is_dir():
+        for path in sorted(partition_dir.glob("*.parquet")):
+            if path.name == "latest.parquet":
+                continue
+            _maybe_add(path, 2)
+    if not ranked:
+        raise FileNotFoundError("no M15 OHLCV closed-bar feed for higher-TF resample")
+    parts: list[pd.DataFrame] = []
+    for rank, frame in ranked:
+        work = frame.copy()
+        work["_src_rank"] = rank
+        parts.append(work)
+    out = pd.concat(parts, ignore_index=True, sort=False)
+    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+    out = out.dropna(subset=["timestamp"])
+    out = out.sort_values(["timestamp", "_src_rank"], kind="mergesort")
+    out = out.drop_duplicates(subset=["timestamp"], keep="first").drop(columns=["_src_rank"])
+    return out.sort_values("timestamp").reset_index(drop=True)

@@ -164,9 +164,6 @@ services:
     volumes:
       - btc_ml_data:/app/data
     command: ["/bin/sh", "/app/deploy/vps/entrypoints/paper_manager.sh"]
-    depends_on:
-      cognition-runtime:
-        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "/app/deploy/vps/healthchecks/check_paper_manager.py"]

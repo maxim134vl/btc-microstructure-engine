@@ -119,6 +119,7 @@ def test_s41_paper_tip_keeps_manager_long_over_observe(tmp_path, monkeypatch) ->
     monkeypatch.setattr(tct, "MTF_AVAILABILITY", tmp_path / "missing_mtf.json")
     monkeypatch.setattr(tct, "MANAGER_LATEST", manager)
     monkeypatch.setattr(tct, "INTRABAR_CONTEXT_JOURNAL", tmp_path / "missing_journal.jsonl")
+    monkeypatch.setattr(tct, "LIFECYCLE_MEMORY", tmp_path / "missing_lifecycle.parquet")
     monkeypatch.setattr(tct, "paper_uses_context_journal", lambda: False)
 
     state = tct.load_tf_state("M15")
@@ -164,9 +165,43 @@ def test_s41_paper_tip_keeps_manager_long_over_live1a_short(tmp_path, monkeypatc
     monkeypatch.setattr(tct, "MTF_AVAILABILITY", tmp_path / "missing_mtf.json")
     monkeypatch.setattr(tct, "MANAGER_LATEST", manager)
     monkeypatch.setattr(tct, "INTRABAR_CONTEXT_JOURNAL", tmp_path / "missing_journal.jsonl")
+    monkeypatch.setattr(tct, "LIFECYCLE_MEMORY", tmp_path / "missing_lifecycle.parquet")
     monkeypatch.setattr(tct, "paper_uses_context_journal", lambda: False)
 
     state = tct.load_tf_state("M15")
     assert state["directional_state"] == "LONG_CONTEXT"
     assert state["context_source"] == "timeframe_command_memory"
     assert state["manager_lifecycle_episode_id"] == "M15:265"
+
+
+def test_s41_memory_tip_overrides_manager_and_stale_live1a(tmp_path, monkeypatch) -> None:
+    import pandas as pd
+
+    health = tmp_path / "intrabar_cognition_health.json"
+    manager = tmp_path / "timeframe_manager_latest.json"
+    memory = tmp_path / "lifecycle.parquet"
+    _write_live1a_observe(health)
+    _write_manager_long(manager)
+    pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-09-10T05:00:00Z"),
+                "timeframe": "M15",
+                "active_market_context": "SHORT_CONTEXT",
+                "lifecycle_state": "ACTIVE",
+                "context_episode_id": 88,
+            }
+        ]
+    ).to_parquet(memory, index=False)
+    monkeypatch.setattr(tct, "LIVE1A_HEALTH", health)
+    monkeypatch.setattr(tct, "MTF_AVAILABILITY", tmp_path / "missing_mtf.json")
+    monkeypatch.setattr(tct, "MANAGER_LATEST", manager)
+    monkeypatch.setattr(tct, "INTRABAR_CONTEXT_JOURNAL", tmp_path / "missing_journal.jsonl")
+    monkeypatch.setattr(tct, "LIFECYCLE_MEMORY", memory)
+    monkeypatch.setattr(tct, "paper_uses_context_journal", lambda: False)
+
+    state = tct.load_tf_state("M15")
+    assert state["directional_state"] == "SHORT_CONTEXT"
+    assert state["context_source"] == "market_context_lifecycle_memory"
+    assert state["manager_lifecycle_episode_id"] == "M15:88"
+    assert state["manager_instruction"] == "OPEN_LONG"

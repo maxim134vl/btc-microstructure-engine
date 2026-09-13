@@ -216,7 +216,7 @@ def test_timeframes_independent():
 
 
 def test_event_time_age_mapping_keeps_n():
-    # N=3 bars * 900s = 2700s for M15
+    # floor(elapsed / TF_SECONDS); 2700s is 3 M15 bars, independent of min-hold.
     assert age_bars_from_elapsed(2699, "M15") == 2
     assert age_bars_from_elapsed(2700, "M15") == 3
 

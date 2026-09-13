@@ -3,6 +3,7 @@
 
 Does not copy M15 direction onto higher timeframes. Does not touch LIVE1A journal.
 M15 rows stay the live shadow-chain series (plus timeframe=M15).
+Higher TFs roll live M15 volume classifiers onto their own closed bars.
 """
 
 from __future__ import annotations

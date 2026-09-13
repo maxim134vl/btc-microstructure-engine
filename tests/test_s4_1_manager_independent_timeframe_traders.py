@@ -198,6 +198,13 @@ def test_01_manager_creates_four_independent_outputs(tmp_path):
     assert len({command["command_id"] for command in cycle["commands"]}) == 4
     assert all(command["intent"] in VALID_INTENTS for command in cycle["commands"])
     assert all(command["reason_codes"] for command in cycle["commands"])
+    by_tf = {command["timeframe"]: command for command in cycle["commands"]}
+    assert by_tf["M15"]["intent"] == "OPEN_LONG"
+    assert by_tf["M30"]["intent"] == "OPEN_LONG"
+    assert by_tf["H1"]["intent"] == "OPEN_SHORT"
+    assert by_tf["H4"]["intent"] == "NO_ACTION"
+    assert "UNCLOSED_BAR_REJECTED" in str(by_tf["H4"]["reason_codes"])
+    assert by_tf["M15"]["lifecycle_episode_id"] != by_tf["H1"]["lifecycle_episode_id"]
 
 
 def test_02_m15_reads_only_m15_state(states):
@@ -251,6 +258,7 @@ def test_07_no_cross_timeframe_fallback(states):
 def test_08_event_sparse_state_remains_available(states):
     m30 = states["M30"]
     assert m30["is_new_event"] is False
+    assert m30["timeframe_direction"] == "LONG"
     assert m30["actionable"] is True
     assert m30["no_action_reason"] is None
 
@@ -354,6 +362,7 @@ def test_15_m15_invalidation_does_not_invalidate_h1():
     assert states["M15"]["actionable"] is False
     assert states["M15"]["lifecycle_phase"] == "INVALIDATED"
     assert states["H1"]["actionable"] is True
+    assert states["H1"]["no_action_reason"] is None
     assert states["H1"]["lifecycle_phase"] == "ACTIVE"
     assert states["H1"]["timeframe_direction"] == "SHORT"
 
@@ -542,41 +551,18 @@ def risk_proof():
     return proofs.run_portfolio_risk_proof()
 
 
-def test_29_per_trader_risk_within_250(risk_proof, isolated):
-    assert risk_proof["checks"]["per_trader_budget_250"]
-    bus, books, traders, feed = isolated
-    bus.append(
-        [
-            proofs.synthetic_command(
-                timeframe="M15", intent="OPEN_LONG", evaluation_timestamp="2026-07-01T01:00:00Z"
-            )
-        ]
-    )
-    traders["M15"].run_once(feed=proofs.visible_feed(feed, "2026-07-01T01:15:00Z"))
-    position = books["M15"].open_position()
-    meta = json.loads(position["metadata_json"])
-    assert float(meta["approved_risk_usd"]) <= 250.0
-    assert float(meta["sizing"]["risk_scale_from_canonical"]) == pytest.approx(0.25)
+def test_29_per_trader_sleeve_budgets(risk_proof):
+    assert risk_proof["checks"]["per_trader_budget_matches_sleeves"]
+    risk = PortfolioRiskCoordinator.load()
+    assert risk.per_trader_max_risk_usd == {"M15": 500.0, "M30": 500.0, "H1": 1000.0, "H4": 1000.0}
+    assert risk.independent_timeframes is True
 
 
-def test_30_aggregate_risk_within_1000(risk_proof, isolated):
-    bus, books, traders, feed = isolated
-    bus.append(
-        [
-            proofs.synthetic_command(
-                timeframe=timeframe, intent="OPEN_LONG", evaluation_timestamp="2026-07-01T01:00:00Z"
-            )
-            for timeframe in SUPPORTED_TIMEFRAMES
-        ]
-    )
-    cycle_feed = proofs.visible_feed(feed, "2026-07-01T01:15:00Z")
-    for timeframe in SUPPORTED_TIMEFRAMES:
-        traders[timeframe].run_once(feed=cycle_feed)
-    total = sum(
-        PaperTraderEngine(books[timeframe]).snapshot()["open_risk_usd"] for timeframe in SUPPORTED_TIMEFRAMES
-    )
-    assert total == pytest.approx(1000.0)
-    assert total <= PortfolioRiskCoordinator.load().portfolio_max_risk_usd
+def test_30_independent_tf_not_blocked_by_shared_cap(risk_proof):
+    assert risk_proof["checks"]["h1_not_blocked_by_other_tf_open_risk"]
+    assert risk_proof["checks"]["h4_not_blocked_by_three_other_sleeves"]
+    risk = PortfolioRiskCoordinator.load()
+    assert sum(risk.per_trader_max_risk_usd.values()) == pytest.approx(3000.0)
 
 
 def test_31_opposing_risk_counted_gross(risk_proof):

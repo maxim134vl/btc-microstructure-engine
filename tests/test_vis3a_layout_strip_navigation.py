@@ -31,11 +31,12 @@ def test_js_rejects_technical_marker_labels():
     assert "placeCompact" in js
     assert "Entry  ${fmtPrice(entry)}" not in js
     assert "Exit  ${fmtPrice" not in js
-    assert 'fillText("Цель"' in js or 'fillText("Цель"' in js
-    assert 'fillText("Стоп"' in js or 'fillText("Стоп"' in js
-    assert 'fillText("Вход"' in js
+    assert "Цель" in js
+    assert "Стоп" in js
     assert "drawContextOverlays" in js
     assert "containingBarIndex" in js
+    assert "lastIncludedBarIndex" in js
+    assert "live ? 1 : 0.22" in js
 
 
 def test_tradingview_position_zone_contract_in_js():
@@ -44,8 +45,17 @@ def test_tradingview_position_zone_contract_in_js():
     assert "rewardFill" in js
     assert "riskFill" in js
     assert "collectVisiblePriceExtras" in js
+    assert "Candle-focused Y scale" in js
+    assert "clampY" in js
+    assert "Цель ↑" in js
+    assert "Стоп ↓" in js
+    assert "ctrlKey" in js
+    assert "geometry(chart, collectVisiblePriceExtras" not in js
     assert "drawContextBands" in js
-    assert "context_segments" in js
+    assert "canonicalVisualContext" in js
+    assert 'vis === "LONG_CONTEXT"' in js
+    assert "observeZone" in js
+    assert 'fillText("CHALLENGED"' not in js
     assert re.search(r"fillRect\(x1,\s*g\.pad\.top,\s*width,\s*3\)", js)
     assert "drawLongEntryMarker" in js
     assert "drawShortEntryMarker" in js

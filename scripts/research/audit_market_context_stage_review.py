@@ -88,7 +88,7 @@ PIPELINE_CYCLE_RE = re.compile(r"PIPELINE CYCLE:\s*(\d+)")
 FT_YES_MOVE = 0.001
 FT_YES_EXTENT = 0.002
 CURRENT_NEUT_BARS = 2
-CURRENT_HOLD_BARS = 3
+CURRENT_HOLD_BARS = 0
 
 
 def _clean(value: Any, default: str = "UNKNOWN") -> str:

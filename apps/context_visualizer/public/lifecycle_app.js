@@ -391,7 +391,7 @@ function goLatest(chart) {
   applyVisibleWindow(chart);
 }
 
-function geometry(chart, priceExtras) {
+function geometry(chart) {
   const canvas = chart.canvas;
   const w = canvas.clientWidth || 100;
   const h = canvas.clientHeight || 100;
@@ -405,12 +405,6 @@ function geometry(chart, priceExtras) {
     minP = Math.min(minP, c.low, c.open, c.close);
     maxP = Math.max(maxP, c.high, c.open, c.close);
   });
-  (priceExtras || []).forEach((p) => {
-    const n = finitePrice(p);
-    if (n == null) return;
-    minP = Math.min(minP, n);
-    maxP = Math.max(maxP, n);
-  });
   if (!Number.isFinite(minP) || !Number.isFinite(maxP) || minP === maxP) {
     minP = (minP || 0) - 1;
     maxP = (maxP || 0) + 1;
@@ -419,6 +413,8 @@ function geometry(chart, priceExtras) {
   minP -= padP;
   maxP += padP;
   const n = Math.max(1, rows.length);
+  const top = pad.top;
+  const bot = pad.top + plotH;
   return {
     pad,
     plotW,
@@ -431,6 +427,12 @@ function geometry(chart, priceExtras) {
     yAt(price) {
       return pad.top + ((maxP - price) / (maxP - minP)) * plotH;
     },
+    clampY(price) {
+      const y = pad.top + ((maxP - price) / (maxP - minP)) * plotH;
+      if (y < top) return { y: top, edge: "high" };
+      if (y > bot) return { y: bot, edge: "low" };
+      return { y, edge: null };
+    },
     indexAt(x) {
       const rel = (x - pad.left) / plotW;
       return Math.max(0, Math.min(n - 1, Math.floor(rel * n)));
@@ -441,27 +443,10 @@ function geometry(chart, priceExtras) {
   };
 }
 
-function collectVisiblePriceExtras(chart, tfBlock) {
-  const extras = [];
-  const entities = (tfBlock.open_positions || []).concat(tfBlock.closed_trades || []);
-  entities.forEach((e) => {
-    if ((e.timeframe || chart.tf) !== chart.tf) return;
-    extras.push(
-      e.entry_fill_price ?? e.entry_price,
-      e.exit_price,
-      e.stop_loss_price ?? e.stop_price,
-      e.take_profit_price,
-    );
-  });
-  (tfBlock.context_events || []).forEach((ev) => {
-    if ((ev.timeframe || chart.tf) !== chart.tf) return;
-    extras.push(ev.context_price);
-  });
-  (tfBlock.context_zones || []).forEach((z) => {
-    if ((z.timeframe || chart.tf) !== chart.tf) return;
-    extras.push(z.context_price);
-  });
-  return extras;
+function collectVisiblePriceExtras() {
+  // Candle-focused Y scale. SL/TP/entry extras must not stretch autoscale;
+  // off-screen levels use edge cues instead (VIS3A).
+  return [];
 }
 
 function barOpenTs(row) {
@@ -508,13 +493,57 @@ function containingBarIndex(rows, eventTs, anchorTs) {
   return timeIndex(rows, preferred != null ? preferred : ts);
 }
 
+function lastIncludedBarIndex(rows, endTs) {
+  if (!rows.length) return null;
+  const ts = parseTs(endTs);
+  if (ts == null) return null;
+  // Exclusive end. CONTEXT_END at a TF close is timestamped on the next bar open
+  // (often a few ms later). That next bar must not stay painted as live context.
+  const boundaryS = 2;
+  let best = null;
+  rows.forEach((c, i) => {
+    const open = barOpenTs(c);
+    if (open == null || open >= ts) return;
+    if (ts - open <= boundaryS) return;
+    if (best == null || open >= barOpenTs(rows[best])) best = i;
+  });
+  return best;
+}
+
+function canonicalVisualContext(name) {
+  const n = String(name || "").toUpperCase();
+  if (n === "LONG_CONTEXT" || n === "LONG" || n.startsWith("LONG")) return "LONG_CONTEXT";
+  if (n === "SHORT_CONTEXT" || n === "SHORT" || n.startsWith("SHORT")) return "SHORT_CONTEXT";
+  if (
+    n === "OBSERVE" ||
+    n === "STAND_ASIDE" ||
+    n === "NONE" ||
+    n === "NO_ACTIVE_CONTEXT" ||
+    n === "NEUTRAL" ||
+    n === "FLAT" ||
+    n === "CHALLENGED" ||
+    n === "DEVELOPING" ||
+    n === "CANDIDATE" ||
+    n === "BULLISH" ||
+    n === "BEARISH" ||
+    n === ""
+  ) {
+    return "OBSERVE";
+  }
+  return "OBSERVE";
+}
+
 function contextBandSegments(tfBlock) {
-  if (Array.isArray(tfBlock.context_zones) && tfBlock.context_zones.length) {
-    return tfBlock.context_zones.map((z) => ({
+  const raw = (Array.isArray(tfBlock.context_zones) && tfBlock.context_zones.length)
+    ? tfBlock.context_zones
+    : (Array.isArray(tfBlock.context_segments) && tfBlock.context_segments.length)
+      ? tfBlock.context_segments
+      : [];
+  return raw.map((z) => ({
       timeframe: z.timeframe,
       start_timestamp: z.start_timestamp,
       end_timestamp: z.end_timestamp,
-      directional_state: z.directional_state || (z.direction ? `${z.direction}_CONTEXT` : null),
+      directional_state: canonicalVisualContext(z.directional_state || z.direction) || "OBSERVE",
       direction: z.direction,
       context_price: z.context_price,
       bar_anchor_time: z.bar_anchor_time,
@@ -524,14 +553,6 @@ function contextBandSegments(tfBlock) {
       lifecycle_state: z.lifecycle_state,
       start_event_id: z.start_event_id,
     }));
-  }
-  if (Array.isArray(tfBlock.context_segments) && tfBlock.context_segments.length) {
-    return tfBlock.context_segments;
-  }
-  if (Array.isArray(tfBlock.context_history) && tfBlock.context_history.length) {
-    return tfBlock.context_history;
-  }
-  return [];
 }
 
 function drawContextBands(chart, tfBlock, g) {
@@ -544,16 +565,15 @@ function drawContextBands(chart, tfBlock, g) {
   if (firstTs == null || lastTs == null) return;
   segments.forEach((seg) => {
     if ((seg.timeframe || chart.tf) !== chart.tf) return;
-    const name = String(seg.directional_state || seg.direction || "").toUpperCase();
-    if (name.includes("OBSERVE") || name === "NONE" || name === "") return;
-    if (!name.includes("LONG") && !name.includes("SHORT")) return;
+    const vis = canonicalVisualContext(seg.directional_state || seg.direction);
+    if (!vis) return;
     const s = parseTs(seg.start_timestamp);
     const e = parseTs(seg.end_timestamp);
     if (s == null) return;
     const i0 = containingBarIndex(chart.visible, seg.start_timestamp, seg.bar_anchor_time);
     const i1 = e != null
-      ? containingBarIndex(chart.visible, seg.end_timestamp, null)
-      : chart.visible.length - 1;
+      ? lastIncludedBarIndex(chart.visible, seg.end_timestamp)
+      : (seg.active ? chart.visible.length - 1 : i0);
     if (i0 == null || i1 == null) return;
     if (e != null && e < firstTs) return;
     if (s > lastTs + 7 * 24 * 3600) return;
@@ -562,27 +582,21 @@ function drawContextBands(chart, tfBlock, g) {
     const width = Math.max(2, x2 - x1);
     let fill = colors.observeZone;
     let accent = colors.info;
-    if (name.includes("LONG")) {
+    if (vis === "LONG_CONTEXT") {
       fill = colors.longZone;
       accent = colors.positive;
-    }
-    if (name.includes("SHORT")) {
+    } else if (vis === "SHORT_CONTEXT") {
       fill = colors.shortZone;
       accent = colors.negative;
     }
+    const live = seg.active === true && e == null;
+    ctx.globalAlpha = live ? 1 : 0.22;
     ctx.fillStyle = fill;
     ctx.fillRect(x1, g.pad.top, width, g.plotH);
     ctx.fillStyle = accent;
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = live ? 0.7 : 0.2;
     ctx.fillRect(x1, g.pad.top, width, 3);
     ctx.globalAlpha = 1;
-    const life = String(seg.lifecycle_state || "").toUpperCase();
-    if (life === "CHALLENGED" && (seg.active || !seg.end_timestamp)) {
-      ctx.fillStyle = colors.warning;
-      ctx.font = `9px ${colors.mono}`;
-      ctx.textAlign = "left";
-      ctx.fillText("CHALLENGED", x1 + 4, g.pad.top + 14);
-    }
   });
 }
 
@@ -673,7 +687,7 @@ function drawCandles(chart, tfBlock) {
   ctx.clearRect(0, 0, w, h);
   const rows = chart.visible;
   if (!rows.length) return;
-  const g = geometry(chart, collectVisiblePriceExtras(chart, tfBlock));
+  const g = geometry(chart);
   drawContextBands(chart, tfBlock, g);
   drawVolumeBars(chart, tfBlock, g);
   ctx.strokeStyle = colors.grid;
@@ -858,10 +872,12 @@ function drawOverlays(chart, tfBlock, g) {
       ctx.restore();
       return;
     }
-    let iEnd = chart.visible.length - 1;
+    let iEnd = iEntry;
     if (kind === "closed") {
-      const ix = containingBarIndex(chart.visible, entity.exit_timestamp, null);
+      const ix = lastIncludedBarIndex(chart.visible, entity.exit_timestamp);
       if (ix != null) iEnd = ix;
+    } else {
+      iEnd = chart.visible.length - 1;
     }
     const x1 = g.xAt(Math.min(iEntry, iEnd));
     const x2 = g.xAt(Math.max(iEntry, iEnd));
@@ -870,37 +886,43 @@ function drawOverlays(chart, tfBlock, g) {
     const entryCandle = chart.visible[iEntry];
 
     if (take != null) {
-      drawZoneRect(ctx, x1, x2, yEntry, g.yAt(take), isSel ? colors.rewardFillSel : colors.rewardFill);
+      const takeY = g.clampY(take);
+      if (!takeY.edge) {
+        drawZoneRect(ctx, x1, x2, yEntry, takeY.y, isSel ? colors.rewardFillSel : colors.rewardFill);
+      }
       ctx.strokeStyle = colors.tradeTake;
       ctx.lineWidth = isSel ? 2 : 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
-      ctx.moveTo(x1, g.yAt(take));
-      ctx.lineTo(x2, g.yAt(take));
+      ctx.moveTo(x1, takeY.y);
+      ctx.lineTo(x2, takeY.y);
       ctx.stroke();
       ctx.setLineDash([]);
       if (isSel || !selected) {
         ctx.fillStyle = colors.tradeTake;
         ctx.font = `9px ${colors.mono}`;
         ctx.textAlign = "left";
-        ctx.fillText("Цель", x2 + 3, g.yAt(take) + 3);
+        ctx.fillText(takeY.edge === "high" ? "Цель ↑" : takeY.edge === "low" ? "Цель ↓" : "Цель", x2 + 3, takeY.y + 3);
       }
     }
     if (stop != null) {
-      drawZoneRect(ctx, x1, x2, yEntry, g.yAt(stop), isSel ? colors.riskFillSel : colors.riskFill);
+      const stopY = g.clampY(stop);
+      if (!stopY.edge) {
+        drawZoneRect(ctx, x1, x2, yEntry, stopY.y, isSel ? colors.riskFillSel : colors.riskFill);
+      }
       ctx.strokeStyle = colors.tradeStop;
       ctx.lineWidth = isSel ? 2 : 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
-      ctx.moveTo(x1, g.yAt(stop));
-      ctx.lineTo(x2, g.yAt(stop));
+      ctx.moveTo(x1, stopY.y);
+      ctx.lineTo(x2, stopY.y);
       ctx.stroke();
       ctx.setLineDash([]);
       if (isSel || !selected) {
         ctx.fillStyle = colors.tradeStop;
         ctx.font = `9px ${colors.mono}`;
         ctx.textAlign = "left";
-        ctx.fillText("Стоп", x2 + 3, g.yAt(stop) + 3);
+        ctx.fillText(stopY.edge === "high" ? "Стоп ↑" : stopY.edge === "low" ? "Стоп ↓" : "Стоп", x2 + 3, stopY.y + 3);
       }
     }
 
@@ -947,8 +969,10 @@ function drawOverlays(chart, tfBlock, g) {
       chart.hitRegions.push({ key, x: x2, y: yExit, entity, kind, role: "exit" });
     }
 
-    const yTop = Math.min(yEntry, take != null ? g.yAt(take) : yEntry, stop != null ? g.yAt(stop) : yEntry);
-    const yBot = Math.max(yEntry, take != null ? g.yAt(take) : yEntry, stop != null ? g.yAt(stop) : yEntry);
+    const takeY = take != null ? g.clampY(take).y : yEntry;
+    const stopY = stop != null ? g.clampY(stop).y : yEntry;
+    const yTop = Math.min(yEntry, takeY, stopY);
+    const yBot = Math.max(yEntry, takeY, stopY);
     chart.hitRegions.push({
       key,
       x: xMid,
@@ -976,10 +1000,10 @@ function renderHeader(tf, tfBlock) {
   const pstatus = st.position_status || "FLAT";
   const bar = contract.latest_confirmed_close || "—";
   const barShort = String(bar).replace(/:\d{2}Z$/, "Z");
-  const segCount = (tfBlock.context_events || tfBlock.context_zones || tfBlock.context_segments || []).length;
+  const segCount = contextBandSegments(tfBlock).length;
   chart.header.innerHTML = `
     <span class="tf-name">${tf}</span>
-    <span class="tf-context">${fmt(st.directional_state)} · ${fmt(st.manager_instruction)}</span>
+    <span class="tf-context">${canonicalVisualContext(st.directional_state) || "OBSERVE"}</span>
     <span>${side} · ${pstatus}</span>
     <span title="Historical TF context segments">${segCount} ctx</span>
     <span title="Latest confirmed bar close (UTC)">bar ${barShort}</span>
@@ -1055,9 +1079,9 @@ function updateStatus() {
     const st = block.state || {};
     const closed = (block.closed_trades || []).length;
     const opens = (block.open_positions || []).length;
-    const segs = (block.context_events || block.context_zones || block.context_segments || []).length;
+    const segs = contextBandSegments(block).length;
     statusChips.innerHTML = [
-      `<span class="lifecycle-chip">${tf}:${st.directional_state || "—"}</span>`,
+      `<span class="lifecycle-chip">${tf}:${canonicalVisualContext(st.directional_state) || "OBSERVE"}</span>`,
       `<span class="lifecycle-chip">${segs} ctx</span>`,
       `<span class="lifecycle-chip">${closed} closed / ${opens} open</span>`,
     ].join("");
@@ -1102,13 +1126,13 @@ function formatTradeDetail(entity, tf) {
 function formatContextDetail(entity, tf) {
   if (!entity) return "";
   return [
-    `<strong>${entity.event_type || "CONTEXT"}</strong>`,
+    `<strong>${entity.event_type || "Контекст"}</strong>`,
     `TF ${entity.timeframe || tf}`,
     `направление ${entity.direction || "—"}`,
     `event_id ${entity.context_event_id || "—"}`,
     `episode ${entity.lifecycle_episode_id || "—"}`,
     `время события ${entity.event_timestamp || "—"}`,
-    `цена контекста ${fmtPrice(entity.context_price)}`,
+    `Цена контекста ${fmtPrice(entity.context_price)}`,
     `время цены ${entity.context_price_timestamp || "—"}`,
     `якорь свечи ${entity.bar_anchor_time || entity.context_bar_open_timestamp || "—"}`,
     `начало свечи ${entity.context_bar_open_timestamp || "—"}`,
@@ -1255,9 +1279,10 @@ function bindChartInteractions(tf) {
   });
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
-    if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && Math.abs(event.deltaX) > 0) {
+    const panX = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : (!event.ctrlKey && !event.metaKey ? event.deltaY : 0);
+    if (panX) {
       const span = Math.max(20, chart.visibleEnd - chart.visibleStart);
-      const shift = Math.round(event.deltaX / 20);
+      const shift = Math.round(panX / 20);
       chart.visibleStart += shift;
       chart.visibleEnd = chart.visibleStart + span;
       chart.followLatest = chart.visibleEnd >= chart.candles.length;
@@ -1266,8 +1291,10 @@ function bindChartInteractions(tf) {
       renderTfChart(tf);
       return;
     }
+    if (!event.ctrlKey && !event.metaKey) return;
     const delta = event.deltaY > 0 ? 1.18 : 1 / 1.18;
-    const len = Math.max(20, Math.round((chart.visibleEnd - chart.visibleStart) * delta));
+    const maxSpan = Math.max(defaultSpan(chart.tf, chart.candles.length) * 4, 240);
+    const len = Math.max(20, Math.min(maxSpan, Math.round((chart.visibleEnd - chart.visibleStart) * delta)));
     const rect = canvas.getBoundingClientRect();
     const g = geometry(chart);
     const idx = g.indexAt(event.clientX - rect.left);
