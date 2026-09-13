@@ -26,6 +26,7 @@ from .portfolio_risk import PortfolioRiskCoordinator
 from .timeframe_state_adapter import (
     INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY,
     SUPPORTED_TIMEFRAMES,
+    TIMEFRAME_SECONDS,
     UNSUPPORTED_TIMEFRAMES,
     TimeframeSources,
     load_sources,
@@ -39,8 +40,19 @@ LIVE_FEED = ROOT / "data" / "live" / "live_market_feed.parquet"
 CONTEXT_DECISION_LOG = ROOT / "data" / "live" / "context_decision_log.parquet"
 
 ASSET = "BTCUSDT"
-TIMEFRAME_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
 _SOURCE_TF_TO_MANAGER = {"15m": "M15", "30m": "M30", "1h": "H1", "4h": "H4"}
+_WAIT_PREVIEW_STATES = {
+    "UNKNOWN",
+    "",
+    "WAITING_FOR_BAR_CLOSE",
+    "TIMEFRAME_NOT_LIVE",
+}
+_CONTEXT_END_STATES = {
+    "OBSERVE",
+    "NO_ACTIVE_CONTEXT",
+    "STAND_ASIDE",
+    "INVALIDATED",
+}
 
 # Bar-count anti-saw is archived. Path-density saw filter lives on paper OPEN
 # (`btc_ml.trading.anti_saw_path_density`). Do not restore min-hold/cooldown.
@@ -279,18 +291,34 @@ def _market_observation(feed: pd.DataFrame, *, at_or_before: Any) -> dict[str, A
     }
 
 
-def _preview_context_for_open_position(side: str, timeframe_state: str) -> str:
-    """Hold through OBSERVE/unknown. Close only on the opposite directional context."""
+def _preview_context_for_open_position(
+    side: str,
+    timeframe_state: str,
+    lifecycle_phase: str | None = None,
+) -> str | None:
+    """Exit preview context for an open position.
+
+    None: missing/UNKNOWN row — wait, do not infer own side, do not close.
+    OBSERVE/END: pass through so S4.1 can flatten (not journal, not candle-close).
+    Opposite ACTIVE: pass through → CONTEXT_FLIP close.
+    Opposite CHALLENGED: keep own side → HOLD (unconfirmed noise).
+    Same-side directional: keep own side → HOLD, including CHALLENGED.
+    """
     ctx = str(timeframe_state or "").upper()
+    phase = str(lifecycle_phase or "").upper()
     side_u = str(side or "").upper()
-    if side_u == "SHORT" and ctx in {"LONG_CONTEXT", "LONG"}:
-        return "LONG_CONTEXT"
-    if side_u == "LONG" and ctx in {"SHORT_CONTEXT", "SHORT"}:
-        return "SHORT_CONTEXT"
-    if side_u == "SHORT":
-        return "SHORT_CONTEXT"
-    if side_u == "LONG":
-        return "LONG_CONTEXT"
+    own = "SHORT_CONTEXT" if side_u == "SHORT" else "LONG_CONTEXT" if side_u == "LONG" else ctx
+    opposite = "LONG_CONTEXT" if side_u == "SHORT" else "SHORT_CONTEXT" if side_u == "LONG" else ""
+    if ctx in _WAIT_PREVIEW_STATES:
+        return None
+    if ctx in _CONTEXT_END_STATES:
+        return ctx
+    if ctx in {opposite, opposite.replace("_CONTEXT", "")}:
+        if phase == "ACTIVE":
+            return opposite
+        return own
+    if side_u in {"SHORT", "LONG"}:
+        return own
     return ctx
 
 
@@ -432,10 +460,16 @@ class TimeframeManager:
         decision_index: dict[str, dict[tuple[pd.Timestamp, str], dict[str, Any]]]
         | dict[tuple[pd.Timestamp, str], dict[str, Any]]
         | None = None,
+        now: Any = None,
     ) -> dict[str, Any]:
         src = sources or load_sources()
         market_feed = feed if feed is not None else load_feed()
-        states = resolve_all_states(evaluation_timestamp=evaluation_timestamp, sources=src, timeframes=self.timeframes)
+        states = resolve_all_states(
+            evaluation_timestamp=evaluation_timestamp,
+            sources=src,
+            timeframes=self.timeframes,
+            now=now,
+        )
         manager_cycle_id = make_id("TF_MGR_CYCLE", self.asset, evaluation_timestamp, ",".join(self.timeframes))
 
         mark = _market_observation(market_feed, at_or_before=evaluation_timestamp)
@@ -635,32 +669,41 @@ class TimeframeManager:
                 if stop is None or take is None:
                     stop, take = compute_stop_take(side, entry)
                 stop_reference = stop
-                preview = evaluate_exit_preview(
-                    side=side,
-                    entry_price=entry,
-                    quantity=quantity,
-                    stop_loss_price=float(stop),
-                    take_profit_price=float(take),
-                    entry_fee_usd=float(
-                        safe_float(open_position.get("entry_fee_usd"))
-                        or safe_float(meta.get("entry_fee_usd"))
-                        or 0.0
-                    ),
-                    current_price=float(observation["close"]),
-                    latest_high=float(observation.get("high") or observation["close"]),
-                    latest_low=float(observation.get("low") or observation["close"]),
-                    latest_context=_preview_context_for_open_position(
-                        side, str(state.get("timeframe_state") or "")
-                    ),
-                    latest_lifecycle_state=str(state.get("lifecycle_phase") or ""),
+                preview_ctx = _preview_context_for_open_position(
+                    side,
+                    str(state.get("timeframe_state") or ""),
+                    str(state.get("lifecycle_phase") or ""),
                 )
-                if preview.get("is_close"):
-                    intent = "CLOSE"
-                    exit_reason = str(preview.get("exit_preview_reason") or "CONTEXT_EXIT")
-                    reasons.append(str(preview.get("exit_preview_action")))
-                else:
+                if preview_ctx is None:
                     intent = "HOLD"
-                    reasons.append(str(preview.get("exit_preview_reason") or "HOLD"))
+                    reasons.append(
+                        str(state.get("no_action_reason") or "WAIT_LIFECYCLE_ROW_FOR_CLOSED_BAR")
+                    )
+                else:
+                    preview = evaluate_exit_preview(
+                        side=side,
+                        entry_price=entry,
+                        quantity=quantity,
+                        stop_loss_price=float(stop),
+                        take_profit_price=float(take),
+                        entry_fee_usd=float(
+                            safe_float(open_position.get("entry_fee_usd"))
+                            or safe_float(meta.get("entry_fee_usd"))
+                            or 0.0
+                        ),
+                        current_price=float(observation["close"]),
+                        latest_high=float(observation.get("high") or observation["close"]),
+                        latest_low=float(observation.get("low") or observation["close"]),
+                        latest_context=preview_ctx,
+                        latest_lifecycle_state=str(state.get("lifecycle_phase") or ""),
+                    )
+                    if preview.get("is_close"):
+                        intent = "CLOSE"
+                        exit_reason = str(preview.get("exit_preview_reason") or "CONTEXT_EXIT")
+                        reasons.append(str(preview.get("exit_preview_action")))
+                    else:
+                        intent = "HOLD"
+                        reasons.append(str(preview.get("exit_preview_reason") or "HOLD"))
             primary = self._compose_command(
                 **shared,
                 intent=intent,

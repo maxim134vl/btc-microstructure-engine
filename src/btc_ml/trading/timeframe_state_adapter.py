@@ -16,7 +16,9 @@ legitimately report opposite directions.
 
 Hard rules enforced here:
   source_bar_close <= evaluation_timestamp
-  lifecycle row timestamp <= source_bar_close
+  lifecycle timestamp is bar open: source_bar_open <= ts < source_bar_close
+  (do not inherit the previous bar, and do not take the next bar's open
+  which equals this bar's close)
   no cross-timeframe fallback, no synthetic direction, D1 is never live.
 """
 
@@ -70,10 +72,46 @@ LIVE_ENTRY_AUTHORITY_TIMEFRAMES = frozenset(SUPPORTED_TIMEFRAMES)
 INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY = (
     "INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY"
 )
+TIMEFRAME_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
+STALE_CLOSED_BAR_SUPERSEDED = "STALE_CLOSED_BAR_SUPERSEDED"
+NO_LIFECYCLE_ROW_FOR_CLOSED_BAR = "NO_LIFECYCLE_ROW_FOR_CLOSED_BAR"
+NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE = "NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE"
 
 
 def timeframe_is_live_entry_authority(timeframe: str) -> bool:
     return str(timeframe or "").upper() in LIVE_ENTRY_AUTHORITY_TIMEFRAMES
+
+
+def closed_bar_superseded(
+    *,
+    timeframe: str,
+    source_bar_close: Any,
+    now: Any,
+) -> bool:
+    """True when the next TF bar has already closed, so this source bar is dead.
+
+    Lifecycle timestamps are bar open. Acting on bar N after bar N+1 has
+    closed is a late OPEN into a context the next closed bar already replaced.
+    """
+    tf = str(timeframe or "").upper()
+    seconds = TIMEFRAME_SECONDS.get(tf)
+    close = _ts(source_bar_close)
+    clock = _ts(now)
+    if seconds is None or close is None or clock is None:
+        return False
+    return clock >= close + pd.Timedelta(seconds=int(seconds))
+
+
+def _lifecycle_mask_for_closed_bar(
+    life_stamps: pd.Series,
+    *,
+    bar_open: pd.Timestamp | None,
+    bar_close: pd.Timestamp,
+) -> pd.Series:
+    """Keep this bar's open-stamped row; drop the next bar (ts == bar_close)."""
+    if bar_open is not None:
+        return (life_stamps >= bar_open) & (life_stamps < bar_close)
+    return life_stamps < bar_close
 
 OPERATIONAL_AVAILABILITY = {
     "FRESH_EVENT",
@@ -95,8 +133,9 @@ DIRECTION_SHORT = "SHORT"
 DIRECTION_FLAT = "NON_DIRECTIONAL"
 
 TERMINAL_LIFECYCLE_PHASES = {"INVALIDATED", "NO_ACTIVE_CONTEXT", "EXPIRED", "TERMINATED"}
-# Entries require a confirmed ACTIVE tip. CHALLENGED keeps an open hold path via
-# open-position preview, but must not open a fresh position from noise.
+# Entries require a confirmed ACTIVE tip. CHALLENGED is not actionable for
+# OPEN. Open-position preview holds through CHALLENGED (including opposite)
+# and only CLOSEs on opposite ACTIVE or OBSERVE/END.
 
 
 def _utc_now() -> str:
@@ -336,6 +375,7 @@ def resolve_timeframe_state(
     causal_cutoff_timestamp: Any = None,
     causal_cutoff_monotonic_ns: Any = None,
     model_version: str | None = None,
+    now: Any = None,
 ) -> dict[str, Any]:
     """Resolve per-TF state.
 
@@ -480,12 +520,18 @@ def resolve_timeframe_state(
         return base
     lifecycle = _scoped_lifecycle(raw_lifecycle, tf)
     if not len(lifecycle):
-        base["no_action_reason"] = "NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE"
+        base["no_action_reason"] = NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE
         return base
     life_stamps = pd.to_datetime(lifecycle["timestamp"], utc=True, errors="coerce")
-    life_mask = life_stamps <= bar_close
+    bar_open = _ts(row.get("source_bar_open"))
+    life_mask = _lifecycle_mask_for_closed_bar(
+        life_stamps, bar_open=bar_open, bar_close=bar_close
+    )
     if not bool(life_mask.any()):
-        base["no_action_reason"] = "NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE"
+        # Empty window: this closed bar has no own row yet. Do not inherit
+        # an older bar, and do not take ts == bar_close (next bar open).
+        base["no_action_reason"] = NO_LIFECYCLE_ROW_FOR_CLOSED_BAR
+        base["timeframe_state"] = "UNKNOWN"
         return base
     life_idx = life_stamps[life_mask].sort_values().index[-1]
     life_row = lifecycle.loc[life_idx].to_dict()
@@ -521,6 +567,13 @@ def resolve_timeframe_state(
     if base.get("actionable") and not timeframe_is_live_entry_authority(tf):
         base["actionable"] = False
         base["no_action_reason"] = INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY
+    if (
+        base.get("actionable")
+        and now is not None
+        and closed_bar_superseded(timeframe=tf, source_bar_close=bar_close, now=now)
+    ):
+        base["actionable"] = False
+        base["no_action_reason"] = STALE_CLOSED_BAR_SUPERSEDED
     if not base["actionable"] and base["no_action_reason"] is None:
         if direction == DIRECTION_FLAT:
             base["no_action_reason"] = "NON_DIRECTIONAL_TIMEFRAME_STATE"
@@ -557,9 +610,15 @@ def resolve_all_states(
     evaluation_timestamp: Any,
     sources: TimeframeSources | None = None,
     timeframes: tuple[str, ...] = SUPPORTED_TIMEFRAMES,
+    now: Any = None,
 ) -> dict[str, dict[str, Any]]:
     src = sources or load_sources()
     return {
-        tf: resolve_timeframe_state(timeframe=tf, evaluation_timestamp=evaluation_timestamp, sources=src)
+        tf: resolve_timeframe_state(
+            timeframe=tf,
+            evaluation_timestamp=evaluation_timestamp,
+            sources=src,
+            now=now,
+        )
         for tf in timeframes
     }

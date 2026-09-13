@@ -184,9 +184,11 @@ def test_challenged_directional_context_is_not_actionable_for_entry():
     assert m15["no_action_reason"] == "LIFECYCLE_PHASE_NOT_ACTIONABLE:CHALLENGED"
 
 
-def test_open_short_holds_through_observe_and_closes_on_long():
-    assert _preview_context_for_open_position("SHORT", "OBSERVE") == "SHORT_CONTEXT"
-    assert _preview_context_for_open_position("SHORT", "UNKNOWN") == "SHORT_CONTEXT"
-    assert _preview_context_for_open_position("SHORT", "LONG_CONTEXT") == "LONG_CONTEXT"
-    assert _preview_context_for_open_position("LONG", "OBSERVE") == "LONG_CONTEXT"
-    assert _preview_context_for_open_position("LONG", "SHORT_CONTEXT") == "SHORT_CONTEXT"
+def test_open_short_waits_unknown_holds_challenged_closes_on_active_or_observe():
+    assert _preview_context_for_open_position("SHORT", "UNKNOWN") is None
+    assert _preview_context_for_open_position("SHORT", "OBSERVE") == "OBSERVE"
+    assert _preview_context_for_open_position("SHORT", "LONG_CONTEXT", "CHALLENGED") == "SHORT_CONTEXT"
+    assert _preview_context_for_open_position("SHORT", "LONG_CONTEXT", "ACTIVE") == "LONG_CONTEXT"
+    assert _preview_context_for_open_position("LONG", "OBSERVE") == "OBSERVE"
+    assert _preview_context_for_open_position("LONG", "SHORT_CONTEXT", "ACTIVE") == "SHORT_CONTEXT"
+    assert _preview_context_for_open_position("LONG", "LONG_CONTEXT", "CHALLENGED") == "LONG_CONTEXT"

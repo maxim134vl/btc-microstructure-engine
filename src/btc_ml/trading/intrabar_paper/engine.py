@@ -1225,6 +1225,7 @@ class IntrabarPaperEngine:
         )
         now = _utc_iso()
         execution_ts = now
+        closed_episode = str(pos.lifecycle_episode_id or "").strip() or episode_id
         event = event or {}
         occurrence_px = resolve_context_entry_price(event, trigger_price)
         occurrence_ts = _occurrence_timestamp(event, trigger_timestamp)
@@ -1332,8 +1333,8 @@ class IntrabarPaperEngine:
             "exit_fee_usd": econ["exit_fee_usd"],
             "risk_amount_usd": pos.risk_amount_usd,
             "exit_reason": trigger_type,
-            "lifecycle_episode_id": episode_id,
-            "entry_ts": None,
+            "lifecycle_episode_id": closed_episode,
+            "entry_ts": pos.opened_at,
             "exit_ts": now,
             "status": "CLOSED",
             **provenance_snap,
@@ -1357,8 +1358,9 @@ class IntrabarPaperEngine:
             "entry_price": pos.entry_price,
             "exit_price": fill_px,
             "closed_at": now,
+            "opened_at": pos.opened_at,
             "exit_reason": trigger_type,
-            "lifecycle_episode_id": episode_id,
+            "lifecycle_episode_id": closed_episode,
             **provenance_snap,
         }
         if protective_level is not None:
@@ -1370,8 +1372,8 @@ class IntrabarPaperEngine:
             )
         self.books.append("positions", closed_position_payload)
         del self.positions[pos.timeframe]
-        if episode_id and context_episode_is_closed(trigger_type):
-            self.ended_episodes.add(str(episode_id))
+        if closed_episode and context_episode_is_closed(trigger_type):
+            self.ended_episodes.add(str(closed_episode))
         if self._uses_sleeves() and self.sleeves is not None:
             sleeve = self.sleeves.apply_realized_net_pnl(
                 pos.timeframe, float(econ["net_pnl_usd"]), at=now

@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from btc_ml.trading.command_bus import CommandBus, CommandBusPaths
+from btc_ml.trading.timeframe_state_adapter import (
+    STALE_CLOSED_BAR_SUPERSEDED,
+    closed_bar_superseded,
+)
 
 
 _TRANSIENT_OPEN_BLOCKS = frozenset(
@@ -108,10 +112,11 @@ class S41CommandConsumer:
             ids.append(command_id)
         self._state["processed_command_ids"] = ids
 
-    def poll(self) -> list[dict[str, Any]]:
+    def poll(self, *, now: str | None = None) -> list[dict[str, Any]]:
         processed = {str(x) for x in (self._state.get("processed_command_ids") or [])}
         after = self._state.get("consume_after") or self.consume_after
         actions: list[dict[str, Any]] = []
+        clock = now or _utc_iso()
         for tf in self.engine.cfg.timeframes:
             pending = self.bus.pending_for_timeframe(
                 tf,
@@ -133,6 +138,22 @@ class S41CommandConsumer:
                 result: dict[str, Any] | None = None
                 if intent in {"OPEN_LONG", "OPEN_SHORT"} and allowed:
                     if not self.engine.execution_market_ready_for_entry():
+                        continue
+                    if closed_bar_superseded(
+                        timeframe=str(command.get("timeframe") or tf),
+                        source_bar_close=command.get("source_bar_close"),
+                        now=clock,
+                    ):
+                        result = {
+                            "status": f"ENTRY_BLOCKED_{STALE_CLOSED_BAR_SUPERSEDED}",
+                            "command_id": command_id,
+                            "timeframe": tf,
+                            "intent": intent,
+                        }
+                        actions.append(result)
+                        self._mark(command_id)
+                        processed.add(command_id)
+                        self._save()
                         continue
                     local_bbo, _reason, _age, _domain = self.engine.bbo.resolve_live_local_entry_bbo(
                         max_age_ms=self.engine.cfg.max_bbo_age_ms,

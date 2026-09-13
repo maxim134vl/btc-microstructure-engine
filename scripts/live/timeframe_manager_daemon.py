@@ -95,6 +95,7 @@ def run_cycle(manager: TimeframeManager, *, boundary: str | None) -> dict[str, A
         feed=load_feed(),
         activation_boundary=boundary,
         persist=True,
+        now=_utc_now(),
     )
     summary = {
         cmd["timeframe"]: f"{cmd['intent']}({json.loads(cmd['reason_codes'])[0]})" for cmd in cycle["commands"]

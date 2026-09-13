@@ -619,6 +619,9 @@ def evaluate_exit_preview(
             # Explicit terminal lifecycle with non-matching should already be non-LONG;
             # if still LONG_CONTEXT, do not exit on CHALLENGED-like labels.
             context_exit = False
+        if life == "CHALLENGED":
+            # Opposite CHALLENGED is unconfirmed; same-side CHALLENGED already holds.
+            context_exit = False
         hold_action = "PREVIEW_HOLD_LONG"
         stop_action = "PREVIEW_CLOSE_LONG_STOP_LOSS"
         take_action = "PREVIEW_CLOSE_LONG_TAKE_PROFIT"
@@ -630,6 +633,8 @@ def evaluate_exit_preview(
         take_profit_hit = latest_low <= take_profit_price
         context_exit = ctx != "SHORT_CONTEXT"
         if ctx == "SHORT_CONTEXT" and life in CONTEXT_EXIT_LIFECYCLES:
+            context_exit = False
+        if life == "CHALLENGED":
             context_exit = False
         hold_action = "PREVIEW_HOLD_SHORT"
         stop_action = "PREVIEW_CLOSE_SHORT_STOP_LOSS"
