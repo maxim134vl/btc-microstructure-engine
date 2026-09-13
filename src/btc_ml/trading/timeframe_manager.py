@@ -59,6 +59,12 @@ _CONTEXT_END_STATES = {
 # Do not mix either into journal START/END/FLIP.
 ANTI_SAW_ENABLED = False
 
+# Daemon ticks on the M15 clock. M30/H1/H4 keep the same source_bar_close until
+# that TF's next bar closes. Actionable CLOSE/OPEN for a TF is one-shot per
+# closed bar; later restatements of that bar are HOLD/NO_ACTION. Not wait-one-bar
+# OPEN and not bar-count anti-saw. Protective SL/TP CLOSE still fires.
+SAME_CLOSED_BAR_ALREADY_ACTED = "SAME_CLOSED_BAR_ALREADY_ACTED"
+
 
 def _canonical_episode_id(*, namespace: str, original: str, timeframe: str | None) -> str:
     """Deterministic bridge id — does not replace original episode keys."""
@@ -355,6 +361,51 @@ def _record_entry(
     if ep not in traded:
         traded.append(ep)
     per_tf_state["traded_episode_ids"] = traded
+
+
+def _same_closed_bar_already_actioned(
+    per_tf_state: dict[str, Any],
+    *,
+    source_bar_close: Any,
+    evaluation_timestamp: Any,
+) -> bool:
+    """True when this TF already emitted CLOSE/OPEN on a prior cycle of this bar.
+
+    Same-evaluation replay stays idempotent so the command bus can reject
+    duplicate command_ids. A later M15-clock cycle that still carries the same
+    ``source_bar_close`` must not re-decide context.
+    """
+    last_bar = per_tf_state.get("last_actioned_source_bar_close")
+    if last_bar is None or source_bar_close is None:
+        return False
+    if not _same_evaluation(last_bar, source_bar_close):
+        return False
+    last_eval = per_tf_state.get("last_actioned_evaluation_timestamp")
+    if last_eval is not None and _same_evaluation(last_eval, evaluation_timestamp):
+        return False
+    return True
+
+
+def _record_actioned_closed_bar(
+    per_tf_state: dict[str, Any],
+    *,
+    source_bar_close: Any,
+    evaluation_timestamp: Any,
+    intent: str,
+) -> None:
+    if source_bar_close is None:
+        return
+    per_tf_state["last_actioned_source_bar_close"] = str(source_bar_close)
+    per_tf_state["last_actioned_evaluation_timestamp"] = str(evaluation_timestamp)
+    per_tf_state["last_actioned_intent"] = str(intent)
+
+
+def _is_stop_or_take_close(preview: dict[str, Any] | None) -> bool:
+    if not preview or not preview.get("is_close"):
+        return False
+    action = str(preview.get("exit_preview_action") or "").upper()
+    reason = str(preview.get("exit_preview_reason") or "").upper()
+    return "STOP_LOSS" in action or "TAKE_PROFIT" in action or "STOP_LOSS" in reason or "TAKE_PROFIT" in reason
 
 
 FEED_BAR_SECONDS = 900
@@ -704,6 +755,26 @@ class TimeframeManager:
                     else:
                         intent = "HOLD"
                         reasons.append(str(preview.get("exit_preview_reason") or "HOLD"))
+            eval_ts = state.get("evaluation_timestamp") or evaluation_timestamp
+            if (
+                intent == "CLOSE"
+                and not _is_stop_or_take_close(preview)
+                and _same_closed_bar_already_actioned(
+                    per_tf_state,
+                    source_bar_close=bar_close,
+                    evaluation_timestamp=eval_ts,
+                )
+            ):
+                intent = "HOLD"
+                exit_reason = None
+                reasons.insert(0, SAME_CLOSED_BAR_ALREADY_ACTED)
+            if intent in {"CLOSE", "OPEN_LONG", "OPEN_SHORT"}:
+                _record_actioned_closed_bar(
+                    per_tf_state,
+                    source_bar_close=bar_close,
+                    evaluation_timestamp=eval_ts,
+                    intent=intent,
+                )
             primary = self._compose_command(
                 **shared,
                 intent=intent,
@@ -798,6 +869,15 @@ class TimeframeManager:
             # FLIP opens a different opposite episode and is not this gate.
             intent = "NO_ACTION"
             reasons.append("EPISODE_ALREADY_TRADED")
+        elif _same_closed_bar_already_actioned(
+            per_tf_state,
+            source_bar_close=state.get("source_bar_close"),
+            evaluation_timestamp=eval_ts,
+        ):
+            # Same closed bar already had CLOSE/OPEN on a prior manager cycle.
+            # Restated opposite on this bar is not a new flip.
+            intent = "NO_ACTION"
+            reasons.append(SAME_CLOSED_BAR_ALREADY_ACTED)
         else:
             direction = str(state.get("timeframe_direction") or "").upper()
             candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
@@ -819,6 +899,12 @@ class TimeframeManager:
                     side=direction,
                     episode=episode,
                     context_started_at=state.get("context_started_at"),
+                )
+                _record_actioned_closed_bar(
+                    per_tf_state,
+                    source_bar_close=state.get("source_bar_close"),
+                    evaluation_timestamp=eval_ts,
+                    intent=intent,
                 )
                 observation = _market_observation(feed, at_or_before=evaluation_timestamp)
                 if observation and observation.get("close"):
