@@ -328,10 +328,7 @@ def test_short_replaced_by_active_long_opposite_replacement():
     rows = [_short_active(i) for i in range(n_active)]
     n = len(rows)
     rows.append(_long_active(n))
-    rows.append(_long_active(n + 1))
     out = mod.build_lifecycle_memory(pd.DataFrame(rows))
-    assert out.iloc[n]["active_market_context"] == "SHORT_CONTEXT"
-    assert out.iloc[n]["lifecycle_state"] == "CHALLENGED"
     row = out.iloc[-1]
     assert row["active_market_context"] == "LONG_CONTEXT"
     assert row["lifecycle_state"] == "ACTIVE"
@@ -344,15 +341,79 @@ def test_long_replaced_by_active_short_opposite_replacement():
     rows = [_long_active(i) for i in range(n_active)]
     n = len(rows)
     rows.append(_short_active(n))
-    rows.append(_short_active(n + 1))
     out = mod.build_lifecycle_memory(pd.DataFrame(rows))
-    assert out.iloc[n]["active_market_context"] == "LONG_CONTEXT"
-    assert out.iloc[n]["lifecycle_state"] == "CHALLENGED"
     row = out.iloc[-1]
     assert row["active_market_context"] == "SHORT_CONTEXT"
     assert row["lifecycle_state"] == "ACTIVE"
     assert row["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
     assert row["previous_active_market_context"] == "LONG_CONTEXT"
+
+
+def test_uncertain_observe_keeps_long_active():
+    src = pd.DataFrame(
+        [
+            _long_active(0),
+            _bar(
+                _ts(1),
+                "OBSERVE",
+                "OBSERVE",
+                cognitive_market_state="UNCERTAIN",
+                state_direction="UNKNOWN",
+                auction_episode="UNKNOWN",
+            ),
+            _long_active(2),
+        ]
+    )
+    out = mod.build_lifecycle_memory(src)
+    assert list(out["active_market_context"]) == ["LONG_CONTEXT", "LONG_CONTEXT", "LONG_CONTEXT"]
+    assert out.iloc[1]["lifecycle_state"] == "ACTIVE"
+    assert out.iloc[1]["transition_reason"] == "insufficient auction evidence keeps active"
+    assert out.iloc[1]["invalidation_type"] == "NONE"
+
+
+def test_uncertain_observe_does_not_open_short_from_long():
+    src = pd.DataFrame(
+        [
+            _long_active(0),
+            _long_active(1),
+            _bar(
+                _ts(2),
+                "OBSERVE",
+                "OBSERVE",
+                cognitive_market_state="UNCERTAIN",
+                state_direction="UNKNOWN",
+                auction_episode="UNKNOWN",
+            ),
+        ]
+    )
+    row = mod.build_lifecycle_memory(src).iloc[-1]
+    assert row["active_market_context"] == "LONG_CONTEXT"
+    assert row["lifecycle_state"] == "ACTIVE"
+
+
+def test_uncertain_gap_does_not_block_later_balance_neutralization():
+    src = pd.DataFrame(
+        [
+            _long_active(0),
+            _bar(
+                _ts(1),
+                "OBSERVE",
+                "OBSERVE",
+                cognitive_market_state="UNCERTAIN",
+                state_direction="UNKNOWN",
+                auction_episode="UNKNOWN",
+            ),
+            _neutral(2),
+            _neutral(3),
+        ]
+    )
+    out = mod.build_lifecycle_memory(src)
+    assert out.iloc[1]["active_market_context"] == "LONG_CONTEXT"
+    assert out.iloc[1]["lifecycle_state"] == "ACTIVE"
+    assert out.iloc[2]["lifecycle_state"] == "CHALLENGED"
+    assert out.iloc[-1]["active_market_context"] == "OBSERVE"
+    assert out.iloc[-1]["lifecycle_state"] == "INVALIDATED"
+    assert out.iloc[-1]["invalidation_type"] == "AUCTION_NEUTRALIZATION"
 
 
 def test_age_bars_not_used_as_invalidation_rule():
@@ -496,17 +557,18 @@ def test_single_balance_bar_challenges_short_not_invalidate():
     assert row["invalidation_type"] == "NONE"
 
 
-def test_young_active_not_neutralized_before_min_hold():
-    # Activate, then feed several neutralization bars while still under min hold.
+def test_young_active_can_be_neutralized_after_confirm_bars():
+    # MIN_HOLD=0: neutralization confirm is the only delay, not a 45-minute hold.
     rows = [_long_active(0)]
-    for j in range(mod.MIN_ACTIVE_CONTEXT_HOLD_BARS):
+    for j in range(mod.NEUTRALIZATION_CONFIRM_BARS):
         rows.append(_neutral(1 + j))
     out = mod.build_lifecycle_memory(pd.DataFrame(rows))
-    # Every bar within the minimum hold window keeps the directional context alive.
-    for i in range(1, mod.MIN_ACTIVE_CONTEXT_HOLD_BARS):
-        assert out.iloc[i]["active_market_context"] == "LONG_CONTEXT"
-        assert out.iloc[i]["lifecycle_state"] == "CHALLENGED"
-        assert out.iloc[i]["invalidation_type"] == "NONE"
+    assert out.iloc[1]["active_market_context"] == "LONG_CONTEXT"
+    assert out.iloc[1]["lifecycle_state"] == "CHALLENGED"
+    last = out.iloc[-1]
+    assert last["active_market_context"] == "OBSERVE"
+    assert last["lifecycle_state"] == "INVALIDATED"
+    assert last["invalidation_type"] == "AUCTION_NEUTRALIZATION"
 
 
 def test_long_two_neutral_bars_after_min_hold_invalidate():
@@ -523,22 +585,23 @@ def test_long_two_neutral_bars_after_min_hold_invalidate():
     assert out.iloc[n_active + 1]["invalidation_type"] == "AUCTION_NEUTRALIZATION"
 
 
-def test_opposite_confirmed_challenges_before_min_hold():
-    # Fresh SHORT (age 0), then confirmed LONG: hold protection, do not replace.
+def test_opposite_confirmed_replaces_young_active():
+    # Fresh SHORT (age 0), then confirmed LONG: first opposite ACTIVE replaces.
+    # Holding the old context for 3 M15 bars is the 45-minute live lag.
     src = pd.DataFrame([_short_active(0), _long_active(1)])
     row = mod.build_lifecycle_memory(src).iloc[1]
-    assert row["active_market_context"] == "SHORT_CONTEXT"
-    assert row["lifecycle_state"] == "CHALLENGED"
-    assert row["invalidation_type"] == "NONE"
+    assert row["active_market_context"] == "LONG_CONTEXT"
+    assert row["lifecycle_state"] == "ACTIVE"
+    assert row["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
 
 
-def test_single_confirmed_opposite_challenges_mature_active():
+def test_single_confirmed_opposite_replaces_mature_active():
     rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
     rows.append(_short_active(len(rows)))
     last = mod.build_lifecycle_memory(pd.DataFrame(rows)).iloc[-1]
-    assert last["active_market_context"] == "LONG_CONTEXT"
-    assert last["lifecycle_state"] == "CHALLENGED"
-    assert last["invalidation_type"] == "NONE"
+    assert last["active_market_context"] == "SHORT_CONTEXT"
+    assert last["lifecycle_state"] == "ACTIVE"
+    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
 
 
 def test_two_consecutive_confirmed_opposite_replaces_mature_active():
@@ -546,22 +609,30 @@ def test_two_consecutive_confirmed_opposite_replaces_mature_active():
     n = len(rows)
     rows.append(_short_active(n))
     rows.append(_short_active(n + 1))
-    last = mod.build_lifecycle_memory(pd.DataFrame(rows)).iloc[-1]
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    flip = out.iloc[n]
+    assert flip["active_market_context"] == "SHORT_CONTEXT"
+    assert flip["lifecycle_state"] == "ACTIVE"
+    assert flip["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
+    assert flip["previous_active_market_context"] == "LONG_CONTEXT"
+    last = out.iloc[-1]
     assert last["active_market_context"] == "SHORT_CONTEXT"
     assert last["lifecycle_state"] == "ACTIVE"
-    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
-    assert last["previous_active_market_context"] == "LONG_CONTEXT"
+    assert last["invalidation_type"] == "NONE"
 
 
-def test_confirmed_opposite_streak_resets_on_same_direction():
+def test_confirmed_opposite_replaces_both_directions():
     rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
     n = len(rows)
     rows.append(_short_active(n))
     rows.append(_long_active(n + 1))
-    rows.append(_short_active(n + 2))
-    last = mod.build_lifecycle_memory(pd.DataFrame(rows)).iloc[-1]
+    out = mod.build_lifecycle_memory(pd.DataFrame(rows))
+    assert out.iloc[n]["active_market_context"] == "SHORT_CONTEXT"
+    assert out.iloc[n]["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
+    last = out.iloc[-1]
     assert last["active_market_context"] == "LONG_CONTEXT"
-    assert last["lifecycle_state"] == "CHALLENGED"
+    assert last["lifecycle_state"] == "ACTIVE"
+    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
 
 
 def test_confirmed_opposite_streak_not_in_output():
@@ -571,20 +642,21 @@ def test_confirmed_opposite_streak_not_in_output():
 
 
 def test_confirmed_opposite_confirm_bars_constant():
-    assert mod.CONFIRMED_OPPOSITE_CONFIRM_BARS == 2
-    assert mod.CONFIRMED_OPPOSITE_CONFIRM_BARS == mod.NEUTRALIZATION_CONFIRM_BARS
+    assert mod.CONFIRMED_OPPOSITE_CONFIRM_BARS == 1
+    assert mod.NEUTRALIZATION_CONFIRM_BARS == 2
     assert not hasattr(mod, "DEVELOPING_OPPOSITE_CONFIRM_BARS")
 
 
-def test_source_does_not_restore_immediate_opposite_exemption():
-    """Lock: the historical one-bar opposite-ACTIVE exemption must not return."""
+def test_source_keeps_developing_opposite_from_replacing():
+    """DEVELOPING opposite never replaces. Confirmed opposite ACTIVE does, same bar."""
     text = MODULE_PATH.read_text(encoding="utf-8")
-    assert "intentionally exempt" not in text
     assert "DEVELOPING_OPPOSITE_CONFIRM_BARS" not in text
     assert "developing opposite context replaced" not in text
+    assert mod.MIN_ACTIVE_CONTEXT_HOLD_BARS == 0
+    assert mod.CONFIRMED_OPPOSITE_CONFIRM_BARS == 1
 
 
-def test_source_invalidated_before_min_hold_becomes_challenged():
+def test_source_invalidated_closes_even_on_young_active():
     src = pd.DataFrame(
         [
             _short_active(0),
@@ -599,9 +671,9 @@ def test_source_invalidated_before_min_hold_becomes_challenged():
         ]
     )
     row = mod.build_lifecycle_memory(src).iloc[1]
-    assert row["active_market_context"] == "SHORT_CONTEXT"
-    assert row["lifecycle_state"] == "CHALLENGED"
-    assert row["invalidation_type"] == "NONE"
+    assert row["active_market_context"] == "OBSERVE"
+    assert row["lifecycle_state"] == "INVALIDATED"
+    assert row["invalidation_type"] == "THESIS_REJECTION"
 
 
 def test_source_invalidated_after_min_hold_closes_to_observe():
@@ -656,9 +728,10 @@ def test_neutralization_streak_not_in_output_columns():
     assert list(out.columns) == mod.REQUIRED_MEMORY_COLUMNS
 
 
-def test_persistence_constants_are_conservative_defaults():
+def test_persistence_constants_forbid_m15_45min_hold():
     assert mod.NEUTRALIZATION_CONFIRM_BARS == 2
-    assert mod.MIN_ACTIVE_CONTEXT_HOLD_BARS == 3
+    assert mod.MIN_ACTIVE_CONTEXT_HOLD_BARS == 0
+    assert mod.CONFIRMED_OPPOSITE_CONFIRM_BARS == 1
 
 
 def test_atomic_write(tmp_path: Path):
@@ -1197,31 +1270,32 @@ def test_m15_36_style_short_hold_stays_short():
     assert last["transition_reason"] == "confirmed same-direction context remains active"
 
 
-def test_aug22_1030_single_short_active_does_not_flip_long():
-    """22 Aug 10:30 MSK: one SHORT ACTIVE against living LONG must not reverse."""
+def test_aug22_1030_single_short_active_flips_long():
+    """Confirmed opposite ACTIVE replaces immediately. Holding LONG after SHORT ACTIVE is the 45-min lag."""
     rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
     rows.append(_short_active(len(rows)))
     out = mod.build_lifecycle_memory(pd.DataFrame(rows))
     last = out.iloc[-1]
-    assert last["active_market_context"] == "LONG_CONTEXT"
-    assert last["lifecycle_state"] == "CHALLENGED"
-    assert last["invalidation_type"] == "NONE"
-    assert last["challenge_context"] == "SHORT_CONTEXT"
+    assert last["active_market_context"] == "SHORT_CONTEXT"
+    assert last["lifecycle_state"] == "ACTIVE"
+    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
 
 
-def test_aug22_1115_single_long_active_does_not_flip_short():
-    """22 Aug 11:15 MSK: DEVELOPING long then one LONG ACTIVE must not reverse SHORT."""
+def test_aug22_1115_developing_does_not_flip_but_confirmed_long_does():
+    """DEVELOPING opposite still only challenges; first LONG ACTIVE replaces SHORT."""
     rows = [_short_active(i) for i in range(_active_bars_to_pass_hold())]
     n = len(rows)
     rows.append(_short_developing(n))
     rows.append(_long_developing(n + 1))
     rows.append(_long_active(n + 2))
     out = mod.build_lifecycle_memory(pd.DataFrame(rows))
-    assert (out["active_market_context"] == "SHORT_CONTEXT").all()
+    assert out.iloc[n]["active_market_context"] == "SHORT_CONTEXT"
+    assert out.iloc[n + 1]["active_market_context"] == "SHORT_CONTEXT"
+    assert out.iloc[n + 1]["lifecycle_state"] == "CHALLENGED"
     last = out.iloc[-1]
-    assert last["lifecycle_state"] == "CHALLENGED"
-    assert last["invalidation_type"] == "NONE"
-    assert last["challenge_context"] == "LONG_CONTEXT"
+    assert last["active_market_context"] == "LONG_CONTEXT"
+    assert last["lifecycle_state"] == "ACTIVE"
+    assert last["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
 
 
 def test_neutralization_not_reset_by_developing_same_direction():
@@ -1256,8 +1330,8 @@ def test_neutralization_not_reset_by_developing_opposite():
     assert last["invalidation_type"] == "AUCTION_NEUTRALIZATION"
 
 
-def test_aug23_dump_two_confirmed_short_replaces_zombie_long():
-    """07:45–08:00 MSK template: two ACCEPTANCE_LOWER ACTIVE bars replace LONG."""
+def test_aug23_dump_confirmed_short_replaces_zombie_long():
+    """Confirmed opposite ACTIVE replaces LONG on the first bar, not after 45 minutes."""
     rows = [_long_active(i) for i in range(_active_bars_to_pass_hold())]
     n = len(rows)
     rows.append(
@@ -1270,19 +1344,7 @@ def test_aug23_dump_two_confirmed_short_replaces_zombie_long():
             state_direction="SELLER_CONTROL",
         )
     )
-    rows.append(
-        _bar(
-            _ts(n + 1),
-            "SHORT_CONTEXT",
-            "ACTIVE",
-            auction_episode="ACCEPTANCE_LOWER",
-            cognitive_market_state="ACCEPTANCE_LOWER",
-            state_direction="SELLER_CONTROL",
-        )
-    )
     out = mod.build_lifecycle_memory(pd.DataFrame(rows))
-    assert out.iloc[n]["active_market_context"] == "LONG_CONTEXT"
-    assert out.iloc[n]["lifecycle_state"] == "CHALLENGED"
     last = out.iloc[-1]
     assert last["active_market_context"] == "SHORT_CONTEXT"
     assert last["lifecycle_state"] == "ACTIVE"

@@ -4,10 +4,11 @@ Reuses the existing runtime planes without changing their semantics:
 
   * availability / clock  -> data/cognition/multi_timeframe_availability_memory.parquet
                              (writer: mtf_availability_runtime_engine_v1.py)
-  * lifecycle / direction -> LIVE1A per-TF context journal when present
-                             (data/cognition/intrabar_context_events/events.jsonl);
-                             otherwise the M15 research parquet
+  * lifecycle / direction -> closed-bar parquet
                              data/cognition/market_context_lifecycle_memory.parquet
+                             when entry_source=s41_command_bus (production).
+                             LIVE1A journal is observe-only in that mode.
+                             Journal is used only for context_journal sandbox.
   * synthesis metadata    -> data/cognition/multi_timeframe_synthesis.parquet
 
 The same lifecycle contract is applied *independently per timeframe*: each
@@ -39,10 +40,27 @@ AVAILABILITY_LATEST = ROOT / "data/runtime/multi_timeframe_availability_latest.j
 LIFECYCLE_MEMORY = ROOT / "data/cognition/market_context_lifecycle_memory.parquet"
 CONTEXT_JOURNAL = ROOT / "data/cognition/intrabar_context_events/events.jsonl"
 SYNTHESIS_MEMORY = ROOT / "data/cognition/multi_timeframe_synthesis.parquet"
+PAPER_EXECUTION_OVERLAY = ROOT / "data/deployment/intrabar_paper_execution.overlay.json"
+PAPER_EXECUTION_CONFIG = ROOT / "config/intrabar_paper_execution.json"
 
 _JOURNAL_CACHE: tuple[float, int, pd.DataFrame] | None = None
 _CONTEXT_EVENTS = frozenset({"CONTEXT_START", "CONTEXT_END", "CONTEXT_FLIP"})
 ACTIVATION_PATH = ROOT / "data/trading/manager/activation.json"
+
+
+def _paper_entry_source() -> str:
+    """Same owner switch as LIVE1B and the chart: overlay, then production JSON."""
+    for path in (PAPER_EXECUTION_OVERLAY, PAPER_EXECUTION_CONFIG):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        src = str(raw.get("entry_source") or "").strip().lower()
+        if src in {"context_journal", "s41_command_bus"}:
+            return src
+    return "s41_command_bus"
 
 
 def _hybrid_closed_bar_lifecycle_preferred() -> bool:
@@ -56,6 +74,13 @@ def _hybrid_closed_bar_lifecycle_preferred() -> bool:
     hybrid = raw.get("hybrid") if isinstance(raw.get("hybrid"), dict) else {}
     owner = str(raw.get("execution_owner") or "").upper()
     return bool(hybrid.get("enabled")) and owner == "LIVE1B_INTRABAR_PAPER"
+
+
+def s41_uses_closed_bar_parquet() -> bool:
+    """Closed-bar cognition is the S4.1 input whenever S4.1 is entry authority."""
+    if _paper_entry_source() == "s41_command_bus":
+        return True
+    return _hybrid_closed_bar_lifecycle_preferred()
 
 
 def _is_provisional_episode(episode: Any) -> bool:
@@ -320,11 +345,11 @@ def load_sources(
             setattr(sources, attr, pd.read_parquet(path))
         except Exception as exc:
             sources.load_errors[name] = f"SCHEMA_INVALID:{type(exc).__name__}"
-    # Production default: prefer the per-TF LIVE1A journal over the M15 parquet.
-    # Hybrid S4.1↔LIVE1B: keep closed-bar parquet lifecycle; journal is observe-only.
+    # Production: closed-bar parquet is the cognition S4.1 reads.
+    # LIVE1A journal is observe-only when entry_source=s41_command_bus.
     # Explicit lifecycle_path keeps fixtures / research reads on parquet.
     sources.lifecycle_source = "parquet"
-    if lifecycle_path is None and not _hybrid_closed_bar_lifecycle_preferred():
+    if lifecycle_path is None and not s41_uses_closed_bar_parquet():
         journal = _lifecycle_from_context_journal(
             CONTEXT_JOURNAL if context_journal_path is None else context_journal_path
         )

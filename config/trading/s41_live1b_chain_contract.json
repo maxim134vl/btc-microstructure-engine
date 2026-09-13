@@ -69,6 +69,10 @@
     {
       "id": "LOADER_ALLOWS_S41",
       "must": "canonical load_intrabar_paper_config accepts production s41_command_bus"
+    },
+    {
+      "id": "COGNITION_OWNS_S41",
+      "must": "when entry_source=s41_command_bus, load_sources reads market_context_lifecycle_memory.parquet not LIVE1A journal; UNCERTAIN OBSERVE keeps active LONG/SHORT so S4.1 HOLD not CLOSE"
     }
   ]
 }

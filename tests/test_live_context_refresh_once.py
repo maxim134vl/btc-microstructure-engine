@@ -71,6 +71,7 @@ def test_refresh_runs_rebuild_when_stale(tmp_path: Path):
         status_path=status,
         log_path=log,
         run_script=fake_run,
+        prefix_datasets=(),
     )
     assert payload["status"] == "OK"
     assert payload["shadow_chain_rebuild_ran"] is True
@@ -121,6 +122,7 @@ def test_refresh_runs_decision_logger_when_shadow_chain_ok_after_visual_skip(tmp
         status_path=tmp_path / "status.json",
         log_path=tmp_path / "refresh.log",
         run_script=fake_run,
+        prefix_datasets=(),
     )
     assert payload["status"] == "OK"
     assert payload["shadow_chain_rebuild_ok"] is True
@@ -157,6 +159,7 @@ def test_refresh_skips_rebuild_when_fresh(tmp_path: Path):
         status_path=tmp_path / "status.json",
         log_path=tmp_path / "refresh.log",
         run_script=fake_run,
+        prefix_datasets=(),
     )
     assert payload["status"] == "OK"
     assert payload["shadow_chain_rebuild_ran"] is False
@@ -199,6 +202,7 @@ def test_refresh_errors_when_rebuild_fails(tmp_path: Path):
         status_path=tmp_path / "status.json",
         log_path=tmp_path / "refresh.log",
         run_script=fake_run,
+        prefix_datasets=(),
     )
     assert payload["status"] == "ERROR"
     assert "Shadow chain rebuild failed" in (payload.get("error") or "")

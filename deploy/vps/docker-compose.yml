@@ -117,7 +117,7 @@ services:
     <<: *runtime_base
     environment:
       <<: *runtime_env
-      CONTEXT_REFRESH_INTERVAL_SECONDS: ${CONTEXT_REFRESH_INTERVAL_SECONDS:-900}
+      CONTEXT_REFRESH_INTERVAL_SECONDS: ${CONTEXT_REFRESH_INTERVAL_SECONDS:-60}
     volumes:
       - btc_ml_data:/app/data
     command: ["/bin/sh", "/app/deploy/vps/entrypoints/context_refresh_daemon.sh"]
@@ -456,6 +456,7 @@ services:
     environment:
       <<: *runtime_env
       VISUAL_REFRESH_INTERVAL_S: ${VISUAL_REFRESH_INTERVAL_S:-20}
+      ENABLE_TIMEFRAME_CHART_TRUTH: "1"
       CONTEXT_REFRESHER_PID_PATH: /app/data/runtime/visual_refresher.pid
       CONTEXT_REFRESHER_LOCK_PATH: /app/run/context_visual_refresher.lock
     volumes:

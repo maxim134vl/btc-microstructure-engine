@@ -20,7 +20,7 @@ from typing import Any
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "market_context_lifecycle_memory_v2_neutralization_carry"
+BUILDER_VERSION = "market_context_lifecycle_memory_v3_no_min_hold_lag"
 INPUT_PATH = ROOT / "data" / "cognition" / "final_market_context_memory.parquet"
 AUCTION_PATH = ROOT / "data" / "cognition" / "auction_episode_memory.parquet"
 COGNITION_PATH = ROOT / "data" / "cognition" / "runtime_cognition_memory.parquet"
@@ -118,20 +118,19 @@ INVALIDATION_AUCTION = "AUCTION_NEUTRALIZATION"
 INVALIDATION_OPPOSITE = "OPPOSITE_CONTEXT_REPLACEMENT"
 INVALIDATION_THESIS = "THESIS_REJECTION"
 
-# Termination persistence protection (shadow-only; no execution, no TTL expiry).
-# A confirmed active context must not be killed by a single bar — neither
-# BALANCE/OBSERVE neutralization nor a one-bar confirmed opposite label.
-# DEVELOPING opposite never replaces: it only challenges. Confirmed opposite
-# replacement uses the same persistence family as neutralization (delay only).
+# Termination rules. This lifecycle is what S4.1 / live trading reads — it is
+# not shadow-only. MIN_ACTIVE_CONTEXT_HOLD_BARS=3 was a 45-minute M15 lag:
+# OPEN in the middle of a move, CLOSE after the painted change. Do not restore it.
+# DEVELOPING opposite never replaces: it only challenges.
 # DEVELOPING same-direction while CHALLENGED must not reset neutralization:
 # a LOWER_ABSORPTION developing bar cannot resurrect a zombie LONG through BALANCE.
 #   NEUTRALIZATION_CONFIRM_BARS      — consecutive full-confluence bars to invalidate.
-#   MIN_ACTIVE_CONTEXT_HOLD_BARS     — a fresh context cannot be replaced before this age.
-#   CONFIRMED_OPPOSITE_CONFIRM_BARS  — consecutive ACTIVE opposite bars to replace.
+#   MIN_ACTIVE_CONTEXT_HOLD_BARS     — 0: a fresh context may be replaced immediately.
+#   CONFIRMED_OPPOSITE_CONFIRM_BARS  — first confirmed opposite ACTIVE replaces.
 # Same-direction ACTIVE continuation is unchanged: the context stays active.
 NEUTRALIZATION_CONFIRM_BARS = 2
-MIN_ACTIVE_CONTEXT_HOLD_BARS = 3
-CONFIRMED_OPPOSITE_CONFIRM_BARS = 2
+MIN_ACTIVE_CONTEXT_HOLD_BARS = 0
+CONFIRMED_OPPOSITE_CONFIRM_BARS = 1
 _TF_BAR_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
 
 
@@ -434,7 +433,23 @@ def step_lifecycle(
             }
     # OBSERVE path: neutralization or challenge.
     elif raw == "OBSERVE":
-        if active == "OBSERVE":
+        if (
+            active in DIRECTIONAL
+            and cognitive == "UNCERTAIN"
+        ):
+            # Auction/volume did not classify this bar (no follow-through yet,
+            # or insufficient evidence). That is not BALANCE and not a context
+            # end. Keep the living thesis; break neutralization confluence.
+            lifecycle = prev_lifecycle if prev_lifecycle in {"ACTIVE", "CHALLENGED"} else "ACTIVE"
+            active_age = active_age + 1
+            neutralization_streak = 0
+            neutralization_bar_key = None
+            if prev_lifecycle == "CHALLENGED":
+                new_challenge = challenge
+                new_challenge_started = challenge_started
+                new_challenge_reason = challenge_reason
+            new_transition = "insufficient auction evidence keeps active"
+        elif active == "OBSERVE":
             lifecycle = "NO_ACTIVE_CONTEXT"
             active_started = None
             active_age = 0

@@ -25,10 +25,11 @@ from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.s41_command_consumer import S41CommandConsumer
 from btc_ml.trading.portfolio_risk import PortfolioRiskCoordinator
 from btc_ml.trading.proofs import build_synthetic_feed, isolated_environment, synthetic_command
-from btc_ml.trading.timeframe_manager import ANTI_SAW_ENABLED, TimeframeManager
+from btc_ml.trading.timeframe_manager import ANTI_SAW_ENABLED, TimeframeManager, _preview_context_for_open_position
 from btc_ml.trading.timeframe_state_adapter import (
     TimeframeSources,
     _scoped_lifecycle,
+    load_sources,
     resolve_timeframe_state,
 )
 
@@ -150,6 +151,7 @@ def test_contract_file_lists_every_invariant():
         "CHART_FOLLOWS_OWNER",
         "CUTOVER_SCRIPTS",
         "LOADER_ALLOWS_S41",
+        "COGNITION_OWNS_S41",
     ]
     assert payload["forbidden_production_entry_source"] == "context_journal"
     assert "LIVE1A journal OPEN/FLIP/END fills" in payload["do_not_restore"]
@@ -494,3 +496,140 @@ def test_atomic_flip_same_cycle_closes_and_opens_opposite(tmp_path: Path, monkey
 def test_valid_intents_include_flip_or_same_cycle_pair():
     """FLIP may be a first-class intent; if not, ATOMIC_FLIP test still binds the pair."""
     assert set(VALID_INTENTS) >= {"OPEN_LONG", "OPEN_SHORT", "CLOSE", "HOLD", "NO_ACTION"}
+
+
+def test_s41_load_sources_ignores_live1a_journal(tmp_path, monkeypatch):
+    from btc_ml.trading import timeframe_state_adapter as ad
+
+    life = tmp_path / "life.parquet"
+    pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-07-01T03:45:00Z"),
+                "timeframe": "M15",
+                "active_market_context": "LONG_CONTEXT",
+                "lifecycle_state": "ACTIVE",
+                "context_episode_id": 321,
+            }
+        ]
+    ).to_parquet(life, index=False)
+    journal = tmp_path / "events.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "timeframe": "M15",
+                "event_type": "CONTEXT_FLIP",
+                "new_context": "SHORT_CONTEXT",
+                "event_timestamp": "2026-09-11T15:55:42Z",
+                "lifecycle_episode_id": "M15:prov:1",
+                "evidence": {"lifecycle_state": "ACTIVE"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ad, "LIFECYCLE_MEMORY", life)
+    monkeypatch.setattr(ad, "CONTEXT_JOURNAL", journal)
+    monkeypatch.setattr(ad, "AVAILABILITY_MEMORY", tmp_path / "no_avail.parquet")
+    monkeypatch.setattr(ad, "SYNTHESIS_MEMORY", tmp_path / "no_syn.parquet")
+    monkeypatch.setattr(ad, "PAPER_EXECUTION_OVERLAY", tmp_path / "no_overlay.json")
+    monkeypatch.setattr(ad, "PAPER_EXECUTION_CONFIG", tmp_path / "no_cfg.json")
+    monkeypatch.setattr(ad, "ACTIVATION_PATH", tmp_path / "no_act.json")
+    sources = load_sources()
+    assert sources.lifecycle_source == "parquet"
+    assert str(sources.lifecycle.iloc[-1]["active_market_context"]).upper() == "LONG_CONTEXT"
+
+
+def test_uncertain_cognition_keeps_long_and_s41_holds_open_long(tmp_path, monkeypatch):
+    life_mod = _lifecycle_builder()
+    src = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-07-01 03:30:00", tz="UTC"),
+                "close": 60500.0,
+                "market_context": "LONG_CONTEXT",
+                "context_status": "ACTIVE",
+                "cognitive_market_state": "LOWER_ABSORPTION",
+                "state_direction": "LONG",
+                "context_reason": "LONG/ACTIVE",
+                "auction_episode": "LOWER_ABSORPTION",
+                "action_allowed": False,
+                "action_reason": "shadow",
+            },
+            {
+                "timestamp": pd.Timestamp("2026-07-01 03:45:00", tz="UTC"),
+                "close": 60510.0,
+                "market_context": "OBSERVE",
+                "context_status": "OBSERVE",
+                "cognitive_market_state": "UNCERTAIN",
+                "state_direction": "UNKNOWN",
+                "context_reason": "OBSERVE/OBSERVE",
+                "auction_episode": "UNKNOWN",
+                "action_allowed": False,
+                "action_reason": "shadow",
+            },
+        ]
+    )
+    memory = life_mod.build_lifecycle_memory(src)
+    memory["timeframe"] = "M15"
+    assert list(memory["active_market_context"]) == ["LONG_CONTEXT", "LONG_CONTEXT"]
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="M15",
+                    evaluation="2026-07-01T04:00:00Z",
+                    bar_open="2026-07-01T03:45:00Z",
+                    bar_close="2026-07-01T04:00:00Z",
+                )
+            ]
+        ),
+        lifecycle=memory,
+        lifecycle_source="parquet",
+    )
+    state = resolve_timeframe_state(
+        timeframe="M15",
+        evaluation_timestamp="2026-07-01T04:00:00Z",
+        sources=sources,
+    )
+    assert state["timeframe_state"] == "LONG_CONTEXT"
+    assert state["lifecycle_phase"] == "ACTIVE"
+    assert state["actionable"] is True
+    assert _preview_context_for_open_position(
+        "LONG", state["timeframe_state"], state["lifecycle_phase"]
+    ) == "LONG_CONTEXT"
+
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+
+    def views(*, mark_price=None):
+        return {
+            "M15": {
+                "open_position": {
+                    "position_id": "pos_long",
+                    "direction": "LONG",
+                    "quantity": 0.1,
+                    "entry_price": 60500.0,
+                    "stop_loss_price": 59900.0,
+                    "take_profit_price": 61400.0,
+                    "entry_fee_usd": 1.0,
+                    "status": "OPEN",
+                },
+                "open_risk_usd": 250.0,
+            },
+            "M30": {"open_position": None, "open_risk_usd": 0.0},
+            "H1": {"open_position": None, "open_risk_usd": 0.0},
+            "H4": {"open_position": None, "open_risk_usd": 0.0},
+        }
+
+    monkeypatch.setattr(manager, "trader_views", views)
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-07-01T04:00:00Z",
+        sources=sources,
+        feed=build_synthetic_feed(),
+        persist=True,
+    )
+    m15 = next(cmd for cmd in cycle["commands"] if cmd["timeframe"] == "M15")
+    assert m15["intent"] == "HOLD"
+    assert m15["timeframe_state"] == "LONG_CONTEXT"

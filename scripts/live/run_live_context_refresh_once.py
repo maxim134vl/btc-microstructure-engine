@@ -11,13 +11,14 @@ Logic:
        - run append_context_decision_log.py only
   5. Write status JSON + log file
 
+Settled production prefix is immutable. The last 4 closed bars per TF are
+restated so auction follow-through can settle UNKNOWN tips. Lifecycle tail is
+replayed from production prev.
+
 Does NOT:
-  - change model / auction / cognitive / final / lifecycle logic
-  - change live feed / runtime-stack
   - start dashboard or visual server
   - enable execution / create orders
-
-This is a manual once-mode refresh for technical lag catch-up only.
+  - change live feed / runtime-stack
 """
 
 from __future__ import annotations
@@ -52,7 +53,10 @@ SHADOW_PREFIX_PRESERVE = (
     (ROOT / "data" / "cognition" / "market_context_lifecycle_episodes.parquet", "end_time"),
 )
 
-REFRESH_VERSION = "live_context_refresh_once_v1_tail_merge"
+REFRESH_VERSION = "live_context_refresh_once_v2_restate_tail"
+# Auction follow-through looks ahead up to 4 closed bars. The previous merge
+# froze the tip as UNKNOWN forever (existing_wins). Restate that window.
+COGNITION_RESTATE_BARS = 4
 
 
 class RefreshError(RuntimeError):
@@ -138,12 +142,49 @@ def _timeframe_timestamp_keys(frame: pd.DataFrame, ts_col: str) -> list[tuple[st
     return list(zip(tf.tolist(), iso.fillna("").tolist()))
 
 
-def tail_merge_existing_wins(prod: pd.DataFrame, cand: pd.DataFrame, ts_col: str) -> pd.DataFrame:
-    """Preserve immutable production prefix; append only candidate rows after prod tip.
+def _iso_ts_series(frame: pd.DataFrame, ts_col: str) -> pd.Series:
+    ts = pd.to_datetime(frame[ts_col], utc=True, errors="coerce")
+    return ts.dt.strftime("%Y-%m-%dT%H:%M:%SZ").fillna("")
 
-    When ``timeframe`` is present, the key is (timeframe, timestamp) so M30/H1/H4
-    rows are not dropped because an M15 bar shares the same clock stamp.
-    Untagged production is treated as M15.
+
+def restate_keys_for_frame(
+    prod: pd.DataFrame,
+    ts_col: str,
+    *,
+    restate_bars: int = COGNITION_RESTATE_BARS,
+) -> set[Any]:
+    """Last N timestamps per timeframe (or untagged series) may be restated."""
+    if prod is None or not len(prod) or ts_col not in prod.columns:
+        return set()
+    n = max(int(restate_bars), 0)
+    if n <= 0:
+        return set()
+    work = prod.copy()
+    work["_ts"] = pd.to_datetime(work[ts_col], utc=True, errors="coerce")
+    work = work.dropna(subset=["_ts"]).sort_values("_ts")
+    if "timeframe" in work.columns:
+        keys: set[tuple[str, str]] = set()
+        tf = work["timeframe"].astype(str).str.upper()
+        for name, grp in work.groupby(tf, sort=False):
+            iso = grp["_ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ").tail(n)
+            keys.update((str(name), str(stamp)) for stamp in iso.tolist())
+        return keys
+    iso = work["_ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ").tail(n)
+    return {str(stamp) for stamp in iso.tolist()}
+
+
+def tail_merge_existing_wins(
+    prod: pd.DataFrame,
+    cand: pd.DataFrame,
+    ts_col: str,
+    *,
+    restate_bars: int = COGNITION_RESTATE_BARS,
+) -> pd.DataFrame:
+    """Immutable settled prefix; candidate restates the last N bars and appends new.
+
+    Auction follow-through needs the next closed bar. Existing-wins on the tip
+    froze UNKNOWN forever. Restate ``restate_bars`` (FT horizon) so volume
+    classifiers can settle, then keep older rows unchanged.
     """
     if prod is None or len(prod) == 0:
         return cand.copy()
@@ -157,33 +198,43 @@ def tail_merge_existing_wins(prod: pd.DataFrame, cand: pd.DataFrame, ts_col: str
             prod["timeframe"] = "M15"
         if "timeframe" not in cand.columns:
             cand["timeframe"] = "M15"
-        prod_keys = set(_timeframe_timestamp_keys(prod, ts_col))
+        restated = restate_keys_for_frame(prod, ts_col, restate_bars=restate_bars)
+        prod_keys = _timeframe_timestamp_keys(prod, ts_col)
+        settled_mask = [key not in restated for key in prod_keys]
+        settled = prod.loc[settled_mask].copy()
+        settled_keys = set(_timeframe_timestamp_keys(settled, ts_col)) if len(settled) else set()
         cand_keys = _timeframe_timestamp_keys(cand, ts_col)
-        keep = [key not in prod_keys for key in cand_keys]
+        keep = [key not in settled_keys for key in cand_keys]
         extra = cand.loc[keep].copy()
         for col in prod.columns:
             if col not in extra.columns:
                 extra[col] = None
-        extra = extra[list(prod.columns)]
-        out = pd.concat([prod, extra], ignore_index=True, sort=False)
-        out = out.drop_duplicates(subset=["timeframe", ts_col], keep="first")
+        extra = extra[list(prod.columns)] if len(extra) else extra
+        cand_key_set = set(cand_keys)
+        missing_restated = prod.loc[[key in restated and key not in cand_key_set for key in prod_keys]]
+        if len(missing_restated):
+            extra = pd.concat([extra, missing_restated], ignore_index=True, sort=False)
+        out = pd.concat([settled, extra], ignore_index=True, sort=False)
+        out = out.drop_duplicates(subset=["timeframe", ts_col], keep="last")
         out["_sort"] = pd.to_datetime(out[ts_col], utc=True, errors="coerce")
         out = out.sort_values(["_sort", "timeframe"]).drop(columns=["_sort"]).reset_index(drop=True)
         return out
-    prod_ts = pd.to_datetime(prod[ts_col], utc=True, errors="coerce")
-    cand_ts = pd.to_datetime(cand[ts_col], utc=True, errors="coerce")
-    prod_tip = prod_ts.max()
-    if pd.isna(prod_tip):
-        return cand.copy()
-    tail = cand.loc[cand_ts > prod_tip].copy()
-    if len(tail) == 0:
-        return prod.copy()
+    restated = restate_keys_for_frame(prod, ts_col, restate_bars=restate_bars)
+    prod_iso = _iso_ts_series(prod, ts_col)
+    settled = prod.loc[~prod_iso.isin(restated)].copy()
+    cand_iso = _iso_ts_series(cand, ts_col)
+    settled_iso = set(_iso_ts_series(settled, ts_col).tolist()) if len(settled) else set()
+    extra = cand.loc[~cand_iso.isin(settled_iso)].copy()
     for col in prod.columns:
-        if col not in tail.columns:
-            tail[col] = None
-    tail = tail[list(prod.columns)]
-    out = pd.concat([prod, tail], ignore_index=True, sort=False)
-    out = out.drop_duplicates(subset=[ts_col], keep="first")
+        if col not in extra.columns:
+            extra[col] = None
+    extra = extra[list(prod.columns)] if len(extra) else extra
+    cand_iso_set = set(cand_iso.tolist())
+    missing_restated = prod.loc[prod_iso.isin(restated) & ~prod_iso.isin(cand_iso_set)]
+    if len(missing_restated):
+        extra = pd.concat([extra, missing_restated], ignore_index=True, sort=False)
+    out = pd.concat([settled, extra], ignore_index=True, sort=False)
+    out = out.drop_duplicates(subset=[ts_col], keep="last")
     out["_sort"] = pd.to_datetime(out[ts_col], utc=True, errors="coerce")
     out = out.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
     return out
@@ -215,13 +266,108 @@ def snapshot_prefix_datasets(
     return snaps
 
 
+def restep_lifecycle_tail(
+    prod: pd.DataFrame,
+    merged: pd.DataFrame,
+    ts_col: str = "timestamp",
+    *,
+    restate_bars: int = COGNITION_RESTATE_BARS,
+) -> pd.DataFrame:
+    """Replay step_lifecycle on the restated tail using production prev.
+
+    Candidate lifecycle rows assumed a full sequential walk that we discarded.
+    Raw classifier fields on the merged tail are kept; active state is restepped.
+    """
+    if merged is None or not len(merged):
+        return merged
+    if prod is None or not len(prod):
+        return merged
+    sys.path.insert(0, str(ROOT / "scripts" / "research"))
+    from build_market_context_lifecycle_memory import step_lifecycle  # noqa: WPS433
+
+    work = merged.copy()
+    if "timeframe" not in work.columns:
+        work["timeframe"] = "M15"
+    prod_work = prod.copy()
+    if "timeframe" not in prod_work.columns:
+        prod_work["timeframe"] = "M15"
+    restated = restate_keys_for_frame(prod_work, ts_col, restate_bars=restate_bars)
+    parts: list[pd.DataFrame] = []
+    tf_col = work["timeframe"].astype(str).str.upper()
+    for tf, grp in work.groupby(tf_col, sort=False):
+        grp = grp.copy()
+        grp["_ts"] = pd.to_datetime(grp[ts_col], utc=True, errors="coerce")
+        grp = grp.sort_values("_ts")
+        prod_tf = prod_work[prod_work["timeframe"].astype(str).str.upper() == str(tf)].copy()
+        if len(prod_tf):
+            prod_tf["_ts"] = pd.to_datetime(prod_tf[ts_col], utc=True, errors="coerce")
+            prod_tf = prod_tf.sort_values("_ts")
+        iso = grp["_ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        tail_mask = [(str(tf), str(stamp)) in restated for stamp in iso.tolist()]
+        # Also restep any brand-new timestamps after prod tip.
+        prod_tip = prod_tf["_ts"].max() if len(prod_tf) and "_ts" in prod_tf.columns else None
+        if prod_tip is not None:
+            tail_mask = [
+                flag or (pd.notna(ts) and ts > prod_tip)
+                for flag, ts in zip(tail_mask, grp["_ts"].tolist())
+            ]
+        if not any(tail_mask):
+            parts.append(grp.drop(columns=["_ts"], errors="ignore"))
+            continue
+        settled = grp.loc[[not flag for flag in tail_mask]]
+        tail = grp.loc[tail_mask]
+        prev = None
+        if len(settled):
+            prev = settled.iloc[-1].to_dict()
+        elif len(prod_tf):
+            # Entire TF window restated: prev is last prod row before restated keys.
+            prod_iso = prod_tf["_ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            kept = prod_tf.loc[[(str(tf), str(stamp)) not in restated for stamp in prod_iso.tolist()]]
+            if len(kept):
+                prev = kept.iloc[-1].to_dict()
+        new_rows: list[dict[str, Any]] = []
+        for rec in tail.to_dict("records"):
+            ts = rec.get("_ts")
+            step = step_lifecycle(
+                raw_market_context=str(rec.get("raw_market_context") or rec.get("active_market_context") or "OBSERVE"),
+                raw_context_status=str(rec.get("raw_context_status") or "UNKNOWN"),
+                raw_context_reason=str(rec.get("raw_context_reason") or "UNKNOWN"),
+                raw_cognitive_market_state=str(rec.get("raw_cognitive_market_state") or "UNKNOWN"),
+                raw_state_direction=str(rec.get("raw_state_direction") or "UNKNOWN"),
+                auction_episode=str(rec.get("raw_auction_episode") or rec.get("auction_episode") or "UNKNOWN"),
+                timestamp=ts,
+                prev=prev,
+            )
+            row = dict(rec)
+            row.update(step)
+            prev_ep = None if prev is None else prev.get("context_episode_id")
+            prev_active = None if prev is None else str(prev.get("active_market_context") or "")
+            new_active = str(row.get("active_market_context") or "")
+            if prev_ep is not None and prev_active == new_active:
+                row["context_episode_id"] = prev_ep
+            row.pop("_ts", None)
+            new_rows.append(row)
+            prev = row
+        rebuilt = pd.concat(
+            [settled.drop(columns=["_ts"], errors="ignore"), pd.DataFrame(new_rows)],
+            ignore_index=True,
+            sort=False,
+        )
+        parts.append(rebuilt)
+    out = pd.concat(parts, ignore_index=True, sort=False)
+    out["_sort"] = pd.to_datetime(out[ts_col], utc=True, errors="coerce")
+    out = out.sort_values(["_sort", "timeframe"]).drop(columns=["_sort"]).reset_index(drop=True)
+    return out
+
+
 def restore_prefix_after_shadow(
     snapshots: dict[str, dict[str, Any]],
     *,
     log_path: Path = LOG_PATH,
 ) -> dict[str, Any]:
-    """After shadow rewrite: existing production rows always win; append new tip only."""
+    """Settled prefix stays; last N bars restated from the shadow rebuild."""
     report: dict[str, Any] = {"restored": [], "skipped": []}
+    lifecycle_path = ROOT / "data" / "cognition" / "market_context_lifecycle_memory.parquet"
     for key, snap in snapshots.items():
         path: Path = snap["path"]
         ts_col: str = snap["ts_col"]
@@ -230,31 +376,41 @@ def restore_prefix_after_shadow(
             report["skipped"].append({"path": key, "reason": "missing_before_or_after"})
             continue
         cand = pd.read_parquet(path)
-        merged = tail_merge_existing_wins(prod, cand, ts_col)
-        # Safety: prefix row count through prior tip must match snapshot.
+        # Episodes are a derived view of lifecycle ids already in books.
+        # Do not restate them: a full rebuild would renumber M15:314.
+        merge_restate = (
+            0
+            if path.name == "market_context_lifecycle_episodes.parquet"
+            else COGNITION_RESTATE_BARS
+        )
+        merged = tail_merge_existing_wins(prod, cand, ts_col, restate_bars=merge_restate)
+        if path.resolve() == lifecycle_path.resolve() or path.name == "market_context_lifecycle_memory.parquet":
+            merged = restep_lifecycle_tail(prod, merged, ts_col)
         prior_tip = snap["tip"]
         if prior_tip is not None:
+            restated = restate_keys_for_frame(prod, ts_col, restate_bars=merge_restate)
             if "timeframe" in merged.columns:
                 prod_work = prod.copy()
                 if "timeframe" not in prod_work.columns:
                     prod_work["timeframe"] = "M15"
-                prod_keys = set(_timeframe_timestamp_keys(prod_work, ts_col))
+                prod_keys = _timeframe_timestamp_keys(prod_work, ts_col)
+                settled_keys = {k for k in prod_keys if k not in restated}
                 merged_keys = _timeframe_timestamp_keys(merged, ts_col)
-                merged_existing = merged.loc[[key in prod_keys for key in merged_keys]]
-                if len(merged_existing) != len(prod):
+                merged_settled = merged.loc[[key in settled_keys for key in merged_keys]]
+                if len(merged_settled) != len(settled_keys):
                     raise RefreshError(
-                        f"prefix row count changed after tail_merge for {path.name}: "
-                        f"{len(prod)} -> {len(merged_existing)}"
+                        f"settled prefix changed after tail_merge for {path.name}: "
+                        f"{len(settled_keys)} -> {len(merged_settled)}"
                     )
             else:
-                p_ts = pd.to_datetime(prod[ts_col], utc=True, errors="coerce")
-                m_ts = pd.to_datetime(merged[ts_col], utc=True, errors="coerce")
-                p_pref = prod.loc[p_ts <= prior_tip]
-                m_pref = merged.loc[m_ts <= prior_tip]
-                if len(p_pref) != len(m_pref):
+                p_iso = _iso_ts_series(prod, ts_col)
+                settled = prod.loc[~p_iso.isin(restated)]
+                m_iso = _iso_ts_series(merged, ts_col)
+                m_settled = merged.loc[m_iso.isin(set(p_iso.loc[~p_iso.isin(restated)].tolist()))]
+                if len(m_settled) != len(settled):
                     raise RefreshError(
-                        f"prefix row count changed after tail_merge for {path.name}: "
-                        f"{len(p_pref)} -> {len(m_pref)}"
+                        f"settled prefix changed after tail_merge for {path.name}: "
+                        f"{len(settled)} -> {len(m_settled)}"
                     )
         _write_parquet_atomic(merged, path)
         new_tip = latest_parquet_timestamp(path, col=ts_col)
@@ -269,7 +425,7 @@ def restore_prefix_after_shadow(
         report["restored"].append(entry)
         append_log(
             f"PREFIX_PRESERVE {path.name} added={entry['added']} "
-            f"tip {_iso(prior_tip)} -> {_iso(new_tip)}",
+            f"restated={COGNITION_RESTATE_BARS} tip {_iso(prior_tip)} -> {_iso(new_tip)}",
             log_path=log_path,
         )
     return report
@@ -313,6 +469,7 @@ def run_refresh_once(
     force_rebuild: bool = False,
     skip_rebuild: bool = False,
     run_script=run_python_script,
+    prefix_datasets: tuple[tuple[Path, str], ...] = SHADOW_PREFIX_PRESERVE,
 ) -> dict[str, Any]:
     started = _utc_now()
     append_log("START live_context_refresh_once", log_path=log_path)
@@ -342,7 +499,7 @@ def run_refresh_once(
 
     try:
         if needs_rebuild:
-            snapshots = snapshot_prefix_datasets()
+            snapshots = snapshot_prefix_datasets(prefix_datasets) if prefix_datasets else {}
             append_log(
                 f"SNAPSHOT prefix datasets n={len(snapshots)} "
                 f"lifecycle_tip={_iso(snapshots.get(str(lifecycle_path), {}).get('tip'))}",
@@ -356,8 +513,9 @@ def run_refresh_once(
                     f"{shadow_result.get('stderr_tail') or shadow_result.get('stdout_tail')}"
                 )
             append_log("PASS shadow chain rebuild", log_path=log_path)
-            prefix_report = restore_prefix_after_shadow(snapshots, log_path=log_path)
-            append_log("PASS prefix preserve (existing rows win)", log_path=log_path)
+            if snapshots:
+                prefix_report = restore_prefix_after_shadow(snapshots, log_path=log_path)
+                append_log("PASS prefix preserve (settled rows win, tail restated)", log_path=log_path)
             # Re-read lifecycle after rebuild + prefix restore.
             life_ts = latest_parquet_timestamp(lifecycle_path)
             lag = lag_seconds(live_ts, life_ts)

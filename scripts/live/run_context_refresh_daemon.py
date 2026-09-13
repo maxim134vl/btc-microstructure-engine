@@ -7,7 +7,7 @@ Default activation is via BTC_ML_CONTEXT_REFRESH_DAEMON=1 + ctl script.
 Supports:
   --foreground   stay in foreground, line-buffered structured stdout
   --once         one cycle then exit (tests / dry validation)
-  --interval-s   cycle sleep (default 900 / CONTEXT_REFRESH_INTERVAL_SECONDS)
+  --interval-s   cycle sleep (default 60 / CONTEXT_REFRESH_INTERVAL_SECONDS)
 
 Does not import or start paper controller. Does not touch Docker.
 """
@@ -822,7 +822,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--interval-s",
         type=float,
-        default=float(os.environ.get("CONTEXT_REFRESH_INTERVAL_SECONDS", "900")),
+        default=float(os.environ.get("CONTEXT_REFRESH_INTERVAL_SECONDS", "60")),
     )
     parser.add_argument("--lock-path", type=Path, default=DEFAULT_LOCK)
     parser.add_argument("--pid-path", type=Path, default=DEFAULT_PID)

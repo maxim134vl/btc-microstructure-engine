@@ -418,6 +418,47 @@ def _map_availability_status(raw: str | None) -> str:
 
 LIVE1A_HEALTH = ROOT / "data" / "runtime" / "intrabar_cognition_health.json"
 INTRABAR_CONTEXT_JOURNAL = ROOT / "data" / "cognition" / "intrabar_context_events" / "events.jsonl"
+PAPER_EXECUTION_OVERLAY = ROOT / "data" / "deployment" / "intrabar_paper_execution.overlay.json"
+PAPER_EXECUTION_CONFIG = ROOT / "config" / "intrabar_paper_execution.json"
+
+
+def paper_entry_source() -> str:
+    """Same resolution as paper_manager: overlay first, then production JSON."""
+    for path in (PAPER_EXECUTION_OVERLAY, PAPER_EXECUTION_CONFIG):
+        src = str(_read_json(path).get("entry_source") or "").strip().lower()
+        if src in {"context_journal", "s41_command_bus"}:
+            return src
+    return "context_journal"
+
+
+def paper_uses_context_journal() -> bool:
+    return paper_entry_source() == "context_journal"
+
+
+def context_band_source(*, live1b: bool, entry_source: str | None = None) -> str:
+    """Chart bands follow the clock that actually fills paper trades."""
+    src = str(entry_source or paper_entry_source()).strip().lower()
+    if not live1b:
+        return "timeframe_command_memory"
+    if src == "context_journal":
+        return "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+    return "market_context_lifecycle_episodes"
+
+
+def select_live_context_zones(
+    *,
+    live1b: bool,
+    entry_source: str | None = None,
+    journal_zones: list[dict[str, Any]],
+    parquet_zones: list[dict[str, Any]],
+    parquet_available: bool | None = None,
+) -> list[dict[str, Any]]:
+    """S4.1 sandbox paints closed-bar parquet; live paper paints the journal."""
+    src = str(entry_source or paper_entry_source()).strip().lower()
+    parquet_ok = LIFECYCLE_EPISODES.exists() if parquet_available is None else bool(parquet_available)
+    if live1b and src == "s41_command_bus" and parquet_ok:
+        return parquet_zones
+    return journal_zones
 
 
 def _direction_from_context(value: Any) -> str | None:
@@ -427,6 +468,136 @@ def _direction_from_context(value: Any) -> str | None:
     if text in {"SHORT", "SHORT_CONTEXT"} or text.startswith("SHORT"):
         return "SHORT"
     return None
+
+
+CANONICAL_VISUAL_CONTEXTS = frozenset({"LONG_CONTEXT", "SHORT_CONTEXT", "OBSERVE"})
+_LEGACY_VISUAL_ALIASES = {
+    "LONG": "LONG_CONTEXT",
+    "SHORT": "SHORT_CONTEXT",
+    "STAND_ASIDE": "OBSERVE",
+    "NONE": "OBSERVE",
+    "NO_ACTIVE_CONTEXT": "OBSERVE",
+    "NEUTRAL": "OBSERVE",
+    "FLAT": "OBSERVE",
+    "CHALLENGED": "OBSERVE",
+    "DEVELOPING": "OBSERVE",
+    "CANDIDATE": "OBSERVE",
+    "BULLISH": "OBSERVE",
+    "BEARISH": "OBSERVE",
+}
+
+
+def canonicalize_visual_context(value: Any) -> str:
+    """Chart paints only LONG_CONTEXT / SHORT_CONTEXT / OBSERVE."""
+    text = str(value or "").strip().upper()
+    if text in CANONICAL_VISUAL_CONTEXTS:
+        return text
+    if text in _LEGACY_VISUAL_ALIASES:
+        return _LEGACY_VISUAL_ALIASES[text]
+    if text.startswith("LONG"):
+        return "LONG_CONTEXT"
+    if text.startswith("SHORT"):
+        return "SHORT_CONTEXT"
+    return "OBSERVE"
+
+
+def _journal_context_is_flat(value: Any) -> bool:
+    """True when the model was already OBSERVE before this journal event."""
+    text = str(value or "").strip().upper()
+    if not text:
+        return False
+    return canonicalize_visual_context(text) == "OBSERVE"
+
+
+def _observe_visual_zone(
+    timeframe: str,
+    start_timestamp: str | None,
+    end_timestamp: str | None,
+    *,
+    active: bool,
+) -> dict[str, Any]:
+    return {
+        "timeframe": timeframe,
+        "direction": None,
+        "directional_state": "OBSERVE",
+        "start_timestamp": start_timestamp,
+        "end_timestamp": None if active else end_timestamp,
+        "start_event_id": None,
+        "lifecycle_episode_id": None,
+        "context_price": None,
+        "bar_anchor_time": start_timestamp,
+        "paper_epoch_id": None,
+        "source": "CANONICAL_VISUAL_OBSERVE_GAP",
+        "active": active,
+        "lifecycle_state": "OBSERVE",
+        "end_event_id": None,
+        "end_reason": None if active else "OBSERVE_GAP",
+    }
+
+
+def fill_observe_context_zones(
+    zones: list[dict[str, Any]],
+    *,
+    timeframe: str,
+    window_start: str | None,
+    window_end: str | None,
+    tip_context: Any,
+) -> list[dict[str, Any]]:
+    """Insert OBSERVE bands in every gap the model is not LONG or SHORT."""
+    directional: list[dict[str, Any]] = []
+    for raw in zones:
+        canon = canonicalize_visual_context(raw.get("directional_state"))
+        if canon == "OBSERVE":
+            canon = canonicalize_visual_context(raw.get("direction"))
+        if canon not in {"LONG_CONTEXT", "SHORT_CONTEXT"}:
+            continue
+        row = dict(raw)
+        row["directional_state"] = canon
+        row["direction"] = "LONG" if canon == "LONG_CONTEXT" else "SHORT"
+        if canon in {"LONG_CONTEXT", "SHORT_CONTEXT"}:
+            life = str(row.get("lifecycle_state") or "").upper()
+            if life not in {"ACTIVE", ""}:
+                row["lifecycle_state"] = "ACTIVE"
+        directional.append(row)
+    directional.sort(key=lambda z: _to_utc(z.get("start_timestamp")) or pd.Timestamp.min.tz_localize("UTC"))
+
+    out: list[dict[str, Any]] = []
+    cursor = window_start
+    open_directional = False
+    for zone in directional:
+        start = zone.get("start_timestamp")
+        cursor_ts = _to_utc(cursor)
+        start_ts = _to_utc(start)
+        if cursor_ts is not None and start_ts is not None and start_ts > cursor_ts:
+            out.append(
+                _observe_visual_zone(timeframe, cursor, start, active=False)
+            )
+        out.append(zone)
+        if zone.get("active") and zone.get("end_timestamp") is None:
+            open_directional = True
+            cursor = None
+            break
+        cursor = zone.get("end_timestamp") or cursor
+
+    tip = canonicalize_visual_context(tip_context)
+    if open_directional:
+        return out
+    cursor_ts = _to_utc(cursor)
+    window_end_ts = _to_utc(window_end)
+    if cursor_ts is not None and window_end_ts is not None and cursor_ts >= window_end_ts:
+        return out
+    if cursor or not directional:
+        start = cursor or window_start
+        if start:
+            out.append(
+                _observe_visual_zone(
+                    timeframe,
+                    start,
+                    window_end,
+                    active=tip == "OBSERVE",
+                )
+            )
+    return out
 
 
 def _candle_lookup(candles: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
@@ -588,6 +759,90 @@ def _episodes_compatible(left: Any, right: Any) -> bool:
     return a == b
 
 
+def build_context_zones_from_lifecycle_parquet(
+    timeframe: str,
+    *,
+    window_start: pd.Timestamp,
+    window_end: pd.Timestamp,
+    frame: pd.DataFrame | None = None,
+) -> list[dict[str, Any]]:
+    """Per-TF directional bands from closed-bar lifecycle episodes.
+
+    Hybrid / S4.1 paints these, not the LIVE1A provisional journal. Untagged
+    legacy parquet is M15-only so senior TFs stay empty rather than inherit M15.
+    """
+    tf = str(timeframe or "").upper()
+    source = frame
+    if source is None:
+        if not LIFECYCLE_EPISODES.exists():
+            return []
+        source = pd.read_parquet(LIFECYCLE_EPISODES)
+    if source is None or not len(source):
+        return []
+    work = source.copy()
+    if "timeframe" in work.columns:
+        work = work[work["timeframe"].astype(str).str.upper() == tf]
+    elif tf != "M15":
+        return []
+    if not len(work):
+        return []
+    work["start_time"] = work["start_time"].map(_to_utc) if "start_time" in work.columns else None
+    work["end_time"] = work["end_time"].map(_to_utc) if "end_time" in work.columns else None
+    # Episodes parquet is a snapshot log: same episode_id is rewritten as it
+    # extends. Keep the latest row per (episode, direction) or the chart floods.
+    work = work.sort_values(["start_time", "end_time"])
+    if "active_market_context" in work.columns:
+        work["_dir_key"] = work["active_market_context"].astype(str).str.upper()
+        work = work.drop_duplicates(["episode_id", "_dir_key"], keep="last")
+    else:
+        work = work.drop_duplicates(["episode_id"], keep="last")
+    zones: list[dict[str, Any]] = []
+    for _, raw in work.iterrows():
+        ctx = str(raw.get("active_market_context") or "").upper()
+        if ctx not in {"LONG_CONTEXT", "SHORT_CONTEXT", "LONG", "SHORT"}:
+            continue
+        start = raw.get("start_time")
+        if start is None or (isinstance(start, float) and pd.isna(start)):
+            continue
+        end = raw.get("end_time")
+        if end is not None and pd.isna(end):
+            end = None
+        if end is not None and end < window_start:
+            continue
+        if start > window_end:
+            continue
+        direction = "LONG" if "LONG" in ctx else "SHORT"
+        try:
+            eid = int(float(raw.get("episode_id")))
+            episode_id = f"{tf}:{eid}"
+        except (TypeError, ValueError):
+            episode_id = _txt(raw.get("episode_id"))
+            if episode_id and ":" not in episode_id:
+                episode_id = f"{tf}:{episode_id}"
+        end_iso = _iso(end) if end is not None else None
+        zones.append(
+            {
+                "timeframe": tf,
+                "direction": direction,
+                "directional_state": "LONG_CONTEXT" if direction == "LONG" else "SHORT_CONTEXT",
+                "start_timestamp": _iso(start),
+                "end_timestamp": end_iso,
+                "start_event_id": None,
+                "lifecycle_episode_id": episode_id,
+                "context_price": _f(raw.get("start_close")),
+                "bar_anchor_time": _iso(start),
+                "paper_epoch_id": None,
+                "source": "market_context_lifecycle_episodes",
+                "active": False,
+                "lifecycle_state": _txt(raw.get("end_lifecycle_state") or raw.get("dominant_lifecycle_state")) or "ACTIVE",
+                "end_event_id": None,
+                "end_reason": _txt(raw.get("end_reason")),
+            }
+        )
+    zones.sort(key=lambda z: z.get("start_timestamp") or "")
+    return zones
+
+
 def _zone_edge_timestamp(ev: dict[str, Any]) -> str | None:
     """Chart-band edge time: decision/source bar, not reused context origin."""
     return (
@@ -614,11 +869,16 @@ def build_context_zones_from_events(events: list[dict[str, Any]]) -> list[dict[s
         ts = _zone_edge_timestamp(ev)
         if et == "CONTEXT_START" and direction in {"LONG", "SHORT"}:
             if open_zone is not None:
-                open_zone["end_timestamp"] = ts
-                open_zone["end_event_id"] = ev.get("context_event_id")
-                open_zone["end_reason"] = "SUPERSEDED_BY_START"
-                open_zone["active"] = False
-                zones.append(open_zone)
+                if _journal_context_is_flat(ev.get("previous_context")):
+                    # Next START came from OBSERVE: previous episode already died
+                    # off-journal. Do not stretch a band across the gap.
+                    open_zone = None
+                else:
+                    open_zone["end_timestamp"] = ts
+                    open_zone["end_event_id"] = ev.get("context_event_id")
+                    open_zone["end_reason"] = "SUPERSEDED_BY_START"
+                    open_zone["active"] = False
+                    zones.append(open_zone)
             open_zone = {
                 "timeframe": ev.get("timeframe"),
                 "direction": direction,
@@ -936,16 +1196,12 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
     }
     live1a = load_live1a_visual_overlay(timeframe)
     if live1a:
-        live_dir = str(live1a.get("directional_state") or "").upper()
         manager_dir = str(state.get("directional_state") or "").upper()
-        # Hybrid / S4.1 tip: do not let provisional OBSERVE erase a fresh manager
-        # LONG/SHORT context that still drives commands.
-        if live_dir == "OBSERVE" and manager_dir in {
-            "LONG_CONTEXT",
-            "SHORT_CONTEXT",
-            "LONG",
-            "SHORT",
-        }:
+        # S4.1: closed-bar parquet/manager is the cognition tip. LIVE1A journal
+        # is diagnostic only and may be a days-old FLIP. Journal paper still
+        # paints LIVE1A because that clock fills trades.
+        keep_closed_bar_tip = not paper_uses_context_journal()
+        if keep_closed_bar_tip:
             state["provisional_market_context"] = live1a.get("provisional_market_context")
             state["context_source"] = "timeframe_command_memory"
             state["source_timestamp"] = state.get("evaluation_timestamp")
@@ -961,9 +1217,12 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
             state["directional_state"] = live1a["directional_state"]
             state["timeframe_direction"] = live1a["timeframe_direction"]
             state["lifecycle_phase"] = live1a["lifecycle_state"]
-            state["manager_lifecycle_episode_id"] = live1a["lifecycle_episode_id"] or state.get(
-                "manager_lifecycle_episode_id"
-            )
+            if live1a["directional_state"] == "OBSERVE":
+                state["manager_lifecycle_episode_id"] = None
+            else:
+                state["manager_lifecycle_episode_id"] = live1a["lifecycle_episode_id"] or state.get(
+                    "manager_lifecycle_episode_id"
+                )
             state["context_event_id"] = live1a["context_event_id"]
             state["context_started_at"] = live1a["context_started_at"]
             state["causal_cutoff_timestamp"] = live1a["causal_cutoff_timestamp"]
@@ -977,6 +1236,17 @@ def load_tf_state(timeframe: str) -> dict[str, Any]:
                 state["manager_instruction"] = "NO_ACTION"
             elif live1a.get("lifecycle_state") == "CHALLENGED":
                 state["manager_instruction"] = "HOLD"
+    if state.get("directional_state"):
+        state["directional_state"] = canonicalize_visual_context(state.get("directional_state"))
+        if state["directional_state"] == "OBSERVE":
+            state["timeframe_direction"] = "NONE"
+            state["active_market_context"] = None
+        elif state["directional_state"] == "LONG_CONTEXT":
+            state["timeframe_direction"] = "LONG"
+            state["active_market_context"] = "LONG_CONTEXT"
+        else:
+            state["timeframe_direction"] = "SHORT"
+            state["active_market_context"] = "SHORT_CONTEXT"
     return state
 
 
@@ -1515,8 +1785,11 @@ def build_global_lifecycle(
             dedup[int(eid)] = ep
     episodes = sorted(dedup.values(), key=lambda r: (r.get("start_timestamp") or "", r.get("episode_id") or 0))
 
-    # LIVE1A provisional overrides closed-bar memory tip for the *active* visual episode.
-    live1a_primary = load_live1a_visual_overlay("M15")
+    # LIVE1A provisional overrides closed-bar memory tip only when journal fills.
+    # S4.1 cognition is the parquet lifecycle already loaded above.
+    live1a_primary = None
+    if paper_uses_context_journal():
+        live1a_primary = load_live1a_visual_overlay("M15")
     if live1a_primary is not None:
         if live1a_primary["directional_state"] == "OBSERVE":
             for ep in episodes:
@@ -1685,7 +1958,18 @@ def build_timeframe_chart_truth(
             window_start=window_start,
             window_end=window_end,
         )
-        context_zones = build_context_zones_from_events(context_events)
+        lifecycle_zones = build_context_zones_from_lifecycle_parquet(
+            tf,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        entry_source = paper_entry_source()
+        context_zones = select_live_context_zones(
+            live1b=live1b,
+            entry_source=entry_source,
+            journal_zones=build_context_zones_from_events(context_events),
+            parquet_zones=lifecycle_zones,
+        )
         # Tip lifecycle (e.g. CHALLENGED) annotates open journal zones; provisional OBSERVE
         # must not close them — only CONTEXT_END/FLIP does.
         tip_life = str(state.get("lifecycle_phase") or "").upper()
@@ -1708,31 +1992,49 @@ def build_timeframe_chart_truth(
             tip_timestamp=str(tip_ts) if tip_ts is not None else None,
             timeframe=tf,
         )
+        if canonicalize_visual_context(tip_active) == "OBSERVE":
+            # Model is flat: keep START→END bands, drop unfinished STARTs.
+            # Stretching them to "now" paints a multi-day context that never lived.
+            flattened: list[dict[str, Any]] = []
+            for zone in context_zones:
+                if zone.get("end_timestamp") is None:
+                    continue
+                zone["active"] = False
+                flattened.append(zone)
+            context_zones = flattened
         for zone in context_zones:
             if not zone.get("active"):
                 continue
-            zone_dir = str(zone.get("directional_state") or "").upper()
-            if tip_life == "CHALLENGED" and (
-                tip_active in zone_dir or zone_dir.startswith(tip_active.replace("_CONTEXT", ""))
-            ):
-                zone["lifecycle_state"] = "CHALLENGED"
-            elif tip_active in {"LONG_CONTEXT", "SHORT_CONTEXT"} and tip_active in zone_dir:
-                zone["lifecycle_state"] = tip_life or "ACTIVE"
+            zone_dir = canonicalize_visual_context(zone.get("directional_state") or zone.get("direction"))
+            if zone_dir in {"LONG_CONTEXT", "SHORT_CONTEXT"}:
+                zone["lifecycle_state"] = "ACTIVE"
+        context_zones = fill_observe_context_zones(
+            context_zones,
+            timeframe=tf,
+            window_start=_iso(window_start),
+            window_end=_iso(window_end) or (str(tip_ts) if tip_ts is not None else None),
+            tip_context=state.get("directional_state") or tip_active,
+        )
 
         if live1b:
-            # LIVE1A journal is the only active context truth; do not paint legacy
-            # closed-bar command-memory bands as current directional context.
+            band_source = context_band_source(live1b=True, entry_source=entry_source)
+            if band_source == "market_context_lifecycle_episodes" and not any(
+                z.get("source") == "market_context_lifecycle_episodes" for z in context_zones
+            ):
+                band_source = "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
             context_segments = [
                 {
                     "timeframe": z.get("timeframe"),
                     "start_timestamp": z.get("start_timestamp"),
                     "end_timestamp": z.get("end_timestamp"),
-                    "directional_state": z.get("directional_state"),
+                    "directional_state": canonicalize_visual_context(
+                        z.get("directional_state") or z.get("direction")
+                    ),
                     "availability_status": "FRESH",
-                    "availability_raw": "LIVE1A_INTRABAR",
+                    "availability_raw": band_source,
                     "manager_instruction": "HOLD" if z.get("active") else "NO_ACTION",
                     "entry_eligibility": False,
-                    "source": "LIVE1A_INTRABAR_CONTEXT_JOURNAL",
+                    "source": z.get("source") or band_source,
                     "command_count": 1,
                     "lifecycle_episode_id": z.get("lifecycle_episode_id"),
                     "context_price": z.get("context_price"),
@@ -1741,12 +2043,18 @@ def build_timeframe_chart_truth(
                     "active": z.get("active"),
                     "start_event_id": z.get("start_event_id"),
                     "end_event_id": z.get("end_event_id"),
-                    "lifecycle_state": z.get("lifecycle_state"),
+                    "lifecycle_state": (
+                        "OBSERVE"
+                        if canonicalize_visual_context(z.get("directional_state") or z.get("direction"))
+                        == "OBSERVE"
+                        else "ACTIVE"
+                    ),
                 }
                 for z in context_zones
-                if z.get("direction") in {"LONG", "SHORT"}
+                if canonicalize_visual_context(z.get("directional_state") or z.get("direction"))
+                in CANONICAL_VISUAL_CONTEXTS
             ]
-            context_source = "LIVE1A_INTRABAR_CONTEXT_JOURNAL"
+            context_source = band_source
         else:
             context_segments = build_tf_context_segments(
                 tf,
@@ -1769,6 +2077,28 @@ def build_timeframe_chart_truth(
                             continue
                     pruned.append(seg)
                 context_segments = pruned
+            context_segments = fill_observe_context_zones(
+                context_segments,
+                timeframe=tf,
+                window_start=_iso(window_start),
+                window_end=_iso(window_end),
+                tip_context=state.get("directional_state"),
+            )
+        if not context_segments:
+            context_segments = [
+                {
+                    "timeframe": z.get("timeframe"),
+                    "start_timestamp": z.get("start_timestamp"),
+                    "end_timestamp": z.get("end_timestamp"),
+                    "directional_state": canonicalize_visual_context(
+                        z.get("directional_state") or z.get("direction")
+                    ),
+                    "source": z.get("source") or context_source,
+                    "active": z.get("active"),
+                    "lifecycle_state": z.get("lifecycle_state"),
+                }
+                for z in context_zones
+            ]
 
         for entity in closed + opens:
             if entity.get("episode_status") == "UNPROVEN":
@@ -1844,7 +2174,8 @@ def build_timeframe_chart_truth(
             "standalone_tf_urls": True,
             "trade_public_numbers": True,
             "timezone": "UTC",
-            "context_source_priority": "LIVE1A_INTRABAR_CONTEXT_JOURNAL" if live1b else "timeframe_command_memory",
+            "canonical_contexts": ["LONG_CONTEXT", "SHORT_CONTEXT", "OBSERVE"],
+            "context_source_priority": context_band_source(live1b=live1b),
         },
         "timeframes": timeframes,
         "data_quality": data_quality,
@@ -1879,9 +2210,7 @@ def _trade_overlay_meta(timeframes: dict[str, Any]) -> dict[str, Any]:
         "trade_overlay_source": (
             "LIVE1B_INTRABAR_PAPER_EPOCH" if live1b_paper_active() else "TIMEFRAME_TRADER_BOOKS"
         ),
-        "context_overlay_source": (
-            "LIVE1A_INTRABAR_CONTEXT_JOURNAL" if live1b_paper_active() else "timeframe_command_memory"
-        ),
+        "context_overlay_source": context_band_source(live1b=live1b_paper_active()),
         "legacy_excluded": bool(live1b_paper_active()),
         "trade_marker_count": marker_n,
         "open_position_overlay_count": open_n,

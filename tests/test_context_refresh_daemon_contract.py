@@ -125,29 +125,45 @@ def test_08_lock_prevents_overlap_alive(tmp_path: Path):
     daemon.release_lock(lock)
 
 
-def test_08b_tail_merge_existing_rows_win():
+def test_08b_tail_merge_restates_last_bars_and_appends():
     tail_merge_existing_wins = refresh_mod.tail_merge_existing_wins
 
     prod = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(
-                ["2026-07-24T14:00:00Z", "2026-07-24T14:15:00Z"], utc=True
+                [
+                    "2026-07-24T13:00:00Z",
+                    "2026-07-24T13:15:00Z",
+                    "2026-07-24T13:30:00Z",
+                    "2026-07-24T13:45:00Z",
+                    "2026-07-24T14:00:00Z",
+                    "2026-07-24T14:15:00Z",
+                ],
+                utc=True,
             ),
-            "v": [1, 2],
+            "v": [1, 2, 3, 4, 5, 6],
         }
     )
     cand = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(
-                ["2026-07-24T14:00:00Z", "2026-07-24T14:15:00Z", "2026-07-24T14:30:00Z"],
+                [
+                    "2026-07-24T13:00:00Z",
+                    "2026-07-24T13:15:00Z",
+                    "2026-07-24T13:30:00Z",
+                    "2026-07-24T13:45:00Z",
+                    "2026-07-24T14:00:00Z",
+                    "2026-07-24T14:15:00Z",
+                    "2026-07-24T14:30:00Z",
+                ],
                 utc=True,
             ),
-            "v": [9, 9, 3],
+            "v": [9, 9, 9, 9, 9, 9, 7],
         }
     )
     merged = tail_merge_existing_wins(prod, cand, "timestamp")
-    assert list(merged["v"]) == [1, 2, 3]
-    assert len(merged) == 3
+    assert list(merged["v"]) == [1, 2, 9, 9, 9, 9, 7]
+    assert len(merged) == 7
 
 
 def test_08c_tail_merge_keeps_m15_prefix_and_adds_independent_h4():
@@ -156,15 +172,28 @@ def test_08c_tail_merge_keeps_m15_prefix_and_adds_independent_h4():
     prod = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(
-                ["2026-07-24T14:00:00Z", "2026-07-24T14:15:00Z"], utc=True
+                [
+                    "2026-07-24T13:00:00Z",
+                    "2026-07-24T13:15:00Z",
+                    "2026-07-24T13:30:00Z",
+                    "2026-07-24T13:45:00Z",
+                    "2026-07-24T14:00:00Z",
+                    "2026-07-24T14:15:00Z",
+                ],
+                utc=True,
             ),
-            "v": [1, 2],
+            "timeframe": ["M15"] * 6,
+            "v": [1, 2, 3, 4, 5, 6],
         }
     )
     cand = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(
                 [
+                    "2026-07-24T13:00:00Z",
+                    "2026-07-24T13:15:00Z",
+                    "2026-07-24T13:30:00Z",
+                    "2026-07-24T13:45:00Z",
                     "2026-07-24T14:00:00Z",
                     "2026-07-24T14:15:00Z",
                     "2026-07-24T14:00:00Z",
@@ -172,16 +201,124 @@ def test_08c_tail_merge_keeps_m15_prefix_and_adds_independent_h4():
                 ],
                 utc=True,
             ),
-            "timeframe": ["M15", "M15", "H4", "M15"],
-            "v": [9, 9, 4, 3],
+            "timeframe": ["M15", "M15", "M15", "M15", "M15", "M15", "H4", "M15"],
+            "v": [9, 9, 9, 9, 9, 9, 4, 3],
         }
     )
     merged = tail_merge_existing_wins(prod, cand, "timestamp")
     m15 = merged[merged["timeframe"].astype(str).str.upper() == "M15"]
     h4 = merged[merged["timeframe"].astype(str).str.upper() == "H4"]
-    assert list(m15["v"]) == [1, 2, 3]
+    assert list(m15["v"]) == [1, 2, 9, 9, 9, 9, 3]
     assert list(h4["v"]) == [4]
-    assert len(merged) == 4
+    assert len(merged) == 8
+
+
+def test_08d_restep_uncertain_keeps_production_long_episode():
+    stamps = pd.to_datetime(
+        [
+            "2026-09-13T10:00:00Z",
+            "2026-09-13T10:15:00Z",
+            "2026-09-13T10:30:00Z",
+            "2026-09-13T10:45:00Z",
+            "2026-09-13T11:00:00Z",
+        ],
+        utc=True,
+    )
+
+    def _row(ts, *, raw, status, cognitive, direction, auction, active, life, episode):
+        return {
+            "timestamp": ts,
+            "timeframe": "M15",
+            "raw_market_context": raw,
+            "raw_context_status": status,
+            "raw_context_reason": f"{raw}/{status}",
+            "raw_cognitive_market_state": cognitive,
+            "raw_state_direction": direction,
+            "raw_auction_episode": auction,
+            "auction_episode": auction,
+            "active_market_context": active,
+            "lifecycle_state": life,
+            "context_episode_id": episode,
+            "active_context_age_bars": 1,
+            "transition_reason": "seed",
+        }
+
+    prod = pd.DataFrame(
+        [
+            _row(
+                stamps[0],
+                raw="LONG_CONTEXT",
+                status="ACTIVE",
+                cognitive="LOWER_ABSORPTION",
+                direction="LONG",
+                auction="LOWER_ABSORPTION",
+                active="LONG_CONTEXT",
+                life="ACTIVE",
+                episode=321,
+            ),
+            _row(
+                stamps[1],
+                raw="LONG_CONTEXT",
+                status="ACTIVE",
+                cognitive="LOWER_ABSORPTION",
+                direction="LONG",
+                auction="LOWER_ABSORPTION",
+                active="LONG_CONTEXT",
+                life="ACTIVE",
+                episode=321,
+            ),
+            _row(
+                stamps[2],
+                raw="OBSERVE",
+                status="OBSERVE",
+                cognitive="UNCERTAIN",
+                direction="UNKNOWN",
+                auction="UNKNOWN",
+                active="SHORT_CONTEXT",
+                life="ACTIVE",
+                episode=323,
+            ),
+            _row(
+                stamps[3],
+                raw="OBSERVE",
+                status="OBSERVE",
+                cognitive="UNCERTAIN",
+                direction="UNKNOWN",
+                auction="UNKNOWN",
+                active="SHORT_CONTEXT",
+                life="ACTIVE",
+                episode=323,
+            ),
+            _row(
+                stamps[4],
+                raw="OBSERVE",
+                status="OBSERVE",
+                cognitive="UNCERTAIN",
+                direction="UNKNOWN",
+                auction="UNKNOWN",
+                active="SHORT_CONTEXT",
+                life="ACTIVE",
+                episode=323,
+            ),
+        ]
+    )
+    cand = prod.copy()
+    merged = refresh_mod.tail_merge_existing_wins(prod, cand, "timestamp")
+    out = refresh_mod.restep_lifecycle_tail(prod, merged, "timestamp")
+    assert list(out["active_market_context"]) == ["LONG_CONTEXT"] * 5
+    assert list(out["context_episode_id"]) == [321] * 5
+    assert out.iloc[2]["transition_reason"] == "insufficient auction evidence keeps active"
+
+
+def test_08e_refresh_interval_fits_inside_one_m15_bar():
+    daemon_src = DAEMON_PATH.read_text(encoding="utf-8")
+    assert 'CONTEXT_REFRESH_INTERVAL_SECONDS", "60"' in daemon_src
+    compose = (ROOT / "deploy" / "vps" / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "CONTEXT_REFRESH_INTERVAL_SECONDS:-60" in compose
+    entry = (ROOT / "deploy" / "vps" / "entrypoints" / "context_refresh_daemon.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'CONTEXT_REFRESH_INTERVAL_SECONDS:-60' in entry
 
 
 def test_09_no_new_safe_upstream_noop_classification():

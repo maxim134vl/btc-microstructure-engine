@@ -13,7 +13,7 @@ DAEMON_SCRIPT="$ROOT/scripts/live/run_context_refresh_daemon.py"
 PID_FILE="$ROOT/run/context_refresh_daemon.pid"
 LOCK_FILE="$ROOT/run/context_refresh_daemon.lock"
 LOG_FILE="$ROOT/logs/context_refresh_daemon.log"
-INTERVAL_S="${CONTEXT_REFRESH_INTERVAL_SECONDS:-900}"
+INTERVAL_S="${CONTEXT_REFRESH_INTERVAL_SECONDS:-60}"
 FLAG="${BTC_ML_CONTEXT_REFRESH_DAEMON:-0}"
 
 _require_flag() {

@@ -27,9 +27,11 @@ This layer publishes:
 | `active_market_context` | Stable context the chart should paint |
 
 `DEVELOPING` raw directional context can become a **candidate**, but cannot instantly become active.
-`OBSERVE` alone can **challenge** an active directional context, but does not instantly end it.
-Auction neutralization or a **persistent** confirmed opposite `ACTIVE` context closes / replaces it.
-A single confirmed opposite bar does **not** replace.
+`OBSERVE` from `UNCERTAIN` / missing auction evidence is **not** a context: keep the living thesis.
+`OBSERVE` with full BALANCE confluence can **challenge** an active directional context, but does not instantly end it.
+Auction neutralization still needs two consecutive confluence bars.
+A confirmed opposite `ACTIVE` bar **does** replace immediately. Holding the old
+context for 3 M15 bars (45 minutes) was a live execution lag and is forbidden.
 
 ## CHALLENGED is not terminal
 
@@ -65,49 +67,42 @@ A neutralization confluence bar for an active SHORT or LONG requires **all** of:
 - `raw_state_direction == NEUTRAL`
 - `auction_episode == BALANCE`
 
-### Termination persistence protection
+### Termination rules (S4.1 reads this — not shadow-only)
 
 A single neutralization confluence bar must **not** kill a confirmed active context.
-A single confirmed opposite `ACTIVE` bar must **not** kill it either.
-Three conservative persistence rules protect directional episodes (shadow-only; no execution):
+A confirmed opposite `ACTIVE` bar **does** replace it. S4.1 opens and closes from
+`active_market_context`; delaying that swap by 3 M15 bars is a 45-minute trade lag
+(open in the middle of the painted move, close after the painted change).
 
 - `NEUTRALIZATION_CONFIRM_BARS = 2` — a confirmed context is invalidated only after
   this many **consecutive** neutralization confluence bars. The first confluence bar
   sets `lifecycle_state = CHALLENGED` while keeping the existing LONG/SHORT active.
   DEVELOPING same-direction or opposite bars **do not reset** this count. A
   `LOWER_ABSORPTION` developing print cannot resurrect a challenged LONG through
-  BALANCE. Live ticks on the same TF bar count as one bar.
-- `MIN_ACTIVE_CONTEXT_HOLD_BARS = 3` — a fresh context whose
-  `active_context_age_bars < MIN_ACTIVE_CONTEXT_HOLD_BARS` is never invalidated by
-  auction neutralization, a source `INVALIDATED` row, **or** confirmed opposite
-  replacement. It is held as `CHALLENGED` with the active context unchanged until
-  the minimum hold is met.
-- `CONFIRMED_OPPOSITE_CONFIRM_BARS = 2` — opposite `ACTIVE` replaces the living
-  thesis only after this many **consecutive** confirmed opposite bars on a mature
-  context. The first opposite `ACTIVE` bar sets `CHALLENGED` and keeps the
-  previous LONG/SHORT. This is the same persistence family as neutralization:
-  it delays termination; it is not a trading signal and does not force a reversal.
-
-There is **no exemption** for opposite CONFIRMED replacement. The historical
-“replace immediately on one opposite ACTIVE bar” hole is closed.
+  BALANCE. Live ticks on the same TF bar count as one bar. S4.1 already HOLDs
+  through OBSERVE, so this is chart flicker protection, not a trade delay.
+- `MIN_ACTIVE_CONTEXT_HOLD_BARS = 0` — a fresh context may be replaced or
+  invalidated immediately. Do not restore `3` (45 minutes of M15).
+- `CONFIRMED_OPPOSITE_CONFIRM_BARS = 1` — the first confirmed opposite `ACTIVE`
+  bar replaces the living thesis. DEVELOPING opposite still only challenges.
 
 `invalidation_type` describes the exact event row only. It is **not** carried forward
 onto later `NO_ACTIVE_CONTEXT` / `CANDIDATE` rows.
 
-This is a persistence/debounce rule only. No `challenge_ratio` rule. No price rewrite.
+This is not a trade-policy rewrite. No `challenge_ratio` rule. No price rewrite.
 
 ## Why no manual TTL
 
 No “N bars then expire” (there is no expiry — an undisturbed active context lives on).
 No rolling-window smoothing.
 No rewriting history from later price.
-The only N-bar element is the neutralization / opposite-confirm / hold
-**persistence** debounce above, which delays termination; it never forces one.
+The only remaining N-bar element is neutralization confirm (2 bars). There is
+no minimum-age hold and no extra confirmed-opposite delay.
 
 Episode ends when:
 
 - auction/cognitive neutralization invalidates active context, or
-- persistent confirmed opposite context becomes active, or
+- confirmed opposite ACTIVE replaces the living thesis, or
 - source row is `INVALIDATED`
 
 `active_context_age_bars` is diagnostic only and applies **only** while
@@ -130,8 +125,7 @@ So:
 
 - OBSERVE + DEVELOPING LONG → `CANDIDATE`, active stays OBSERVE
 - ACTIVE LONG + DEVELOPING SHORT → `CHALLENGED`, active stays LONG
-- ACTIVE LONG + one ACTIVE SHORT → `CHALLENGED`, active stays LONG
-- ACTIVE LONG + two consecutive ACTIVE SHORT (mature hold) → active becomes SHORT (`OPPOSITE_CONTEXT_REPLACEMENT`)
+- ACTIVE LONG + confirmed ACTIVE SHORT → active becomes SHORT (`OPPOSITE_CONTEXT_REPLACEMENT`)
 
 ## Why OBSERVE challenges instead of always ending
 
@@ -155,11 +149,14 @@ Do **not** paint raw per-bar flips from `final_market_context_episodes.parquet` 
 CHALLENGED bars stay inside the same active episode until `active_market_context` actually changes.
 Auction neutralization ends the directional episode and starts an OBSERVE episode.
 
-## Shadow-only
+## Chart vs execution
 
-- `shadow_only=True`
-- not in `CANONICAL_PIPELINE`
-- not execution
+S4.1 / live trading reads `active_market_context`. Chart bands should too.
+`shadow_only=True` on the parquet rows is historical: it does **not** mean the
+manager ignores this layer. Delaying replacement here delays OPEN and CLOSE.
+
+- `shadow_only=True` remains on the builder output schema
+- do not restore `MIN_ACTIVE_CONTEXT_HOLD_BARS = 3` (45 minutes of M15)
 
 ## How to run
 
