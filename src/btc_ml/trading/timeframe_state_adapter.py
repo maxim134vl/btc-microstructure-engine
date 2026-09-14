@@ -158,9 +158,10 @@ DIRECTION_SHORT = "SHORT"
 DIRECTION_FLAT = "NON_DIRECTIONAL"
 
 TERMINAL_LIFECYCLE_PHASES = {"INVALIDATED", "NO_ACTIVE_CONTEXT", "EXPIRED", "TERMINATED"}
-# Entries require a confirmed ACTIVE tip. CHALLENGED is not actionable for
-# OPEN. Open-position preview holds through CHALLENGED (including opposite)
-# and only CLOSEs on opposite ACTIVE or OBSERVE/END.
+# Entries follow the painted closed-bar direction (ACTIVE or CHALLENGED).
+# CHALLENGED is still the chart band — S4.1 must hold/open that side.
+# CLOSE only on opposite ACTIVE. OBSERVE/END is a pause: HOLD the living
+# position until the painted context becomes the opposite.
 
 
 def _utc_now() -> str:
@@ -577,7 +578,9 @@ def resolve_timeframe_state(
             "context_origin_price": None
             if life_row.get("context_origin_price") is None
             else float(life_row.get("context_origin_price") or 0.0) or None,
-            "actionable": direction in {DIRECTION_LONG, DIRECTION_SHORT} and phase == "ACTIVE",
+            "actionable": direction in {DIRECTION_LONG, DIRECTION_SHORT}
+            and phase not in TERMINAL_LIFECYCLE_PHASES
+            and phase not in {"", "UNKNOWN", "OBSERVE"},
         }
     )
     # Hybrid / safety: provisional journal episodes must not open S4.1→LIVE1B entries.

@@ -613,11 +613,10 @@ def evaluate_exit_preview(
         unrealized_pnl_usd = quantity * (current_price - entry_price)
         stop_loss_hit = latest_low <= stop_loss_price
         take_profit_hit = latest_high >= take_profit_price
-        # Hold while LONG_CONTEXT remains (including CHALLENGED/WEAK/QUESTIONABLE).
-        context_exit = ctx != "LONG_CONTEXT"
+        # Hold the living position through OBSERVE / pause labels.
+        # Flatten only on opposite directional context (SHORT while long, etc).
+        context_exit = ctx in {"SHORT_CONTEXT", "SHORT"}
         if ctx == "LONG_CONTEXT" and life in CONTEXT_EXIT_LIFECYCLES:
-            # Explicit terminal lifecycle with non-matching should already be non-LONG;
-            # if still LONG_CONTEXT, do not exit on CHALLENGED-like labels.
             context_exit = False
         if life == "CHALLENGED":
             # Opposite CHALLENGED is unconfirmed; same-side CHALLENGED already holds.
@@ -631,7 +630,7 @@ def evaluate_exit_preview(
         unrealized_pnl_usd = quantity * (entry_price - current_price)
         stop_loss_hit = latest_high >= stop_loss_price
         take_profit_hit = latest_low <= take_profit_price
-        context_exit = ctx != "SHORT_CONTEXT"
+        context_exit = ctx in {"LONG_CONTEXT", "LONG"}
         if ctx == "SHORT_CONTEXT" and life in CONTEXT_EXIT_LIFECYCLES:
             context_exit = False
         if life == "CHALLENGED":
@@ -645,16 +644,14 @@ def evaluate_exit_preview(
 
     same_bar = bool(stop_loss_hit and take_profit_hit)
     if hold_until:
-        # Research hold: exit only on directional context end / flip / observe.
+        # Hold until opposite directional context. OBSERVE is a pause, not a flatten.
         if context_exit:
-            if ctx == "SHORT_CONTEXT" and side_u == "LONG":
+            if ctx in {"SHORT_CONTEXT", "SHORT"} and side_u == "LONG":
                 end_code = "CONTEXT_FLIP_LONG_TO_SHORT"
-            elif ctx == "LONG_CONTEXT" and side_u == "SHORT":
+            elif ctx in {"LONG_CONTEXT", "LONG"} and side_u == "SHORT":
                 end_code = "CONTEXT_FLIP_SHORT_TO_LONG"
-            elif ctx in {"OBSERVE", "NO_ACTIVE_CONTEXT", "STAND_ASIDE", "INVALIDATED", ""}:
-                end_code = "CONTEXT_END_EVENT_LONG" if side_u == "LONG" else "CONTEXT_END_EVENT_SHORT"
             else:
-                end_code = "CONTEXT_END_EVENT_LONG" if side_u == "LONG" else "CONTEXT_END_EVENT_SHORT"
+                end_code = "CONTEXT_FLIP_LONG_TO_SHORT" if side_u == "LONG" else "CONTEXT_FLIP_SHORT_TO_LONG"
             action, reason = (
                 ctx_action,
                 f"{end_code}|HOLD_UNTIL_DIRECTIONAL_CONTEXT_END:{ctx}/{life or 'UNKNOWN'}",
@@ -668,7 +665,12 @@ def evaluate_exit_preview(
     elif take_profit_hit:
         action, reason = take_action, "TAKE_PROFIT_HIT"
     elif context_exit:
-        end_code = "CONTEXT_END_EVENT_LONG" if side_u == "LONG" else "CONTEXT_END_EVENT_SHORT"
+        if ctx in {"SHORT_CONTEXT", "SHORT"} and side_u == "LONG":
+            end_code = "CONTEXT_FLIP_LONG_TO_SHORT"
+        elif ctx in {"LONG_CONTEXT", "LONG"} and side_u == "SHORT":
+            end_code = "CONTEXT_FLIP_SHORT_TO_LONG"
+        else:
+            end_code = "CONTEXT_FLIP_LONG_TO_SHORT" if side_u == "LONG" else "CONTEXT_FLIP_SHORT_TO_LONG"
         action, reason = (
             ctx_action,
             f"{end_code}|CONTEXT_OR_LIFECYCLE_EXIT:{ctx}/{life or 'UNKNOWN'}",

@@ -20,7 +20,7 @@ from typing import Any
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "market_context_lifecycle_memory_v3_no_min_hold_lag"
+BUILDER_VERSION = "market_context_lifecycle_memory_v4_opposite_through_observe"
 INPUT_PATH = ROOT / "data" / "cognition" / "final_market_context_memory.parquet"
 AUCTION_PATH = ROOT / "data" / "cognition" / "auction_episode_memory.parquet"
 COGNITION_PATH = ROOT / "data" / "cognition" / "runtime_cognition_memory.parquet"
@@ -122,11 +122,14 @@ INVALIDATION_THESIS = "THESIS_REJECTION"
 # not shadow-only. MIN_ACTIVE_CONTEXT_HOLD_BARS=3 was a 45-minute M15 lag:
 # OPEN in the middle of a move, CLOSE after the painted change. Do not restore it.
 # DEVELOPING opposite never replaces: it only challenges.
+# Confirmed opposite ACTIVE never paints LONG→SHORT / SHORT→LONG in one step.
+# It ends the living thesis to OBSERVE; the opposite may become ACTIVE only
+# from OBSERVE on a later bar. Path: LONG → OBSERVE → SHORT (and reverse).
 # DEVELOPING same-direction while CHALLENGED must not reset neutralization:
 # a LOWER_ABSORPTION developing bar cannot resurrect a zombie LONG through BALANCE.
 #   NEUTRALIZATION_CONFIRM_BARS      — consecutive full-confluence bars to invalidate.
-#   MIN_ACTIVE_CONTEXT_HOLD_BARS     — 0: a fresh context may be replaced immediately.
-#   CONFIRMED_OPPOSITE_CONFIRM_BARS  — first confirmed opposite ACTIVE replaces.
+#   MIN_ACTIVE_CONTEXT_HOLD_BARS     — 0: a fresh context may end immediately.
+#   CONFIRMED_OPPOSITE_CONFIRM_BARS  — first confirmed opposite ACTIVE → OBSERVE.
 # Same-direction ACTIVE continuation is unchanged: the context stays active.
 NEUTRALIZATION_CONFIRM_BARS = 2
 MIN_ACTIVE_CONTEXT_HOLD_BARS = 0
@@ -582,20 +585,28 @@ def step_lifecycle(
                         f"(hold protection: age={active_age - 1}, streak={confirmed_opposite_streak})"
                     )
                 else:
+                    # End through OBSERVE. Do not paint opposite as active on
+                    # this bar — that would be a direct LONG↔SHORT flip.
                     previous = active
-                    active = raw
-                    lifecycle = "ACTIVE"
-                    active_started = timestamp
+                    active = "OBSERVE"
+                    lifecycle = "INVALIDATED"
+                    active_started = None
                     active_age = 0
+                    new_candidate = raw
+                    new_candidate_started = timestamp
+                    new_candidate_reason = reason
+                    confirmed_opposite_streak = 0
                     new_transition = (
-                        f"confirmed opposite context replaced active after "
-                        f"{confirmed_opposite_streak} consecutive bars"
+                        f"confirmed opposite {raw} ended {previous} to OBSERVE after "
+                        f"{prev_confirmed_opposite_streak + 1} consecutive bars; "
+                        "opposite may activate only from OBSERVE"
                     )
                     inv = {
                         "previous_active_market_context": previous,
                         "invalidation_reason": (
-                            f"{previous} replaced by confirmed opposite {raw} "
-                            f"(streak={confirmed_opposite_streak})"
+                            f"{previous} ended to OBSERVE by confirmed opposite {raw} "
+                            f"(streak={prev_confirmed_opposite_streak + 1}); "
+                            "no direct context-to-context flip"
                         ),
                         "invalidated_at": timestamp,
                         "invalidated_by_auction_episode": auction,

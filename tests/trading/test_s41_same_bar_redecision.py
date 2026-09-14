@@ -1,8 +1,9 @@
-"""S4.1 must not re-decide CLOSE/OPEN on a restated same closed bar.
+"""S4.1 follows restated parquet on the same closed bar.
 
-Locks the 2026-09-13 M30 incident: CLOSE+OPEN_SHORT on the 19:30 bar, then a
-19:45 manager tick with the same source_bar_close and restated LONG must HOLD
-the short. The next M30 close may CLOSE. Not wait-one-bar OPEN, not hold=3.
+Locks the 2026-09-13/14 overnight: CLOSE+OPEN_SHORT on the 19:30 / 23:00 bar,
+then a later manager tick with the same source_bar_close and restated LONG
+must CLOSE the ghost short and OPEN the painted long. Unchanged parquet on
+that bar still HOLDs. Not wait-one-bar OPEN, not hold=3.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ if str(ROOT / "src") not in sys.path:
 from btc_ml.trading.portfolio_risk import PortfolioRiskCoordinator
 from btc_ml.trading.proofs import isolated_environment
 from btc_ml.trading.timeframe_manager import (
+    COGNITION_RESTATED_FOLLOW,
     SAME_CLOSED_BAR_ALREADY_ACTED,
     TimeframeManager,
     _same_closed_bar_already_actioned,
@@ -137,25 +139,35 @@ def test_same_closed_bar_helper_allows_same_evaluation_replay():
     state = {
         "last_actioned_source_bar_close": "2026-09-13T19:30:00Z",
         "last_actioned_evaluation_timestamp": "2026-09-13T19:30:00Z",
+        "last_actioned_cognition_key": "SHORT|111|SHORT_CONTEXT|ACTIVE",
     }
     assert not _same_closed_bar_already_actioned(
         state,
         source_bar_close="2026-09-13T19:30:00Z",
         evaluation_timestamp="2026-09-13T19:30:00Z",
+        cognition_key="SHORT|111|SHORT_CONTEXT|ACTIVE",
     )
     assert _same_closed_bar_already_actioned(
         state,
         source_bar_close="2026-09-13T19:30:00Z",
         evaluation_timestamp="2026-09-13T19:45:00Z",
+        cognition_key="SHORT|111|SHORT_CONTEXT|ACTIVE",
+    )
+    assert not _same_closed_bar_already_actioned(
+        state,
+        source_bar_close="2026-09-13T19:30:00Z",
+        evaluation_timestamp="2026-09-13T19:45:00Z",
+        cognition_key="LONG|110|LONG_CONTEXT|ACTIVE",
     )
     assert not _same_closed_bar_already_actioned(
         state,
         source_bar_close="2026-09-13T20:00:00Z",
         evaluation_timestamp="2026-09-13T20:00:00Z",
+        cognition_key="SHORT|111|SHORT_CONTEXT|ACTIVE",
     )
 
 
-def test_m30_restated_opposite_on_same_bar_does_not_close_short(tmp_path: Path, monkeypatch):
+def test_m30_restated_opposite_on_same_bar_follows_cognition(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
     bus, books, _ = isolated_environment(tmp_path / "books")
     manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
@@ -197,27 +209,30 @@ def test_m30_restated_opposite_on_same_bar_does_not_close_short(tmp_path: Path, 
         now="2026-09-13T19:46:11Z",
         decision_index={},
     )
-    assert "CLOSE" not in _m30_intents(second)
-    assert "OPEN_LONG" not in _m30_intents(second)
-    assert "OPEN_SHORT" not in _m30_intents(second)
-    assert SAME_CLOSED_BAR_ALREADY_ACTED in _m30_reasons(second)
+    assert "CLOSE" in _m30_intents(second)
+    assert "OPEN_LONG" in _m30_intents(second)
+    assert SAME_CLOSED_BAR_ALREADY_ACTED not in _m30_reasons(second)
+    assert COGNITION_RESTATED_FOLLOW in _m30_reasons(second)
 
+    positions["M30"] = _slot("LONG")
     third = manager.run_cycle(
-        evaluation_timestamp="2026-09-13T20:00:00Z",
+        evaluation_timestamp="2026-09-13T19:46:00Z",
         sources=_sources(
-            evaluation="2026-09-13T20:00:00Z",
-            bar_open="2026-09-13T19:30:00Z",
-            bar_close="2026-09-13T20:00:00Z",
+            evaluation="2026-09-13T19:46:00Z",
+            bar_open="2026-09-13T19:00:00Z",
+            bar_close="2026-09-13T19:30:00Z",
             context="LONG_CONTEXT",
             episode=110,
             started="2026-09-13T09:00:00Z",
         ),
         feed=feed,
         persist=True,
-        now="2026-09-13T20:00:14Z",
+        now="2026-09-13T19:47:00Z",
         decision_index={},
     )
-    assert "CLOSE" in _m30_intents(third)
+    assert "CLOSE" not in _m30_intents(third)
+    assert "OPEN_SHORT" not in _m30_intents(third)
+    assert "HOLD" in _m30_intents(third)
 
 
 def test_same_evaluation_replay_still_emits_atomic_flip(tmp_path: Path, monkeypatch):

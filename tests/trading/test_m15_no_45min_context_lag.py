@@ -73,18 +73,27 @@ def test_m15_open_follows_first_confirmed_context_not_plus_45m() -> None:
     assert (later - start) == pd.Timedelta(minutes=15)
 
 
-def test_m15_close_follows_first_confirmed_opposite_not_plus_45m() -> None:
+def test_m15_close_follows_first_confirmed_opposite_through_observe_not_plus_45m() -> None:
     out = _mod.build_lifecycle_memory(
-        pd.DataFrame([_bar(0, "LONG_CONTEXT", "ACTIVE"), _bar(1, "SHORT_CONTEXT", "ACTIVE")])
+        pd.DataFrame(
+            [
+                _bar(0, "LONG_CONTEXT", "ACTIVE"),
+                _bar(1, "SHORT_CONTEXT", "ACTIVE"),
+                _bar(2, "SHORT_CONTEXT", "ACTIVE"),
+            ]
+        )
     )
     assert out.iloc[0]["active_market_context"] == "LONG_CONTEXT"
-    flip = out.iloc[1]
-    assert flip["active_market_context"] == "SHORT_CONTEXT"
-    assert flip["lifecycle_state"] == "ACTIVE"
-    assert flip["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
+    mid = out.iloc[1]
+    assert mid["active_market_context"] == "OBSERVE"
+    assert mid["lifecycle_state"] == "INVALIDATED"
+    assert mid["invalidation_type"] == "OPPOSITE_CONTEXT_REPLACEMENT"
+    last = out.iloc[2]
+    assert last["active_market_context"] == "SHORT_CONTEXT"
+    assert last["lifecycle_state"] == "ACTIVE"
     origin = pd.Timestamp(out.iloc[0]["timestamp"])
-    change = pd.Timestamp(flip["timestamp"])
-    assert (change - origin) == pd.Timedelta(minutes=15)
+    observe = pd.Timestamp(mid["timestamp"])
+    assert (observe - origin) == pd.Timedelta(minutes=15)
 
 
 def test_m15_developing_opposite_still_does_not_replace() -> None:

@@ -91,3 +91,25 @@ def test_missing_bars_fail_open(cfg) -> None:
         _ctx(eid="ok", etype="CONTEXT_START", tf="M15", prev="OBSERVE", new="LONG_CONTEXT", mono=2_000_000)
     )
     assert acts[0]["status"] == "ENTERED"
+
+
+def test_s41_open_is_not_blocked_by_saw(cfg) -> None:
+    from datetime import datetime, timezone
+
+    c, repo = cfg
+    eng = _engine(c, repo)
+    eng.saw_filter = _FixedSaw(True)
+    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    result = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_cognition_open",
+            "timeframe": "M15",
+            "intent": "OPEN_LONG",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M15:334",
+            "evaluation_timestamp": ts,
+            "context_origin_price": 100.1,
+        }
+    )
+    assert result["status"] == "ENTERED"
+    assert "M15" in eng.positions

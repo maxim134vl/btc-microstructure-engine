@@ -88,13 +88,20 @@ def _life_row(*, ts: str, tf: str, context: str, episode: str) -> dict:
     }
 
 
-def _sources_for(context_by_tf: dict[str, str], *, evaluation: str = "2026-07-01T04:00:00Z") -> TimeframeSources:
+def _sources_for(
+    context_by_tf: dict[str, str],
+    *,
+    evaluation: str = "2026-07-01T04:00:00Z",
+    m15_bar_open: str = "2026-07-01T03:45:00Z",
+    m15_bar_close: str = "2026-07-01T04:00:00Z",
+    m15_life_ts: str | None = None,
+) -> TimeframeSources:
     availability = [
         _availability(
             tf="M15",
             evaluation=evaluation,
-            bar_open="2026-07-01T03:45:00Z",
-            bar_close="2026-07-01T04:00:00Z",
+            bar_open=m15_bar_open,
+            bar_close=m15_bar_close,
         ),
         _availability(
             tf="M30",
@@ -117,7 +124,7 @@ def _sources_for(context_by_tf: dict[str, str], *, evaluation: str = "2026-07-01
     ]
     lifecycle = [
         _life_row(
-            ts="2026-07-01T03:45:00Z",
+            ts=(m15_life_ts or m15_bar_open) if tf == "M15" else "2026-07-01T03:45:00Z",
             tf=tf,
             context=ctx,
             episode=f"{tf}-ep",
@@ -145,6 +152,7 @@ def test_contract_file_lists_every_invariant():
         "NO_M15_INHERITANCE",
         "HOLD_ZERO",
         "EPISODE_ONESHOT",
+        "COGNITION_EXECUTION",
         "ATOMIC_FLIP",
         "RETRY_MARKET",
         "VOLUME_CLASS_LINEAGE",
@@ -152,6 +160,8 @@ def test_contract_file_lists_every_invariant():
         "CUTOVER_SCRIPTS",
         "LOADER_ALLOWS_S41",
         "COGNITION_OWNS_S41",
+        "OBSERVE_HOLD",
+        "OPPOSITE_THROUGH_OBSERVE",
     ]
     assert payload["forbidden_production_entry_source"] == "context_journal"
     assert "LIVE1A journal OPEN/FLIP/END fills" in payload["do_not_restore"]
@@ -448,26 +458,44 @@ def test_paper_manager_does_not_wait_on_live1a_health():
     assert "check_paper_manager.py" in paper
 
 
-def test_episode_oneshot_manager_does_not_reopen_same_episode(tmp_path: Path, monkeypatch):
+def test_episode_oneshot_is_journal_only_s41_follows_parquet(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
     bus, books, _ = isolated_environment(tmp_path / "books")
     manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
     sources = _sources_for({"M15": "LONG_CONTEXT", "M30": "LONG_CONTEXT", "H1": "LONG_CONTEXT", "H4": "LONG_CONTEXT"})
-    kwargs = dict(sources=sources, feed=build_synthetic_feed(), persist=True)
-    first = manager.run_cycle(evaluation_timestamp="2026-07-01T04:00:00Z", **kwargs)
-    second = manager.run_cycle(evaluation_timestamp="2026-07-01T04:15:00Z", **kwargs)
+    first = manager.run_cycle(
+        evaluation_timestamp="2026-07-01T04:00:00Z",
+        sources=sources,
+        feed=build_synthetic_feed(),
+        persist=True,
+    )
+    later = _sources_for(
+        {"M15": "LONG_CONTEXT", "M30": "LONG_CONTEXT", "H1": "LONG_CONTEXT", "H4": "LONG_CONTEXT"},
+        evaluation="2026-07-01T04:15:00Z",
+        m15_bar_open="2026-07-01T04:00:00Z",
+        m15_bar_close="2026-07-01T04:15:00Z",
+        m15_life_ts="2026-07-01T04:00:00Z",
+    )
+    second = manager.run_cycle(
+        evaluation_timestamp="2026-07-01T04:15:00Z",
+        sources=later,
+        feed=build_synthetic_feed(),
+        persist=True,
+    )
     m15_first = next(cmd for cmd in first["commands"] if cmd["timeframe"] == "M15")
     m15_second = next(cmd for cmd in second["commands"] if cmd["timeframe"] == "M15")
     assert m15_first["intent"] == "OPEN_LONG"
-    assert m15_second["intent"] != "OPEN_LONG"
-    assert "EPISODE_ALREADY_TRADED" in json.loads(m15_second["reason_codes"])
+    assert m15_second["intent"] == "OPEN_LONG"
+    assert "EPISODE_ALREADY_TRADED" not in json.loads(m15_second["reason_codes"])
 
 
-def test_s41_open_uses_traded_episode_gate_like_journal():
+def test_s41_open_does_not_use_traded_episode_gate_like_journal():
     text = (ROOT / "src" / "btc_ml" / "trading" / "intrabar_paper" / "engine.py").read_text(
         encoding="utf-8"
     )
-    assert "FLIP and S4.1 command-bus are not this gate" not in text
+    assert "S4.1 command-bus OPEN is not this gate" in text
+    assert "event_type == \"S41_COMMAND_OPEN\"" in text
+    assert "episode_id in self.ended_episodes" in text
 
 
 def test_atomic_flip_same_cycle_closes_and_opens_opposite(tmp_path: Path, monkeypatch):

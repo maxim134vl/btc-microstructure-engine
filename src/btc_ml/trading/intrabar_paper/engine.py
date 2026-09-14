@@ -43,9 +43,10 @@ def _utc_iso() -> str:
 def context_episode_is_closed(exit_reason: Any) -> bool:
     """True when CONTEXT_END closed the episode.
 
-    Journal CONTEXT_START and S4.1 OPEN are one-shot per episode via
-    traded_episodes (TP/SL must not re-open a chase). CONTEXT_FLIP to a
-    new opposite episode is not this helper.
+    Journal CONTEXT_START is one-shot per episode via traded_episodes
+    (TP/SL must not re-open a chase). S4.1 OPEN follows current parquet
+    and is not this helper. CONTEXT_FLIP to a new opposite episode is
+    not this helper.
     """
     text = str(exit_reason or "").upper()
     return text.startswith("CONTEXT_END")
@@ -655,7 +656,9 @@ class IntrabarPaperEngine:
                 return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
         saw = self.saw_filter.evaluate(timeframe=tf, as_of=event_timestamp)
         self.last_saw = saw.to_dict()
-        if saw.block:
+        # Journal START may still be gated. S4.1 OPEN executes cognition:
+        # path-density must not keep us flat while parquet is directional.
+        if saw.block and not from_manager_command:
             self._block(
                 saw.reason or "ENTRY_BLOCKED_SAW_PATH_DENSITY",
                 tf,
@@ -750,32 +753,38 @@ class IntrabarPaperEngine:
         if not self.execution_market_ready_for_entry():
             self._block("ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", tf, context_event_id, side, event=event)
             return {"status": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", "timeframe": tf}
-        # CONTEXT_END kills the episode for both journal START and S4.1 OPEN.
+        # CONTEXT_END kills the episode for journal START. S4.1 OPEN follows
+        # the current parquet row even after TP/SL of that episode.
         if (
-            (event_type == "CONTEXT_START" or from_manager_command)
+            event_type == "CONTEXT_START"
+            and not from_manager_command
             and episode_id
             and episode_id in self.ended_episodes
         ):
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
             return None
-        # Journal START and S4.1 OPEN are one-shot per episode so TP/SL
-        # do not re-open a chase (301/907 train losers). CONTEXT_FLIP to a
-        # new opposite episode is not this gate.
+        if (
+            from_manager_command
+            and event_type == "S41_COMMAND_OPEN"
+            and episode_id
+            and episode_id in self.ended_episodes
+        ):
+            self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
+            return {
+                "status": "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED",
+                "timeframe": tf,
+                "context_event_id": context_event_id,
+            }
+        # Journal CONTEXT_START is one-shot per episode so TP/SL do not
+        # re-open a chase. S4.1 command-bus OPEN is not this gate: it must
+        # match the painted cognitive layer after TP/SL or a restated row.
         if (
             episode_id
             and episode_id in self.traded_episodes
-            and (
-                (event_type == "CONTEXT_START" and not from_manager_command)
-                or (from_manager_command and event_type == "S41_COMMAND_OPEN")
-            )
+            and event_type == "CONTEXT_START"
+            and not from_manager_command
         ):
             self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
-            if from_manager_command:
-                return {
-                    "status": "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED",
-                    "timeframe": tf,
-                    "context_event_id": context_event_id,
-                }
             return None
 
         occurrence_px = resolve_context_entry_price(event, context_event_price)

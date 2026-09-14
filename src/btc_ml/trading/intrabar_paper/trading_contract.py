@@ -206,7 +206,8 @@ def _hardcoded_rules() -> dict[str, Any]:
         "already_traded_episode_behavior": (
             "CONTEXT_END closes the episode: later CONTEXT_START/S4.1 OPEN blocked "
             "with ENTRY_BLOCKED_EPISODE_ALREADY_TRADED; live journal CONTEXT_START "
-            "and S4.1 OPEN are one-shot per episode so TP/SL do not re-open a chase; "
+            "is one-shot per episode so TP/SL do not re-open a chase; "
+            "S4.1 command-bus OPEN follows current parquet after TP/SL; "
             "one position per timeframe still applies; "
             "CONTEXT_FLIP close→open is not blocked by episode lock"
         ),

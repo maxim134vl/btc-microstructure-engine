@@ -15,11 +15,11 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
-from .anti_saw_path_density import BLOCK_REASON as SAW_PATH_DENSITY_BLOCK, PathDensitySawFilter
+from .anti_saw_path_density import PathDensitySawFilter
 from .command_bus import COMMAND_SCHEMA_VERSION, VALID_INTENTS, CommandBus, CommandBusPaths, utc_now
 from .paper_core import compute_stop_take, evaluate_exit_preview, make_id, safe_float
 from .paper_trader_engine import PaperTraderEngine
@@ -48,7 +48,7 @@ _WAIT_PREVIEW_STATES = {
     "WAITING_FOR_BAR_CLOSE",
     "TIMEFRAME_NOT_LIVE",
 }
-_CONTEXT_END_STATES = {
+_CONTEXT_PAUSE_STATES = {
     "OBSERVE",
     "NO_ACTIVE_CONTEXT",
     "STAND_ASIDE",
@@ -61,10 +61,12 @@ _CONTEXT_END_STATES = {
 ANTI_SAW_ENABLED = False
 
 # Daemon ticks on the M15 clock. M30/H1/H4 keep the same source_bar_close until
-# that TF's next bar closes. Actionable CLOSE/OPEN for a TF is one-shot per
-# closed bar; later restatements of that bar are HOLD/NO_ACTION. Not wait-one-bar
-# OPEN and not bar-count anti-saw. Protective SL/TP CLOSE still fires.
+# that TF's next bar closes. If parquet on that bar is unchanged, do not
+# re-issue CLOSE/OPEN. If parquet restates to a different direction/episode,
+# follow it — S4.1 executes the cognitive layer, not the first flash.
+# Protective SL/TP CLOSE still fires. Not wait-one-bar OPEN, not hold=3.
 SAME_CLOSED_BAR_ALREADY_ACTED = "SAME_CLOSED_BAR_ALREADY_ACTED"
+COGNITION_RESTATED_FOLLOW = "COGNITION_RESTATED_FOLLOW"
 
 
 def _canonical_episode_id(*, namespace: str, original: str, timeframe: str | None) -> str:
@@ -306,7 +308,9 @@ def _preview_context_for_open_position(
     """Exit preview context for an open position.
 
     None: missing/UNKNOWN row — wait, do not infer own side, do not close.
-    OBSERVE/END: pass through so S4.1 can flatten (not journal, not candle-close).
+    OBSERVE / NO_ACTIVE / STAND_ASIDE / INVALIDATED: keep own side → HOLD.
+    The pause is not a flatten. Close only when the painted context becomes
+    the opposite ACTIVE. If after OBSERVE the same direction returns, HOLD.
     Opposite ACTIVE: pass through → CONTEXT_FLIP close.
     Opposite CHALLENGED: keep own side → HOLD (unconfirmed noise).
     Same-side directional: keep own side → HOLD, including CHALLENGED.
@@ -318,8 +322,8 @@ def _preview_context_for_open_position(
     opposite = "LONG_CONTEXT" if side_u == "SHORT" else "SHORT_CONTEXT" if side_u == "LONG" else ""
     if ctx in _WAIT_PREVIEW_STATES:
         return None
-    if ctx in _CONTEXT_END_STATES:
-        return ctx
+    if ctx in _CONTEXT_PAUSE_STATES:
+        return own if side_u in {"LONG", "SHORT"} else ctx
     if ctx in {opposite, opposite.replace("_CONTEXT", "")}:
         if phase == "ACTIVE":
             return opposite
@@ -364,17 +368,34 @@ def _record_entry(
     per_tf_state["traded_episode_ids"] = traded
 
 
+def _cognition_fingerprint(state: Mapping[str, Any] | None) -> str:
+    """Direction + episode + painted context: the chart's desired position."""
+    if not state:
+        return ""
+    return "|".join(
+        [
+            str(state.get("timeframe_direction") or "").upper(),
+            str(state.get("lifecycle_episode_id") or ""),
+            str(state.get("timeframe_state") or "").upper(),
+            str(state.get("lifecycle_phase") or "").upper(),
+        ]
+    )
+
+
 def _same_closed_bar_already_actioned(
     per_tf_state: dict[str, Any],
     *,
     source_bar_close: Any,
     evaluation_timestamp: Any,
+    cognition_key: str | None = None,
 ) -> bool:
-    """True when this TF already emitted CLOSE/OPEN on a prior cycle of this bar.
+    """True when this TF already acted this bar on the same cognition row.
 
     Same-evaluation replay stays idempotent so the command bus can reject
-    duplicate command_ids. A later M15-clock cycle that still carries the same
-    ``source_bar_close`` must not re-decide context.
+    duplicate command_ids. A later M15-clock cycle with the same
+    ``source_bar_close`` but a different parquet direction/episode must
+    follow cognition (H1 23:16 LONG after 23:01 SHORT flash). Unchanged
+    parquet stays locked so we do not churn.
     """
     last_bar = per_tf_state.get("last_actioned_source_bar_close")
     if last_bar is None or source_bar_close is None:
@@ -384,6 +405,10 @@ def _same_closed_bar_already_actioned(
     last_eval = per_tf_state.get("last_actioned_evaluation_timestamp")
     if last_eval is not None and _same_evaluation(last_eval, evaluation_timestamp):
         return False
+    if cognition_key is not None:
+        last_key = str(per_tf_state.get("last_actioned_cognition_key") or "")
+        if last_key != str(cognition_key):
+            return False
     return True
 
 
@@ -393,12 +418,15 @@ def _record_actioned_closed_bar(
     source_bar_close: Any,
     evaluation_timestamp: Any,
     intent: str,
+    cognition_key: str | None = None,
 ) -> None:
     if source_bar_close is None:
         return
     per_tf_state["last_actioned_source_bar_close"] = str(source_bar_close)
     per_tf_state["last_actioned_evaluation_timestamp"] = str(evaluation_timestamp)
     per_tf_state["last_actioned_intent"] = str(intent)
+    if cognition_key is not None:
+        per_tf_state["last_actioned_cognition_key"] = str(cognition_key)
 
 
 def _is_stop_or_take_close(preview: dict[str, Any] | None) -> bool:
@@ -771,6 +799,7 @@ class TimeframeManager:
                         intent = "HOLD"
                         reasons.append(str(preview.get("exit_preview_reason") or "HOLD"))
             eval_ts = state.get("evaluation_timestamp") or evaluation_timestamp
+            cognition_key = _cognition_fingerprint(state)
             if (
                 intent == "CLOSE"
                 and not _is_stop_or_take_close(preview)
@@ -778,17 +807,22 @@ class TimeframeManager:
                     per_tf_state,
                     source_bar_close=bar_close,
                     evaluation_timestamp=eval_ts,
+                    cognition_key=cognition_key,
                 )
             ):
                 intent = "HOLD"
                 exit_reason = None
                 reasons.insert(0, SAME_CLOSED_BAR_ALREADY_ACTED)
+            elif intent == "CLOSE" and cognition_key and per_tf_state.get("last_actioned_cognition_key"):
+                if str(per_tf_state.get("last_actioned_cognition_key")) != cognition_key:
+                    reasons.insert(0, COGNITION_RESTATED_FOLLOW)
             if intent in {"CLOSE", "OPEN_LONG", "OPEN_SHORT"}:
                 _record_actioned_closed_bar(
                     per_tf_state,
                     source_bar_close=bar_close,
                     evaluation_timestamp=eval_ts,
                     intent=intent,
+                    cognition_key=cognition_key,
                 )
             primary = self._compose_command(
                 **shared,
@@ -869,6 +903,7 @@ class TimeframeManager:
         portfolio_open_risk = risk_view.portfolio_open_risk_usd
         eval_ts = state.get("evaluation_timestamp") or evaluation_timestamp
         episode = state.get("lifecycle_episode_id")
+        cognition_key = _cognition_fingerprint(state)
 
         if not state.get("actionable"):
             intent = "NO_ACTION"
@@ -876,26 +911,19 @@ class TimeframeManager:
         elif "BEFORE_ACTIVATION_BOUNDARY" in reasons:
             intent = "NO_ACTION"
         elif not timeframe_is_live_entry_authority(timeframe):
-            # Each supported TF opens from its own ACTIVE direction. D1 stays out.
+            # Each supported TF opens from its own painted direction. D1 stays out.
             intent = "NO_ACTION"
             reasons.append(INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY)
-        elif _episode_already_traded(per_tf_state, episode=episode, evaluation_timestamp=eval_ts):
-            # One-shot: TP/SL frees the slot but the same episode must not chase.
-            # FLIP opens a different opposite episode and is not this gate.
-            intent = "NO_ACTION"
-            reasons.append("EPISODE_ALREADY_TRADED")
         elif _same_closed_bar_already_actioned(
             per_tf_state,
             source_bar_close=state.get("source_bar_close"),
             evaluation_timestamp=eval_ts,
+            cognition_key=cognition_key,
         ):
-            # Same closed bar already had CLOSE/OPEN on a prior manager cycle.
-            # Restated opposite on this bar is not a new flip.
+            # Same closed bar, same parquet row: do not re-OPEN.
+            # Different parquet row on this bar follows cognition.
             intent = "NO_ACTION"
             reasons.append(SAME_CLOSED_BAR_ALREADY_ACTED)
-        elif self._saw_blocks_open(timeframe, state=state, evaluation_timestamp=eval_ts):
-            intent = "NO_ACTION"
-            reasons.append(SAW_PATH_DENSITY_BLOCK)
         else:
             direction = str(state.get("timeframe_direction") or "").upper()
             candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
@@ -911,6 +939,9 @@ class TimeframeManager:
                 intent = candidate_intent
                 approved_risk = decision.approved_risk_usd
                 reasons.append(f"TIMEFRAME_DIRECTIONAL_ENTRY:{direction}")
+                if cognition_key and per_tf_state.get("last_actioned_cognition_key"):
+                    if str(per_tf_state.get("last_actioned_cognition_key")) != cognition_key:
+                        reasons.append(COGNITION_RESTATED_FOLLOW)
                 _record_entry(
                     per_tf_state,
                     evaluation_timestamp=eval_ts,
@@ -923,6 +954,7 @@ class TimeframeManager:
                     source_bar_close=state.get("source_bar_close"),
                     evaluation_timestamp=eval_ts,
                     intent=intent,
+                    cognition_key=cognition_key,
                 )
                 observation = _market_observation(feed, at_or_before=evaluation_timestamp)
                 if observation and observation.get("close"):

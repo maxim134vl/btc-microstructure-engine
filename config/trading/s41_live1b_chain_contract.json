@@ -44,7 +44,11 @@
     },
     {
       "id": "EPISODE_ONESHOT",
-      "must": "same lifecycle_episode_id must not OPEN again after TP/SL/CLOSE; FLIP to opposite episode still allowed"
+      "must": "journal CONTEXT_START is one-shot per episode; S4.1 OPEN follows current parquet direction and may re-enter after TP/SL while that episode remains directional; CONTEXT_END still blocks via ended_episodes; FLIP to opposite episode still allowed"
+    },
+    {
+      "id": "COGNITION_EXECUTION",
+      "must": "S4.1 desired position equals closed-bar parquet direction the chart paints; restated opposite on the same source_bar_close is followed; path-density anti-saw must not veto S4.1 OPEN"
     },
     {
       "id": "ATOMIC_FLIP",
@@ -72,7 +76,15 @@
     },
     {
       "id": "COGNITION_OWNS_S41",
-      "must": "when entry_source=s41_command_bus, load_sources reads market_context_lifecycle_memory.parquet not LIVE1A journal; UNCERTAIN OBSERVE keeps active LONG/SHORT so S4.1 HOLD not CLOSE"
+      "must": "when entry_source=s41_command_bus, load_sources reads market_context_lifecycle_memory.parquet not LIVE1A journal; OBSERVE/NO_ACTIVE keeps the living LONG/SHORT so S4.1 HOLD not CLOSE; flatten only on opposite ACTIVE context"
+    },
+    {
+      "id": "OBSERVE_HOLD",
+      "must": "open LONG holds through OBSERVE and resumes if LONG returns; open SHORT holds through OBSERVE and resumes if SHORT returns; CLOSE only when painted context becomes the opposite ACTIVE"
+    },
+    {
+      "id": "OPPOSITE_THROUGH_OBSERVE",
+      "must": "lifecycle never paints LONG→SHORT or SHORT→LONG; confirmed opposite ACTIVE ends living thesis to OBSERVE; opposite activates only from OBSERVE on a later bar"
     }
   ]
 }

@@ -1,9 +1,10 @@
-"""S4.1 late-OPEN / CHALLENGED-hold / OBSERVE-close / bookkeeping contract.
+"""S4.1 late-OPEN / CHALLENGED-hold / OBSERVE-hold / bookkeeping contract.
 
 Locks the M30 2026-09-13 one-bar short: do not OPEN after the next TF bar
 has already closed; do not inherit the next bar's open-stamped lifecycle
-row; do not CLOSE on opposite CHALLENGED; CLOSE on OBSERVE via S4.1.
-Do not restore candle-close exit, hold=3, or journal flatten.
+row; do not CLOSE on opposite CHALLENGED; HOLD through OBSERVE until the
+opposite ACTIVE context. Do not restore candle-close exit, hold=3, or
+journal flatten.
 """
 
 from __future__ import annotations
@@ -279,8 +280,8 @@ def test_challenged_opposite_holds_active_opposite_closes():
     assert "CONTEXT_FLIP_SHORT_TO_LONG" in active["exit_preview_reason"]
 
 
-def test_observe_closes_open_short_via_s41_not_journal():
-    assert _preview_context_for_open_position("SHORT", "OBSERVE") == "OBSERVE"
+def test_observe_holds_open_short_until_opposite():
+    assert _preview_context_for_open_position("SHORT", "OBSERVE") == "SHORT_CONTEXT"
     end = ctrl.evaluate_exit_preview(
         side="SHORT",
         entry_price=76778.8,
@@ -294,9 +295,190 @@ def test_observe_closes_open_short_via_s41_not_journal():
         latest_context="OBSERVE",
         latest_lifecycle_state="NO_ACTIVE_CONTEXT",
     )
-    assert end["is_close"] is True
-    assert "CONTEXT_END_EVENT_SHORT" in end["exit_preview_reason"]
-    assert "CONTEXT_FLIP" not in end["exit_preview_reason"]
+    assert end["is_close"] is False
+    assert "HOLD" in end["exit_preview_action"]
+    resume = ctrl.evaluate_exit_preview(
+        side="SHORT",
+        entry_price=76778.8,
+        quantity=1.0,
+        stop_loss_price=77000.0,
+        take_profit_price=76000.0,
+        entry_fee_usd=0.1,
+        current_price=76645.0,
+        latest_high=76700.0,
+        latest_low=76600.0,
+        latest_context="SHORT_CONTEXT",
+        latest_lifecycle_state="ACTIVE",
+    )
+    assert resume["is_close"] is False
+    flip = ctrl.evaluate_exit_preview(
+        side="SHORT",
+        entry_price=76778.8,
+        quantity=1.0,
+        stop_loss_price=77000.0,
+        take_profit_price=76000.0,
+        entry_fee_usd=0.1,
+        current_price=76645.0,
+        latest_high=76700.0,
+        latest_low=76600.0,
+        latest_context="LONG_CONTEXT",
+        latest_lifecycle_state="ACTIVE",
+    )
+    assert flip["is_close"] is True
+    assert "CONTEXT_FLIP_SHORT_TO_LONG" in flip["exit_preview_reason"]
+
+
+def test_manager_holds_long_through_observe_then_closes_on_opposite(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {
+        "M15": {
+            "open_position": {
+                "position_id": "pos_long",
+                "direction": "LONG",
+                "quantity": 0.1,
+                "entry_price": 77000.0,
+                "stop_loss_price": 76400.0,
+                "take_profit_price": 77900.0,
+                "entry_fee_usd": 1.0,
+                "status": "OPEN",
+            },
+            "open_risk_usd": 250.0,
+        },
+        "M30": {"open_position": None, "open_risk_usd": 0.0},
+        "H1": {"open_position": None, "open_risk_usd": 0.0},
+        "H4": {"open_position": None, "open_risk_usd": 0.0},
+    }
+
+    def views(*, mark_price=None):
+        return positions
+
+    monkeypatch.setattr(manager, "trader_views", views)
+    feed = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [
+                    "2026-09-14T03:00:00Z",
+                    "2026-09-14T03:15:00Z",
+                    "2026-09-14T03:30:00Z",
+                    "2026-09-14T03:45:00Z",
+                ],
+                utc=True,
+            ),
+            "open": [77000.0, 77100.0, 77200.0, 77150.0],
+            "high": [77150.0, 77250.0, 77300.0, 77200.0],
+            "low": [76900.0, 77000.0, 77100.0, 77050.0],
+            "close": [77100.0, 77200.0, 77150.0, 77100.0],
+            "volume": [10.0, 10.0, 10.0, 10.0],
+            "bar_close": pd.to_datetime(
+                [
+                    "2026-09-14T03:15:00Z",
+                    "2026-09-14T03:30:00Z",
+                    "2026-09-14T03:45:00Z",
+                    "2026-09-14T04:00:00Z",
+                ],
+                utc=True,
+            ),
+        }
+    )
+
+    def _cycle(*, evaluation: str, bar_open: str, bar_close: str, context: str, phase: str, episode: int):
+        sources = _sources(
+            [
+                _availability(tf="M15", evaluation=evaluation, bar_open=bar_open, bar_close=bar_close),
+                _availability(
+                    tf="M30",
+                    evaluation=evaluation,
+                    bar_open="2026-09-14T03:00:00Z",
+                    bar_close="2026-09-14T03:30:00Z",
+                ),
+                _availability(
+                    tf="H1",
+                    evaluation=evaluation,
+                    bar_open="2026-09-14T03:00:00Z",
+                    bar_close="2026-09-14T04:00:00Z",
+                ),
+                _availability(
+                    tf="H4",
+                    evaluation=evaluation,
+                    bar_open="2026-09-14T00:00:00Z",
+                    bar_close="2026-09-14T04:00:00Z",
+                ),
+            ],
+            [
+                _life(
+                    ts=bar_open,
+                    tf="M15",
+                    context=context,
+                    episode=episode,
+                    phase=phase,
+                    started="2026-09-14T02:00:00Z",
+                ),
+                _life(
+                    ts="2026-09-14T03:00:00Z",
+                    tf="M30",
+                    context="OBSERVE",
+                    episode=1,
+                    phase="NO_ACTIVE_CONTEXT",
+                ),
+                _life(
+                    ts="2026-09-14T03:00:00Z",
+                    tf="H1",
+                    context="OBSERVE",
+                    episode=1,
+                    phase="NO_ACTIVE_CONTEXT",
+                ),
+                _life(
+                    ts="2026-09-14T00:00:00Z",
+                    tf="H4",
+                    context="OBSERVE",
+                    episode=1,
+                    phase="NO_ACTIVE_CONTEXT",
+                ),
+            ],
+        )
+        return manager.run_cycle(
+            evaluation_timestamp=evaluation,
+            sources=sources,
+            feed=feed,
+            persist=True,
+            now=evaluation,
+            decision_index={},
+        )
+
+    observe = _cycle(
+        evaluation="2026-09-14T03:30:00Z",
+        bar_open="2026-09-14T03:15:00Z",
+        bar_close="2026-09-14T03:30:00Z",
+        context="OBSERVE",
+        phase="NO_ACTIVE_CONTEXT",
+        episode=333,
+    )
+    m15_observe = next(cmd for cmd in observe["commands"] if cmd["timeframe"] == "M15")
+    assert m15_observe["intent"] == "HOLD"
+
+    resume = _cycle(
+        evaluation="2026-09-14T03:45:00Z",
+        bar_open="2026-09-14T03:30:00Z",
+        bar_close="2026-09-14T03:45:00Z",
+        context="LONG_CONTEXT",
+        phase="ACTIVE",
+        episode=334,
+    )
+    m15_resume = next(cmd for cmd in resume["commands"] if cmd["timeframe"] == "M15")
+    assert m15_resume["intent"] == "HOLD"
+
+    flip = _cycle(
+        evaluation="2026-09-14T04:00:00Z",
+        bar_open="2026-09-14T03:45:00Z",
+        bar_close="2026-09-14T04:00:00Z",
+        context="SHORT_CONTEXT",
+        phase="ACTIVE",
+        episode=335,
+    )
+    m15_flip = [cmd for cmd in flip["commands"] if cmd["timeframe"] == "M15"]
+    assert "CLOSE" in [cmd["intent"] for cmd in m15_flip]
 
 
 def test_consumer_marks_stale_open_processed(tmp_path: Path):
