@@ -67,6 +67,8 @@ ANTI_SAW_ENABLED = False
 # Protective SL/TP CLOSE still fires. Not wait-one-bar OPEN, not hold=3.
 SAME_CLOSED_BAR_ALREADY_ACTED = "SAME_CLOSED_BAR_ALREADY_ACTED"
 COGNITION_RESTATED_FOLLOW = "COGNITION_RESTATED_FOLLOW"
+OPPOSITE_REQUIRES_OBSERVE = "OPPOSITE_REQUIRES_OBSERVE"
+FORMING_BAR_CONTEXT = "FORMING_BAR_CONTEXT"
 
 
 def _canonical_episode_id(*, namespace: str, original: str, timeframe: str | None) -> str:
@@ -427,6 +429,42 @@ def _record_actioned_closed_bar(
     per_tf_state["last_actioned_intent"] = str(intent)
     if cognition_key is not None:
         per_tf_state["last_actioned_cognition_key"] = str(cognition_key)
+    per_tf_state["saw_observe_since_last_action"] = False
+
+
+def _direction_from_cognition_key(key: str | None) -> str:
+    return str(key or "").split("|")[0].upper()
+
+
+def _blocks_opposite_without_observe(
+    per_tf_state: dict[str, Any],
+    state: Mapping[str, Any],
+    *,
+    source_bar_close: Any,
+) -> bool:
+    """True when this bar already traded one side and parquet jumped to the other.
+
+    Legal path is LONG → OBSERVE → SHORT (and reverse). A same-bar restatement
+    SHORT→LONG without OBSERVE must not ATOMIC_FLIP.
+    """
+    last_bar = per_tf_state.get("last_actioned_source_bar_close")
+    if last_bar is None or source_bar_close is None:
+        return False
+    if not _same_evaluation(last_bar, source_bar_close):
+        return False
+    last_dir = _direction_from_cognition_key(per_tf_state.get("last_actioned_cognition_key"))
+    now_dir = str(state.get("timeframe_direction") or "").upper()
+    if last_dir not in {"LONG", "SHORT"} or now_dir not in {"LONG", "SHORT"}:
+        return False
+    if last_dir == now_dir:
+        return False
+    if per_tf_state.get("saw_observe_since_last_action"):
+        return False
+    phase = str(state.get("lifecycle_phase") or "").upper()
+    ctx = str(state.get("timeframe_state") or "").upper()
+    if phase == "OBSERVE" or ctx in _CONTEXT_PAUSE_STATES:
+        return False
+    return True
 
 
 def _is_stop_or_take_close(preview: dict[str, Any] | None) -> bool:
@@ -723,6 +761,8 @@ class TimeframeManager:
 
         open_position = view.get("open_position")
         bar_close = state.get("source_bar_close")
+        if str(state.get("context_bar_kind") or "") == FORMING_BAR_CONTEXT:
+            reasons.append(FORMING_BAR_CONTEXT)
         shared = dict(
             timeframe=timeframe,
             state=state,
@@ -774,6 +814,8 @@ class TimeframeManager:
                         str(state.get("no_action_reason") or "WAIT_LIFECYCLE_ROW_FOR_CLOSED_BAR")
                     )
                 else:
+                    if str(state.get("timeframe_state") or "").upper() in _CONTEXT_PAUSE_STATES:
+                        per_tf_state["saw_observe_since_last_action"] = True
                     preview = evaluate_exit_preview(
                         side=side,
                         entry_price=entry,
@@ -816,6 +858,17 @@ class TimeframeManager:
             elif intent == "CLOSE" and cognition_key and per_tf_state.get("last_actioned_cognition_key"):
                 if str(per_tf_state.get("last_actioned_cognition_key")) != cognition_key:
                     reasons.insert(0, COGNITION_RESTATED_FOLLOW)
+            if (
+                intent == "CLOSE"
+                and preview is not None
+                and _is_context_flip_close(preview)
+                and _blocks_opposite_without_observe(
+                    per_tf_state, state, source_bar_close=bar_close
+                )
+            ):
+                intent = "HOLD"
+                exit_reason = None
+                reasons.insert(0, OPPOSITE_REQUIRES_OBSERVE)
             if intent in {"CLOSE", "OPEN_LONG", "OPEN_SHORT"}:
                 _record_actioned_closed_bar(
                     per_tf_state,
@@ -914,6 +967,11 @@ class TimeframeManager:
             # Each supported TF opens from its own painted direction. D1 stays out.
             intent = "NO_ACTION"
             reasons.append(INDEPENDENT_TF_LIFECYCLE_NOT_ENTRY_AUTHORITY)
+        elif _blocks_opposite_without_observe(
+            per_tf_state, state, source_bar_close=state.get("source_bar_close")
+        ):
+            intent = "NO_ACTION"
+            reasons.append(OPPOSITE_REQUIRES_OBSERVE)
         elif _same_closed_bar_already_actioned(
             per_tf_state,
             source_bar_close=state.get("source_bar_close"),

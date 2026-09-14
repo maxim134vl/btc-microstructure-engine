@@ -60,7 +60,7 @@ def is_active_epoch_trade_row(row: dict[str, Any] | None, *, active_epoch_id: st
     if row_epoch != eid:
         return False
     status = str(row.get("status") or row.get("void_status") or "").upper()
-    if status == VOID_STATUS or status.startswith("VOID_"):
+    if status == "VOID" or status == VOID_STATUS or status.startswith("VOID_"):
         return False
     return True
 

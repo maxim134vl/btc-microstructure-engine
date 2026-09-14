@@ -16,10 +16,11 @@ timeframe resolves at its own confirmed bar-close clock, so M15 and H1 can
 legitimately report opposite directions.
 
 Hard rules enforced here:
-  source_bar_close <= evaluation_timestamp
-  lifecycle timestamp is bar open: source_bar_open <= ts < source_bar_close
-  (do not inherit the previous bar, and do not take the next bar's open
-  which equals this bar's close)
+  last-closed availability bar_close <= evaluation_timestamp
+  lifecycle timestamp is bar open
+  If a forming-bar row exists (ts == last closed close) and evaluation is
+  already inside that bar, trade THAT row — do not wait for it to close.
+  Otherwise use the last closed bar: source_bar_open <= ts < source_bar_close
   no cross-timeframe fallback, no synthetic direction, D1 is never live.
 """
 
@@ -101,6 +102,7 @@ TIMEFRAME_SECONDS = {"M15": 900, "M30": 1800, "H1": 3600, "H4": 14400}
 STALE_CLOSED_BAR_SUPERSEDED = "STALE_CLOSED_BAR_SUPERSEDED"
 NO_LIFECYCLE_ROW_FOR_CLOSED_BAR = "NO_LIFECYCLE_ROW_FOR_CLOSED_BAR"
 NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE = "NO_LIFECYCLE_ROW_AT_OR_BEFORE_BAR_CLOSE"
+FORMING_BAR_CONTEXT = "FORMING_BAR_CONTEXT"
 
 
 def timeframe_is_live_entry_authority(timeframe: str) -> bool:
@@ -137,6 +139,27 @@ def _lifecycle_mask_for_closed_bar(
     if bar_open is not None:
         return (life_stamps >= bar_open) & (life_stamps < bar_close)
     return life_stamps < bar_close
+
+
+def _forming_bar_lifecycle_index(
+    life_stamps: pd.Series,
+    *,
+    forming_open: pd.Timestamp | None,
+    evaluation_ts: pd.Timestamp | None,
+) -> Any:
+    """Index of the live forming-bar row (timestamp == last closed close).
+
+    Context painted on bar T must be tradable during bar T, not after T closes.
+    """
+    if forming_open is None or evaluation_ts is None or life_stamps is None or not len(life_stamps):
+        return None
+    if evaluation_ts < forming_open:
+        return None
+    deltas = (life_stamps - forming_open).abs()
+    ok = deltas <= pd.Timedelta(seconds=1)
+    if not bool(ok.any()):
+        return None
+    return deltas[ok].sort_values().index[0]
 
 OPERATIONAL_AVAILABILITY = {
     "FRESH_EVENT",
@@ -432,6 +455,7 @@ def resolve_timeframe_state(
         "lifecycle_episode_id": None,
         "lifecycle_phase": None,
         "lifecycle_row_timestamp": None,
+        "context_bar_kind": None,
         "actionable": False,
         "no_action_reason": None,
         "confidence": None,
@@ -550,16 +574,31 @@ def resolve_timeframe_state(
         return base
     life_stamps = pd.to_datetime(lifecycle["timestamp"], utc=True, errors="coerce")
     bar_open = _ts(row.get("source_bar_open"))
-    life_mask = _lifecycle_mask_for_closed_bar(
-        life_stamps, bar_open=bar_open, bar_close=bar_close
+    forming_idx = _forming_bar_lifecycle_index(
+        life_stamps, forming_open=bar_close, evaluation_ts=evaluation_ts
     )
-    if not bool(life_mask.any()):
-        # Empty window: this closed bar has no own row yet. Do not inherit
-        # an older bar, and do not take ts == bar_close (next bar open).
-        base["no_action_reason"] = NO_LIFECYCLE_ROW_FOR_CLOSED_BAR
-        base["timeframe_state"] = "UNKNOWN"
-        return base
-    life_idx = life_stamps[life_mask].sort_values().index[-1]
+    if forming_idx is not None:
+        life_idx = forming_idx
+        tf_seconds = TIMEFRAME_SECONDS.get(tf)
+        forming_close = (
+            bar_close + pd.Timedelta(seconds=int(tf_seconds)) if tf_seconds else bar_close
+        )
+        base["source_bar_open"] = _iso(bar_close)
+        base["source_bar_close"] = _iso(forming_close)
+        base["context_bar_kind"] = FORMING_BAR_CONTEXT
+        bar_close = forming_close
+    else:
+        life_mask = _lifecycle_mask_for_closed_bar(
+            life_stamps, bar_open=bar_open, bar_close=bar_close
+        )
+        if not bool(life_mask.any()):
+            # Empty window: this closed bar has no own row yet. Do not inherit
+            # an older bar.
+            base["no_action_reason"] = NO_LIFECYCLE_ROW_FOR_CLOSED_BAR
+            base["timeframe_state"] = "UNKNOWN"
+            return base
+        life_idx = life_stamps[life_mask].sort_values().index[-1]
+        base["context_bar_kind"] = "CLOSED"
     life_row = lifecycle.loc[life_idx].to_dict()
     direction, direction_reason = _lifecycle_direction(life_row)
     phase = str(life_row.get("lifecycle_state") or "UNKNOWN").upper()

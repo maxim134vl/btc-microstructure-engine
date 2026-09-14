@@ -245,7 +245,7 @@ function filterActiveEpochTrades(rows, activeEpochId) {
     if (!eid) return false;
     if (eid !== String(activeEpochId)) return false;
     const status = String(row.status || row.void_status || "").toUpperCase();
-    if (status === "VOID_PRE_INTRABAR_RULE_CONTRACT" || status.startsWith("VOID_")) return false;
+    if (status === "VOID" || status === "VOID_PRE_INTRABAR_RULE_CONTRACT" || status.startsWith("VOID_")) return false;
     return true;
   });
 }

@@ -254,24 +254,38 @@ def _load_live1b_closed_trades(*, timeframe: str | None = None) -> list[dict[str
         raw_rows.append(row)
 
     try:
-        from btc_ml.trading.intrabar_paper.performance_eligibility import filter_superseded_trades
+        from btc_ml.trading.intrabar_paper.performance_eligibility import (
+            counts_toward_strategy_performance,
+            filter_superseded_trades,
+        )
 
-        trade_rows = filter_superseded_trades(raw_rows)
+        trade_rows = [
+            row
+            for row in filter_superseded_trades(raw_rows)
+            if counts_toward_strategy_performance(row)
+        ]
     except Exception:
-        trade_rows = raw_rows
+        trade_rows = [
+            row
+            for row in raw_rows
+            if str(row.get("status") or "").upper() not in {"VOID"}
+            and not str(row.get("status") or "").upper().startswith("VOID_")
+            and row.get("statistics_included") is not False
+        ]
 
     for row in trade_rows:
         tf = str(row.get("timeframe") or "").upper()
         exit_ts = _iso(row.get("exit_ts"))
         position_id = _txt(row.get("position_id"))
         entry_ts = _iso(row.get("entry_ts")) or opened_at_by_position.get(position_id)
+        status = (_txt(row.get("status")) or "CLOSED").upper()
 
         out.append(
             {
                 "trade_id": _txt(row.get("trade_id")),
                 "position_id": position_id,
                 "timeframe": tf,
-                "status": "CLOSED",
+                "status": status,
                 "side": (_txt(row.get("side")) or "LONG").upper(),
                 "entry_timestamp": entry_ts,
                 "entry_fill_timestamp": entry_ts,
