@@ -69,6 +69,42 @@ SAME_CLOSED_BAR_ALREADY_ACTED = "SAME_CLOSED_BAR_ALREADY_ACTED"
 COGNITION_RESTATED_FOLLOW = "COGNITION_RESTATED_FOLLOW"
 OPPOSITE_REQUIRES_OBSERVE = "OPPOSITE_REQUIRES_OBSERVE"
 FORMING_BAR_CONTEXT = "FORMING_BAR_CONTEXT"
+RAW_STATUS_NOT_CONFIRMED = "RAW_STATUS_NOT_CONFIRMED"
+_CONFIRMED_RAW_CONTEXT_STATUSES = {"ACTIVE", "CONFIRMED"}
+_UNCONFIRMED_RAW_CONTEXT_STATUSES = {"DEVELOPING", "OBSERVE", "STARTED"}
+_S41_CONTRACT_PATH = ROOT / "config" / "trading" / "s41_live1b_chain_contract.json"
+
+
+def _entry_requires_confirmed_raw_status() -> bool:
+    """Flat OPEN needs this bar's raw_context_status confirmed.
+
+    Missing/UNKNOWN fail-open so fixtures and older rows keep current behavior.
+    ATOMIC_FLIP_OPEN is not gated: confirmed opposite after OBSERVE must still enter.
+    """
+    try:
+        payload = json.loads(_S41_CONTRACT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return True
+    if "entry_requires_confirmed_raw_status" not in payload:
+        return True
+    return bool(payload.get("entry_requires_confirmed_raw_status"))
+
+
+ENTRY_REQUIRES_CONFIRMED_RAW_STATUS = _entry_requires_confirmed_raw_status()
+
+
+def _clean_raw_context_status(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if text in {"", "NONE", "NAN", "NAT", "<NA>"}:
+        return "UNKNOWN"
+    return text
+
+
+def _raw_status_blocks_new_entry(state: Mapping[str, Any] | None) -> bool:
+    raw = _clean_raw_context_status((state or {}).get("raw_context_status"))
+    if raw == "UNKNOWN" or raw in _CONFIRMED_RAW_CONTEXT_STATUSES:
+        return False
+    return raw in _UNCONFIRMED_RAW_CONTEXT_STATUSES
 
 
 def _canonical_episode_id(*, namespace: str, original: str, timeframe: str | None) -> str:
@@ -107,9 +143,9 @@ def _episode_already_traded(
 ) -> bool:
     """True when this episode already received an OPEN on a prior evaluation.
 
-    Same-evaluation replay stays idempotent: the original OPEN command_id is
-    re-emitted so the command bus can reject duplicates. A later cycle, even
-    with a free slot after TP/SL, must not OPEN the same episode again.
+    Unused by the live S4.1 path. After TP/SL the slot is free and the same
+    directional parquet episode must be able to open the next trade (_2, _3).
+    Same-evaluation replay stays idempotent via deterministic command_id.
     """
     ep = str(episode or "").strip()
     if not ep:
@@ -300,6 +336,41 @@ def _market_observation(feed: pd.DataFrame, *, at_or_before: Any) -> dict[str, A
         "high": safe_float(row.get("high")),
         "low": safe_float(row.get("low")),
     }
+
+
+def _market_observation_for_open_position(
+    feed: pd.DataFrame,
+    *,
+    at_or_before: Any,
+    opened_at: Any,
+) -> dict[str, Any] | None:
+    """Last completed bar, with high/low extremes since the position opened.
+
+    Protective TP/SL must see a wick that already printed after entry, not
+    only the latest bar after price has come back.
+    """
+    last = _market_observation(feed, at_or_before=at_or_before)
+    if last is None:
+        return None
+    start = _ts_key(opened_at)
+    if start is None:
+        return last
+    column = "bar_close_timestamp" if "bar_close_timestamp" in feed.columns else "timestamp"
+    stamps = pd.to_datetime(feed[column], utc=True, errors="coerce")
+    end = _ts_key(at_or_before)
+    if end is None:
+        return last
+    mask = (stamps <= end) & (stamps >= start)
+    if not bool(mask.any()):
+        return last
+    window = feed.loc[mask]
+    high = safe_float(window["high"].max()) if "high" in window.columns else None
+    low = safe_float(window["low"].min()) if "low" in window.columns else None
+    if high is not None:
+        last["high"] = high
+    if low is not None:
+        last["low"] = low
+    return last
 
 
 def _preview_context_for_open_position(
@@ -783,7 +854,11 @@ class TimeframeManager:
                 reasons.append("BEFORE_ACTIVATION_BOUNDARY")
 
         if open_position:
-            observation = _market_observation(feed, at_or_before=evaluation_timestamp)
+            observation = _market_observation_for_open_position(
+                feed,
+                at_or_before=evaluation_timestamp,
+                opened_at=open_position.get("opened_at") or open_position.get("entry_ts"),
+            )
             meta = self._position_meta(timeframe)
             preview = None
             if observation is None or observation.get("close") is None:
@@ -887,11 +962,18 @@ class TimeframeManager:
                 portfolio_open_risk=portfolio_open_risk,
                 stop_reference=stop_reference,
             )
-            if intent == "CLOSE" and preview is not None and _is_context_flip_close(preview):
+            if intent == "CLOSE" and preview is not None and (
+                _is_context_flip_close(preview) or _is_stop_or_take_close(preview)
+            ):
                 follow_risk = dict(reserved_risk)
                 follow_risk[timeframe] = 0.0
                 follow_positions = dict(open_positions)
                 follow_positions[timeframe] = 0
+                follow_reason = (
+                    "ATOMIC_FLIP_OPEN"
+                    if _is_context_flip_close(preview)
+                    else "TP_SL_CONTINUATION_OPEN"
+                )
                 follow = self._build_flat_open_command(
                     timeframe=timeframe,
                     state=state,
@@ -903,7 +985,7 @@ class TimeframeManager:
                     per_tf_state=per_tf_state,
                     cross_metadata=cross_metadata,
                     decision_index=decision_index,
-                    extra_reasons=["ATOMIC_FLIP_OPEN"],
+                    extra_reasons=[follow_reason],
                 )
                 if follow.get("intent") in {"OPEN_LONG", "OPEN_SHORT"}:
                     return [primary, follow]
@@ -972,16 +1054,13 @@ class TimeframeManager:
         ):
             intent = "NO_ACTION"
             reasons.append(OPPOSITE_REQUIRES_OBSERVE)
-        elif _same_closed_bar_already_actioned(
-            per_tf_state,
-            source_bar_close=state.get("source_bar_close"),
-            evaluation_timestamp=eval_ts,
-            cognition_key=cognition_key,
+        elif (
+            ENTRY_REQUIRES_CONFIRMED_RAW_STATUS
+            and "ATOMIC_FLIP_OPEN" not in reasons
+            and _raw_status_blocks_new_entry(state)
         ):
-            # Same closed bar, same parquet row: do not re-OPEN.
-            # Different parquet row on this bar follows cognition.
             intent = "NO_ACTION"
-            reasons.append(SAME_CLOSED_BAR_ALREADY_ACTED)
+            reasons.append(RAW_STATUS_NOT_CONFIRMED)
         else:
             direction = str(state.get("timeframe_direction") or "").upper()
             candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"

@@ -71,7 +71,11 @@ def _sources(availability: list[dict], lifecycle: list[dict]) -> TimeframeSource
 
 
 def test_next_bar_open_stamp_is_not_this_bar():
-    """08:30 SHORT row is the 08:30-09:00 bar, not the bar that closed 08:30."""
+    """A later bar's open stamp is not the closed 08:00-08:30 row.
+
+    At 08:45 the current M30 bar is 08:30-09:00. If that forming row is
+    missing, fall back to 08:00-08:30 OBSERVE and do not inherit 09:00 SHORT.
+    """
     sources = _sources(
         [
             _availability(
@@ -83,17 +87,19 @@ def test_next_bar_open_stamp_is_not_this_bar():
         ],
         [
             _life(ts="2026-09-13T08:00:00Z", tf="M30", context="OBSERVE", episode=163, phase="NO_ACTIVE_CONTEXT"),
-            _life(ts="2026-09-13T08:30:00Z", tf="M30", context="SHORT_CONTEXT", episode=164, started="2026-09-13T08:00:00Z"),
+            _life(ts="2026-09-13T09:00:00Z", tf="M30", context="SHORT_CONTEXT", episode=164, started="2026-09-13T09:00:00Z"),
         ],
     )
     state = resolve_timeframe_state(
         timeframe="M30",
         evaluation_timestamp="2026-09-13T08:45:00Z",
         sources=sources,
+        now="2026-09-13T08:45:00Z",
     )
     assert state["timeframe_state"] == "OBSERVE"
     assert state["actionable"] is False
     assert state["lifecycle_episode_id"] == "M30:163"
+    assert state["context_bar_kind"] == "CLOSED"
 
 
 def test_missing_this_bar_row_does_not_inherit_previous():

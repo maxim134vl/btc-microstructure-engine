@@ -564,6 +564,104 @@ def test_s41_close_higher_tf_not_blocked_by_entry_authority(cfg):
     assert not str(result.get("status") or "").startswith("ENTRY_BLOCKED_")
 
 
+def test_s41_take_profit_close_fills_at_take_without_bbo(cfg):
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="tp_close_seed",
+    )
+    opened = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m30_open_tp",
+            "timeframe": "M30",
+            "intent": "OPEN_LONG",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M30:tp-close",
+            "evaluation_timestamp": _fresh(20),
+            "context_origin_price": 100.1,
+        }
+    )
+    assert opened["status"] == "ENTERED"
+    take = float(eng.positions["M30"].take_profit_price)
+    eng.bbo._latest_local = None
+    closed = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m30_close_tp",
+            "timeframe": "M30",
+            "intent": "CLOSE",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M30:tp-close",
+            "evaluation_timestamp": _fresh(5),
+            "reason_codes": json.dumps(
+                ["PREVIEW_CLOSE_LONG_TAKE_PROFIT", "TAKE_PROFIT_HIT", "COGNITION_RESTATED_FOLLOW"]
+            ),
+            "context_origin_price": 100.1,
+        }
+    )
+    assert closed["status"] == "EXITED"
+    assert closed["fill"]["paper_fill_price"] == pytest.approx(take)
+    assert closed["trade"]["exit_reason"] == "TAKE_PROFIT"
+    assert "M30" not in eng.positions
+
+
+def test_pending_s41_close_retries_on_live_bbo(cfg):
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=100.0,
+        best_ask=100.2,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="pending_close_seed",
+    )
+    opened = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m30_open_pending",
+            "timeframe": "M30",
+            "intent": "OPEN_LONG",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M30:pending-close",
+            "evaluation_timestamp": _fresh(20),
+            "context_origin_price": 100.1,
+        }
+    )
+    assert opened["status"] == "ENTERED"
+    eng.bbo._latest_local = None
+    pending = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m30_close_pending",
+            "timeframe": "M30",
+            "intent": "CLOSE",
+            "action_allowed": True,
+            "lifecycle_episode_id": "M30:pending-close",
+            "evaluation_timestamp": _fresh(5),
+            "reason_codes": json.dumps(["PREVIEW_CLOSE_LONG_CONTEXT_EXIT"]),
+        }
+    )
+    assert pending["status"] == "EXIT_PENDING_NO_CAUSAL_BBO"
+    assert "M30" in eng.positions
+    now2 = time_mod.monotonic_ns()
+    acts = eng.update_bbo_from_market(
+        best_bid=101.0,
+        best_ask=101.2,
+        receive_monotonic_ns=now2 - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="pending_close_retry",
+    )
+    assert acts and acts[0]["status"] == "EXITED"
+    assert "M30" not in eng.positions
+
+
 def test_s41_open_reenters_after_tp(cfg):
     c, _ = cfg
     eng = _engine(c)

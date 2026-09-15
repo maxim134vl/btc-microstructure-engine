@@ -25,6 +25,7 @@ if str(_SRC) not in sys.path:
 
 from btc_ml.trading.trading_performance_truth import (  # noqa: E402
     build_trading_performance_truth as _build_canonical_trading_performance_truth,
+    canonical_equity_curve_start as _canonical_equity_curve_start,
     load_canonical_equity_snapshots as _load_canonical_equity_snapshots,
     _resolve_epoch_manifest_timestamp as _resolve_epoch_manifest_timestamp,
 )
@@ -153,10 +154,13 @@ def build_ops_equity_pnl_curves(payload: dict[str, Any]) -> dict[str, Any]:
         return empty
 
     snaps = _load_canonical_equity_snapshots(books_dir=books_dir, paper_epoch_id=epoch)
-    init_ts, inferred = _resolve_epoch_manifest_timestamp(
+    manifest_ts, inferred = _resolve_epoch_manifest_timestamp(
         paper_epoch_id=epoch,
         epoch_manifest=None,
         repo_root=ROOT,
+    )
+    init_ts, inferred = _canonical_equity_curve_start(
+        snaps, epoch_manifest_ts=manifest_ts
     )
     points: list[dict[str, Any]] = []
     if init_ts is not None:

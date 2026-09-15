@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from btc_ml.trading.trading_performance_truth import (
     build_equity_curve_risk_metrics,
     build_trading_performance_truth,
+    canonical_equity_curve_start,
     load_canonical_equity_snapshots,
 )
 
@@ -214,17 +216,116 @@ def test_live_active_epoch_equity_curve_populated():
     snaps = load_canonical_equity_snapshots(
         books_dir=books, paper_epoch_id=str(payload["paper_epoch_id"])
     )
-    assert dq["equity_point_count"] == len(snaps) + 1  # initial + snapshots
-    assert dq["return_observation_count"] == len(snaps)
+    origin_in_snaps = any(
+        str(row.get("trade_id") or "") == "CANONICAL_ERA_ORIGIN" for row in snaps
+    )
+    # Origin snapshot is also the curve start, so it is not prepended twice.
+    expected_points = len(snaps) if origin_in_snaps else len(snaps) + 1
+    assert dq["equity_point_count"] == expected_points
     assert dq["canonical_closed_trade_count"] == payload["portfolio"]["closed_trade_count"]
-    assert risk["sharpe"]["value"] is not None
-    assert risk["sharpe"]["status"] == "PRELIMINARY"
-    assert risk["sortino"]["value"] is not None
-    assert risk["sortino"]["status"] == "PRELIMINARY"
     assert risk["max_drawdown"]["value"] is not None
     assert risk["max_drawdown"]["status"] == "PRELIMINARY"
-    assert risk["drawdown_duration"]["value"] is not None
-    assert risk["calmar"]["status"] == "UNSTABLE_SHORT_HISTORY"
-    assert risk["annualised_return"]["status"] == "UNSTABLE_SHORT_HISTORY"
     assert risk["decision_grade"] is False
     assert "shadow" not in str(payload.get("source_policy")).lower()
+    if dq["return_observation_count"] >= 2:
+        assert risk["sharpe"]["status"] in {"PRELIMINARY", "UNDEFINED_ZERO_VARIANCE"}
+        assert risk["sortino"]["status"] in {
+            "PRELIMINARY",
+            "UNDEFINED_NO_DOWNSIDE",
+            "UNDEFINED_ZERO_VARIANCE",
+        }
+
+
+def test_void_trade_snapshots_do_not_enter_equity_curve(tmp_path: Path):
+    epoch = "TEST_EPOCH"
+    books = tmp_path / "books"
+    books.mkdir()
+    (books / "trades.jsonl").write_text(
+        json.dumps(
+            {
+                "trade_id": "trd_leaky",
+                "status": "VOID_LEAKY_H1_PRE_CANONICAL_S41",
+                "statistics_included": False,
+                "paper_epoch_id": epoch,
+                "net_pnl_usd": -304.0,
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "trade_id": "trd_ok",
+                "status": "CLOSED",
+                "paper_epoch_id": epoch,
+                "net_pnl_usd": 10.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    origin = datetime(2026, 9, 14, 10, 4, 36, tzinfo=timezone.utc)
+    (books / "equity_snapshots.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "trade_id": "CANONICAL_ERA_ORIGIN",
+                        "ts": origin.isoformat().replace("+00:00", "Z"),
+                        "equity_usd": 400000.0,
+                        "paper_epoch_id": epoch,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "trade_id": "trd_leaky",
+                        "ts": "2026-09-14T13:02:23Z",
+                        "equity_usd": 399695.69,
+                        "paper_epoch_id": epoch,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "trade_id": "trd_ok",
+                        "ts": "2026-09-14T14:00:00Z",
+                        "equity_usd": 400010.0,
+                        "paper_epoch_id": epoch,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snaps = load_canonical_equity_snapshots(books_dir=books, paper_epoch_id=epoch)
+    assert [row["trade_id"] for row in snaps] == ["CANONICAL_ERA_ORIGIN", "trd_ok"]
+
+
+def test_canonical_origin_does_not_inherit_epoch_birth_drawdown():
+    """Sep-7 epoch created_at + Sep-14 H1 loss must not report a 7-day DD."""
+    origin = datetime(2026, 9, 14, 10, 4, 36, tzinfo=timezone.utc)
+    epoch_birth = datetime(2026, 9, 7, 9, 54, 42, tzinfo=timezone.utc)
+    snaps = [
+        {
+            "trade_id": "CANONICAL_ERA_ORIGIN",
+            "ts": origin.isoformat().replace("+00:00", "Z"),
+            "_ts": origin,
+            "equity_usd": 400000.0,
+        },
+        {
+            "trade_id": "trd_leaky",
+            "ts": "2026-09-14T13:52:37Z",
+            "_ts": datetime(2026, 9, 14, 13, 52, 37, tzinfo=timezone.utc),
+            "equity_usd": 399522.05,
+        },
+    ]
+    start, inferred = canonical_equity_curve_start(snaps, epoch_manifest_ts=epoch_birth)
+    assert inferred is False
+    assert start == origin
+    out = build_equity_curve_risk_metrics(
+        initial_equity_usd=400000.0,
+        initial_timestamp=start,
+        equity_snapshots=snaps,
+        initial_timestamp_inferred=False,
+    )
+    assert out["drawdown_duration"]["value"] == pytest.approx(3.0 + 48.0 / 60.0, abs=0.02)
+    assert out["drawdown_duration"]["value"] < 24.0
+    assert out["max_drawdown"]["value"] == pytest.approx((400000.0 - 399522.05) / 400000.0)

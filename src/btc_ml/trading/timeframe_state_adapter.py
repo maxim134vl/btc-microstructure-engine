@@ -18,9 +18,12 @@ legitimately report opposite directions.
 Hard rules enforced here:
   last-closed availability bar_close <= evaluation_timestamp
   lifecycle timestamp is bar open
-  If a forming-bar row exists (ts == last closed close) and evaluation is
-  already inside that bar, trade THAT row — do not wait for it to close.
-  Otherwise use the last closed bar: source_bar_open <= ts < source_bar_close
+  Trade the bar the wall clock (`now`, else evaluation) is in when that TF
+  has a row at the bar open. Duplicate timestamps: last file-order row wins
+  (restated cognition). M15 availability can freeze at last close while
+  `now` is already inside the next bar. If the current-bar row is missing,
+  fall back to the last closed availability bar:
+  source_bar_open <= ts < source_bar_close
   no cross-timeframe fallback, no synthetic direction, D1 is never live.
 """
 
@@ -129,6 +132,17 @@ def closed_bar_superseded(
     return clock >= close + pd.Timedelta(seconds=int(seconds))
 
 
+def _timeframe_bar_open(stamp: pd.Timestamp | None, timeframe: str) -> pd.Timestamp | None:
+    """UTC open of the TF bar that contains ``stamp``."""
+    seconds = TIMEFRAME_SECONDS.get(str(timeframe or "").upper())
+    clock = _ts(stamp)
+    if seconds is None or clock is None:
+        return None
+    epoch = int(clock.timestamp())
+    floored = epoch - (epoch % int(seconds))
+    return pd.Timestamp(floored, unit="s", tz="UTC")
+
+
 def _lifecycle_mask_for_closed_bar(
     life_stamps: pd.Series,
     *,
@@ -141,25 +155,52 @@ def _lifecycle_mask_for_closed_bar(
     return life_stamps < bar_close
 
 
+def _latest_lifecycle_index_at(
+    life_stamps: pd.Series,
+    target: pd.Timestamp | None,
+    *,
+    tolerance_seconds: int = 1,
+) -> Any:
+    """Last file-order row at ``target`` (restated cognition wins)."""
+    if target is None or life_stamps is None or not len(life_stamps):
+        return None
+    deltas = (life_stamps - target).abs()
+    ok = deltas <= pd.Timedelta(seconds=int(tolerance_seconds))
+    if not bool(ok.any()):
+        return None
+    return ok[ok].index[-1]
+
+
+def _latest_lifecycle_index_in_mask(life_stamps: pd.Series, mask: pd.Series) -> Any:
+    """Last restated row at the newest timestamp inside ``mask``."""
+    if life_stamps is None or mask is None or not bool(mask.any()):
+        return None
+    window = life_stamps[mask]
+    latest = window.max()
+    if pd.isna(latest):
+        return None
+    at_latest = (window - latest).abs() <= pd.Timedelta(seconds=1)
+    if not bool(at_latest.any()):
+        return None
+    return at_latest[at_latest].index[-1]
+
+
 def _forming_bar_lifecycle_index(
     life_stamps: pd.Series,
     *,
     forming_open: pd.Timestamp | None,
     evaluation_ts: pd.Timestamp | None,
 ) -> Any:
-    """Index of the live forming-bar row (timestamp == last closed close).
+    """Index of the live forming-bar row (timestamp == current bar open).
 
     Context painted on bar T must be tradable during bar T, not after T closes.
+    Duplicate timestamps keep the last restated row.
     """
     if forming_open is None or evaluation_ts is None or life_stamps is None or not len(life_stamps):
         return None
     if evaluation_ts < forming_open:
         return None
-    deltas = (life_stamps - forming_open).abs()
-    ok = deltas <= pd.Timedelta(seconds=1)
-    if not bool(ok.any()):
-        return None
-    return deltas[ok].sort_values().index[0]
+    return _latest_lifecycle_index_at(life_stamps, forming_open)
 
 OPERATIONAL_AVAILABILITY = {
     "FRESH_EVENT",
@@ -455,6 +496,8 @@ def resolve_timeframe_state(
         "lifecycle_episode_id": None,
         "lifecycle_phase": None,
         "lifecycle_row_timestamp": None,
+        "raw_context_status": None,
+        "raw_auction_episode": None,
         "context_bar_kind": None,
         "actionable": False,
         "no_action_reason": None,
@@ -574,18 +617,27 @@ def resolve_timeframe_state(
         return base
     life_stamps = pd.to_datetime(lifecycle["timestamp"], utc=True, errors="coerce")
     bar_open = _ts(row.get("source_bar_open"))
+    clock = _ts(now) or evaluation_ts
+    current_open = _timeframe_bar_open(clock, tf)
+    forming_open = current_open if current_open is not None else bar_close
     forming_idx = _forming_bar_lifecycle_index(
-        life_stamps, forming_open=bar_close, evaluation_ts=evaluation_ts
+        life_stamps, forming_open=forming_open, evaluation_ts=clock
     )
+    tf_seconds = TIMEFRAME_SECONDS.get(tf)
     if forming_idx is not None:
         life_idx = forming_idx
-        tf_seconds = TIMEFRAME_SECONDS.get(tf)
         forming_close = (
-            bar_close + pd.Timedelta(seconds=int(tf_seconds)) if tf_seconds else bar_close
+            forming_open + pd.Timedelta(seconds=int(tf_seconds))
+            if tf_seconds and forming_open is not None
+            else bar_close
         )
-        base["source_bar_open"] = _iso(bar_close)
+        base["source_bar_open"] = _iso(forming_open)
         base["source_bar_close"] = _iso(forming_close)
-        base["context_bar_kind"] = FORMING_BAR_CONTEXT
+        base["context_bar_kind"] = (
+            FORMING_BAR_CONTEXT
+            if forming_open is not None and bar_close is not None and forming_open >= bar_close
+            else "CLOSED"
+        )
         bar_close = forming_close
     else:
         life_mask = _lifecycle_mask_for_closed_bar(
@@ -597,12 +649,22 @@ def resolve_timeframe_state(
             base["no_action_reason"] = NO_LIFECYCLE_ROW_FOR_CLOSED_BAR
             base["timeframe_state"] = "UNKNOWN"
             return base
-        life_idx = life_stamps[life_mask].sort_values().index[-1]
+        life_idx = _latest_lifecycle_index_in_mask(life_stamps, life_mask)
+        if life_idx is None:
+            base["no_action_reason"] = NO_LIFECYCLE_ROW_FOR_CLOSED_BAR
+            base["timeframe_state"] = "UNKNOWN"
+            return base
         base["context_bar_kind"] = "CLOSED"
     life_row = lifecycle.loc[life_idx].to_dict()
     direction, direction_reason = _lifecycle_direction(life_row)
     phase = str(life_row.get("lifecycle_state") or "UNKNOWN").upper()
     episode = _episode_id_for_timeframe(tf, life_row.get("context_episode_id"))
+    raw_status = str(life_row.get("raw_context_status") or "").strip().upper()
+    if raw_status in {"", "NONE", "NAN", "NAT", "<NA>"}:
+        raw_status = "UNKNOWN"
+    raw_auction = str(life_row.get("raw_auction_episode") or "").strip().upper()
+    if raw_auction in {"", "NONE", "NAN", "NAT", "<NA>"}:
+        raw_auction = None
 
     base.update(
         {
@@ -611,6 +673,8 @@ def resolve_timeframe_state(
             "direction_reason": direction_reason,
             "lifecycle_episode_id": episode,
             "lifecycle_phase": phase,
+            "raw_context_status": raw_status,
+            "raw_auction_episode": raw_auction,
             "lifecycle_row_timestamp": _iso(life_stamps.loc[life_idx]),
             "context_started_at": _iso(life_row.get("active_context_started_at")),
             "invalidation_reason": life_row.get("invalidation_reason"),

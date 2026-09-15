@@ -25,7 +25,12 @@ from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
 from btc_ml.trading.intrabar_paper.s41_command_consumer import S41CommandConsumer
 from btc_ml.trading.portfolio_risk import PortfolioRiskCoordinator
 from btc_ml.trading.proofs import build_synthetic_feed, isolated_environment, synthetic_command
-from btc_ml.trading.timeframe_manager import ANTI_SAW_ENABLED, TimeframeManager, _preview_context_for_open_position
+from btc_ml.trading.timeframe_manager import (
+    ANTI_SAW_ENABLED,
+    ENTRY_REQUIRES_CONFIRMED_RAW_STATUS,
+    TimeframeManager,
+    _preview_context_for_open_position,
+)
 from btc_ml.trading.timeframe_state_adapter import (
     TimeframeSources,
     _scoped_lifecycle,
@@ -162,6 +167,7 @@ def test_contract_file_lists_every_invariant():
         "COGNITION_OWNS_S41",
         "OBSERVE_HOLD",
         "OPPOSITE_THROUGH_OBSERVE",
+        "ENTRY_CONFIRMED_RAW",
     ]
     assert payload["forbidden_production_entry_source"] == "context_journal"
     assert "LIVE1A journal OPEN/FLIP/END fills" in payload["do_not_restore"]
@@ -175,6 +181,9 @@ def test_hold_zero_and_no_bar_count_anti_saw():
     assert mod.MIN_ACTIVE_CONTEXT_HOLD_BARS == 0
     assert mod.CONFIRMED_OPPOSITE_CONFIRM_BARS == 1
     assert ANTI_SAW_ENABLED is False
+    payload = _contract()
+    assert payload["entry_requires_confirmed_raw_status"] is True
+    assert ENTRY_REQUIRES_CONFIRMED_RAW_STATUS is True
 
 
 def test_provisional_intrabar_is_never_s41_actionable():
@@ -284,6 +293,90 @@ def test_retry_market_does_not_consume_command_id(tmp_path: Path):
     )
     assert consumer.poll() == []
     cursor = tmp_path / "s41_command_cursor.json"
+    if cursor.exists():
+        stored = json.loads(cursor.read_text(encoding="utf-8"))
+        assert command["command_id"] not in stored.get("processed_command_ids", [])
+
+
+def test_close_pending_does_not_consume_command_id(tmp_path: Path):
+    bus, _books, _ = isolated_environment(tmp_path / "bus")
+    command = synthetic_command(
+        timeframe="M30",
+        intent="CLOSE",
+        evaluation_timestamp="2026-07-01T04:00:00Z",
+        episode="M30:stuck-tp",
+    )
+    bus.append([command])
+
+    class _Cfg:
+        timeframes = ("M30",)
+        max_bbo_age_ms = 2000.0
+
+    class _PendingEngine:
+        cfg = _Cfg()
+
+        def apply_s41_manager_command(self, _command: dict) -> dict:
+            return {"status": "EXIT_PENDING_NO_CAUSAL_BBO", "timeframe": "M30"}
+
+    cursor = tmp_path / "s41_command_cursor.json"
+    pending_consumer = S41CommandConsumer(
+        _PendingEngine(),
+        checkpoint_path=cursor,
+        consume_after=None,
+        bus=bus,
+    )
+    actions = pending_consumer.poll()
+    assert actions and actions[0]["status"] == "EXIT_PENDING_NO_CAUSAL_BBO"
+    if cursor.exists():
+        stored = json.loads(cursor.read_text(encoding="utf-8"))
+        assert command["command_id"] not in stored.get("processed_command_ids", [])
+
+    class _FillEngine:
+        cfg = _Cfg()
+
+        def apply_s41_manager_command(self, _command: dict) -> dict:
+            return {"status": "EXITED", "timeframe": "M30"}
+
+    fill_consumer = S41CommandConsumer(
+        _FillEngine(),
+        checkpoint_path=cursor,
+        consume_after=None,
+        bus=bus,
+    )
+    filled = fill_consumer.poll()
+    assert filled and filled[0]["status"] == "EXITED"
+    stored = json.loads(cursor.read_text(encoding="utf-8"))
+    assert command["command_id"] in stored.get("processed_command_ids", [])
+
+
+def test_close_missing_position_does_not_consume_command_id(tmp_path: Path):
+    bus, _books, _ = isolated_environment(tmp_path / "bus")
+    command = synthetic_command(
+        timeframe="M30",
+        intent="CLOSE",
+        evaluation_timestamp="2026-07-01T04:30:00Z",
+        episode="M30:missing-pos",
+    )
+    bus.append([command])
+
+    class _Cfg:
+        timeframes = ("M30",)
+        max_bbo_age_ms = 2000.0
+
+    class _EmptyEngine:
+        cfg = _Cfg()
+
+        def apply_s41_manager_command(self, _command: dict):
+            return None
+
+    cursor = tmp_path / "s41_command_cursor.json"
+    consumer = S41CommandConsumer(
+        _EmptyEngine(),
+        checkpoint_path=cursor,
+        consume_after=None,
+        bus=bus,
+    )
+    assert consumer.poll() == []
     if cursor.exists():
         stored = json.loads(cursor.read_text(encoding="utf-8"))
         assert command["command_id"] not in stored.get("processed_command_ids", [])

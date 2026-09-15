@@ -29,7 +29,12 @@ from .paper_core import (
     safe_float,
 )
 from .trader_book import PRODUCTION_BOOKS_ROOT
-from btc_ml.trading.intrabar_paper.performance_eligibility import counts_toward_strategy_performance
+from btc_ml.trading.intrabar_paper.performance_eligibility import (
+    counts_toward_strategy_performance,
+    filter_superseded_trades,
+)
+
+CANONICAL_ERA_ORIGIN_TRADE_ID = "CANONICAL_ERA_ORIGIN"
 
 SCHEMA_VERSION = "trading_performance_truth_v1"
 MTM_BASIS_GROSS = "GROSS_UNREALISED"
@@ -647,6 +652,22 @@ def _parse_ts_local(value: Any) -> datetime | None:
     return stamp.astimezone(timezone.utc)
 
 
+def _eligible_equity_snapshot_trade_ids(*, books_dir: Path) -> set[str] | None:
+    """Trade ids that may mark the equity curve. None = no trades book, keep all."""
+    trades_path = Path(books_dir) / "trades.jsonl"
+    if not trades_path.exists():
+        return None
+    allowed = {CANONICAL_ERA_ORIGIN_TRADE_ID}
+    rows = filter_superseded_trades(_read_jsonl_dicts(trades_path))
+    for row in rows:
+        if not counts_toward_strategy_performance(row):
+            continue
+        trade_id = str(row.get("trade_id") or "").strip()
+        if trade_id:
+            allowed.add(trade_id)
+    return allowed
+
+
 def load_canonical_equity_snapshots(
     *,
     books_dir: Path,
@@ -654,6 +675,7 @@ def load_canonical_equity_snapshots(
 ) -> list[dict[str, Any]]:
     """Load/filter/sort canonical trade-close equity snapshots for one epoch."""
     rows = _read_jsonl_dicts(books_dir / "equity_snapshots.jsonl")
+    allowed_ids = _eligible_equity_snapshot_trade_ids(books_dir=books_dir)
     cleaned: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for row in rows:
@@ -663,6 +685,8 @@ def load_canonical_equity_snapshots(
         ts = _parse_ts_local(row.get("ts"))
         trade_id = str(row.get("trade_id") or "").strip()
         if equity is None or not math.isfinite(equity) or ts is None or not trade_id:
+            continue
+        if allowed_ids is not None and trade_id not in allowed_ids:
             continue
         # Canonical close snapshot: must carry trade_id (trade-close equity mark).
         key = (trade_id, _iso_ts(ts) or "")
@@ -681,6 +705,25 @@ def load_canonical_equity_snapshots(
         )
     cleaned.sort(key=lambda r: (r["_ts"], r["trade_id"]))
     return cleaned
+
+
+def canonical_equity_curve_start(
+    equity_snapshots: list[dict[str, Any]],
+    *,
+    epoch_manifest_ts: datetime | None,
+) -> tuple[datetime | None, bool]:
+    """Curve origin is CANONICAL_ERA_ORIGIN when present, else epoch manifest.
+
+    Epoch created_at (Sep 7) must not prepend a synthetic HWM before the
+    canonical-era reset — that turns a same-day close into a 7-day drawdown.
+    """
+    for row in equity_snapshots:
+        if str(row.get("trade_id") or "") != CANONICAL_ERA_ORIGIN_TRADE_ID:
+            continue
+        stamp = row.get("_ts") or _parse_ts_local(row.get("ts"))
+        if stamp is not None:
+            return stamp, False
+    return epoch_manifest_ts, epoch_manifest_ts is None
 
 
 def build_equity_curve_risk_metrics(
@@ -1024,8 +1067,11 @@ def _attach_equity_curve_metrics(
     data_quality: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     snaps = load_canonical_equity_snapshots(books_dir=books_dir, paper_epoch_id=paper_epoch_id)
-    init_ts, inferred_flag = _resolve_epoch_manifest_timestamp(
+    manifest_ts, inferred_flag = _resolve_epoch_manifest_timestamp(
         paper_epoch_id=paper_epoch_id, epoch_manifest=epoch_manifest
+    )
+    init_ts, inferred_flag = canonical_equity_curve_start(
+        snaps, epoch_manifest_ts=manifest_ts
     )
     risk = build_equity_curve_risk_metrics(
         initial_equity_usd=float(initial_equity_usd),
@@ -1118,7 +1164,7 @@ def build_trading_performance_truth(
         try:
             from btc_ml.trading.intrabar_paper.ops_adapter import _read_jsonl
 
-            for trade in _read_jsonl(books_dir / "trades.jsonl"):
+            for trade in filter_superseded_trades(_read_jsonl(books_dir / "trades.jsonl")):
                 if not counts_toward_strategy_performance(trade):
                     continue
                 tf = str(trade.get("timeframe") or "")

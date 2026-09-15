@@ -21,6 +21,7 @@
     "LIVE1A journal OPEN/FLIP/END fills",
     "wait-one-bar OPEN"
   ],
+  "entry_requires_confirmed_raw_status": true,
   "invariants": [
     {
       "id": "OWNER_SINGLE",
@@ -85,6 +86,10 @@
     {
       "id": "OPPOSITE_THROUGH_OBSERVE",
       "must": "lifecycle never paints LONG→SHORT or SHORT→LONG; confirmed opposite ACTIVE ends living thesis to OBSERVE; opposite activates only from OBSERVE on a later bar"
+    },
+    {
+      "id": "ENTRY_CONFIRMED_RAW",
+      "must": "flat-slot OPEN requires raw_context_status ACTIVE on the resolved lifecycle row; DEVELOPING/OBSERVE while lifecycle ACTIVE is NO_ACTION RAW_STATUS_NOT_CONFIRMED; missing/UNKNOWN fail-open; ATOMIC_FLIP_OPEN is not gated; CLOSE/HOLD unchanged"
     }
   ]
 }

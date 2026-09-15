@@ -287,7 +287,7 @@ class IntrabarPaperEngine:
         book_update_id: str | None = None,
         source_event_id: str | None = None,
         market_provenance: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         self.bbo.update_from_book_ticker(
             best_bid=best_bid,
             best_ask=best_ask,
@@ -297,6 +297,12 @@ class IntrabarPaperEngine:
             source_event_id=source_event_id,
             domain="local",
         )
+        actions: list[dict[str, Any]] = []
+        for tf in list(self.pending_exits.keys()):
+            done = self._try_pending_exit(tf)
+            if done:
+                actions.extend(done if isinstance(done, list) else [done])
+        return actions
 
     def update_from_trade(
         self,
@@ -499,6 +505,20 @@ class IntrabarPaperEngine:
             self.consumer.save()
         return []
 
+    @staticmethod
+    def _s41_close_trigger_type(command: dict[str, Any]) -> str:
+        raw = command.get("reason_codes")
+        if isinstance(raw, list):
+            blob = " ".join(str(x) for x in raw)
+        else:
+            blob = str(raw or "")
+        upper = blob.upper()
+        if "TAKE_PROFIT" in upper:
+            return "TAKE_PROFIT"
+        if "STOP_LOSS" in upper:
+            return "STOP_LOSS"
+        return "S41_COMMAND_CLOSE"
+
     def apply_s41_manager_command(self, command: dict[str, Any]) -> dict[str, Any] | None:
         """Execute one S4.1 manager command against LIVE1B books (hybrid)."""
         intent = str(command.get("intent") or "").upper()
@@ -525,6 +545,7 @@ class IntrabarPaperEngine:
             "evaluation_timestamp": command.get("evaluation_timestamp"),
             "context_started_at": command.get("context_started_at"),
             "decision_id": command.get("decision_id"),
+            "reason_codes": command.get("reason_codes"),
         }
         if intent in {"OPEN_LONG", "OPEN_SHORT"}:
             if not timeframe_is_live_entry_authority(tf):
@@ -548,17 +569,19 @@ class IntrabarPaperEngine:
                 from_manager_command=True,
             )
         if intent == "CLOSE":
+            trigger = self._s41_close_trigger_type(command)
+            protective = trigger in {"TAKE_PROFIT", "STOP_LOSS", "TP", "SL", "STOP"}
             return self._exit_position(
                 tf=tf,
-                trigger_type="S41_COMMAND_CLOSE",
+                trigger_type=trigger,
                 trigger_event_id=command_id,
                 trigger_timestamp=str(event.get("event_timestamp") or ""),
                 trigger_monotonic_ns=mono,
-                trigger_price=event.get("context_origin_price"),
+                trigger_price=None if protective else event.get("context_origin_price"),
                 context_event_id=command_id,
                 episode_id=str(episode) if episode else None,
                 event=event,
-                use_local_bbo=True,
+                use_local_bbo=not protective,
             )
         return {"status": "IGNORED", "intent": intent, "command_id": command_id, "timeframe": tf}
 
@@ -1092,11 +1115,11 @@ class IntrabarPaperEngine:
             )
 
         if use_local_bbo:
-            bbo, reason, age_ms = self.bbo.resolve_local(
-                command_monotonic_ns=trigger_monotonic_ns,
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_live_local_entry_bbo(
                 max_age_ms=self.cfg.max_bbo_age_ms,
             )
-            bbo_domain = "local"
+            if reason == "ENTRY_BLOCKED_NO_CAUSAL_BBO":
+                reason = "EXIT_PENDING_NO_CAUSAL_BBO"
         else:
             bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
                 command_monotonic_ns=trigger_monotonic_ns,
@@ -1143,10 +1166,14 @@ class IntrabarPaperEngine:
         pos = self.positions.get(tf)
         if not pend or not pos:
             return None
-        bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
-            command_monotonic_ns=pend.command_monotonic_ns,
+        bbo, reason, age_ms, bbo_domain = self.bbo.resolve_live_local_entry_bbo(
             max_age_ms=self.cfg.max_bbo_age_ms,
         )
+        if bbo is None:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
+                command_monotonic_ns=pend.command_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
         if bbo is None:
             return None
         key = idempotency_key(

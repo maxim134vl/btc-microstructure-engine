@@ -70,6 +70,28 @@ def test_stable_ordinals_tf_n(truth):
         assert rebuilt == original
 
 
+def test_next_trade_after_closed_gets_tf_2():
+    closed = [
+        {
+            "trade_id": "trd_m15_1",
+            "entry_timestamp": "2026-09-14T10:54:32Z",
+            "created_at": "2026-09-14T10:54:32Z",
+        }
+    ]
+    opens = [
+        {
+            "position_id": "pos_m15_2",
+            "entry_timestamp": "2026-09-14T18:52:00Z",
+            "created_at": "2026-09-14T18:52:00Z",
+        }
+    ]
+    assign_tf_ordinals("M15", closed_trades=closed, open_positions=opens)
+    assert closed[0]["public_number"] == "M15_1"
+    assert closed[0]["display_label"] == "M15_1"
+    assert opens[0]["public_number"] == "M15_2"
+    assert opens[0]["display_label"] == "M15_2"
+
+
 def test_context_history_per_tf_isolated(truth):
     from active_epoch_trade_filter import live1b_paper_active  # noqa: E402
     from timeframe_chart_truth import paper_entry_source  # noqa: E402

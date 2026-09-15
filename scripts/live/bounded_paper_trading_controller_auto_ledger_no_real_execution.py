@@ -643,7 +643,15 @@ def evaluate_exit_preview(
         raise ValueError(f"unsupported_side:{side}")
 
     same_bar = bool(stop_loss_hit and take_profit_hit)
-    if hold_until:
+    # Protective SL/TP always fire. HOLD_UNTIL only keeps the position through
+    # OBSERVE / same-direction context. It must not suppress stops or takes.
+    if same_bar:
+        action, reason = stop_action, "SAME_BAR_STOP_AND_TAKE_CONSERVATIVE_STOP_FIRST"
+    elif stop_loss_hit:
+        action, reason = stop_action, "STOP_LOSS_HIT"
+    elif take_profit_hit:
+        action, reason = take_action, "TAKE_PROFIT_HIT"
+    elif hold_until:
         # Hold until opposite directional context. OBSERVE is a pause, not a flatten.
         if context_exit:
             if ctx in {"SHORT_CONTEXT", "SHORT"} and side_u == "LONG":
@@ -658,12 +666,6 @@ def evaluate_exit_preview(
             )
         else:
             action, reason = hold_action, "HOLD_UNTIL_DIRECTIONAL_CONTEXT_END"
-    elif same_bar:
-        action, reason = stop_action, "SAME_BAR_STOP_AND_TAKE_CONSERVATIVE_STOP_FIRST"
-    elif stop_loss_hit:
-        action, reason = stop_action, "STOP_LOSS_HIT"
-    elif take_profit_hit:
-        action, reason = take_action, "TAKE_PROFIT_HIT"
     elif context_exit:
         if ctx in {"SHORT_CONTEXT", "SHORT"} and side_u == "LONG":
             end_code = "CONTEXT_FLIP_LONG_TO_SHORT"

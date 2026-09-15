@@ -129,7 +129,7 @@ def test_03_bounded_loop_defaults():
 
 
 def test_04_long_short_stop_take_context_and_stop_first():
-    # Canonical default: HOLD_UNTIL_DIRECTIONAL_CONTEXT_END suppresses stop/take.
+    # HOLD_UNTIL keeps OBSERVE / same-direction context. Protective SL/TP still fire.
     long_hold = mod.evaluate_exit_preview(
         side="LONG",
         entry_price=100.0,
@@ -144,8 +144,40 @@ def test_04_long_short_stop_take_context_and_stop_first():
         latest_lifecycle_state="ACTIVE",
     )
     assert long_hold["same_bar_stop_take_hit"] is True
-    assert long_hold["exit_preview_action"] == "PREVIEW_HOLD_LONG"
-    assert "HOLD_UNTIL_DIRECTIONAL_CONTEXT_END" in long_hold["exit_preview_reason"]
+    assert long_hold["exit_preview_action"] == "PREVIEW_CLOSE_LONG_STOP_LOSS"
+    assert "STOP_FIRST" in long_hold["exit_preview_reason"]
+
+    long_take_default_hold = mod.evaluate_exit_preview(
+        side="LONG",
+        entry_price=100.0,
+        quantity=1.0,
+        stop_loss_price=99.0,
+        take_profit_price=101.5,
+        entry_fee_usd=0.1,
+        current_price=100.5,
+        latest_high=101.6,
+        latest_low=100.2,
+        latest_context="LONG_CONTEXT",
+        latest_lifecycle_state="ACTIVE",
+    )
+    assert long_take_default_hold["exit_preview_action"] == "PREVIEW_CLOSE_LONG_TAKE_PROFIT"
+    assert long_take_default_hold["exit_preview_reason"] == "TAKE_PROFIT_HIT"
+
+    long_context_hold = mod.evaluate_exit_preview(
+        side="LONG",
+        entry_price=100.0,
+        quantity=1.0,
+        stop_loss_price=99.0,
+        take_profit_price=101.5,
+        entry_fee_usd=0.1,
+        current_price=100.5,
+        latest_high=100.6,
+        latest_low=100.2,
+        latest_context="LONG_CONTEXT",
+        latest_lifecycle_state="ACTIVE",
+    )
+    assert long_context_hold["exit_preview_action"] == "PREVIEW_HOLD_LONG"
+    assert "HOLD_UNTIL_DIRECTIONAL_CONTEXT_END" in long_context_hold["exit_preview_reason"]
 
     # Explicit hold_mode=OFF restores stop-first / take / context exit canon.
     long_stop = mod.evaluate_exit_preview(

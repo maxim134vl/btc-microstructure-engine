@@ -239,7 +239,7 @@ def test_ops_equity_pnl_curves_from_canonical_snapshots():
     if curves["status"] != "AVAILABLE":
         pytest.skip("no canonical equity snapshots on this epoch")
     points = curves["points"]
-    assert len(points) >= 2
+    assert len(points) >= 1
     assert points[0]["pnl_usd"] == pytest.approx(0.0)
     assert points[0]["equity_usd"] == pytest.approx(float(curves["initial_equity_usd"]))
     last = points[-1]

@@ -21,6 +21,25 @@ _TRANSIENT_OPEN_BLOCKS = frozenset(
         "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY",
     }
 )
+_COMMITTED_CLOSE_STATUSES = frozenset(
+    {
+        "EXITED",
+        "DUPLICATE_PREVENTED",
+    }
+)
+
+
+def close_command_committed(result: dict[str, Any] | None) -> bool:
+    """True when a CLOSE may be marked processed. Pending / missing fill must retry."""
+    if result is None:
+        return False
+    status = str(result.get("status") or "").strip()
+    if status in _COMMITTED_CLOSE_STATUSES:
+        return True
+    if status.startswith("EXIT_PENDING"):
+        return False
+    # Permanent rejects (bad command, ignored) must not spin the cursor.
+    return bool(status)
 
 
 def _utc_iso() -> str:
@@ -165,6 +184,10 @@ class S41CommandConsumer:
                         continue
                 elif intent == "CLOSE" and allowed:
                     result = self.engine.apply_s41_manager_command(command)
+                    if not close_command_committed(result):
+                        if result is not None:
+                            actions.append(result)
+                        continue
                 else:
                     result = {
                         "status": "IGNORED",
