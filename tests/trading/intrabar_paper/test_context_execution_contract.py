@@ -712,6 +712,231 @@ def test_s41_open_reenters_after_tp(cfg):
     assert "M15" in eng.positions
 
 
+def test_s41_close_without_position_is_committed_noop(cfg):
+    c, _ = cfg
+    eng = _engine(c)
+    result = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_h1_close_flat",
+            "timeframe": "M15",
+            "intent": "CLOSE",
+            "action_allowed": True,
+            "evaluation_timestamp": _fresh(20),
+            "reason_codes": ["PREVIEW_CLOSE_LONG_STOP_LOSS", "STOP_LOSS_HIT"],
+        }
+    )
+    assert result["status"] == "CLOSE_NO_POSITION"
+
+
+def test_lagged_long_sl_close_does_not_kill_continuation_short(cfg):
+    """H1_31: leftover LONG-SL CLOSE after TP/SL continuation must not fill the new SHORT stop."""
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=77669.0,
+        best_ask=77671.0,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="h1_long_seed",
+    )
+    long_open = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m15_long",
+            "timeframe": "M15",
+            "intent": "OPEN_LONG",
+            "action_allowed": True,
+            "lifecycle_episode_id": "H1:47",
+            "evaluation_timestamp": _fresh(20),
+            "created_at": _fresh(25),
+            "context_origin_price": 77670.0,
+        }
+    )
+    assert long_open["status"] == "ENTERED"
+    long_stop = float(eng.positions["M15"].stop_loss_price)
+    long_sl = {
+        "command_id": "TF_CMD_m15_long_sl",
+        "timeframe": "M15",
+        "intent": "CLOSE",
+        "action_allowed": True,
+        "lifecycle_episode_id": "H1:47",
+        "evaluation_timestamp": _fresh(-5),
+        "created_at": _fresh(-5),
+        "reason_codes": [
+            "COGNITION_RESTATED_FOLLOW",
+            "FORMING_BAR_CONTEXT",
+            "PREVIEW_CLOSE_LONG_STOP_LOSS",
+        ],
+    }
+    first_close = eng.apply_s41_manager_command(long_sl)
+    assert first_close["status"] == "EXITED"
+    assert first_close["fill"]["paper_fill_price"] == pytest.approx(long_stop)
+    assert "M15" not in eng.positions
+
+    leftover_sl = dict(long_sl)
+    leftover_sl["command_id"] = "TF_CMD_m15_long_sl_retry"
+    leftover_sl["evaluation_timestamp"] = _fresh(120)
+    leftover_sl["created_at"] = _fresh(120)
+    assert eng.apply_s41_manager_command(leftover_sl)["status"] == "CLOSE_NO_POSITION"
+
+    now2 = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=77669.0,
+        best_ask=77671.0,
+        receive_monotonic_ns=now2 - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="h1_short_seed",
+    )
+    short_open = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m15_short",
+            "timeframe": "M15",
+            "intent": "OPEN_SHORT",
+            "action_allowed": True,
+            "lifecycle_episode_id": "H1:47",
+            "evaluation_timestamp": _fresh(10),
+            "created_at": _fresh(10),
+            "context_origin_price": 77670.0,
+        }
+    )
+    assert short_open["status"] == "ENTERED"
+    assert eng.positions["M15"].side == "SHORT"
+    short_entry = float(eng.positions["M15"].entry_price)
+    short_stop = float(eng.positions["M15"].stop_loss_price)
+    assert short_stop > short_entry
+
+    killed = eng.apply_s41_manager_command(leftover_sl)
+    assert killed["status"] in {"CLOSE_SIDE_MISMATCH", "CLOSE_STALE_FOR_NEWER_POSITION"}
+    assert "M15" in eng.positions
+    assert eng.positions["M15"].side == "SHORT"
+
+
+def test_h1_9_leftover_long_sl_does_not_kill_continuation_short(cfg):
+    """H1_9: leftover LONG-SL CLOSE must not fill a new SHORT 22s later."""
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=77669.0,
+        best_ask=77671.0,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="h1_9_long_seed",
+    )
+    long_open = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_h1_long",
+            "timeframe": "H1",
+            "intent": "OPEN_LONG",
+            "action_allowed": True,
+            "lifecycle_episode_id": "H1:105",
+            "evaluation_timestamp": _fresh(20),
+            "created_at": _fresh(25),
+            "context_origin_price": 77670.0,
+        }
+    )
+    assert long_open["status"] == "ENTERED"
+    leftover_sl = {
+        "command_id": "TF_CMD_h1_long_sl_retry",
+        "timeframe": "H1",
+        "intent": "CLOSE",
+        "action_allowed": True,
+        "lifecycle_episode_id": "H1:105",
+        "evaluation_timestamp": _fresh(-5),
+        "created_at": _fresh(-5),
+        "reason_codes": [
+            "TP_SL_CONTINUATION_OPEN",
+            "PREVIEW_CLOSE_LONG_STOP_LOSS",
+            "STOP_LOSS_HIT",
+        ],
+    }
+    first_close = eng.apply_s41_manager_command(
+        {
+            **leftover_sl,
+            "command_id": "TF_CMD_h1_long_sl",
+        }
+    )
+    assert first_close["status"] == "EXITED"
+    assert "H1" not in eng.positions
+
+    now2 = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=77669.0,
+        best_ask=77671.0,
+        receive_monotonic_ns=now2 - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="h1_9_short_seed",
+    )
+    short_open = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_h1_short_cont",
+            "timeframe": "H1",
+            "intent": "OPEN_SHORT",
+            "action_allowed": True,
+            "lifecycle_episode_id": "H1:105",
+            "evaluation_timestamp": _fresh(10),
+            "created_at": _fresh(10),
+            "context_origin_price": 77670.0,
+        }
+    )
+    assert short_open["status"] == "ENTERED"
+    assert eng.positions["H1"].side == "SHORT"
+
+    leftover_sl["evaluation_timestamp"] = _fresh(22)
+    leftover_sl["created_at"] = _fresh(22)
+    killed = eng.apply_s41_manager_command(leftover_sl)
+    assert killed["status"] in {"CLOSE_SIDE_MISMATCH", "CLOSE_STALE_FOR_NEWER_POSITION"}
+    assert "H1" in eng.positions
+    assert eng.positions["H1"].side == "SHORT"
+
+
+def test_older_close_without_side_does_not_kill_newer_open(cfg):
+    import time as time_mod
+
+    c, _ = cfg
+    eng = _engine(c)
+    now = time_mod.monotonic_ns()
+    eng.update_bbo_from_market(
+        best_bid=77669.0,
+        best_ask=77671.0,
+        receive_monotonic_ns=now - 1_000,
+        receive_timestamp=_fresh(0),
+        book_update_id="stale_close_seed",
+    )
+    opened = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m15_short_new",
+            "timeframe": "M15",
+            "intent": "OPEN_SHORT",
+            "action_allowed": True,
+            "lifecycle_episode_id": "H1:47",
+            "evaluation_timestamp": _fresh(10),
+            "created_at": _fresh(10),
+            "context_origin_price": 77670.0,
+        }
+    )
+    assert opened["status"] == "ENTERED"
+    killed = eng.apply_s41_manager_command(
+        {
+            "command_id": "TF_CMD_m15_old_sl",
+            "timeframe": "M15",
+            "intent": "CLOSE",
+            "action_allowed": True,
+            "lifecycle_episode_id": "H1:47",
+            "evaluation_timestamp": _fresh(3600),
+            "created_at": _fresh(3600),
+            "reason_codes": ["STOP_LOSS_HIT"],
+        }
+    )
+    assert killed["status"] == "CLOSE_STALE_FOR_NEWER_POSITION"
+    assert "M15" in eng.positions
+    assert eng.positions["M15"].side == "SHORT"
+
+
 def test_c_ended_episode_cannot_reenter(cfg):
     c, _ = cfg
     eng = _engine(c)
@@ -1402,10 +1627,23 @@ def test_live1b_provisional_end_does_not_flatten_before_closed_bar(cfg, monkeypa
     assert bar.is_closed is False
     assert bar.bar_open_timestamp == pd.Timestamp(end_bar_open)
     assert bar_close == pd.Timestamp(end_bar_close)
+    # Pause inside a living long is not death. Consumer still ignores a
+    # provisional CONTEXT_END if one arrives while the bar is open.
+    assert _m15(emitted, "CONTEXT_END") == []
 
-    ends = _m15(emitted, "CONTEXT_END")
-    assert len(ends) == 1
-    end = ends[0]
+    episode = paper.positions["M15"].lifecycle_episode_id
+    end = _end(
+        eid="provisional_end_still_open_bar",
+        episode=str(episode),
+        mono=4_000_000,
+        occurrence_ts=end_ts,
+        occurrence_price=OCCURRENCE_PRICE,
+        bid=EXIT_BID,
+        ask=EXIT_ASK,
+        evaluation_mode="PROVISIONAL_INTRABAR",
+        extra={"ingested_at": end_ts, "materialized_timestamp": None},
+    )
+    _journal_append(c, end)
     assert end["evaluation_mode"] == "PROVISIONAL_INTRABAR"
     assert end["event_timestamp"] == end_ts
     assert end["event_timestamp"] != end_bar_close
@@ -1488,23 +1726,24 @@ def test_live1b_provisional_flip_executes_intrabar_before_current_bar_close(cfg,
     assert pd.Timestamp(entry_acts[0]["fill"]["execution_timestamp"]) < pd.Timestamp(BAR_CLOSE_TS)
 
     _freeze_entry_clock(monkeypatch, FLIP_CLOCK)
-    flip_prints = [
-        _agg_trade(price=100.80, qty=2.0, ts="2026-08-13T16:17:20Z", mono=2_450_000, tid=5, sell=False),
-        _agg_trade(price=FLIP_OCCURRENCE_PRICE, qty=4.0, ts=FLIP_TS, mono=2_500_000, tid=6, sell=True),
-    ]
-    emitted = []
-    for trade in flip_prints:
-        emitted.extend(cog.on_agg_trade(trade))
-
     bar = cog.bars.bars["M15"]
     bar_close = _expected_bar_close(bar)
     assert bar.is_closed is False
     assert bar.bar_open_timestamp == pd.Timestamp(BAR_OPEN_TS)
     assert bar_close == pd.Timestamp(BAR_CLOSE_TS)
 
-    flips = _m15(emitted, "CONTEXT_FLIP")
-    assert len(flips) == 1
-    flip = flips[0]
+    episode = paper.positions["M15"].lifecycle_episode_id
+    flip = _flip(
+        eid="provisional_flip_still_open_bar",
+        episode=str(episode),
+        mono=2_500_000,
+        occurrence_ts=FLIP_TS,
+        occurrence_price=FLIP_OCCURRENCE_PRICE,
+        bid=EXIT_BID,
+        ask=EXIT_ASK,
+        extra={"ingested_at": FLIP_TS, "materialized_timestamp": None},
+    )
+    _journal_append(c, flip)
     assert flip["evaluation_mode"] == "PROVISIONAL_INTRABAR"
     assert flip["event_timestamp"] == FLIP_TS
     assert flip["previous_context"] == "LONG_CONTEXT"

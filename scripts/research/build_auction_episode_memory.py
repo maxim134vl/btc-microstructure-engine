@@ -48,6 +48,9 @@ REQUIRED_OUTPUT_COLUMNS = [
     "auction_episode",
     "episode_status",
     "episode_reason",
+    "relative_volume",
+    "relative_spread",
+    "timeframe",
     "source_freshness",
     "builder_version",
     "shadow_only",
@@ -682,7 +685,18 @@ def build_auction_episode_rows(
             base[c] = merged[col].where(ok, pd.NA)
         return base
 
-    vol_j = _asof_cols(vol, ["volume_event", "climax_state", "effort_result_state", "volume_class", "relative_volume", "localized_behavior"])
+    vol_j = _asof_cols(
+        vol,
+        [
+            "volume_event",
+            "climax_state",
+            "effort_result_state",
+            "volume_class",
+            "relative_volume",
+            "relative_spread",
+            "localized_behavior",
+        ],
+    )
     conv_j = _asof_cols(conv, ["convergence_state", "localized_behavior"])
     prob_j = _asof_cols(prob, ["auction_regime", "distribution_probability", "absorption_probability"])
     cog_j = _asof_cols(cog, ["trigger_event", "location_bias"], max_age=cognition_max_age)
@@ -705,6 +719,8 @@ def build_auction_episode_rows(
         effort_result_state = _clean_text(vol_j.iloc[index].get("effort_result_state"), default="UNKNOWN")
         volume_class = _clean_text(vol_j.iloc[index].get("volume_class"), default="UNKNOWN")
         relative_volume = _safe_float(vol_j.iloc[index].get("relative_volume"), default=None)
+        relative_spread = _safe_float(vol_j.iloc[index].get("relative_spread"), default=None)
+        timeframe = _clean_text(bar.get("timeframe"), default="M15") if "timeframe" in bars.columns else "M15"
         localized_from_vol = _clean_text(vol_j.iloc[index].get("localized_behavior"), default="UNKNOWN")
 
         convergence_state = _clean_text(conv_j.iloc[index].get("convergence_state"), default="UNKNOWN")
@@ -856,6 +872,9 @@ def build_auction_episode_rows(
                 "auction_episode": auction_episode,
                 "episode_status": episode_status,
                 "episode_reason": episode_reason,
+                "relative_volume": relative_volume,
+                "relative_spread": relative_spread,
+                "timeframe": timeframe,
                 "source_freshness": freshness_json,
                 "builder_version": BUILDER_VERSION,
                 "shadow_only": True,

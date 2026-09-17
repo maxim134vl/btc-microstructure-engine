@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .bbo import CausalBBOStore, fill_price_for, resolve_context_entry_price
 from .books import EpochBooks
@@ -134,6 +134,7 @@ class OpenPosition:
     entry_command_id: str
     entry_monotonic_ns: int
     opened_at: str | None = None
+    entry_decision_ts: str | None = None
     traded_episode_ids: set[str] = field(default_factory=set)
 
 
@@ -253,6 +254,13 @@ class IntrabarPaperEngine:
                 entry_command_id=str(row.get("entry_command_id") or ""),
                 entry_monotonic_ns=int(row.get("entry_monotonic_ns") or 0),
                 opened_at=str(row.get("opened_at") or row.get("execution_timestamp") or "") or None,
+                entry_decision_ts=str(
+                    row.get("entry_decision_ts")
+                    or row.get("evaluation_timestamp")
+                    or row.get("context_occurrence_timestamp")
+                    or ""
+                )
+                or None,
             )
             if ep:
                 self.traded_episodes.add(str(ep))
@@ -506,18 +514,35 @@ class IntrabarPaperEngine:
         return []
 
     @staticmethod
-    def _s41_close_trigger_type(command: dict[str, Any]) -> str:
-        raw = command.get("reason_codes")
+    def _s41_reason_blob(command: Mapping[str, Any] | None) -> str:
+        raw = (command or {}).get("reason_codes")
         if isinstance(raw, list):
-            blob = " ".join(str(x) for x in raw)
-        else:
-            blob = str(raw or "")
-        upper = blob.upper()
+            return " ".join(str(x) for x in raw)
+        return str(raw or "")
+
+    @staticmethod
+    def _s41_close_trigger_type(command: dict[str, Any]) -> str:
+        upper = IntrabarPaperEngine._s41_reason_blob(command).upper()
         if "TAKE_PROFIT" in upper:
             return "TAKE_PROFIT"
         if "STOP_LOSS" in upper:
             return "STOP_LOSS"
         return "S41_COMMAND_CLOSE"
+
+    @staticmethod
+    def _s41_close_target_side(command: Mapping[str, Any] | None) -> str | None:
+        """Side the CLOSE was decided against. None if the command does not say.
+
+        PREVIEW_CLOSE_LONG_STOP_LOSS must not flatten a later SHORT.
+        """
+        upper = IntrabarPaperEngine._s41_reason_blob(command).upper()
+        long_hit = "PREVIEW_CLOSE_LONG" in upper or "CLOSE_LONG" in upper
+        short_hit = "PREVIEW_CLOSE_SHORT" in upper or "CLOSE_SHORT" in upper
+        if long_hit and not short_hit:
+            return "LONG"
+        if short_hit and not long_hit:
+            return "SHORT"
+        return None
 
     def apply_s41_manager_command(self, command: dict[str, Any]) -> dict[str, Any] | None:
         """Execute one S4.1 manager command against LIVE1B books (hybrid)."""
@@ -569,6 +594,41 @@ class IntrabarPaperEngine:
                 from_manager_command=True,
             )
         if intent == "CLOSE":
+            pos = self.positions.get(tf)
+            if not pos:
+                return {
+                    "status": "CLOSE_NO_POSITION",
+                    "command_id": command_id,
+                    "timeframe": tf,
+                }
+            target_side = self._s41_close_target_side(command)
+            pos_side = str(pos.side or "").upper()
+            if target_side and target_side != pos_side:
+                return {
+                    "status": "CLOSE_SIDE_MISMATCH",
+                    "command_id": command_id,
+                    "timeframe": tf,
+                    "position_side": pos_side,
+                    "command_side": target_side,
+                }
+            cmd_ts = _as_utc_datetime(command.get("evaluation_timestamp")) or _as_utc_datetime(
+                command.get("created_at")
+            )
+            entry_decision_ts = _as_utc_datetime(pos.entry_decision_ts)
+            # Decision clocks only. Fill `opened_at` lags paper and must not
+            # reject a later CLOSE of the same occupancy.
+            if (
+                cmd_ts is not None
+                and entry_decision_ts is not None
+                and cmd_ts < entry_decision_ts
+            ):
+                return {
+                    "status": "CLOSE_STALE_FOR_NEWER_POSITION",
+                    "command_id": command_id,
+                    "timeframe": tf,
+                    "entry_decision_ts": pos.entry_decision_ts,
+                    "command_ts": command.get("evaluation_timestamp") or command.get("created_at"),
+                }
             trigger = self._s41_close_trigger_type(command)
             protective = trigger in {"TAKE_PROFIT", "STOP_LOSS", "TP", "SL", "STOP"}
             return self._exit_position(
@@ -679,9 +739,8 @@ class IntrabarPaperEngine:
                 return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
         saw = self.saw_filter.evaluate(timeframe=tf, as_of=event_timestamp)
         self.last_saw = saw.to_dict()
-        # Journal START may still be gated. S4.1 OPEN executes cognition:
-        # path-density must not keep us flat while parquet is directional.
-        if saw.block and not from_manager_command:
+        # Journal START and S4.1 OPEN both skip a saw. Exits stay free.
+        if saw.block:
             self._block(
                 saw.reason or "ENTRY_BLOCKED_SAW_PATH_DENSITY",
                 tf,
@@ -886,6 +945,11 @@ class IntrabarPaperEngine:
         signal_id = _new_id("sig")
         execution_ts = _utc_iso()
         occurrence_ts = _occurrence_timestamp(event, event_timestamp)
+        entry_decision_ts = (
+            str(event.get("evaluation_timestamp") or "").strip()
+            or str(event.get("decision_available_at") or "").strip()
+            or occurrence_ts
+        )
         decision_available_at = event.get("decision_available_at")
         materialized_timestamp = event.get("materialized_timestamp") or event.get("ingested_at")
         cmd_mono = event_monotonic_ns
@@ -915,6 +979,8 @@ class IntrabarPaperEngine:
             "execution_bbo_domain": bbo_domain,
             "manager_command_id": event.get("manager_command_id"),
             "entry_source": "s41_command_bus" if from_manager_command else "context_journal",
+            "entry_decision_ts": entry_decision_ts,
+            "evaluation_timestamp": event.get("evaluation_timestamp"),
         }
         price_snap = {
             "paper_fill_price": fill_px,
@@ -1040,6 +1106,7 @@ class IntrabarPaperEngine:
             entry_command_id=cmd_id,
             entry_monotonic_ns=cmd_mono,
             opened_at=execution_ts,
+            entry_decision_ts=entry_decision_ts,
         )
         if self._uses_sleeves() and self.sleeves is not None:
             self.sleeves.mark_open(tf, pos_id, float(sizing.risk_amount_usd))

@@ -19,6 +19,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from .anti_saw_path_density import BLOCK_REASON as SAW_BLOCK_REASON
 from .anti_saw_path_density import PathDensitySawFilter
 from .command_bus import COMMAND_SCHEMA_VERSION, VALID_INTENTS, CommandBus, CommandBusPaths, utc_now
 from .paper_core import compute_stop_take, evaluate_exit_preview, make_id, safe_float
@@ -31,10 +32,12 @@ from .timeframe_state_adapter import (
     UNSUPPORTED_TIMEFRAMES,
     TimeframeSources,
     load_sources,
-    resolve_all_states,
+    resolve_timeframe_state,
     timeframe_is_live_entry_authority,
 )
 from .trader_book import TraderBook, repo_relative
+
+from btc_ml.cognition.living_market_process import trade_strength_floor
 
 ROOT = Path(__file__).resolve().parents[3]
 LIVE_FEED = ROOT / "data" / "live" / "live_market_feed.parquet"
@@ -70,6 +73,7 @@ COGNITION_RESTATED_FOLLOW = "COGNITION_RESTATED_FOLLOW"
 OPPOSITE_REQUIRES_OBSERVE = "OPPOSITE_REQUIRES_OBSERVE"
 FORMING_BAR_CONTEXT = "FORMING_BAR_CONTEXT"
 RAW_STATUS_NOT_CONFIRMED = "RAW_STATUS_NOT_CONFIRMED"
+PROCESS_STRENGTH_TOO_WEAK = "PROCESS_STRENGTH_TOO_WEAK"
 _CONFIRMED_RAW_CONTEXT_STATUSES = {"ACTIVE", "CONFIRMED"}
 _UNCONFIRMED_RAW_CONTEXT_STATUSES = {"DEVELOPING", "OBSERVE", "STARTED"}
 _S41_CONTRACT_PATH = ROOT / "config" / "trading" / "s41_live1b_chain_contract.json"
@@ -93,6 +97,23 @@ def _entry_requires_confirmed_raw_status() -> bool:
 ENTRY_REQUIRES_CONFIRMED_RAW_STATUS = _entry_requires_confirmed_raw_status()
 
 
+def _entry_requires_min_process_strength() -> bool:
+    """Flat OPEN and context-flip need process_strength at least the TF floor.
+
+    Missing strength fail-open so older fixtures and rows keep current behavior.
+    """
+    try:
+        payload = json.loads(_S41_CONTRACT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return True
+    if "entry_requires_min_process_strength" not in payload:
+        return True
+    return bool(payload.get("entry_requires_min_process_strength"))
+
+
+ENTRY_REQUIRES_MIN_PROCESS_STRENGTH = _entry_requires_min_process_strength()
+
+
 def _clean_raw_context_status(value: Any) -> str:
     text = str(value or "").strip().upper()
     if text in {"", "NONE", "NAN", "NAT", "<NA>"}:
@@ -105,6 +126,36 @@ def _raw_status_blocks_new_entry(state: Mapping[str, Any] | None) -> bool:
     if raw == "UNKNOWN" or raw in _CONFIRMED_RAW_CONTEXT_STATUSES:
         return False
     return raw in _UNCONFIRMED_RAW_CONTEXT_STATUSES
+
+
+def _process_strength_value(state: Mapping[str, Any] | None) -> float | None:
+    if not state:
+        return None
+    raw = state.get("process_strength")
+    if raw is None:
+        return None
+    try:
+        if pd.isna(raw):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
+def _strength_too_weak(state: Mapping[str, Any] | None, timeframe: str | None = None) -> bool:
+    if not ENTRY_REQUIRES_MIN_PROCESS_STRENGTH:
+        return False
+    strength = _process_strength_value(state)
+    if strength is None:
+        return False
+    tf = str(timeframe or (state or {}).get("timeframe") or "M15")
+    return strength < trade_strength_floor(tf)
 
 
 def _canonical_episode_id(*, namespace: str, original: str, timeframe: str | None) -> str:
@@ -373,18 +424,104 @@ def _market_observation_for_open_position(
     return last
 
 
+def _state_is_opposite_active(state: Mapping[str, Any] | None, side: str) -> bool:
+    """True when the resolved row is confirmed opposite ACTIVE — flatten authority."""
+    if not state:
+        return False
+    side_u = str(side or "").upper()
+    ctx = str(state.get("timeframe_state") or "").upper()
+    phase = str(state.get("lifecycle_phase") or "").upper()
+    if phase != "ACTIVE":
+        return False
+    if _strength_too_weak(state, str(state.get("timeframe") or "")):
+        return False
+    if side_u == "LONG":
+        return ctx in {"SHORT", "SHORT_CONTEXT"}
+    if side_u == "SHORT":
+        return ctx in {"LONG", "LONG_CONTEXT"}
+    return False
+
+
+def _state_is_directional_entry(state: Mapping[str, Any] | None) -> bool:
+    """Painted directional band that may open a slot (ACTIVE or CHALLENGED)."""
+    if not state:
+        return False
+    ctx = str(state.get("timeframe_state") or "").upper()
+    phase = str(state.get("lifecycle_phase") or "").upper()
+    return phase in {"ACTIVE", "CHALLENGED"} and ctx in {
+        "LONG",
+        "LONG_CONTEXT",
+        "SHORT",
+        "SHORT_CONTEXT",
+    }
+
+
+def _closed_row_missing(state: Mapping[str, Any] | None) -> bool:
+    if not state:
+        return True
+    reason = str(state.get("no_action_reason") or "")
+    ctx = str(state.get("timeframe_state") or "").upper()
+    if "NO_LIFECYCLE" in reason or reason in {
+        "LIFECYCLE_DATASET_MISSING",
+        "WAITING_FOR_BAR_CLOSE",
+    }:
+        return True
+    return ctx in {"UNKNOWN", "WAITING_FOR_BAR_CLOSE", ""} and "NO_LIFECYCLE" in reason
+
+
+def select_state_for_flat_open(
+    *,
+    closed: Mapping[str, Any],
+    forming: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Entry authority when the slot is empty.
+
+    Closed directional paint is the fact. Forming must not open a side the
+    closed bar does not have (H4_3 LONG CHALLENGED on a bar whose closed
+    paint is already SHORT/OBSERVE). Forming is used only when the closed
+    row is missing.
+    """
+    if _state_is_directional_entry(closed):
+        return dict(closed)
+    if _closed_row_missing(closed) and _state_is_directional_entry(forming):
+        return dict(forming)
+    return dict(closed)
+
+
+def select_state_for_open_position(
+    *,
+    closed: Mapping[str, Any],
+    forming: Mapping[str, Any],
+    side: str,
+) -> dict[str, Any]:
+    """Exit authority for an open slot.
+
+    Closed opposite ACTIVE closes. Forming opposite ACTIVE must not flatten
+    over a closed OBSERVE / same-side / CHALLENGED row (H4 14:31, H1 07:46).
+    Forming is used only when the closed row is missing.
+    """
+    if _state_is_opposite_active(closed, side):
+        return dict(closed)
+    if _closed_row_missing(closed) and _state_is_opposite_active(forming, side):
+        return dict(forming)
+    return dict(closed)
+
+
 def _preview_context_for_open_position(
     side: str,
     timeframe_state: str,
     lifecycle_phase: str | None = None,
+    *,
+    process_strength: float | None = None,
+    timeframe: str | None = None,
 ) -> str | None:
     """Exit preview context for an open position.
 
     None: missing/UNKNOWN row — wait, do not infer own side, do not close.
     OBSERVE / NO_ACTIVE / STAND_ASIDE / INVALIDATED: keep own side → HOLD.
     The pause is not a flatten. Close only when the painted context becomes
-    the opposite ACTIVE. If after OBSERVE the same direction returns, HOLD.
-    Opposite ACTIVE: pass through → CONTEXT_FLIP close.
+    the opposite ACTIVE with enough process strength. If after OBSERVE the
+    same direction returns, HOLD. Weak opposite (0.5) is noise, not a reverse.
     Opposite CHALLENGED: keep own side → HOLD (unconfirmed noise).
     Same-side directional: keep own side → HOLD, including CHALLENGED.
     """
@@ -399,6 +536,11 @@ def _preview_context_for_open_position(
         return own if side_u in {"LONG", "SHORT"} else ctx
     if ctx in {opposite, opposite.replace("_CONTEXT", "")}:
         if phase == "ACTIVE":
+            if _strength_too_weak(
+                {"process_strength": process_strength, "timeframe": timeframe},
+                timeframe,
+            ):
+                return own
             return opposite
         return own
     if side_u in {"SHORT", "LONG"}:
@@ -667,17 +809,50 @@ class TimeframeManager:
     ) -> dict[str, Any]:
         src = sources or load_sources()
         market_feed = feed if feed is not None else load_feed()
-        states = resolve_all_states(
-            evaluation_timestamp=evaluation_timestamp,
-            sources=src,
-            timeframes=self.timeframes,
-            now=now,
-        )
         manager_cycle_id = make_id("TF_MGR_CYCLE", self.asset, evaluation_timestamp, ",".join(self.timeframes))
 
         mark = _market_observation(market_feed, at_or_before=evaluation_timestamp)
         mark_price = (mark or {}).get("close")
         views = self.trader_views(mark_price=mark_price)
+        states: dict[str, dict[str, Any]] = {}
+        for tf in self.timeframes:
+            open_position = (views.get(tf) or {}).get("open_position")
+            if open_position:
+                closed = resolve_timeframe_state(
+                    timeframe=tf,
+                    evaluation_timestamp=evaluation_timestamp,
+                    sources=src,
+                    now=now,
+                    prefer_forming=False,
+                )
+                forming = resolve_timeframe_state(
+                    timeframe=tf,
+                    evaluation_timestamp=evaluation_timestamp,
+                    sources=src,
+                    now=now,
+                    prefer_forming=True,
+                )
+                states[tf] = select_state_for_open_position(
+                    closed=closed,
+                    forming=forming,
+                    side=str(open_position.get("direction") or ""),
+                )
+            else:
+                closed = resolve_timeframe_state(
+                    timeframe=tf,
+                    evaluation_timestamp=evaluation_timestamp,
+                    sources=src,
+                    now=now,
+                    prefer_forming=False,
+                )
+                forming = resolve_timeframe_state(
+                    timeframe=tf,
+                    evaluation_timestamp=evaluation_timestamp,
+                    sources=src,
+                    now=now,
+                    prefer_forming=True,
+                )
+                states[tf] = select_state_for_flat_open(closed=closed, forming=forming)
         open_risk = {tf: float(view.get("open_risk_usd") or 0.0) for tf, view in views.items()}
         open_positions = {tf: (1 if view.get("open_position") else 0) for tf, view in views.items()}
 
@@ -882,6 +1057,8 @@ class TimeframeManager:
                     side,
                     str(state.get("timeframe_state") or ""),
                     str(state.get("lifecycle_phase") or ""),
+                    process_strength=_process_strength_value(state),
+                    timeframe=timeframe,
                 )
                 if preview_ctx is None:
                     intent = "HOLD"
@@ -915,6 +1092,15 @@ class TimeframeManager:
                     else:
                         intent = "HOLD"
                         reasons.append(str(preview.get("exit_preview_reason") or "HOLD"))
+                        if (
+                            _strength_too_weak(state, timeframe)
+                            and str(state.get("lifecycle_phase") or "").upper() == "ACTIVE"
+                        ):
+                            painted = str(state.get("timeframe_state") or "").upper()
+                            if (side == "LONG" and "SHORT" in painted) or (
+                                side == "SHORT" and "LONG" in painted
+                            ):
+                                reasons.insert(0, PROCESS_STRENGTH_TOO_WEAK)
             eval_ts = state.get("evaluation_timestamp") or evaluation_timestamp
             cognition_key = _cognition_fingerprint(state)
             if (
@@ -1061,6 +1247,12 @@ class TimeframeManager:
         ):
             intent = "NO_ACTION"
             reasons.append(RAW_STATUS_NOT_CONFIRMED)
+        elif _strength_too_weak(state, timeframe):
+            intent = "NO_ACTION"
+            reasons.append(PROCESS_STRENGTH_TOO_WEAK)
+        elif self._saw_blocks_open(timeframe, state=state, evaluation_timestamp=evaluation_timestamp):
+            intent = "NO_ACTION"
+            reasons.append(SAW_BLOCK_REASON)
         else:
             direction = str(state.get("timeframe_direction") or "").upper()
             candidate_intent = "OPEN_LONG" if direction == "LONG" else "OPEN_SHORT"
@@ -1189,6 +1381,8 @@ class TimeframeManager:
             "availability_status": state.get("availability_status"),
             "lifecycle_episode_id": episode,
             "lifecycle_phase": state.get("lifecycle_phase"),
+            "process_strength": state.get("process_strength"),
+            "living_process": state.get("living_process"),
             "context_origin_price": state.get("context_origin_price"),
             "context_started_at": state.get("context_started_at"),
             "intent": intent,
@@ -1232,7 +1426,10 @@ class TimeframeManager:
         if self.saw_filter is None:
             return False
         as_of = state.get("source_bar_close") or state.get("evaluation_timestamp") or evaluation_timestamp
-        decision = self.saw_filter.evaluate(timeframe=timeframe, as_of=as_of)
+        try:
+            decision = self.saw_filter.evaluate(timeframe=timeframe, as_of=as_of)
+        except Exception:
+            return False
         return bool(decision.block)
 
     def _position_meta(self, timeframe: str) -> dict[str, Any]:

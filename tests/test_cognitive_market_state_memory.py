@@ -35,33 +35,33 @@ def _episode_row(**overrides) -> dict:
     return base
 
 
-def test_upper_distribution_maps_to_seller_pressure():
+def test_upper_distribution_is_event_not_seller_process():
     state, direction, reason = mod.classify_cognitive_market_state(
         auction_episode="UPPER_DISTRIBUTION",
         episode_status="CONFIRMED",
     )
     assert state == "UPPER_DISTRIBUTION"
-    assert direction == "SELLER_PRESSURE"
-    assert "seller pressure" in reason
+    assert direction == "NEUTRAL"
+    assert "not a seller process" in reason
 
 
-def test_failed_breakout_maps_to_upper_distribution():
+def test_failed_breakout_is_event_not_seller_process():
     state, direction, _ = mod.classify_cognitive_market_state(
         auction_episode="FAILED_BREAKOUT",
         episode_status="DEVELOPING",
     )
     assert state == "UPPER_DISTRIBUTION"
-    assert direction == "SELLER_PRESSURE"
+    assert direction == "NEUTRAL"
 
 
-def test_lower_absorption_maps_to_buyer_support():
+def test_lower_absorption_is_event_not_buyer_process():
     state, direction, reason = mod.classify_cognitive_market_state(
         auction_episode="LOWER_ABSORPTION",
         episode_status="CONFIRMED",
     )
     assert state == "LOWER_ABSORPTION"
-    assert direction == "BUYER_SUPPORT"
-    assert "buyer support" in reason
+    assert direction == "NEUTRAL"
+    assert "not a buyer process" in reason
 
 
 def test_acceptance_higher_and_lower():
@@ -146,8 +146,8 @@ def test_build_rows_invariants_and_required_fields():
         "UNCERTAIN",
     ]
     assert out["state_direction"].tolist() == [
-        "SELLER_PRESSURE",
-        "BUYER_SUPPORT",
+        "NEUTRAL",
+        "NEUTRAL",
         "NEUTRAL",
         "UNKNOWN",
     ]

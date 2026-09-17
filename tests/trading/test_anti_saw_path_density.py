@@ -63,6 +63,64 @@ def test_chop_is_saw() -> None:
     assert score.failed_breakouts >= 1
 
 
+def test_h4_chop_with_thin_path_atr_is_saw() -> None:
+    """H4 4-bar window: same saw, path/ATR often < 2. Rejected probes still count."""
+    rows = [
+        {"timestamp": "2026-09-11T00:00:00Z", "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.4},
+        {"timestamp": "2026-09-11T04:00:00Z", "open": 100.4, "high": 103.5, "low": 100.0, "close": 100.2},
+        {"timestamp": "2026-09-11T08:00:00Z", "open": 100.2, "high": 101.0, "low": 96.5, "close": 100.5},
+        {"timestamp": "2026-09-11T12:00:00Z", "open": 100.5, "high": 101.2, "low": 99.4, "close": 100.1},
+    ]
+    score = score_bars(rows, min_bars=3)
+    assert score.path_atr < 2.0
+    assert score.failed_breakouts >= 1
+    assert score.balance_support >= 0.55
+    assert score.is_saw is True
+
+
+def test_two_sided_volume_confirms_price_chop() -> None:
+    rows = _saw()
+    for row in rows:
+        row["high"] = 104.0
+        row["low"] = 96.0
+        row["volume"] = 100.0
+        row["delta"] = 5.0 if float(row["close"]) > float(row["open"]) else -5.0
+    score = score_bars(rows)
+    assert score.volume_present is True
+    assert score.volume_two_sided >= 0.55
+    assert score.is_saw is True
+
+
+def test_balance_auction_confirms_price_chop() -> None:
+    rows = _saw()
+    for row in rows:
+        row["high"] = 104.0
+        row["low"] = 96.0
+        row["auction_episode"] = "BALANCE"
+    score = score_bars(rows)
+    assert score.auction_present is True
+    assert score.auction_balance_share >= 0.5
+    assert score.is_saw is True
+
+
+def test_missing_volume_and_auction_fail_open_on_features() -> None:
+    score = score_bars(_saw())
+    assert score.volume_present is False
+    assert score.auction_present is False
+    assert score.is_saw is True  # price path still confirms
+
+
+def test_trend_with_volume_is_not_saw() -> None:
+    rows = _trend()
+    for row in rows:
+        row["volume"] = 80.0
+        row["delta"] = 40.0
+        row["auction_episode"] = "CONTINUATION"
+    score = score_bars(rows)
+    assert score.is_saw is False
+    assert score.net_over_path > 0.8
+
+
 def test_tiny_chop_without_atr_churn_is_not_saw() -> None:
     rows = []
     for i in range(8):

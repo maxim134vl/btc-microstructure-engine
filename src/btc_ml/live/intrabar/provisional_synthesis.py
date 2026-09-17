@@ -44,6 +44,9 @@ def synthesize_provisional_state(
     causal_cutoff: Any = None,
     prior_auction_episode: str = "UNKNOWN",
     prev_close: float | None = None,
+    prior_market_context: str | None = None,
+    prior_strength: float = 0.0,
+    timeframe: str = "M15",
 ) -> dict[str, Any]:
     """Wire existing episode → cognitive → final context classifiers for one tip."""
     completed_history = completed_history or {}
@@ -129,6 +132,21 @@ def synthesize_provisional_state(
         cognitive_market_state=cognitive_market_state,
         state_direction=state_direction,
         state_status=state_status,
+        prior_context=prior_market_context,
+        prior_strength=prior_strength,
+        effort_result=effort_result,
+        price_result=price_result,
+        effort_side=effort_side,
+        volume_effort=volume_effort,
+        relative_volume=float(response_row["relative_volume"])
+        if response_row.get("relative_volume") == response_row.get("relative_volume")
+        and response_row.get("relative_volume") is not None
+        else None,
+        relative_spread=float(response_row["relative_spread"])
+        if response_row.get("relative_spread") == response_row.get("relative_spread")
+        and response_row.get("relative_spread") is not None
+        else None,
+        timeframe=timeframe,
     )
     context_status = classify_context_status(
         market_context=market_context,

@@ -22,6 +22,7 @@
     "wait-one-bar OPEN"
   ],
   "entry_requires_confirmed_raw_status": true,
+  "entry_requires_min_process_strength": true,
   "invariants": [
     {
       "id": "OWNER_SINGLE",
@@ -49,7 +50,7 @@
     },
     {
       "id": "COGNITION_EXECUTION",
-      "must": "S4.1 desired position equals closed-bar parquet direction the chart paints; restated opposite on the same source_bar_close is followed; path-density anti-saw must not veto S4.1 OPEN"
+      "must": "S4.1 desired position equals closed-bar parquet direction the chart paints; restated opposite on the same source_bar_close is followed; path-density anti-saw vetoes flat OPEN and ATOMIC_FLIP OPEN when the closed-bar window is a saw; CLOSE/SL/TP/HOLD are not gated"
     },
     {
       "id": "ATOMIC_FLIP",
@@ -89,7 +90,11 @@
     },
     {
       "id": "ENTRY_CONFIRMED_RAW",
-      "must": "flat-slot OPEN requires raw_context_status ACTIVE on the resolved lifecycle row; DEVELOPING/OBSERVE while lifecycle ACTIVE is NO_ACTION RAW_STATUS_NOT_CONFIRMED; missing/UNKNOWN fail-open; ATOMIC_FLIP_OPEN is not gated; CLOSE/HOLD unchanged"
+      "must": "flat-slot OPEN requires raw_context_status ACTIVE on the resolved lifecycle row; DEVELOPING/OBSERVE while lifecycle ACTIVE is NO_ACTION RAW_STATUS_NOT_CONFIRMED; missing/UNKNOWN fail-open; ATOMIC_FLIP_OPEN is not gated by raw status; CLOSE/HOLD unchanged"
+    },
+    {
+      "id": "PROCESS_STRENGTH_TRADE",
+      "must": "flat OPEN and context-flip CLOSE require process_strength >= 0.5 * TF_WEIGHT; missing strength fail-open; SL/TP CLOSE is not gated; opposite accept kills only when its hit >= living strength"
     }
   ]
 }

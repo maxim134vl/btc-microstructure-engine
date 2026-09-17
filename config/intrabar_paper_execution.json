@@ -45,6 +45,9 @@
     "min_path_atr": 2.0,
     "min_failed_breakouts": 1,
     "min_bars": 3,
-    "candle_structure_path": "data/cognition/candle_structure_memory.parquet"
+    "volume_two_sided_enter": 0.55,
+    "auction_balance_share": 0.50,
+    "candle_structure_path": "data/cognition/candle_structure_memory.parquet",
+    "auction_path": "data/cognition/auction_episode_memory.parquet"
   }
 }

@@ -12,6 +12,7 @@ data/**
 .DS_Store
 
 .env
+config/hl-testnet.secrets.env
 
 .idea/
 

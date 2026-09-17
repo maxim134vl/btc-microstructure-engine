@@ -22,10 +22,13 @@ from btc_ml.trading.proofs import isolated_environment
 from btc_ml.trading.timeframe_manager import (
     FORMING_BAR_CONTEXT,
     OPPOSITE_REQUIRES_OBSERVE,
+    PROCESS_STRENGTH_TOO_WEAK,
     RAW_STATUS_NOT_CONFIRMED,
     SAME_CLOSED_BAR_ALREADY_ACTED,
     TimeframeManager,
     _same_closed_bar_already_actioned,
+    select_state_for_flat_open,
+    select_state_for_open_position,
     with_bar_close,
 )
 from btc_ml.trading.timeframe_state_adapter import TimeframeSources, resolve_timeframe_state
@@ -55,6 +58,7 @@ def _life(
     started: str | None = None,
     phase: str = "ACTIVE",
     raw_status: str | None = None,
+    process_strength: float | None = None,
 ) -> dict:
     row = {
         "timestamp": ts,
@@ -67,6 +71,9 @@ def _life(
     }
     if raw_status is not None:
         row["raw_context_status"] = raw_status
+    if process_strength is not None:
+        row["process_strength"] = process_strength
+        row["living_process"] = "SELLER" if "SHORT" in context else "BUYER" if "LONG" in context else "NONE"
     return row
 
 
@@ -383,6 +390,51 @@ def test_h1_forming_bar_row_is_actionable_before_close():
     assert state["lifecycle_row_timestamp"] == "2026-09-14T12:00:00Z"
 
 
+def test_select_state_for_flat_open_closed_direction_wins():
+    closed = {"timeframe_state": "SHORT_CONTEXT", "lifecycle_phase": "ACTIVE"}
+    forming = {"timeframe_state": "LONG_CONTEXT", "lifecycle_phase": "ACTIVE"}
+    chosen = select_state_for_flat_open(closed=closed, forming=forming)
+    assert chosen["timeframe_state"] == "SHORT_CONTEXT"
+
+
+def test_select_state_for_flat_open_observe_closed_does_not_take_forming():
+    closed = {"timeframe_state": "OBSERVE", "lifecycle_phase": "INVALIDATED"}
+    forming = {
+        "timeframe_state": "LONG_CONTEXT",
+        "lifecycle_phase": "CHALLENGED",
+    }
+    chosen = select_state_for_flat_open(closed=closed, forming=forming)
+    assert chosen["timeframe_state"] == "OBSERVE"
+
+
+def test_select_state_for_flat_open_forming_only_when_closed_missing():
+    closed = {
+        "timeframe_state": "UNKNOWN",
+        "no_action_reason": "NO_LIFECYCLE_ROW_FOR_CLOSED_BAR",
+    }
+    forming = {"timeframe_state": "SHORT_CONTEXT", "lifecycle_phase": "ACTIVE"}
+    chosen = select_state_for_flat_open(closed=closed, forming=forming)
+    assert chosen["timeframe_state"] == "SHORT_CONTEXT"
+
+
+def test_select_state_for_open_position_closed_observe_holds_through_forming_short():
+    """H4 14:31: closed OBSERVE + forming SHORT must not flatten a LONG."""
+    closed = {"timeframe_state": "OBSERVE", "lifecycle_phase": "INVALIDATED"}
+    forming = {"timeframe_state": "SHORT_CONTEXT", "lifecycle_phase": "ACTIVE"}
+    chosen = select_state_for_open_position(closed=closed, forming=forming, side="LONG")
+    assert chosen["timeframe_state"] == "OBSERVE"
+
+
+def test_select_state_for_open_position_forming_short_only_when_closed_missing():
+    closed = {
+        "timeframe_state": "UNKNOWN",
+        "no_action_reason": "NO_LIFECYCLE_ROW_FOR_CLOSED_BAR",
+    }
+    forming = {"timeframe_state": "SHORT_CONTEXT", "lifecycle_phase": "ACTIVE"}
+    chosen = select_state_for_open_position(closed=closed, forming=forming, side="LONG")
+    assert chosen["timeframe_state"] == "SHORT_CONTEXT"
+
+
 def test_h1_manager_opens_forming_bar_context(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
     bus, books, _ = isolated_environment(tmp_path / "books")
@@ -427,6 +479,116 @@ def test_h1_manager_opens_forming_bar_context(tmp_path: Path, monkeypatch):
     for cmd in h1:
         reasons.extend(json.loads(cmd["reason_codes"]))
     assert FORMING_BAR_CONTEXT in reasons
+
+
+def test_flat_open_does_not_use_forming_when_closed_bar_is_not_same_side(
+    tmp_path: Path, monkeypatch
+):
+    """H4_3: closed OBSERVE, forming LONG CHALLENGED → no OPEN_LONG."""
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {"H4": _slot(None)}
+    monkeypatch.setattr(manager, "trader_views", _views_for(positions))
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="H4",
+                    evaluation="2026-09-15T00:15:00Z",
+                    bar_open="2026-09-14T20:00:00Z",
+                    bar_close="2026-09-15T00:00:00Z",
+                )
+            ]
+        ),
+        lifecycle=pd.DataFrame(
+            [
+                _life(
+                    ts="2026-09-14T20:00:00Z",
+                    tf="H4",
+                    context="OBSERVE",
+                    episode=46,
+                    started="2026-09-14T20:00:00Z",
+                    phase="INVALIDATED",
+                ),
+                _life(
+                    ts="2026-09-15T00:00:00Z",
+                    tf="H4",
+                    context="LONG_CONTEXT",
+                    episode=45,
+                    started="2026-09-13T08:00:00Z",
+                    phase="CHALLENGED",
+                    raw_status="DEVELOPING",
+                ),
+            ]
+        ),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-09-15T00:15:00Z",
+        sources=sources,
+        feed=_feed_from("2026-09-14T20:00:00Z", periods=20),
+        persist=True,
+        now="2026-09-15T00:16:00Z",
+        decision_index={},
+    )
+    h4 = [cmd for cmd in cycle["commands"] if cmd["timeframe"] == "H4"]
+    assert not any(cmd["intent"] == "OPEN_LONG" for cmd in h4)
+
+
+def test_flat_open_closed_short_does_not_open_forming_long(
+    tmp_path: Path, monkeypatch
+):
+    """H4_3 restated paint: closed SHORT, forming LONG ACTIVE → no OPEN_LONG."""
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {"H4": _slot(None)}
+    monkeypatch.setattr(manager, "trader_views", _views_for(positions))
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="H4",
+                    evaluation="2026-09-15T00:15:00Z",
+                    bar_open="2026-09-14T20:00:00Z",
+                    bar_close="2026-09-15T00:00:00Z",
+                )
+            ]
+        ),
+        lifecycle=pd.DataFrame(
+            [
+                _life(
+                    ts="2026-09-14T20:00:00Z",
+                    tf="H4",
+                    context="SHORT_CONTEXT",
+                    episode=47,
+                    started="2026-09-15T00:00:00Z",
+                    phase="ACTIVE",
+                ),
+                _life(
+                    ts="2026-09-15T00:00:00Z",
+                    tf="H4",
+                    context="LONG_CONTEXT",
+                    episode=45,
+                    started="2026-09-13T08:00:00Z",
+                    phase="ACTIVE",
+                ),
+            ]
+        ),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-09-15T00:15:00Z",
+        sources=sources,
+        feed=_feed_from("2026-09-14T20:00:00Z", periods=20),
+        persist=True,
+        now="2026-09-15T00:16:00Z",
+        decision_index={},
+    )
+    h4 = [cmd for cmd in cycle["commands"] if cmd["timeframe"] == "H4"]
+    assert not any(cmd["intent"] == "OPEN_LONG" for cmd in h4)
+    assert any(cmd["intent"] == "OPEN_SHORT" for cmd in h4)
 
 
 def test_observe_on_same_bar_then_opposite_allows_atomic_flip(tmp_path: Path, monkeypatch):
@@ -730,7 +892,10 @@ def test_h1_lagged_availability_follows_now_bar():
     assert state["context_bar_kind"] == FORMING_BAR_CONTEXT
 
 
-def test_m15_forming_short_closes_open_long(tmp_path: Path, monkeypatch):
+def test_m15_forming_short_does_not_close_open_long_when_closed_bar_exists(
+    tmp_path: Path, monkeypatch
+):
+    """Journal 1 / H4 14:31: forming opposite must not flatten over a closed row."""
     monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
     bus, books, _ = isolated_environment(tmp_path / "books")
     manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
@@ -776,9 +941,9 @@ def test_m15_forming_short_closes_open_long(tmp_path: Path, monkeypatch):
         now="2026-09-14T20:52:00Z",
         decision_index={},
     )
-    assert "CLOSE" in _intents(cycle, "M15")
-    assert "OPEN_SHORT" in _intents(cycle, "M15")
-    assert FORMING_BAR_CONTEXT in _reasons(cycle, "M15")
+    assert "HOLD" in _intents(cycle, "M15")
+    assert "CLOSE" not in _intents(cycle, "M15")
+    assert "OPEN_SHORT" not in _intents(cycle, "M15")
 
 
 def test_h1_forming_short_closes_leftover_long(tmp_path: Path, monkeypatch):
@@ -1120,3 +1285,249 @@ def test_open_long_holds_when_raw_observe_same_side(tmp_path: Path, monkeypatch)
     )
     assert "HOLD" in _intents(cycle, "M15")
     assert "CLOSE" not in _intents(cycle, "M15")
+
+
+def test_open_long_closes_on_closed_bar_short_even_if_forming_still_long(
+    tmp_path: Path, monkeypatch
+):
+    """M15_4 / M15_7: forming LONG must not hide the just-closed SHORT ACTIVE."""
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {"M15": _slot("LONG")}
+    monkeypatch.setattr(manager, "trader_views", _views_for(positions))
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="M15",
+                    evaluation="2026-09-14T21:00:00Z",
+                    bar_open="2026-09-14T20:45:00Z",
+                    bar_close="2026-09-14T21:00:00Z",
+                )
+            ]
+        ),
+        lifecycle=pd.DataFrame(
+            [
+                _life(
+                    ts="2026-09-14T20:45:00Z",
+                    tf="M15",
+                    context="SHORT_CONTEXT",
+                    episode=362,
+                    started="2026-09-14T20:45:00Z",
+                ),
+                _life(
+                    ts="2026-09-14T21:00:00Z",
+                    tf="M15",
+                    context="LONG_CONTEXT",
+                    episode=360,
+                    started="2026-09-14T19:00:00Z",
+                ),
+            ]
+        ),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-09-14T21:00:00Z",
+        sources=sources,
+        feed=_feed_from("2026-09-14T19:00:00Z"),
+        persist=True,
+        now="2026-09-14T21:01:00Z",
+        decision_index={},
+    )
+    assert "CLOSE" in _intents(cycle, "M15")
+    assert "OPEN_SHORT" in _intents(cycle, "M15")
+
+
+def test_open_short_closes_on_closed_bar_long_even_if_forming_still_short(
+    tmp_path: Path, monkeypatch
+):
+    """Symmetric flip: open SHORT must OPEN_LONG when closed bar is LONG ACTIVE."""
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {"M15": _slot("SHORT")}
+    monkeypatch.setattr(manager, "trader_views", _views_for(positions))
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="M15",
+                    evaluation="2026-09-14T22:15:00Z",
+                    bar_open="2026-09-14T22:00:00Z",
+                    bar_close="2026-09-14T22:15:00Z",
+                )
+            ]
+        ),
+        lifecycle=pd.DataFrame(
+            [
+                _life(
+                    ts="2026-09-14T22:00:00Z",
+                    tf="M15",
+                    context="LONG_CONTEXT",
+                    episode=366,
+                    started="2026-09-14T22:00:00Z",
+                ),
+                _life(
+                    ts="2026-09-14T22:15:00Z",
+                    tf="M15",
+                    context="SHORT_CONTEXT",
+                    episode=362,
+                    started="2026-09-14T21:00:00Z",
+                ),
+            ]
+        ),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-09-14T22:15:00Z",
+        sources=sources,
+        feed=_feed_from("2026-09-14T20:00:00Z"),
+        persist=True,
+        now="2026-09-14T22:16:00Z",
+        decision_index={},
+    )
+    assert "CLOSE" in _intents(cycle, "M15")
+    assert "OPEN_LONG" in _intents(cycle, "M15")
+
+
+def test_open_long_holds_closed_observe_even_if_forming_still_long(
+    tmp_path: Path, monkeypatch
+):
+    """OBSERVE_HOLD: closed OBSERVE keeps the LONG; forming LONG is not flatten authority."""
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {"M15": _slot("LONG")}
+    monkeypatch.setattr(manager, "trader_views", _views_for(positions))
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="M15",
+                    evaluation="2026-09-14T20:45:00Z",
+                    bar_open="2026-09-14T20:30:00Z",
+                    bar_close="2026-09-14T20:45:00Z",
+                )
+            ]
+        ),
+        lifecycle=pd.DataFrame(
+            [
+                _life(
+                    ts="2026-09-14T20:30:00Z",
+                    tf="M15",
+                    context="OBSERVE",
+                    episode=361,
+                    phase="NO_ACTIVE_CONTEXT",
+                ),
+                _life(
+                    ts="2026-09-14T20:45:00Z",
+                    tf="M15",
+                    context="LONG_CONTEXT",
+                    episode=360,
+                    started="2026-09-14T19:00:00Z",
+                ),
+            ]
+        ),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-09-14T20:45:00Z",
+        sources=sources,
+        feed=_feed_from("2026-09-14T19:00:00Z"),
+        persist=True,
+        now="2026-09-14T20:46:00Z",
+        decision_index={},
+    )
+    assert "HOLD" in _intents(cycle, "M15")
+    assert "CLOSE" not in _intents(cycle, "M15")
+    assert "OPEN_SHORT" not in _intents(cycle, "M15")
+
+
+def test_flat_open_blocks_strength_below_floor(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {"M15": _slot(None)}
+    monkeypatch.setattr(manager, "trader_views", _views_for(positions))
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="M15",
+                    evaluation="2026-09-16T07:00:00Z",
+                    bar_open="2026-09-16T06:45:00Z",
+                    bar_close="2026-09-16T07:00:00Z",
+                )
+            ]
+        ),
+        lifecycle=pd.DataFrame(
+            [
+                _life(
+                    ts="2026-09-16T06:45:00Z",
+                    tf="M15",
+                    context="LONG_CONTEXT",
+                    episode=360,
+                    started="2026-09-16T03:15:00Z",
+                    raw_status="ACTIVE",
+                    process_strength=0.3,
+                )
+            ]
+        ),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-09-16T07:00:00Z",
+        sources=sources,
+        feed=_feed_from("2026-09-16T05:00:00Z"),
+        persist=True,
+        now="2026-09-16T07:01:00Z",
+        decision_index={},
+    )
+    assert "OPEN_LONG" not in _intents(cycle, "M15")
+    assert PROCESS_STRENGTH_TOO_WEAK in _reasons(cycle, "M15")
+
+
+def test_open_long_holds_weak_opposite_short(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(TimeframeManager, "_use_live1b_position_views", staticmethod(lambda: False))
+    bus, books, _ = isolated_environment(tmp_path / "books")
+    manager = TimeframeManager(bus=bus, books=books, risk=PortfolioRiskCoordinator.load())
+    positions = {"M15": _slot("LONG")}
+    monkeypatch.setattr(manager, "trader_views", _views_for(positions))
+    sources = TimeframeSources(
+        availability=pd.DataFrame(
+            [
+                _availability(
+                    tf="M15",
+                    evaluation="2026-09-16T07:15:00Z",
+                    bar_open="2026-09-16T07:00:00Z",
+                    bar_close="2026-09-16T07:15:00Z",
+                )
+            ]
+        ),
+        lifecycle=pd.DataFrame(
+            [
+                _life(
+                    ts="2026-09-16T07:00:00Z",
+                    tf="M15",
+                    context="SHORT_CONTEXT",
+                    episode=362,
+                    started="2026-09-16T07:00:00Z",
+                    raw_status="ACTIVE",
+                    process_strength=0.3,
+                )
+            ]
+        ),
+        lifecycle_source="parquet",
+    )
+    cycle = manager.run_cycle(
+        evaluation_timestamp="2026-09-16T07:15:00Z",
+        sources=sources,
+        feed=_feed_from("2026-09-16T05:00:00Z"),
+        persist=True,
+        now="2026-09-16T07:16:00Z",
+        decision_index={},
+    )
+    assert "HOLD" in _intents(cycle, "M15")
+    assert "CLOSE" not in _intents(cycle, "M15")
+    assert PROCESS_STRENGTH_TOO_WEAK in _reasons(cycle, "M15")

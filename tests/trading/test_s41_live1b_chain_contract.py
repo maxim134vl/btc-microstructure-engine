@@ -22,7 +22,10 @@ import pytest
 
 from btc_ml.trading.command_bus import VALID_INTENTS
 from btc_ml.trading.intrabar_paper.config import load_intrabar_paper_config
-from btc_ml.trading.intrabar_paper.s41_command_consumer import S41CommandConsumer
+from btc_ml.trading.intrabar_paper.s41_command_consumer import (
+    S41CommandConsumer,
+    close_command_committed,
+)
 from btc_ml.trading.portfolio_risk import PortfolioRiskCoordinator
 from btc_ml.trading.proofs import build_synthetic_feed, isolated_environment, synthetic_command
 from btc_ml.trading.timeframe_manager import (
@@ -168,6 +171,7 @@ def test_contract_file_lists_every_invariant():
         "OBSERVE_HOLD",
         "OPPOSITE_THROUGH_OBSERVE",
         "ENTRY_CONFIRMED_RAW",
+        "PROCESS_STRENGTH_TRADE",
     ]
     assert payload["forbidden_production_entry_source"] == "context_journal"
     assert "LIVE1A journal OPEN/FLIP/END fills" in payload["do_not_restore"]
@@ -183,7 +187,11 @@ def test_hold_zero_and_no_bar_count_anti_saw():
     assert ANTI_SAW_ENABLED is False
     payload = _contract()
     assert payload["entry_requires_confirmed_raw_status"] is True
+    assert payload["entry_requires_min_process_strength"] is True
     assert ENTRY_REQUIRES_CONFIRMED_RAW_STATUS is True
+    cognition = next(row for row in payload["invariants"] if row["id"] == "COGNITION_EXECUTION")
+    assert "vetoes" in cognition["must"]
+    assert "must not veto" not in cognition["must"]
 
 
 def test_provisional_intrabar_is_never_s41_actionable():
@@ -298,6 +306,49 @@ def test_retry_market_does_not_consume_command_id(tmp_path: Path):
         assert command["command_id"] not in stored.get("processed_command_ids", [])
 
 
+def test_atomic_flip_open_blocked_by_active_position_is_not_consumed(tmp_path: Path):
+    """M15_6 05:15: OPEN_SHORT must retry until the CLOSE fill flattens the slot."""
+    bus, _books, _ = isolated_environment(tmp_path / "bus")
+    command = synthetic_command(
+        timeframe="M15",
+        intent="OPEN_SHORT",
+        evaluation_timestamp="2026-09-15T05:15:00Z",
+        episode="M15:378",
+    )
+    bus.append([command])
+
+    class _Cfg:
+        timeframes = ("M15",)
+        max_bbo_age_ms = 2000.0
+
+    class _Engine:
+        cfg = _Cfg()
+        bbo = type(
+            "BBO",
+            (),
+            {"resolve_live_local_entry_bbo": staticmethod(lambda **_k: (object(), None, 0.0, "local"))},
+        )()
+
+        def execution_market_ready_for_entry(self) -> bool:
+            return True
+
+        def apply_s41_manager_command(self, _command: dict) -> dict:
+            return {"status": "ENTRY_BLOCKED_ACTIVE_POSITION", "timeframe": "M15"}
+
+    cursor = tmp_path / "s41_command_cursor.json"
+    consumer = S41CommandConsumer(
+        _Engine(),
+        checkpoint_path=cursor,
+        consume_after=None,
+        bus=bus,
+    )
+    actions = consumer.poll(now="2026-09-15T05:16:00Z")
+    assert actions == []
+    if cursor.exists():
+        stored = json.loads(cursor.read_text(encoding="utf-8"))
+        assert command["command_id"] not in stored.get("processed_command_ids", [])
+
+
 def test_close_pending_does_not_consume_command_id(tmp_path: Path):
     bus, _books, _ = isolated_environment(tmp_path / "bus")
     command = synthetic_command(
@@ -349,7 +400,16 @@ def test_close_pending_does_not_consume_command_id(tmp_path: Path):
     assert command["command_id"] in stored.get("processed_command_ids", [])
 
 
-def test_close_missing_position_does_not_consume_command_id(tmp_path: Path):
+def test_close_command_committed_none_does_not_retry():
+    assert close_command_committed(None) is True
+    assert close_command_committed({"status": "CLOSE_NO_POSITION"}) is True
+    assert close_command_committed({"status": "CLOSE_SIDE_MISMATCH"}) is True
+    assert close_command_committed({"status": "CLOSE_STALE_FOR_NEWER_POSITION"}) is True
+    assert close_command_committed({"status": "EXITED"}) is True
+    assert close_command_committed({"status": "EXIT_PENDING_NO_CAUSAL_BBO"}) is False
+
+
+def test_close_missing_position_is_consumed(tmp_path: Path):
     bus, _books, _ = isolated_environment(tmp_path / "bus")
     command = synthetic_command(
         timeframe="M30",
@@ -377,9 +437,46 @@ def test_close_missing_position_does_not_consume_command_id(tmp_path: Path):
         bus=bus,
     )
     assert consumer.poll() == []
-    if cursor.exists():
-        stored = json.loads(cursor.read_text(encoding="utf-8"))
-        assert command["command_id"] not in stored.get("processed_command_ids", [])
+    stored = json.loads(cursor.read_text(encoding="utf-8"))
+    assert command["command_id"] in stored.get("processed_command_ids", [])
+
+
+def test_close_side_mismatch_is_consumed(tmp_path: Path):
+    bus, _books, _ = isolated_environment(tmp_path / "bus")
+    command = synthetic_command(
+        timeframe="M30",
+        intent="CLOSE",
+        evaluation_timestamp="2026-07-01T04:30:00Z",
+        episode="M30:mismatch",
+    )
+    bus.append([command])
+
+    class _Cfg:
+        timeframes = ("M30",)
+        max_bbo_age_ms = 2000.0
+
+    class _MismatchEngine:
+        cfg = _Cfg()
+
+        def apply_s41_manager_command(self, _command: dict) -> dict:
+            return {
+                "status": "CLOSE_SIDE_MISMATCH",
+                "timeframe": "M30",
+                "position_side": "SHORT",
+                "command_side": "LONG",
+            }
+
+    cursor = tmp_path / "s41_command_cursor.json"
+    consumer = S41CommandConsumer(
+        _MismatchEngine(),
+        checkpoint_path=cursor,
+        consume_after=None,
+        bus=bus,
+    )
+    actions = consumer.poll()
+    assert actions and actions[0]["status"] == "CLOSE_SIDE_MISMATCH"
+    stored = json.loads(cursor.read_text(encoding="utf-8"))
+    assert command["command_id"] in stored.get("processed_command_ids", [])
 
 
 def test_consumer_raises_stale_cursor_floor_to_configured(tmp_path: Path):

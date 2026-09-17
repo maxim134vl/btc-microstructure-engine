@@ -16,7 +16,7 @@ from typing import Any
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_VERSION = "cognitive_market_state_memory_v1"
+BUILDER_VERSION = "cognitive_market_state_memory_v2"
 INPUT_PATH = ROOT / "data" / "cognition" / "auction_episode_memory.parquet"
 OUTPUT_PATH = ROOT / "data" / "cognition" / "cognitive_market_state_memory.parquet"
 STALE_HOURS = 6.0
@@ -36,6 +36,10 @@ REQUIRED_OUTPUT_COLUMNS = [
     "effort_result",
     "price_result",
     "follow_through",
+    "volume_effort",
+    "relative_volume",
+    "relative_spread",
+    "timeframe",
     "source_episode_freshness",
     "source_episode_row_count",
     "builder_version",
@@ -102,19 +106,19 @@ def classify_cognitive_market_state(
     if not invalidated and episode in {"UPPER_DISTRIBUTION", "FAILED_BREAKOUT"}:
         return (
             "UPPER_DISTRIBUTION",
-            "SELLER_PRESSURE",
-            "auction episode UPPER_DISTRIBUTION implies seller pressure"
+            "NEUTRAL",
+            "auction episode UPPER_DISTRIBUTION is an event, not a seller process"
             if episode == "UPPER_DISTRIBUTION"
-            else "auction episode FAILED_BREAKOUT implies seller pressure",
+            else "auction episode FAILED_BREAKOUT is an event, not a seller process",
         )
 
     if not invalidated and episode in {"LOWER_ABSORPTION", "FAILED_BREAKDOWN"}:
         return (
             "LOWER_ABSORPTION",
-            "BUYER_SUPPORT",
-            "auction episode LOWER_ABSORPTION implies buyer support"
+            "NEUTRAL",
+            "auction episode LOWER_ABSORPTION is an event, not a buyer process"
             if episode == "LOWER_ABSORPTION"
-            else "auction episode FAILED_BREAKDOWN implies buyer support",
+            else "auction episode FAILED_BREAKDOWN is an event, not a buyer process",
         )
 
     if episode == "ACCEPTANCE_HIGHER":
@@ -235,6 +239,10 @@ def build_cognitive_market_state_rows(episode_frame: pd.DataFrame) -> pd.DataFra
                 "effort_result": effort_result,
                 "price_result": _clean_text(src.get("price_result"), default="UNKNOWN"),
                 "follow_through": _clean_text(src.get("follow_through"), default="UNKNOWN"),
+                "volume_effort": _clean_text(src.get("volume_effort"), default="UNKNOWN"),
+                "relative_volume": _safe_float(src.get("relative_volume")),
+                "relative_spread": _safe_float(src.get("relative_spread")),
+                "timeframe": _clean_text(src.get("timeframe"), default="M15"),
                 "source_episode_freshness": freshness,
                 "source_episode_row_count": row_count,
                 "builder_version": BUILDER_VERSION,

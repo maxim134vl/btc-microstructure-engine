@@ -31,14 +31,14 @@ def _state_row(**overrides) -> dict:
     return base
 
 
-def test_lower_absorption_to_long():
+def test_lower_absorption_is_event_not_long():
     ctx, reason = mod.classify_market_context(
         cognitive_market_state="LOWER_ABSORPTION",
         state_direction="BUYER_SUPPORT",
         state_status="CONFIRMED",
     )
-    assert ctx == "LONG_CONTEXT"
-    assert reason == "LOWER_ABSORPTION implies LONG_CONTEXT"
+    assert ctx == "OBSERVE"
+    assert "not LONG_CONTEXT" in reason
 
 
 def test_acceptance_higher_to_long():
@@ -61,14 +61,14 @@ def test_buyer_control_to_long():
     assert reason == "BUYER_CONTROL implies LONG_CONTEXT"
 
 
-def test_upper_distribution_to_short():
+def test_upper_distribution_is_event_not_short():
     ctx, reason = mod.classify_market_context(
         cognitive_market_state="UPPER_DISTRIBUTION",
         state_direction="SELLER_PRESSURE",
         state_status="CONFIRMED",
     )
-    assert ctx == "SHORT_CONTEXT"
-    assert reason == "UPPER_DISTRIBUTION implies SHORT_CONTEXT"
+    assert ctx == "OBSERVE"
+    assert "not SHORT_CONTEXT" in reason
 
 
 def test_acceptance_lower_to_short():
@@ -122,8 +122,8 @@ def test_invalidated_state_to_observe_with_invalidated_status():
 def test_short_context_not_erased_by_trade_ban():
     """Trading disable must not rewrite SHORT_CONTEXT to OBSERVE."""
     ctx, reason = mod.classify_market_context(
-        cognitive_market_state="UPPER_DISTRIBUTION",
-        state_direction="SELLER_PRESSURE",
+        cognitive_market_state="ACCEPTANCE_LOWER",
+        state_direction="SELLER_CONTROL",
         state_status="CONFIRMED",
     )
     assert ctx == "SHORT_CONTEXT"
@@ -134,8 +134,8 @@ def test_short_context_not_erased_by_trade_ban():
         pd.DataFrame(
             [
                 _state_row(
-                    cognitive_market_state="UPPER_DISTRIBUTION",
-                    state_direction="SELLER_PRESSURE",
+                    cognitive_market_state="ACCEPTANCE_LOWER",
+                    state_direction="SELLER_CONTROL",
                     state_status="CONFIRMED",
                 )
             ]
@@ -170,11 +170,39 @@ def test_build_rows_invariants_and_required_fields():
     )
     out = mod.build_final_market_context_rows(src)
     assert set(mod.REQUIRED_OUTPUT_COLUMNS).issubset(out.columns)
-    assert out["market_context"].tolist() == ["LONG_CONTEXT", "SHORT_CONTEXT", "OBSERVE"]
-    assert out["context_status"].tolist() == ["ACTIVE", "DEVELOPING", "OBSERVE"]
+    assert out["market_context"].tolist() == ["OBSERVE", "OBSERVE", "OBSERVE"]
+    assert out["context_status"].tolist() == ["OBSERVE", "OBSERVE", "OBSERVE"]
     assert out["action_allowed"].tolist() == [False, False, False]
     assert out["shadow_only"].tolist() == [True, True, True]
     assert (out["action_reason"] == mod.ACTION_REASON).all()
+
+
+def test_absorption_after_accepted_lower_holds_short():
+    src = pd.DataFrame(
+        [
+            _state_row(
+                cognitive_market_state="ACCEPTANCE_LOWER",
+                state_direction="SELLER_CONTROL",
+                state_status="CONFIRMED",
+            ),
+            _state_row(
+                timestamp=pd.Timestamp("2026-07-10 12:15:00", tz="UTC"),
+                cognitive_market_state="LOWER_ABSORPTION",
+                state_direction="NEUTRAL",
+                state_status="CONFIRMED",
+            ),
+            _state_row(
+                timestamp=pd.Timestamp("2026-07-10 12:30:00", tz="UTC"),
+                cognitive_market_state="BALANCE",
+                state_direction="NEUTRAL",
+                state_status="STARTED",
+            ),
+        ]
+    )
+    out = mod.build_final_market_context_rows(src)
+    assert out["market_context"].tolist() == ["SHORT_CONTEXT", "SHORT_CONTEXT", "SHORT_CONTEXT"]
+    assert out["living_process"].tolist() == ["SELLER", "SELLER", "SELLER"]
+    assert float(out.iloc[0]["process_strength"]) > 0
 
 
 def test_context_status_mapping():

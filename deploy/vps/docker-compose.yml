@@ -519,7 +519,9 @@ services:
       <<: *runtime_env
       HL_VAULT_CONFIG: ${HL_VAULT_CONFIG:-/app/config/hl_vault_testnet.json}
       HL_VAULT_ADDRESS: ${HL_VAULT_ADDRESS:-}
+      HL_ACCOUNT_ADDRESS: ${HL_ACCOUNT_ADDRESS:-}
       HL_TESTNET_AGENT_PK: ${HL_TESTNET_AGENT_PK:-}
+      HL_TIMEFRAMES: ${HL_TIMEFRAMES:-M15}
       HL_VAULT_POLL_MS: ${HL_VAULT_POLL_MS:-500}
       HL_VAULT_FAKE: ${HL_VAULT_FAKE:-false}
       HL_MAINNET_ENABLED: ${HL_MAINNET_ENABLED:-false}

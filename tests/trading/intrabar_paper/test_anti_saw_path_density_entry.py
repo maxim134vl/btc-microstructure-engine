@@ -93,7 +93,7 @@ def test_missing_bars_fail_open(cfg) -> None:
     assert acts[0]["status"] == "ENTERED"
 
 
-def test_s41_open_is_not_blocked_by_saw(cfg) -> None:
+def test_s41_open_is_blocked_by_saw(cfg) -> None:
     from datetime import datetime, timezone
 
     c, repo = cfg
@@ -111,5 +111,5 @@ def test_s41_open_is_not_blocked_by_saw(cfg) -> None:
             "context_origin_price": 100.1,
         }
     )
-    assert result["status"] == "ENTERED"
-    assert "M15" in eng.positions
+    assert result["status"] == BLOCK_REASON
+    assert "M15" not in eng.positions

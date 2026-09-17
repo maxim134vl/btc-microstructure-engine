@@ -19,20 +19,32 @@ _TRANSIENT_OPEN_BLOCKS = frozenset(
     {
         "ENTRY_BLOCKED_NO_CAUSAL_BBO",
         "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY",
+        # ATOMIC_FLIP OPEN in the same poll as CLOSE must wait until the
+        # occupancy is actually flat. Marking it processed loses the flip
+        # (M15_6 05:15 OPEN_SHORT never filled).
+        "ENTRY_BLOCKED_ACTIVE_POSITION",
     }
 )
 _COMMITTED_CLOSE_STATUSES = frozenset(
     {
         "EXITED",
         "DUPLICATE_PREVENTED",
+        "CLOSE_NO_POSITION",
+        "CLOSE_SIDE_MISMATCH",
+        "CLOSE_STALE_FOR_NEWER_POSITION",
     }
 )
 
 
 def close_command_committed(result: dict[str, Any] | None) -> bool:
-    """True when a CLOSE may be marked processed. Pending / missing fill must retry."""
+    """True when a CLOSE may be marked processed.
+
+    No open position is committed, not retried: a leftover LONG-SL CLOSE must
+    not flatten the continuation SHORT that opens on the next poll.
+    EXIT_PENDING still retries until the same position fills.
+    """
     if result is None:
-        return False
+        return True
     status = str(result.get("status") or "").strip()
     if status in _COMMITTED_CLOSE_STATUSES:
         return True

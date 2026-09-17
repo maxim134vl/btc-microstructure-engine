@@ -22,11 +22,15 @@ It is **not** an order, entry, or execution permission.
 | `cognitive_market_state` | What process is the market in? | `UPPER_DISTRIBUTION`, `LOWER_ABSORPTION`, `BALANCE` |
 | `market_context` | What top-level context does that imply? | `SHORT_CONTEXT`, `LONG_CONTEXT`, `OBSERVE` |
 
-Examples:
+Context comes from the **living process**, not from a one-bar label:
 
-- `LOWER_ABSORPTION` → `LONG_CONTEXT`
-- `UPPER_DISTRIBUTION` → `SHORT_CONTEXT`
-- `BALANCE` / `UNCERTAIN` → `OBSERVE`
+- accepted higher / buyer control → `LONG_CONTEXT` (strength grows)
+- accepted lower / seller control → `SHORT_CONTEXT` (strength grows)
+- `LOWER_ABSORPTION` / `UPPER_DISTRIBUTION` alone → `OBSERVE` (events, not a new process)
+- pause / no-effort inside a living process → keep that LONG or SHORT; strength does not reset
+- opposite process starts only when the other side is **accepted**
+
+Do not restore `LOWER_ABSORPTION` → `LONG_CONTEXT`.
 
 ## LONG / SHORT here are not trade signals
 

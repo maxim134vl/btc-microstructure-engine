@@ -125,7 +125,7 @@ def test_08_lock_prevents_overlap_alive(tmp_path: Path):
     daemon.release_lock(lock)
 
 
-def test_08b_tail_merge_restates_last_bars_and_appends():
+def test_08b_tail_merge_freezes_closed_bars_and_appends():
     tail_merge_existing_wins = refresh_mod.tail_merge_existing_wins
 
     prod = pd.DataFrame(
@@ -162,8 +162,137 @@ def test_08b_tail_merge_restates_last_bars_and_appends():
         }
     )
     merged = tail_merge_existing_wins(prod, cand, "timestamp")
-    assert list(merged["v"]) == [1, 2, 9, 9, 9, 9, 7]
+    assert list(merged["v"]) == [1, 2, 3, 4, 5, 6, 7]
     assert len(merged) == 7
+
+
+def test_08b2_forming_bar_may_update_closed_bars_stay():
+    prod = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2026-07-24T14:00:00Z", "2026-07-24T14:15:00Z"],
+                utc=True,
+            ),
+            "timeframe": ["M15", "M15"],
+            "v": [1, 2],
+        }
+    )
+    cand = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                ["2026-07-24T14:00:00Z", "2026-07-24T14:15:00Z"],
+                utc=True,
+            ),
+            "timeframe": ["M15", "M15"],
+            "v": [9, 8],
+        }
+    )
+    frozen = refresh_mod.tail_merge_existing_wins(
+        prod, cand, "timestamp", now="2026-07-24T14:16:00Z"
+    )
+    assert list(frozen["v"]) == [1, 8]
+    closed = refresh_mod.tail_merge_existing_wins(
+        prod, cand, "timestamp", now="2026-07-24T14:31:00Z"
+    )
+    assert list(closed["v"]) == [1, 2]
+
+
+def test_08b3_restep_does_not_rewrite_closed_bars():
+    stamps = pd.to_datetime(
+        [
+            "2026-09-13T10:00:00Z",
+            "2026-09-13T10:15:00Z",
+            "2026-09-13T10:30:00Z",
+        ],
+        utc=True,
+    )
+
+    def _row(ts, *, active, episode):
+        return {
+            "timestamp": ts,
+            "timeframe": "M15",
+            "raw_market_context": active,
+            "raw_context_status": "ACTIVE",
+            "raw_context_reason": f"{active}/ACTIVE",
+            "raw_cognitive_market_state": "BUYER_CONTROL",
+            "raw_state_direction": "LONG" if "LONG" in active else "SHORT",
+            "raw_auction_episode": "ACCEPTANCE_HIGHER",
+            "auction_episode": "ACCEPTANCE_HIGHER",
+            "active_market_context": active,
+            "lifecycle_state": "ACTIVE",
+            "context_episode_id": episode,
+            "active_context_age_bars": 1,
+            "transition_reason": "seed",
+        }
+
+    prod = pd.DataFrame(
+        [
+            _row(stamps[0], active="LONG_CONTEXT", episode=10),
+            _row(stamps[1], active="LONG_CONTEXT", episode=10),
+            _row(stamps[2], active="LONG_CONTEXT", episode=10),
+        ]
+    )
+    cand = pd.DataFrame(
+        [
+            _row(stamps[0], active="SHORT_CONTEXT", episode=99),
+            _row(stamps[1], active="SHORT_CONTEXT", episode=99),
+            _row(stamps[2], active="SHORT_CONTEXT", episode=99),
+        ]
+    )
+    merged = refresh_mod.tail_merge_existing_wins(
+        prod, cand, "timestamp", now="2026-09-13T10:31:00Z"
+    )
+    out = refresh_mod.restep_lifecycle_tail(
+        prod, merged, "timestamp", now="2026-09-13T10:31:00Z"
+    )
+    assert list(out["active_market_context"])[:2] == ["LONG_CONTEXT", "LONG_CONTEXT"]
+    assert list(out["context_episode_id"])[:2] == [10, 10]
+    assert list(out["active_market_context"])[2] != "LONG_CONTEXT"
+
+
+def test_08b4_lagged_tip_does_not_restep_already_closed_new_bars():
+    """M15_2: snapshot tip lag must not rewrite a closed bar that just appeared."""
+    stamps = pd.to_datetime(
+        [
+            "2026-09-16T07:00:00Z",
+            "2026-09-16T07:15:00Z",
+            "2026-09-16T07:30:00Z",
+        ],
+        utc=True,
+    )
+
+    def _row(ts, *, raw, active, episode):
+        return {
+            "timestamp": ts,
+            "timeframe": "M15",
+            "raw_market_context": raw,
+            "raw_context_status": "ACTIVE",
+            "raw_context_reason": f"{raw}/ACTIVE",
+            "raw_cognitive_market_state": "ACCEPTANCE_LOWER",
+            "raw_state_direction": "SHORT",
+            "raw_auction_episode": "ACCEPTANCE_LOWER",
+            "auction_episode": "ACCEPTANCE_LOWER",
+            "active_market_context": active,
+            "lifecycle_state": "ACTIVE",
+            "context_episode_id": episode,
+            "active_context_age_bars": 1,
+            "transition_reason": "seed",
+        }
+
+    prod = pd.DataFrame([_row(stamps[0], raw="LONG_CONTEXT", active="LONG_CONTEXT", episode=360)])
+    merged = pd.DataFrame(
+        [
+            _row(stamps[0], raw="LONG_CONTEXT", active="LONG_CONTEXT", episode=360),
+            _row(stamps[1], raw="SHORT_CONTEXT", active="SHORT_CONTEXT", episode=362),
+            _row(stamps[2], raw="SHORT_CONTEXT", active="SHORT_CONTEXT", episode=362),
+        ]
+    )
+    out = refresh_mod.restep_lifecycle_tail(
+        prod, merged, "timestamp", now="2026-09-16T07:31:00Z"
+    )
+    closed = out[out["timestamp"] == stamps[1]].iloc[0]
+    assert closed["active_market_context"] == "SHORT_CONTEXT"
+    assert int(closed["context_episode_id"]) == 362
 
 
 def test_08c_tail_merge_keeps_m15_prefix_and_adds_independent_h4():
@@ -208,7 +337,7 @@ def test_08c_tail_merge_keeps_m15_prefix_and_adds_independent_h4():
     merged = tail_merge_existing_wins(prod, cand, "timestamp")
     m15 = merged[merged["timeframe"].astype(str).str.upper() == "M15"]
     h4 = merged[merged["timeframe"].astype(str).str.upper() == "H4"]
-    assert list(m15["v"]) == [1, 2, 9, 9, 9, 9, 3]
+    assert list(m15["v"]) == [1, 2, 3, 4, 5, 6, 3]
     assert list(h4["v"]) == [4]
     assert len(merged) == 8
 
@@ -305,9 +434,14 @@ def test_08d_restep_uncertain_keeps_production_long_episode():
     cand = prod.copy()
     merged = refresh_mod.tail_merge_existing_wins(prod, cand, "timestamp")
     out = refresh_mod.restep_lifecycle_tail(prod, merged, "timestamp")
-    assert list(out["active_market_context"]) == ["LONG_CONTEXT"] * 5
-    assert list(out["context_episode_id"]) == [321] * 5
-    assert out.iloc[2]["transition_reason"] == "insufficient auction evidence keeps active"
+    assert list(out["active_market_context"]) == [
+        "LONG_CONTEXT",
+        "LONG_CONTEXT",
+        "SHORT_CONTEXT",
+        "SHORT_CONTEXT",
+        "SHORT_CONTEXT",
+    ]
+    assert list(out["context_episode_id"]) == [321, 321, 323, 323, 323]
 
 
 def test_08f_replace_higher_tf_keeps_m15_settled_prefix():
@@ -347,9 +481,9 @@ def test_08f_replace_higher_tf_keeps_m15_settled_prefix():
     )
     m15 = merged[merged["timeframe"].astype(str).str.upper() == "M15"]
     h4 = merged[merged["timeframe"].astype(str).str.upper() == "H4"]
-    assert list(m15["v"]) == [1, 2, 9, 9, 9, 9]
-    assert list(h4["v"]) == [80, 81]
-    assert list(h4["active_market_context"]) == ["LONG_CONTEXT", "LONG_CONTEXT"]
+    assert list(m15["v"]) == [1, 2, 3, 4, 5, 6]
+    assert list(h4["v"]) == [70, 71]
+    assert list(h4["active_market_context"]) == ["OBSERVE", "OBSERVE"]
 
 
 def test_08g_replaced_h4_keeps_living_episode_when_direction_stays():
@@ -399,7 +533,7 @@ def test_08g_replaced_h4_keeps_living_episode_when_direction_stays():
         "timestamp",
         replace_timeframes=refresh_mod.INDEPENDENT_REPLACE_TIMEFRAMES,
     )
-    assert list(out["lifecycle_source"]) == ["INDEPENDENT_CLOSED_BAR_VOLUME"] * 2
+    assert list(out["lifecycle_source"]) == ["INDEPENDENT_OHLCV_PROXY"] * 2
     assert list(out["active_market_context"]) == ["LONG_CONTEXT", "LONG_CONTEXT"]
     assert list(out["context_episode_id"]) == [22, 22]
 
@@ -434,6 +568,11 @@ def test_08h_m15_episodes_stay_when_higher_tf_rebuilt():
     assert len(h1) == 1
     assert list(h1["active_market_context"]) == ["SHORT_CONTEXT"]
     assert list(h1["lifecycle_source"]) == ["INDEPENDENT_CLOSED_BAR_VOLUME"]
+
+
+def test_08i_closed_bars_are_frozen_by_default():
+    assert refresh_mod.COGNITION_RESTATE_BARS == 0
+    assert refresh_mod.INDEPENDENT_REPLACE_TIMEFRAMES == frozenset()
 
 
 def test_08e_refresh_interval_fits_inside_one_m15_bar():

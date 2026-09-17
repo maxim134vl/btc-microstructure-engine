@@ -5,6 +5,12 @@ Not a bar-count delay. Scores a closed-bar window:
 - rotation / path density: 1 - |net| / path (same family as auction balance_support)
 - ATR density: how many ATR units of body-path packed into that net
 - failed breakouts: range high/low taken, then close back inside
+- two-sided volume / cancelled delta (optional; missing volume fails open)
+- BALANCE auction share (optional; missing auction fails open)
+
+Chop is required. Confirmation is any of ATR churn, rejected breakouts,
+volume churn, or auction balance. H4 4-bar windows often miss path_atr>=2
+and still are the same saw.
 
 Gate OPEN only. CONTEXT_END / FLIP-close / TP / SL stay untouched.
 Missing history fails open: no bars → do not block.
@@ -20,6 +26,8 @@ TF_MINUTES = {"M15": 15, "M30": 30, "H1": 60, "H4": 240}
 DEFAULT_WINDOW_BARS = {"M15": 8, "M30": 8, "H1": 6, "H4": 4}
 BLOCK_REASON = "ENTRY_BLOCKED_SAW_PATH_DENSITY"
 DEFAULT_CANDLE_PATH = Path("data/cognition/candle_structure_memory.parquet")
+DEFAULT_AUCTION_PATH = Path("data/cognition/auction_episode_memory.parquet")
+AUCTION_BALANCE_LABELS = frozenset({"BALANCE"})
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,10 @@ class SawScore:
     failed_breakouts: int
     failed_up_breakouts: int
     failed_down_breakouts: int
+    volume_two_sided: float
+    auction_balance_share: float
+    volume_present: bool
+    auction_present: bool
     is_saw: bool
     reason: str | None
 
@@ -101,6 +113,56 @@ def count_failed_breakouts(
     return failed_up, failed_down
 
 
+def _optional_float(row: Mapping[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key not in row or row.get(key) is None:
+            continue
+        try:
+            value = float(row[key])
+        except (TypeError, ValueError):
+            continue
+        if value == value and abs(value) < 1e18:
+            return value
+    return None
+
+
+def _volume_two_sided(rows: Sequence[Mapping[str, Any]]) -> tuple[bool, float]:
+    vols: list[float] = []
+    deltas: list[float] = []
+    for row in rows:
+        vol = _optional_float(row, "volume")
+        if vol is None or vol < 0:
+            continue
+        delta = _optional_float(row, "delta")
+        if delta is None:
+            buy = _optional_float(row, "buy_volume")
+            sell = _optional_float(row, "sell_volume")
+            if buy is not None and sell is not None:
+                delta = buy - sell
+            else:
+                delta = 0.0
+        vols.append(vol)
+        deltas.append(delta)
+    if len(vols) < 3:
+        return False, 0.0
+    path = sum(abs(v) for v in vols)
+    net = abs(sum(deltas))
+    ratio = 0.0 if path <= 1e-12 else net / path
+    return True, _clamp(1.0 - ratio)
+
+
+def _auction_balance_share(rows: Sequence[Mapping[str, Any]]) -> tuple[bool, float]:
+    labels = []
+    for row in rows:
+        raw = str(row.get("auction_episode") or "").strip().upper()
+        if raw and raw not in {"", "NAN", "NONE", "NULL", "UNKNOWN"}:
+            labels.append(raw)
+    if not labels:
+        return False, 0.0
+    balanced = sum(1 for label in labels if label in AUCTION_BALANCE_LABELS)
+    return True, balanced / len(labels)
+
+
 def score_bars(
     bars: Sequence[Mapping[str, Any]],
     *,
@@ -109,6 +171,8 @@ def score_bars(
     min_path_atr: float = 2.0,
     min_failed_breakouts: int = 1,
     min_bars: int = 3,
+    volume_two_sided_enter: float = 0.55,
+    auction_balance_share: float = 0.50,
 ) -> SawScore:
     """Score a chronological window of closed OHLC bars."""
     rows = [b for b in bars if _finite_ohlc(b)]
@@ -125,6 +189,10 @@ def score_bars(
         failed_breakouts=0,
         failed_up_breakouts=0,
         failed_down_breakouts=0,
+        volume_two_sided=0.0,
+        auction_balance_share=0.0,
+        volume_present=False,
+        auction_present=False,
         is_saw=False,
         reason="INSUFFICIENT_HISTORY",
     )
@@ -149,13 +217,17 @@ def score_bars(
     net_atr = 0.0 if atr <= 1e-12 else net / atr
     failed_up, failed_down = count_failed_breakouts(highs, lows, closes)
     failed_breakouts = failed_up + failed_down
+    vol_present, vol_two = _volume_two_sided(rows)
+    auc_present, auc_share = _auction_balance_share(rows)
     chop = (
         balance_support >= float(balance_support_enter)
         and net_over_path <= float(balance_max_net_disp_ratio)
     )
     atr_dense = path_atr >= float(min_path_atr)
     rejected = failed_breakouts >= int(min_failed_breakouts)
-    is_saw = bool(chop and atr_dense and rejected)
+    volume_churn = vol_present and vol_two >= float(volume_two_sided_enter)
+    auction_churn = auc_present and auc_share >= float(auction_balance_share)
+    is_saw = bool(chop and (atr_dense or rejected or volume_churn or auction_churn))
     return SawScore(
         n_bars=n,
         rotation=round(rotation, 6),
@@ -168,6 +240,10 @@ def score_bars(
         failed_breakouts=int(failed_breakouts),
         failed_up_breakouts=int(failed_up),
         failed_down_breakouts=int(failed_down),
+        volume_two_sided=round(vol_two, 6),
+        auction_balance_share=round(auc_share, 6),
+        volume_present=bool(vol_present),
+        auction_present=bool(auc_present),
         is_saw=bool(is_saw),
         reason=BLOCK_REASON if is_saw else None,
     )
@@ -210,9 +286,12 @@ def _parse_cfg(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "min_path_atr": float(block.get("min_path_atr", 2.0)),
         "min_failed_breakouts": int(block.get("min_failed_breakouts", 1)),
         "min_bars": int(block.get("min_bars", 3)),
+        "volume_two_sided_enter": float(block.get("volume_two_sided_enter", 0.55)),
+        "auction_balance_share": float(block.get("auction_balance_share", 0.50)),
         "candle_structure_path": str(
             block.get("candle_structure_path") or DEFAULT_CANDLE_PATH
         ),
+        "auction_path": str(block.get("auction_path") or DEFAULT_AUCTION_PATH),
     }
 
 
@@ -231,6 +310,7 @@ class PathDensitySawFilter:
         self._bars_by_tf = {str(k).upper(): list(v) for k, v in dict(bars_by_tf or {}).items()}
         self._mtime_ns: int | None = None
         self._size: int | None = None
+        self._auction_mtime_ns: int | None = None
         self._m15: list[dict[str, Any]] = []
         self.last_decision: SawDecision | None = None
 
@@ -265,6 +345,8 @@ class PathDensitySawFilter:
             min_path_atr=float(self.params["min_path_atr"]),
             min_failed_breakouts=int(self.params["min_failed_breakouts"]),
             min_bars=int(self.params["min_bars"]),
+            volume_two_sided_enter=float(self.params["volume_two_sided_enter"]),
+            auction_balance_share=float(self.params["auction_balance_share"]),
         )
         mode = str(self.params["mode"])
         enforce = mode == "enforce"
@@ -333,12 +415,9 @@ class PathDensitySawFilter:
             self._m15 = []
             return self._m15
         try:
-            frame = pd.read_parquet(full, columns=["timestamp", "open", "high", "low", "close"])
+            frame = pd.read_parquet(full)
         except Exception:
-            try:
-                frame = pd.read_parquet(full)
-            except Exception:
-                return self._m15
+            return self._m15
         if frame is None or len(frame) == 0:
             self._m15 = []
             self._mtime_ns = mtime_ns
@@ -348,21 +427,90 @@ class PathDensitySawFilter:
         work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
         work = work.dropna(subset=["timestamp", "open", "high", "low", "close"])
         work = work.sort_values("timestamp")
-        self._m15 = [
-            {
+        extra = [c for c in ("volume", "delta", "buy_volume", "sell_volume") if c in work.columns]
+        rows: list[dict[str, Any]] = []
+        for rec in work[["timestamp", "open", "high", "low", "close", *extra]].itertuples(index=False, name=None):
+            ts, o, h, lo, c, *rest = rec
+            item: dict[str, Any] = {
                 "timestamp": ts.isoformat().replace("+00:00", "Z"),
                 "open": float(o),
                 "high": float(h),
                 "low": float(lo),
                 "close": float(c),
             }
-            for ts, o, h, lo, c in work[["timestamp", "open", "high", "low", "close"]].itertuples(
-                index=False, name=None
-            )
-        ]
+            for name, value in zip(extra, rest):
+                try:
+                    item[name] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            rows.append(item)
+        self._m15 = _attach_auction(rows, self._auction_path())
         self._mtime_ns = mtime_ns
         self._size = size
         return self._m15
+
+    def _auction_path(self) -> Path:
+        path = Path(str(self.params.get("auction_path") or DEFAULT_AUCTION_PATH))
+        if not path.is_absolute():
+            path = self.repo_root / path
+        return path
+
+
+def _attach_auction(rows: list[dict[str, Any]], auction_path: Path) -> list[dict[str, Any]]:
+    if not rows or not auction_path.exists():
+        return rows
+    try:
+        import pandas as pd
+    except ImportError:
+        return rows
+    try:
+        frame = pd.read_parquet(auction_path)
+    except Exception:
+        return rows
+    if frame is None or len(frame) == 0:
+        return rows
+    if "timestamp" not in frame.columns or "auction_episode" not in frame.columns:
+        return rows
+    work = frame.copy()
+    if "timeframe" in work.columns:
+        tf = work["timeframe"].astype(str).str.upper()
+        scoped = work[tf.isin(["M15", "15M", "NAN", "NONE", ""])]
+        if len(scoped):
+            work = scoped
+    work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True, errors="coerce")
+    work = work.dropna(subset=["timestamp"])
+    lookup: dict[str, str] = {}
+    for ts, episode in work[["timestamp", "auction_episode"]].itertuples(index=False, name=None):
+        label = str(episode or "").strip().upper()
+        if not label or label in {"NAN", "NONE", "NULL", "UNKNOWN"}:
+            continue
+        key = ts.isoformat().replace("+00:00", "Z")
+        lookup[key] = label
+    if not lookup:
+        return rows
+    out = []
+    for row in rows:
+        item = dict(row)
+        label = lookup.get(str(item.get("timestamp") or ""))
+        if label:
+            item["auction_episode"] = label
+        out.append(item)
+    return out
+
+
+def _resample_flow(group: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    extra: dict[str, Any] = {}
+    for name in ("volume", "delta", "buy_volume", "sell_volume"):
+        values = [_optional_float(row, name) for row in group]
+        present = [v for v in values if v is not None]
+        if present:
+            extra[name] = float(sum(present))
+    for row in reversed(group):
+        label = str(row.get("auction_episode") or "").strip().upper()
+        if label and label not in {"", "NAN", "NONE", "NULL", "UNKNOWN"}:
+            extra["auction_episode"] = label
+            break
+    return extra
 
 
 def _as_of_ts(value: Any) -> float | None:
@@ -415,6 +563,7 @@ def _resample(m15: Sequence[Mapping[str, Any]], timeframe: str) -> list[dict[str
                 "high": max(float(b["high"]) for b in group),
                 "low": min(float(b["low"]) for b in group),
                 "close": float(group[-1]["close"]),
+                **_resample_flow(group),
             }
         )
     return out
@@ -438,6 +587,8 @@ def snapshot_for_candles(
         min_path_atr=float(params["min_path_atr"]),
         min_failed_breakouts=int(params["min_failed_breakouts"]),
         min_bars=int(params["min_bars"]),
+        volume_two_sided_enter=float(params["volume_two_sided_enter"]),
+        auction_balance_share=float(params["auction_balance_share"]),
     )
     return {
         "timeframe": tf,

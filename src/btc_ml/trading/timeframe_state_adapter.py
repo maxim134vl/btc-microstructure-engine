@@ -249,6 +249,23 @@ def _iso(value: Any) -> str | None:
     return None if stamp is None else stamp.isoformat().replace("+00:00", "Z")
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
 @dataclass
 class TimeframeSources:
     availability: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -466,12 +483,20 @@ def resolve_timeframe_state(
     causal_cutoff_monotonic_ns: Any = None,
     model_version: str | None = None,
     now: Any = None,
+    prefer_forming: bool = True,
 ) -> dict[str, Any]:
     """Resolve per-TF state.
 
     Closed-bar default unchanged. Provisional intrabar path only when
     ``allow_provisional=True`` and ``evaluation_mode=PROVISIONAL_INTRABAR``.
     Provisional results are never treated as manager-actionable closed tips.
+
+    ``prefer_forming=True`` (legacy): last row of the current bar.
+    Flat OPEN now uses ``select_state_for_flat_open``: closed directional
+    ACTIVE wins; forming ACTIVE only if the closed row is missing.
+    ``prefer_forming=False`` (open position closed-bar view): the just-closed
+    bar the chart paints. ``TimeframeManager.run_cycle`` combines both views
+    for an open slot: closed opposite ACTIVE wins over forming same-side.
     """
     tf = str(timeframe or "").upper()
     evaluation_ts = _ts(evaluation_timestamp)
@@ -499,6 +524,8 @@ def resolve_timeframe_state(
         "raw_context_status": None,
         "raw_auction_episode": None,
         "context_bar_kind": None,
+        "process_strength": None,
+        "living_process": None,
         "actionable": False,
         "no_action_reason": None,
         "confidence": None,
@@ -620,9 +647,11 @@ def resolve_timeframe_state(
     clock = _ts(now) or evaluation_ts
     current_open = _timeframe_bar_open(clock, tf)
     forming_open = current_open if current_open is not None else bar_close
-    forming_idx = _forming_bar_lifecycle_index(
-        life_stamps, forming_open=forming_open, evaluation_ts=clock
-    )
+    forming_idx = None
+    if prefer_forming:
+        forming_idx = _forming_bar_lifecycle_index(
+            life_stamps, forming_open=forming_open, evaluation_ts=clock
+        )
     tf_seconds = TIMEFRAME_SECONDS.get(tf)
     if forming_idx is not None:
         life_idx = forming_idx
@@ -676,6 +705,8 @@ def resolve_timeframe_state(
             "raw_context_status": raw_status,
             "raw_auction_episode": raw_auction,
             "lifecycle_row_timestamp": _iso(life_stamps.loc[life_idx]),
+            "process_strength": _optional_float(life_row.get("process_strength")),
+            "living_process": str(life_row.get("living_process") or "").upper() or None,
             "context_started_at": _iso(life_row.get("active_context_started_at")),
             "invalidation_reason": life_row.get("invalidation_reason"),
             "context_origin_price": None
@@ -742,6 +773,7 @@ def resolve_all_states(
     sources: TimeframeSources | None = None,
     timeframes: tuple[str, ...] = SUPPORTED_TIMEFRAMES,
     now: Any = None,
+    prefer_forming: bool = True,
 ) -> dict[str, dict[str, Any]]:
     src = sources or load_sources()
     return {
@@ -750,6 +782,7 @@ def resolve_all_states(
             evaluation_timestamp=evaluation_timestamp,
             sources=src,
             now=now,
+            prefer_forming=prefer_forming,
         )
         for tf in timeframes
     }

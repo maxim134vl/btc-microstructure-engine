@@ -172,12 +172,15 @@ class IntrabarCognitionEngine:
         if len(geometry_history) and "close" in geometry_history.columns:
             prev_close = float(geometry_history.iloc[-1]["close"])
         prior_auction = self.prior_auction_by_tf.get(timeframe) or "UNKNOWN"
+        prior = self.lifecycle_prev.get(timeframe) or {}
         synth = synthesize_provisional_state(
             structure_row=structure,
             response_row=response,
             causal_cutoff=bar.causal_cutoff_timestamp,
             prev_close=prev_close,
             prior_auction_episode=prior_auction,
+            prior_market_context=str(prior.get("active_market_context") or "") or None,
+            timeframe=timeframe,
         )
         self.prior_auction_by_tf[timeframe] = str(synth.get("auction_episode") or "UNKNOWN")
         life = step_event_time_lifecycle(

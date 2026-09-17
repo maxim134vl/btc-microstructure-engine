@@ -40,11 +40,11 @@ def main() -> int:
         return _fail("config_load_failure", details={"error": str(exc)})
     if cfg.is_mainnet and os.environ.get("HL_MAINNET_ENABLED", "").lower() not in {"1", "true", "yes"}:
         return _fail("mainnet_not_explicitly_enabled")
-    if not cfg.vault_address:
+    if not cfg.vault_address and not cfg.account_address:
         if os.environ.get("HL_VAULT_FAKE") in {"1", "true", "yes"}:
             pass
         else:
-            return _fail("missing_vault_address")
+            return _fail("missing_vault_or_account_address")
     env_key = ENV_MAINNET_AGENT_PK if cfg.is_mainnet else ENV_AGENT_PK
     if not os.environ.get(env_key) and not os.environ.get("HL_AGENT_PK"):
         if os.environ.get("HL_VAULT_FAKE") in {"1", "true", "yes"}:
@@ -58,6 +58,8 @@ def main() -> int:
         "checked_at": _utc(),
         "network": cfg.network,
         "vault_address": cfg.vault_address,
+        "account_address": cfg.account_address,
+        "execution_mode": "vault" if cfg.vault_address else "master",
         "reason": "ok",
     }
     CONTRACT_PATH.parent.mkdir(parents=True, exist_ok=True)

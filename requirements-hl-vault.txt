@@ -1,0 +1,4 @@
+# Optional extras for Hyperliquid vault testnet/mainnet execution.
+# Not required by the paper-only VPS runtime.
+hyperliquid-python-sdk>=0.14.0
+eth-account>=0.11.0

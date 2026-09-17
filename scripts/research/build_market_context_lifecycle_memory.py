@@ -87,6 +87,9 @@ REQUIRED_MEMORY_COLUMNS = [
     "action_reason",
     "shadow_only",
     "builder_version",
+    "living_process",
+    "process_strength",
+    "timeframe",
 ]
 
 REQUIRED_EPISODE_COLUMNS = [
@@ -1117,6 +1120,9 @@ def build_lifecycle_memory(
             ),
             "shadow_only": True,
             "builder_version": BUILDER_VERSION,
+            "living_process": _clean_text(src.get("living_process"), default="NONE"),
+            "process_strength": _safe_float(src.get("process_strength"), default=0.0) or 0.0,
+            "timeframe": _clean_text(src.get("timeframe"), default="M15"),
         }
         row = _attach_lifecycle_diagnostics(
             row,
