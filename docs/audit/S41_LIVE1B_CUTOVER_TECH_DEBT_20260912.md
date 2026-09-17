@@ -36,6 +36,11 @@ Shipped: `2ed7b46`, `cf8f80f`. Volume overlay/activation/cursor persisted withou
 - Engine ignores backfill prints with `trade_ts < opened_at`.
 - paper-manager no longer `depends_on` LIVE1A `cognition-runtime` health. Journal stays observe-only.
 
+## Bug register
+
+Living journal (status, recurrences, tests): `docs/audit/BUG_JOURNAL.md`.  
+Window 14–15 Sep books: `docs/audit/M15_BUG_BOOK_20260914.md`, `docs/audit/MTF_BUG_BOOK_20260914.md`.
+
 ## Do not restore
 
 `MIN_ACTIVE_CONTEXT_HOLD_BARS=3`, bar-count anti-saw, M15 inheritance onto M30/H1/H4, journal OPEN/FLIP/END fills, wait-one-bar OPEN.
