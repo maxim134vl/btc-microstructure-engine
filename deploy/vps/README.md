@@ -68,6 +68,7 @@ It refuses Mac live paths and never copies the live epoch.
 
 ## Related notes
 
+- [Запуск на другом ПК](../../docs/deploy/RUN_MODEL_ON_ANOTHER_PC.md)
 - [FRONTEND_DEPENDENCY_NOTE.md](./FRONTEND_DEPENDENCY_NOTE.md)
 - [GITLINK_DECISION.md](./GITLINK_DECISION.md)
 - [CTO_DEPLOYMENT_VALIDATION.md](./CTO_DEPLOYMENT_VALIDATION.md) (historical CTO smoke notes)
