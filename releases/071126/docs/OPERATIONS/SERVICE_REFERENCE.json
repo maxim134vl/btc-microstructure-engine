@@ -1,0 +1,355 @@
+[
+  {
+    "service": "canonical-runtime",
+    "image_id": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/canonical_runtime.sh"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app",
+    "memory_limit_bytes": 0,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 1.4060177088110057,
+    "measured_memory_bytes": 899563520,
+    "purpose": "Последовательный Stage1/Stage2 pipeline, run.py → runtime/pipeline.py",
+    "inputs": "Watchdog feed и native Legacy outputs; после входной проверки dependency guard",
+    "outputs": "cognition/*.parquet, runtime_engine_state, availability/metadata",
+    "trigger": "Полный проход затем RUNTIME_LOOP_DELAY=5 s. ENGINE_TIMEOUT_SECONDS по env, default 120 s; это deadline отдельного engine, не всего pipeline.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "image_id": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/context_refresh_daemon.sh"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app",
+    "memory_limit_bytes": 0,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.2802667616007857,
+    "measured_memory_bytes": 507879424,
+    "purpose": "Publisher Final/Lifecycle/Context Phase четырёх TF; один causal child",
+    "inputs": "Пригодные собственные native frames и Stage2 evidence; admission и source pins",
+    "outputs": "live/primary_context_publication.json, live/context_refresh_daemon_status.json; own-TF Final/Lifecycle, phase generations",
+    "trigger": "Monotonic interval 900 s. Пропущенные slots пропускаются, не ставятся в очередь полных циклов.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "context-refresher",
+    "image_id": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/context_refresher.sh"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app",
+    "memory_limit_bytes": 805306368,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.7170817651098901,
+    "measured_memory_bytes": 288792576,
+    "purpose": "Подготовка read-only visual projections из owner outputs",
+    "inputs": "Опубликованные Final/Lifecycle/trade/phase источники; /profile — диагностика",
+    "outputs": "visual public volume; /profile diagnostics",
+    "trigger": "Штатный loop из entrypoint. Установленная проверка versions пропускает полный пересчёт неизменённых входов; точный период см. сохранённый command/env.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "legacy-volume-memory",
+    "image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+    "command": [
+      "python",
+      "-u",
+      "/opt/btcml-legacy-memory-regime/legacy_pair_runtime.py",
+      "--root",
+      "/legacy"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "10001:10001",
+    "cwd": "/legacy",
+    "memory_limit_bytes": 1073741824,
+    "cpu_limit_cores": 1.0,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.2317411481687559,
+    "measured_memory_bytes": 198623232,
+    "purpose": "Native Memory/Regime pair под IO wrapper",
+    "inputs": "Текущий multi_exchange_flow snapshot из /legacy",
+    "outputs": "/legacy native Memory/Regime parquet и /legacy/ops provenance",
+    "trigger": "Родной цикл pair. Входной snapshot переиспользуется внутри прохода; формулы native unchanged.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "legacy-volume-reactions",
+    "image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+    "command": [
+      "python",
+      "-u",
+      "/opt/btcml-legacy-reactions-acceptance/legacy_pair_runtime.py",
+      "--root",
+      "/legacy"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "10001:10001",
+    "cwd": "/legacy",
+    "memory_limit_bytes": 1073741824,
+    "cpu_limit_cores": 1.0,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.11497511716737144,
+    "measured_memory_bytes": 190095360,
+    "purpose": "Native Reactions/Acceptance pair",
+    "inputs": "Текущий multi_exchange_flow snapshot из /legacy",
+    "outputs": "/legacy native Reactions/Acceptance и /legacy/ops",
+    "trigger": "Родной цикл pair; расчёты/AST admission сохранены.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "legacy-volume-clusters",
+    "image_id": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+    "command": [
+      "python",
+      "-u",
+      "/opt/btcml-legacy-pair/legacy_pair_runtime.py",
+      "--root",
+      "/legacy"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "10001:10001",
+    "cwd": "/legacy",
+    "memory_limit_bytes": 1073741824,
+    "cpu_limit_cores": 1.0,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.15879737973421384,
+    "measured_memory_bytes": 214188032,
+    "purpose": "Native Clusters/Inventory pair с текущим pass-local snapshot reuse",
+    "inputs": "/legacy multi_exchange_flow + проверенные native source pins",
+    "outputs": "/legacy native Clusters/Inventory + ops capture/published metadata",
+    "trigger": "Родной dispatch; один неизменный входной snapshot делится только внутри pair.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "legacy-multi-exchange",
+    "image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+    "command": [
+      "python",
+      "-u",
+      "/opt/btcml-legacy-original/io_runtime.py",
+      "/opt/btcml-legacy-original/multi_exchange_collector.py",
+      "multi_exchange_flow.parquet"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "10001:10001",
+    "cwd": "/legacy",
+    "memory_limit_bytes": 536870912,
+    "cpu_limit_cores": 0.5,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.2937736211658196,
+    "measured_memory_bytes": 113569792,
+    "purpose": "Сборщик multi-exchange flow под IO runtime",
+    "inputs": "Реальные соединения сборщика; точные endpoints в сохранённом source",
+    "outputs": "/legacy multi_exchange_flow parquet, ops source evidence",
+    "trigger": "Непрерывное получение, штатный flush/публикация исходного collector.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "dashboard-ui",
+    "image_id": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+    "command": [
+      "nginx",
+      "-g",
+      "daemon off;"
+    ],
+    "entrypoint": [
+      "/docker-entrypoint.sh"
+    ],
+    "user": "",
+    "cwd": "/",
+    "memory_limit_bytes": 0,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.00809602034807642,
+    "measured_memory_bytes": 8597504,
+    "purpose": "Один nginx: Dashboard + встроенный Market Context/legacy Chart",
+    "inputs": "Статика image, /visual-data RO, /release/manifest.json RO, внутренний ops-api",
+    "outputs": "127.0.0.1:15173; :18765 только Chart static/GET projection",
+    "trigger": "GET/static и запросы UI; модель не вычисляется.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "ops-api",
+    "image_id": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+    "command": [
+      "python",
+      "run_api.py"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app/dashboard/backend",
+    "memory_limit_bytes": 1610612736,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.05020858509731962,
+    "measured_memory_bytes": 42962944,
+    "purpose": "Read-only FastAPI/WS транспорт owner данных и bounded Docker GET telemetry",
+    "inputs": "Data/visual RO, release manifest RO, Docker socket RO и действующий socket GID",
+    "outputs": "127.0.0.1:18080; health/runtime/chart projections",
+    "trigger": "Данные читаются по запросам/ограниченному transport cache. Docker counters требуют двух сопоставимых samples.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "collector-watchdog",
+    "image_id": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/collector_watchdog.sh"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app",
+    "memory_limit_bytes": 0,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.14204877493344256,
+    "measured_memory_bytes": 137637888,
+    "purpose": "Watchdog штатных required collectors",
+    "inputs": "Сохранённая конфигурация collectors; в P0 фактически работал live_binance_feed_v2 child",
+    "outputs": "Feed parquet, collector heartbeats и штатные logs",
+    "trigger": "Существующий supervision loop, не отдельный новый collector.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "cognition-runtime",
+    "image_id": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/cognition_runtime.sh"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app",
+    "memory_limit_bytes": 0,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.568840208009172,
+    "measured_memory_bytes": 273297408,
+    "purpose": "LIVE1A Spot stream, архив raw_event_journal и provisional cognition",
+    "inputs": "Spot BTCUSDT aggTrade/bookTicker; нормализация source/session/receive metadata",
+    "outputs": "raw_market_events_v2; cognition/intrabar_context_events; runtime/intrabar_cognition_health.json",
+    "trigger": "Receive непрерывен; архивный writer bounded, chunk policy в source: 50k events / 60 s, ZSTD.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "paper-manager",
+    "image_id": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/financial_candidate_paper.sh",
+      "--continuity-mode",
+      "FLAT_START",
+      "--fresh-live-domain",
+      "paper-t0-20261104T182435Z"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "10001:10001",
+    "cwd": "/app",
+    "memory_limit_bytes": 1610612736,
+    "cpu_limit_cores": 2.0,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.27274908126166847,
+    "measured_memory_bytes": 279625728,
+    "purpose": "Единственный Paper writer; Futures receive, WAL/ACK, исполнение/сопровождение; штатный R08 child",
+    "inputs": "Native books/epoch, историческая provenance + выбранный release pins, действительные bindings, свежие Futures и BBO",
+    "outputs": "Paper WAL/checkpoints/books/financial heads, health и owner projections; /r08 producer outputs",
+    "trigger": "Receive/ACK/SLTP непрерывны; один последовательный market worker; существующий poll/health loop.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "timeframe-manager",
+    "image_id": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/financial_trend_service.sh",
+      "timeframe-manager"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app",
+    "memory_limit_bytes": 0,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.671239121851321,
+    "measured_memory_bytes": 304300032,
+    "purpose": "Четыре независимых TF decisions → CommandBus",
+    "inputs": "Собственные M15/M30/H1/H4 контексты, phase/strength, Paper state и genuine source bindings",
+    "outputs": "trading/manager/*, timeframe_command_memory, timeframe_manager_latest/health",
+    "trigger": "Текущий daemon interval/poll; одинаковые evaluation/intent keys дедуплицируются.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  },
+  {
+    "service": "intrabar-supervisor",
+    "image_id": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+    "command": [
+      "/bin/sh",
+      "/app/deploy/vps/entrypoints/intrabar_supervisor.sh"
+    ],
+    "entrypoint": [
+      "/usr/bin/tini",
+      "--"
+    ],
+    "user": "btcml",
+    "cwd": "/app",
+    "memory_limit_bytes": 0,
+    "cpu_limit_cores": null,
+    "measured_at": "2026-11-07T11:19:39.403609+00:00",
+    "measured_cpu_cores": 0.050317041942966746,
+    "measured_memory_bytes": 13066240,
+    "purpose": "Существующий supervisor/наблюдатель execution служб",
+    "inputs": "Paper/Timeframe owner health, control/config и shared runtime state",
+    "outputs": "runtime/intrabar_supervision_state.json и штатные журналы",
+    "trigger": "Штатный supervision loop из сохранённой команды.",
+    "unknown_norms": "NOT_ESTABLISHED"
+  }
+]

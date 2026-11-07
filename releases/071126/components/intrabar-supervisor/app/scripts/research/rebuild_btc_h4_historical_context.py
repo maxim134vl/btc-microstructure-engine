@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Rebuild BTC H4 historical context into ETLL market pack."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from btc_ml.external_traders.rebuild_context import rebuild_btc_tf_historical_context  # noqa: E402
+
+DEFAULT_PACK = ROOT / "data/research/external_traders/market_pack_btc_h4"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pack-dir", type=Path, default=DEFAULT_PACK)
+    parser.add_argument("--limit-bars", type=int, default=None)
+    args = parser.parse_args()
+    report = rebuild_btc_tf_historical_context(
+        pack_dir=args.pack_dir,
+        timeframe="H4",
+        limit_bars=args.limit_bars,
+    )
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,107 @@
+{
+  "release": "071126",
+  "kind": "preserved-installed-components",
+  "platform": "linux/arm64",
+  "real_execution": "DISABLED",
+  "services": [
+    {
+      "service": "ops-api",
+      "installed_image_id": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+      "restore_image_id": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+      "source_directory": "components/ops-api"
+    },
+    {
+      "service": "dashboard-ui",
+      "installed_image_id": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+      "restore_image_id": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+      "source_directory": "presentation-build-source"
+    },
+    {
+      "service": "timeframe-manager",
+      "installed_image_id": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+      "restore_image_id": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+      "source_directory": "components/timeframe-manager"
+    },
+    {
+      "service": "paper-manager",
+      "installed_image_id": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+      "restore_image_id": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+      "source_directory": "components/paper-manager"
+    },
+    {
+      "service": "context-refresh-daemon",
+      "installed_image_id": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+      "restore_image_id": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+      "source_directory": "components/context-refresh-daemon"
+    },
+    {
+      "service": "context-refresher",
+      "installed_image_id": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+      "restore_image_id": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+      "source_directory": "components/context-refresher"
+    },
+    {
+      "service": "legacy-volume-clusters",
+      "installed_image_id": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+      "restore_image_id": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+      "source_directory": "components/legacy-volume-clusters"
+    },
+    {
+      "service": "canonical-runtime",
+      "installed_image_id": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+      "restore_image_id": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+      "source_directory": "components/canonical-runtime"
+    },
+    {
+      "service": "intrabar-supervisor",
+      "installed_image_id": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+      "restore_image_id": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+      "source_directory": "components/intrabar-supervisor"
+    },
+    {
+      "service": "legacy-volume-memory",
+      "installed_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "restore_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "source_directory": "components/legacy-volume-memory"
+    },
+    {
+      "service": "legacy-volume-reactions",
+      "installed_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "restore_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "source_directory": "components/legacy-volume-reactions"
+    },
+    {
+      "service": "legacy-multi-exchange",
+      "installed_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "restore_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "source_directory": "components/legacy-multi-exchange"
+    },
+    {
+      "service": "collector-watchdog",
+      "installed_image_id": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+      "restore_image_id": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+      "source_directory": "components/collector-watchdog"
+    },
+    {
+      "service": "cognition-runtime",
+      "installed_image_id": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+      "restore_image_id": "sha256:348073d3a7300d3a402bea47f770505486ce4b4f6112f1c2f1b59e57e62540e8",
+      "source_directory": "components/cognition-runtime"
+    }
+  ],
+  "source_files": "SOURCE_FILES.json",
+  "cognition_original_image_missing_from_store": true,
+  "cognition_reconstructed_from_actual_rootfs": true,
+  "cognition_byte_identity_claimed": false,
+  "private_restore_package": "BTCML_BACKUP_071126 on owner storage; images/private env/runtime data intentionally not in Git",
+  "full_runtime_restore": "NOT_TESTED",
+  "artifact_checks": "Complete image closure/load/create, volume file hashes, exact source/bind hashes, isolated state restoration; see preservation docs",
+  "historical_provenance": "Historical financial approval/anchors are unchanged; current release implementation binding remains separate",
+  "trading_permission": "Existing startup/source/PAPER OPEN guards unchanged; no qualification or synthetic permission supplied",
+  "saved_build_bases": [
+    "sha256:2e37bce2841464cc7fe31cf3d70109218f530564d873608c06297f2c312ec0cc",
+    "sha256:d54f55e2d5dd913be33ed982071bb4f6df537167e0dc5f5ba0f80999ff67b87e",
+    "sha256:a8bb71c3467ac597f064e23a32f7a54fd6cae3a7ed3e2e1bfe6df4681470a6b1"
+  ],
+  "build_base_note": "Exact available accepted bases retained privately for provenance/rebuild. Current runtime image layer closure is self-contained; no bit-identical rebuild claim for missing historical intermediate image metadata."
+}

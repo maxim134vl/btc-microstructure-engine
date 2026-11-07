@@ -1,0 +1,590 @@
+{
+  "run_id": "20260720_132423",
+  "cycle_id": "20260720_132423",
+  "generated_at": "2026-07-20T13:24:23.736877",
+  "status": "OK",
+  "trust": {
+    "trust_level": "TOXIC",
+    "cognition_health": "DEGRADED",
+    "stability_score": 0.3846,
+    "overconfident_rate": 0.0,
+    "drift_frequency": 0.9091
+  },
+  "comparison": {
+    "status": "OK",
+    "previous_cycle_id": "20260713_132422",
+    "comparisons": [
+      {
+        "metric": "cognition_stability_score",
+        "label": "Cognition stability",
+        "current": 0.3846,
+        "previous": 0.6731,
+        "rolling_average": 0.5064,
+        "delta_vs_previous": -0.2885,
+        "delta_vs_baseline": -0.1218,
+        "trend": "degrading"
+      },
+      {
+        "metric": "confidence_realism_score",
+        "label": "Confidence realism",
+        "current": 0.3333,
+        "previous": 0.3333,
+        "rolling_average": 0.1111,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.2222,
+        "trend": "stable"
+      },
+      {
+        "metric": "ontology_integrity_score",
+        "label": "Ontology integrity",
+        "current": 0.5,
+        "previous": 0.8125,
+        "rolling_average": 0.7708,
+        "delta_vs_previous": -0.3125,
+        "delta_vs_baseline": -0.2708,
+        "trend": "degrading"
+      },
+      {
+        "metric": "transition_stability_score",
+        "label": "Transition stability",
+        "current": 0.5,
+        "previous": 0.5,
+        "rolling_average": 0.1667,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": 0.3333,
+        "trend": "stable"
+      },
+      {
+        "metric": "contradiction_pressure_score",
+        "label": "Contradiction pressure",
+        "current": 0.6971,
+        "previous": 1.0,
+        "rolling_average": 1.0,
+        "delta_vs_previous": -0.3029,
+        "delta_vs_baseline": -0.3029,
+        "trend": "improving"
+      },
+      {
+        "metric": "calibration_health_score",
+        "label": "Calibration health",
+        "current": 0.1927,
+        "previous": 0.613,
+        "rolling_average": 0.3197,
+        "delta_vs_previous": -0.4203,
+        "delta_vs_baseline": -0.127,
+        "trend": "degrading"
+      },
+      {
+        "metric": "confirmed_rate",
+        "label": "Stage 1 confirmation",
+        "current": 0.3391,
+        "previous": 0.3811,
+        "rolling_average": 0.377,
+        "delta_vs_previous": -0.042,
+        "delta_vs_baseline": -0.0379,
+        "trend": "degrading"
+      },
+      {
+        "metric": "reasoning_accuracy",
+        "label": "Reasoning accuracy",
+        "current": 0.0,
+        "previous": 0.3529,
+        "rolling_average": 0.1176,
+        "delta_vs_previous": -0.3529,
+        "delta_vs_baseline": -0.1176,
+        "trend": "degrading"
+      },
+      {
+        "metric": "cognition_drift_frequency",
+        "label": "Cognition drift",
+        "current": 0.9091,
+        "previous": 0.8235,
+        "rolling_average": 0.9412,
+        "delta_vs_previous": 0.0856,
+        "delta_vs_baseline": -0.0321,
+        "trend": "degrading"
+      },
+      {
+        "metric": "overconfident_rate",
+        "label": "Overconfidence",
+        "current": 0.0,
+        "previous": 0.0,
+        "rolling_average": 0.6667,
+        "delta_vs_previous": 0.0,
+        "delta_vs_baseline": -0.6667,
+        "trend": "stable"
+      }
+    ],
+    "rolling_average": {
+      "cognition_stability_score": 0.5064,
+      "confidence_realism_score": 0.1111,
+      "ontology_integrity_score": 0.7708,
+      "transition_stability_score": 0.1667,
+      "contradiction_pressure_score": 1.0,
+      "calibration_health_score": 0.3197,
+      "confirmed_rate": 0.377,
+      "reasoning_accuracy": 0.1176,
+      "cognition_drift_frequency": 0.9412,
+      "overconfident_rate": 0.6667
+    },
+    "best_stability_cycle": "20260713_132422",
+    "worst_stability_cycle": "20260528_181603",
+    "history_length": 4
+  },
+  "regression": {
+    "verdict": "REGRESSION",
+    "improvement_count": 0,
+    "regression_count": 6,
+    "events": [
+      {
+        "type": "REGRESSION",
+        "metric": "cognition_stability_score",
+        "label": "Cognition stability",
+        "delta": -0.2885,
+        "note": "Cognition stability declined vs previous cycle."
+      },
+      {
+        "type": "REGRESSION",
+        "metric": "ontology_integrity_score",
+        "label": "Ontology integrity",
+        "delta": -0.3125,
+        "note": "Ontology integrity declined vs previous cycle."
+      },
+      {
+        "type": "REGRESSION",
+        "metric": "calibration_health_score",
+        "label": "Calibration health",
+        "delta": -0.4203,
+        "note": "Calibration health declined vs previous cycle."
+      },
+      {
+        "type": "REGRESSION",
+        "metric": "reasoning_accuracy",
+        "label": "Reasoning accuracy",
+        "delta": -0.3529,
+        "note": "Reasoning accuracy declined vs previous cycle."
+      },
+      {
+        "type": "REGRESSION",
+        "metric": "cognition_drift_frequency",
+        "label": "Cognition drift",
+        "delta": 0.0856,
+        "note": "Cognition drift increased vs previous cycle."
+      },
+      {
+        "type": "REGRESSION",
+        "metric": "trust_level",
+        "label": "Trust classification",
+        "delta": null,
+        "note": "Cycle classified as TOXIC."
+      }
+    ]
+  },
+  "evolution": {
+    "timeline": {
+      "confidence_realism": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.0
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.3333
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.3333
+        }
+      ],
+      "contradiction_pressure": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.6971
+        }
+      ],
+      "ontology_integrity": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.75
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.75
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.8125
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.5
+        }
+      ],
+      "transition_stability": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.0
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.5
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.5
+        }
+      ],
+      "cognition_stability": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.4231
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.4231
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.6731
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.3846
+        }
+      ],
+      "narrative_coherence": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.7167
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.7167
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.7647
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.7364
+        }
+      ],
+      "narrative_stability": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.7167
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.7167
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.7647
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.7364
+        }
+      ],
+      "cognition_drift": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.8235
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.9091
+        }
+      ],
+      "calibration_effectiveness": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 0.1731
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 0.1731
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.613
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.1927
+        }
+      ],
+      "confidence_inflation": [
+        {
+          "cycle_id": "20260528_181603",
+          "timestamp": "2026-05-28T18:16:03.397707",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260528_181635",
+          "timestamp": "2026-05-28T18:16:35.850906",
+          "value": 1.0
+        },
+        {
+          "cycle_id": "20260713_132422",
+          "timestamp": "2026-07-13T13:24:22.245458",
+          "value": 0.0
+        },
+        {
+          "cycle_id": "20260720_132423",
+          "timestamp": "2026-07-20T13:24:23.697137",
+          "value": 0.0
+        }
+      ]
+    },
+    "trends": {
+      "confidence_realism": "improving",
+      "contradiction_pressure": "improving",
+      "ontology_integrity": "degrading",
+      "transition_stability": "improving",
+      "cognition_stability": "degrading",
+      "narrative_coherence": "stable",
+      "narrative_stability": "stable",
+      "cognition_drift": "improving",
+      "calibration_effectiveness": "stable",
+      "confidence_inflation": "improving"
+    },
+    "cycle_count": 4
+  },
+  "calibration_evolution": {
+    "entry": {
+      "cycle_id": "20260720_132423",
+      "generated_at": "2026-07-20T13:24:23.697137",
+      "calibration_status": "NEEDS_REVIEW",
+      "recommendations": [
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage1",
+          "metric": "initiative_followthrough",
+          "recommendation": "Initiative detection thresholds likely too sensitive during low volatility.",
+          "evidence": "Observed 13.5% below minimum 35.0%.",
+          "observed_value": 0.1345
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage1",
+          "metric": "transition_stability",
+          "recommendation": "Transition persistence assumptions diverge from runtime reality.",
+          "evidence": "Observed 0.0% below minimum 40.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage2",
+          "metric": "confidence_realism",
+          "recommendation": "Confidence weighting exceeds observed follow-through quality.",
+          "evidence": "Observed 0.0% below minimum 40.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage2",
+          "metric": "synthesis_stability",
+          "recommendation": "Synthesis state machine may be overreacting to local noise.",
+          "evidence": "Observed 9.1% below minimum 35.0%.",
+          "observed_value": 0.0909
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "stage2",
+          "metric": "reasoning_accuracy",
+          "recommendation": "Reasoning bias mapping diverges from market behavior.",
+          "evidence": "Observed 0.0% below minimum 30.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "fully_confirmed_rate",
+          "recommendation": "End-to-end cognition chain rarely confirms \u2014 review cross-stage wiring.",
+          "evidence": "Observed 0.0% below minimum 25.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "cross_stage_alignment",
+          "recommendation": "Perception-to-reasoning handoff diverging from architecture intent.",
+          "evidence": "Observed 0.0% below minimum 45.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "confidence_realism",
+          "recommendation": "Integrated confidence exceeds market confirmation quality.",
+          "evidence": "Observed 0.0% below minimum 40.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "cognition_drift_frequency",
+          "recommendation": "Rolling cognition drift exceeds architectural tolerance.",
+          "evidence": "Observed 90.9% exceeds maximum 35.0%.",
+          "observed_value": 0.9091
+        },
+        {
+          "priority": "SEVERE_DRIFT",
+          "layer": "integrated",
+          "metric": "reasoning_accuracy",
+          "recommendation": "Reasoning layer failing within integrated validation.",
+          "evidence": "Observed 0.0% below minimum 30.0%.",
+          "observed_value": 0.0
+        },
+        {
+          "priority": "ONTOLOGY_DEGRADATION",
+          "layer": "integrated",
+          "metric": "ontology_coherence",
+          "recommendation": "Ontology fragmentation detected across cognition layers.",
+          "evidence": "Observed 18.2% below minimum 45.0%.",
+          "observed_value": 0.1818
+        },
+        {
+          "priority": "DRIFTING",
+          "layer": "stage1",
+          "metric": "false_positive_rate",
+          "recommendation": "Perception bias scoring may be miscalibrated for current regime.",
+          "evidence": "Observed 20.0% drifting above expected 15.0%.",
+          "observed_value": 0.2
+        },
+        {
+          "priority": "DRIFTING",
+          "layer": "stage2",
+          "metric": "contradiction_frequency",
+          "recommendation": "Reasoning layer producing contradictory synthesis states.",
+          "evidence": "Observed 36.4% drifting above expected 25.0%.",
+          "observed_value": 0.3636
+        },
+        {
+          "priority": "DRIFTING",
+          "layer": "integrated",
+          "metric": "contradiction_propagation",
+          "recommendation": "Contradiction cascade detected \u2014 review propagation guards.",
+          "evidence": "Observed 36.4% drifting above expected 25.0%.",
+          "observed_value": 0.3636
+        },
+        {
+          "priority": "DRIFTING",
+          "layer": "integrated",
+          "metric": "market_confirmation_rate",
+          "recommendation": "Architecture assumptions about market confirmation diverge from runtime.",
+          "evidence": "Observed 18.2% drifting below expected 30.0%.",
+          "observed_value": 0.1818
+        },
+        {
+          "priority": "DRIFTING",
+          "layer": "integrated",
+          "metric": "perception_accuracy",
+          "recommendation": "Perception layer failing within integrated validation.",
+          "evidence": "Observed 18.2% drifting below expected 30.0%.",
+          "observed_value": 0.1818
+        }
+      ],
+      "confidence_realism_delta": 0.0,
+      "overconfident_rate_delta": 0.0,
+      "calibration_health_delta": -0.4203,
+      "regression_verdict": "REGRESSION",
+      "calibration_improved": false
+    },
+    "note": "Calibration change impact inconclusive."
+  },
+  "ontology_evolution": {
+    "entry": {
+      "cycle_id": "20260720_132423",
+      "generated_at": "2026-07-20T13:24:23.697137",
+      "ontology_status": "STRAINED",
+      "ontology_score": 0.5,
+      "ontology_coherence": 0.1818,
+      "integrity_delta": -0.3125,
+      "issues": [
+        "contradiction_frequency: DRIFTING",
+        "cross_stage_alignment: SEVERE_DRIFT",
+        "ontology_coherence: ONTOLOGY_DEGRADATION",
+        "contradiction_propagation: DRIFTING"
+      ]
+    },
+    "signal": "ontology degradation detected"
+  },
+  "dataset_counts": {
+    "validated_cognition": 202,
+    "failed_cognition": 67,
+    "drift_epochs": 0,
+    "toxic_periods": 7,
+    "ontology_health_history": 4,
+    "calibration_history": 1
+  },
+  "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/memory/reports/evolution_20260720_132423.md",
+  "history_length": 4
+}

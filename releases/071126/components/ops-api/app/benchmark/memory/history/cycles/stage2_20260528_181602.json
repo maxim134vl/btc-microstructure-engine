@@ -1,0 +1,55 @@
+{
+  "entry": {
+    "layer": "stage2",
+    "run_id": "20260528_181602",
+    "generated_at": "2026-05-28T18:16:03.090316",
+    "summary": {
+      "event_count": 3,
+      "verdict_distribution": {
+        "PARTIAL": 3
+      },
+      "reasoning_accuracy": 0.0,
+      "probabilistic_calibration_quality": 0.0,
+      "contradiction_frequency": 0.0,
+      "synthesis_stability": 0.0,
+      "narrative_coherence": 0.7167,
+      "confidence_drift": 1.0,
+      "regime_interpretation_accuracy": 0.0,
+      "transition_logic_quality": 0.0,
+      "overconfident_rate": 1.0,
+      "context_failure_rate": 0.0
+    },
+    "drift": null,
+    "calibration": null,
+    "ontology": null,
+    "cognition_health": null,
+    "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_benchmark_20260528_181602.json",
+    "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage2_forensic_20260528_181602.md",
+    "event_count": 3
+  },
+  "payload": {
+    "run_id": "20260528_181602",
+    "generated_at": "2026-05-28T18:16:03.090316",
+    "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage2_forensic_20260528_181602.md",
+    "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_benchmark_20260528_181602.json",
+    "export_csv": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_summary_20260528_181602.csv",
+    "visuals": [],
+    "summary": {
+      "event_count": 3,
+      "verdict_distribution": {
+        "PARTIAL": 3
+      },
+      "reasoning_accuracy": 0.0,
+      "probabilistic_calibration_quality": 0.0,
+      "contradiction_frequency": 0.0,
+      "synthesis_stability": 0.0,
+      "narrative_coherence": 0.7167,
+      "confidence_drift": 1.0,
+      "regime_interpretation_accuracy": 0.0,
+      "transition_logic_quality": 0.0,
+      "overconfident_rate": 1.0,
+      "context_failure_rate": 0.0
+    },
+    "status": "OK"
+  }
+}

@@ -1,0 +1,171 @@
+import time
+import pandas as pd
+from datetime import datetime
+
+print("\nINITIATIVE MEMORY ENGINE STARTED\n")
+
+initiative_memory = []
+
+while True:
+
+    try:
+
+        flow = pd.read_parquet("multi_exchange_flow.parquet")
+
+        recent = flow.tail(20)
+
+        delta = recent["delta"].sum()
+
+        volume_value = (
+            recent["buy_volume"].sum()
+            +
+            recent["sell_volume"].sum()
+        )
+
+        price = recent.iloc[-1]["avg_price"]
+
+        price_change = recent["price_change"].sum()
+
+        print("\n================================")
+        print("INITIATIVE MEMORY ENGINE")
+        print(datetime.utcnow())
+        print("================================\n")
+
+        print(f"PRICE: {round(price, 2)}")
+        print(f"DELTA: {round(delta, 2)}")
+        print(f"VOLUME: {round(volume_value, 2)}")
+        print(f"PRICE CHANGE: {round(price_change, 2)}")
+
+        # DETECT INITIATIVE
+
+        if abs(delta) > 100 and volume_value > 25:
+
+            direction = "BUY" if delta > 0 else "SELL"
+
+            zone_low = round(price - 25, 2)
+            zone_high = round(price + 25, 2)
+
+            initiative = {
+                "timestamp": datetime.utcnow(),
+                "direction": direction,
+                "zone_low": zone_low,
+                "zone_high": zone_high,
+                "origin_price": price,
+                "delta": delta,
+                "volume": volume_value,
+                "state": "ACTIVE"
+            }
+
+            initiative_memory.append(initiative)
+
+            print(f"\nNEW {direction} INITIATIVE DETECTED")
+            print(f"ZONE: {zone_low} - {zone_high}")
+
+        # CHECK REVISITS
+
+        for initiative in initiative_memory:
+
+            if initiative["state"] == "FAILED":
+                continue
+
+            inside_zone = (
+                price >= initiative["zone_low"]
+                and
+                price <= initiative["zone_high"]
+            )
+
+            if inside_zone:
+
+                # BUY INITIATIVE
+
+                if initiative["direction"] == "BUY":
+
+                    # HEALTHY DEFENSE
+
+                    if delta > 0 and price_change > 10:
+
+                        initiative["state"] = "DEFENDED"
+
+                        print("\nBUY INITIATIVE DEFENDED")
+                        print(
+                            f"ZONE: {initiative['zone_low']} - {initiative['zone_high']}"
+                        )
+
+                    # ABSORPTION
+
+                    elif delta > 0 and abs(price_change) < 10:
+
+                        initiative["state"] = "ABSORBED"
+
+                        print("\nBUY INITIATIVE ABSORBED")
+                        print(
+                            "Aggressive buying fails to produce meaningful upside response."
+                        )
+
+                    # FAILURE
+
+                    elif delta < -50:
+
+                        initiative["state"] = "FAILED"
+
+                        print("\nBUY INITIATIVE FAILED")
+                        print(
+                            f"ZONE LOST: {initiative['zone_low']} - {initiative['zone_high']}"
+                        )
+
+                # SELL INITIATIVE
+
+                elif initiative["direction"] == "SELL":
+
+                    # HEALTHY DEFENSE
+
+                    if delta < 0 and price_change < -10:
+
+                        initiative["state"] = "DEFENDED"
+
+                        print("\nSELL INITIATIVE DEFENDED")
+                        print(
+                            f"ZONE: {initiative['zone_low']} - {initiative['zone_high']}"
+                        )
+
+                    # ABSORPTION
+
+                    elif delta < 0 and abs(price_change) < 10:
+
+                        initiative["state"] = "ABSORBED"
+
+                        print("\nSELL INITIATIVE ABSORBED")
+                        print(
+                            "Aggressive selling fails to produce meaningful downside continuation."
+                        )
+
+                    # FAILURE
+
+                    elif delta > 50:
+
+                        initiative["state"] = "FAILED"
+
+                        print("\nSELL INITIATIVE FAILED")
+                        print(
+                            f"ZONE LOST: {initiative['zone_low']} - {initiative['zone_high']}"
+                        )
+
+        # SAVE MEMORY
+
+        memory_df = pd.DataFrame(initiative_memory)
+
+        memory_df.to_parquet(
+            "initiative_memory.parquet",
+            index=False
+        )
+
+        print(f"\nACTIVE INITIATIVES: {len(memory_df)}")
+
+        time.sleep(60)
+
+    except Exception as e:
+
+        print("\nERROR")
+        print(e)
+
+        time.sleep(10)

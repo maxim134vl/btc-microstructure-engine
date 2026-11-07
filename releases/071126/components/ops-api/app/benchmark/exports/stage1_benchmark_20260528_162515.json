@@ -1,0 +1,441 @@
+{
+  "run_id": "20260528_162515",
+  "generated_at": "2026-05-28T16:25:15.938359",
+  "lookback_days": 14,
+  "forward_horizon": 7,
+  "summary": {
+    "event_count": 16,
+    "verdict_distribution": {
+      "CONFIRMED": 6,
+      "PARTIAL": 8,
+      "FALSE POSITIVE": 2
+    },
+    "initiative_accuracy": 0.0,
+    "climax_confirmation_rate": 0.4,
+    "stopping_quality_rate": 0.3636,
+    "transition_stability": 0.0,
+    "probabilistic_consistency": 0.375,
+    "false_positive_rate": 0.125,
+    "confirmed_rate": 0.375,
+    "follow_through_strong_rate": 0.0,
+    "market_structure_coherence": 0.625
+  },
+  "events": [
+    {
+      "event_index": 1,
+      "timestamp": "2026-05-18 02:45:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 76797.7,
+      "outcome": {
+        "move_pct": 0.314,
+        "max_up_pct": 0.317,
+        "max_down_pct": 0.03,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.31% over next 7 candles.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "validation_note": "Market moved upward confirming bullish interpretation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 2,
+      "timestamp": "2026-05-18 06:00:00",
+      "interpretation": "Trigger event: STOPPING_VOLUME. Synthesis: LOCAL_EXHAUSTION. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.",
+      "bias_label": "stopping support",
+      "bias_source": "trigger_event",
+      "entry_price": 76845.4,
+      "outcome": {
+        "move_pct": 0.257,
+        "max_up_pct": 0.258,
+        "max_down_pct": 0.284,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.26% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Weak upward confirmation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "STOPPING_VOLUME"
+      }
+    },
+    {
+      "event_index": 3,
+      "timestamp": "2026-05-18 08:30:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 76918.5,
+      "outcome": {
+        "move_pct": -0.189,
+        "max_up_pct": 0.128,
+        "max_down_pct": 0.317,
+        "follow_through": "NONE",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved downward 0.19% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Weak upward confirmation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 4,
+      "timestamp": "2026-05-18 15:00:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 76287.8,
+      "outcome": {
+        "move_pct": 0.137,
+        "max_up_pct": 0.463,
+        "max_down_pct": 0.358,
+        "follow_through": "NONE",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.14% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Weak upward confirmation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 5,
+      "timestamp": "2026-05-18 18:15:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 76331.6,
+      "outcome": {
+        "move_pct": 0.945,
+        "max_up_pct": 0.95,
+        "max_down_pct": 0.17,
+        "follow_through": "MODERATE",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.94% over next 7 candles.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "validation_note": "Market moved upward confirming bullish interpretation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 6,
+      "timestamp": "2026-05-19 21:00:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 76975.5,
+      "outcome": {
+        "move_pct": -0.37,
+        "max_up_pct": 0.054,
+        "max_down_pct": 0.468,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved downward 0.37% over next 7 candles.",
+      "verdict": "FALSE POSITIVE",
+      "false_positive": true,
+      "validation_note": "Market moved opposite to bullish interpretation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 7,
+      "timestamp": "2026-05-20 04:30:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 76735.4,
+      "outcome": {
+        "move_pct": 0.693,
+        "max_up_pct": 0.78,
+        "max_down_pct": 0.026,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.69% over next 7 candles.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "validation_note": "Market moved upward confirming bullish interpretation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 8,
+      "timestamp": "2026-05-20 05:00:00",
+      "interpretation": "Trigger event: BUYING_CLIMAX. Synthesis: INTERMEDIATE_REVERSAL. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "buyer climax exhaustion",
+      "bias_source": "trigger_event",
+      "entry_price": 77188.2,
+      "outcome": {
+        "move_pct": 0.229,
+        "max_up_pct": 0.255,
+        "max_down_pct": 0.118,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.23% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Weak downward confirmation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": "INTERMEDIATE_REVERSAL",
+        "trigger_event": "BUYING_CLIMAX"
+      }
+    },
+    {
+      "event_index": 9,
+      "timestamp": "2026-05-20 07:00:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 77353.9,
+      "outcome": {
+        "move_pct": 0.108,
+        "max_up_pct": 0.338,
+        "max_down_pct": 0.226,
+        "follow_through": "NONE",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.11% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Weak upward confirmation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 10,
+      "timestamp": "2026-05-20 07:30:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 77349.4,
+      "outcome": {
+        "move_pct": 0.169,
+        "max_up_pct": 0.344,
+        "max_down_pct": 0.221,
+        "follow_through": "NONE",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.17% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Weak upward confirmation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 11,
+      "timestamp": "2026-05-20 08:15:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 77229.5554,
+      "outcome": {
+        "move_pct": 0.451,
+        "max_up_pct": 0.5,
+        "max_down_pct": 0.002,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.45% over next 7 candles.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "validation_note": "Market moved upward confirming bullish interpretation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 12,
+      "timestamp": "2026-05-20 08:30:00",
+      "interpretation": "Trigger event: BUYING_CLIMAX. Synthesis: LOCAL_EXHAUSTION. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "buyer climax exhaustion",
+      "bias_source": "trigger_event",
+      "entry_price": 77502.8,
+      "outcome": {
+        "move_pct": 0.112,
+        "max_up_pct": 0.152,
+        "max_down_pct": 0.212,
+        "follow_through": "NONE",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.11% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Weak downward confirmation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "BUYING_CLIMAX"
+      }
+    },
+    {
+      "event_index": 13,
+      "timestamp": "2026-05-20 13:30:00",
+      "interpretation": "Volume class: climax. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "volume climax",
+      "bias_source": "volume_class",
+      "entry_price": 77075.6,
+      "outcome": {
+        "move_pct": 0.603,
+        "max_up_pct": 0.963,
+        "max_down_pct": 0.272,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.60% over next 7 candles.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "validation_note": "Reversal or structural shift observed after event.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 14,
+      "timestamp": "2026-05-21 00:45:00",
+      "interpretation": "Volume class: climax. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.",
+      "bias_label": "volume climax",
+      "bias_source": "volume_class",
+      "entry_price": 77956.0,
+      "outcome": {
+        "move_pct": 0.059,
+        "max_up_pct": 0.271,
+        "max_down_pct": 0.245,
+        "follow_through": "NONE",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved upward 0.06% over next 7 candles.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "validation_note": "Limited follow-through after reversal signal.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 15,
+      "timestamp": "2026-05-21 08:45:00",
+      "interpretation": "Volume class: stopping. Regime: HIGH_CONVICTION_AUCTION. Buyer initiative on delta.",
+      "bias_label": "stopping activity",
+      "bias_source": "volume_class",
+      "entry_price": 77889.9,
+      "outcome": {
+        "move_pct": -0.716,
+        "max_up_pct": 0.061,
+        "max_down_pct": 0.936,
+        "follow_through": "WEAK",
+        "forward_candles": 7
+      },
+      "observed_outcome": "Market moved downward 0.72% over next 7 candles.",
+      "verdict": "FALSE POSITIVE",
+      "false_positive": true,
+      "validation_note": "Market moved opposite to bullish interpretation.",
+      "context": {
+        "volume_event": NaN,
+        "climax_state": NaN,
+        "effort_result_state": NaN,
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    },
+    {
+      "event_index": 16,
+      "timestamp": "2026-05-21 18:57:56.394969",
+      "interpretation": "Effort/result: ABSORPTION_RESPONSE. Localized behavior: localized_distribution. Regime: HIGH_CONVICTION_AUCTION. Seller initiative on delta.",
+      "bias_label": "absorption response",
+      "bias_source": "effort_result_state",
+      "entry_price": 77185.5,
+      "outcome": {
+        "move_pct": 0.0,
+        "follow_through": "NONE",
+        "max_up_pct": 0.0,
+        "max_down_pct": 0.0,
+        "forward_candles": 0
+      },
+      "observed_outcome": "Market moved upward 0.00% over next 0 candles.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "validation_note": "Market remained balanced after absorption interpretation.",
+      "context": {
+        "volume_event": "NEUTRAL_VOLUME",
+        "climax_state": "NO_CLIMAX",
+        "effort_result_state": "ABSORPTION_RESPONSE",
+        "synthesis_state": NaN,
+        "trigger_event": NaN
+      }
+    }
+  ]
+}

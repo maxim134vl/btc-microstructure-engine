@@ -1,0 +1,3 @@
+FROM btc-ml-paper-manager:final-readiness-20261005-v5
+COPY . /app/
+LABEL btcml.scope="fresh-boundary-isolation-not-deployed" btcml.risk_contract="PER_TF_COMMITTED_EQUITY_PCT_V1"

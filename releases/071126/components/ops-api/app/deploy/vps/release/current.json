@@ -1,0 +1,9 @@
+{
+  "version": "2026.09.22",
+  "channel": "release",
+  "app": "btc-ml-paper",
+  "branch": "release",
+  "remote": "https://gitea.fonte.kaz/skramovskiyin/btc-microstructure-engine.git",
+  "settings": "deploy/vps/release/settings.json",
+  "runbook": "docs/deploy/RELEASE_2026.09.22.md"
+}

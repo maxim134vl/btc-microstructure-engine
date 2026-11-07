@@ -1,0 +1,15 @@
+export const ruShell = {
+  platform: "BTC-ML Platform",
+  mainNav: "Основная навигация",
+  language: "Язык",
+  theme: "Тема",
+  development: "Development",
+  production: "Production",
+  developmentEnv: "Среда разработки",
+  productionEnv: "Производственная среда",
+  themeLight: "Светлая",
+  themeDark: "Тёмная",
+  themeSystem: "Системная",
+  expandNav: "Развернуть навигацию",
+  collapseNav: "Свернуть навигацию",
+};

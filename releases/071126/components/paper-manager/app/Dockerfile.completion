@@ -1,0 +1,6 @@
+FROM btc-ml-paper-manager:live1b-safety-candidate-20261004-v2
+USER root
+COPY src/btc_ml/trading/intrabar_paper/execution_market_wal.py /app/src/btc_ml/trading/intrabar_paper/execution_market_wal.py
+COPY src/btc_ml/trading/intrabar_paper/execution_market_checkpoint.py /app/src/btc_ml/trading/intrabar_paper/execution_market_checkpoint.py
+COPY src/btc_ml/trading/intrabar_paper/execution_market_processor.py /app/src/btc_ml/trading/intrabar_paper/execution_market_processor.py
+USER btcml

@@ -1,0 +1,1 @@
+function t(o){return o.replace(/\/+$/,"")}function n(){return t(String("/api/v1"))}function r(){return`${window.location.protocol==="https:"?"wss":"ws"}://${window.location.host}/ws/live`}export{n as getApiBase,r as getWsUrl};

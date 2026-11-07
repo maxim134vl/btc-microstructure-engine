@@ -1,0 +1,165 @@
+{
+  "generated_at": "2026-05-30T12:27:40.395267+00:00",
+  "window": {
+    "start": "2026-05-02",
+    "end": "2026-05-30 23:59:59"
+  },
+  "old_calibration": {
+    "profile": "legacy",
+    "thresholds": {
+      "continuation_delta_min": 350.0,
+      "continuation_price_min": 150.0,
+      "initiative_ma_min": 180.0,
+      "initiative_swing_min": 450.0,
+      "rotational_flips_min": 4,
+      "rotational_stopping_min_flips": 0,
+      "cooldown_bars": 4,
+      "confidence_material_delta": 0.08
+    },
+    "raw_trigger_counts": {
+      "IC_ROTATIONAL_PRESSURE": 195,
+      "IC_CONTINUATION_WEAKENING": 1
+    },
+    "persisted_distribution": {
+      "IC_ROTATIONAL_PRESSURE": 109,
+      "IC_CONTINUATION_WEAKENING": 1
+    },
+    "persisted_total": 110,
+    "weekly_rate": 26.55,
+    "rotational_share": 0.9909,
+    "precision": 0.898,
+    "confirmation_rate": 0.8,
+    "false_positive_rate": 0.0909,
+    "early_warning_rate": 0.0,
+    "narrative_confirmation_rate": 0.9636,
+    "by_state": {
+      "IC_CONTINUATION_WEAKENING": {
+        "event_count": 1,
+        "precision": 0.0,
+        "confirmation_rate": 0.0,
+        "false_positive_rate": 0.0,
+        "early_warning_rate": 0.0,
+        "average_horizon_to_confirmation": 0.0,
+        "partial_rate": 0.0,
+        "failed_rate": 1.0,
+        "verdict_distribution": {
+          "FAILED": 1
+        }
+      },
+      "IC_INITIATIVE_DETERIORATION": {
+        "event_count": 0,
+        "precision": 0.0,
+        "confirmation_rate": 0.0,
+        "false_positive_rate": 0.0,
+        "early_warning_rate": 0.0,
+        "average_horizon_to_confirmation": 0.0,
+        "partial_rate": 0.0,
+        "failed_rate": 0.0,
+        "verdict_distribution": {}
+      },
+      "IC_ROTATIONAL_PRESSURE": {
+        "event_count": 109,
+        "precision": 0.898,
+        "confirmation_rate": 0.8073,
+        "false_positive_rate": 0.0917,
+        "early_warning_rate": 0.0,
+        "average_horizon_to_confirmation": 8.45,
+        "partial_rate": 0.1651,
+        "failed_rate": 0.0183,
+        "verdict_distribution": {
+          "CONFIRMED": 88,
+          "PARTIAL": 18,
+          "FAILED": 2,
+          "FALSE_POSITIVE": 1
+        }
+      }
+    }
+  },
+  "new_calibration": {
+    "profile": "live_feed",
+    "thresholds": {
+      "continuation_delta_min": 128.0296,
+      "continuation_price_min": 185.126,
+      "initiative_ma_min": 40.3684,
+      "initiative_swing_min": 134.2763,
+      "rotational_flips_min": 5.0,
+      "rotational_stopping_min_flips": 2.0,
+      "cooldown_bars": 4.0,
+      "confidence_material_delta": 0.08
+    },
+    "raw_trigger_counts": {
+      "IC_ROTATIONAL_PRESSURE": 39,
+      "IC_INITIATIVE_DETERIORATION": 54,
+      "IC_CONTINUATION_WEAKENING": 9
+    },
+    "persisted_distribution": {
+      "IC_ROTATIONAL_PRESSURE": 34,
+      "IC_INITIATIVE_DETERIORATION": 34,
+      "IC_CONTINUATION_WEAKENING": 5
+    },
+    "persisted_total": 73,
+    "weekly_rate": 17.62,
+    "rotational_share": 0.4658,
+    "precision": 0.875,
+    "confirmation_rate": 0.6712,
+    "false_positive_rate": 0.0959,
+    "early_warning_rate": 0.0137,
+    "narrative_confirmation_rate": 0.9315,
+    "by_state": {
+      "IC_CONTINUATION_WEAKENING": {
+        "event_count": 5,
+        "precision": 1.0,
+        "confirmation_rate": 0.6,
+        "false_positive_rate": 0.0,
+        "early_warning_rate": 0.2,
+        "average_horizon_to_confirmation": 7.0,
+        "partial_rate": 0.0,
+        "failed_rate": 0.2,
+        "verdict_distribution": {
+          "CONFIRMED": 3,
+          "EARLY_WARNING": 1,
+          "FAILED": 1
+        }
+      },
+      "IC_INITIATIVE_DETERIORATION": {
+        "event_count": 34,
+        "precision": 0.9091,
+        "confirmation_rate": 0.5882,
+        "false_positive_rate": 0.0588,
+        "early_warning_rate": 0.0,
+        "average_horizon_to_confirmation": 7.35,
+        "partial_rate": 0.3235,
+        "failed_rate": 0.0588,
+        "verdict_distribution": {
+          "CONFIRMED": 20,
+          "PARTIAL": 11,
+          "FAILED": 2,
+          "FALSE_POSITIVE": 1
+        }
+      },
+      "IC_ROTATIONAL_PRESSURE": {
+        "event_count": 34,
+        "precision": 0.8387,
+        "confirmation_rate": 0.7647,
+        "false_positive_rate": 0.1471,
+        "early_warning_rate": 0.0,
+        "average_horizon_to_confirmation": 9.45,
+        "partial_rate": 0.2059,
+        "failed_rate": 0.0294,
+        "verdict_distribution": {
+          "CONFIRMED": 26,
+          "PARTIAL": 7,
+          "FAILED": 1
+        }
+      }
+    }
+  },
+  "delta": {
+    "precision": -0.023,
+    "confirmation_rate": -0.1288,
+    "false_positive_rate": 0.005,
+    "early_warning_rate": 0.0137,
+    "weekly_rate": -8.93,
+    "rotational_share": -0.5251
+  }
+}

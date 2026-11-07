@@ -1,0 +1,1181 @@
+{
+  "run_id": "20260529_092158",
+  "generated_at": "2026-05-29T09:21:58.521863",
+  "period": {
+    "start": "2026-05-21",
+    "end": "2026-05-28 23:59:59"
+  },
+  "validation_horizons": [
+    4,
+    8,
+    16
+  ],
+  "summary": {
+    "event_count": 12,
+    "verdict_distribution": {
+      "EARLY_WARNING": 2,
+      "CONFIRMED": 7,
+      "FALSE_POSITIVE": 2,
+      "PARTIAL": 1
+    },
+    "by_state": {
+      "IC_CONTINUATION_WEAKENING": {
+        "event_count": 5,
+        "precision": 1.0,
+        "confirmation_rate": 0.6,
+        "false_positive_rate": 0.0,
+        "early_warning_rate": 0.4,
+        "average_horizon_to_confirmation": 7.2,
+        "partial_rate": 0.0,
+        "failed_rate": 0.0,
+        "verdict_distribution": {
+          "EARLY_WARNING": 2,
+          "CONFIRMED": 3
+        }
+      },
+      "IC_INITIATIVE_DETERIORATION": {
+        "event_count": 5,
+        "precision": 0.75,
+        "confirmation_rate": 0.6,
+        "false_positive_rate": 0.2,
+        "early_warning_rate": 0.0,
+        "average_horizon_to_confirmation": 4.0,
+        "partial_rate": 0.2,
+        "failed_rate": 0.0,
+        "verdict_distribution": {
+          "CONFIRMED": 3,
+          "FALSE_POSITIVE": 1,
+          "PARTIAL": 1
+        }
+      },
+      "IC_ROTATIONAL_PRESSURE": {
+        "event_count": 2,
+        "precision": 0.5,
+        "confirmation_rate": 0.5,
+        "false_positive_rate": 0.5,
+        "early_warning_rate": 0.0,
+        "average_horizon_to_confirmation": 16.0,
+        "partial_rate": 0.0,
+        "failed_rate": 0.0,
+        "verdict_distribution": {
+          "FALSE_POSITIVE": 1,
+          "CONFIRMED": 1
+        }
+      }
+    },
+    "precision": 0.7778,
+    "confirmation_rate": 0.5833,
+    "false_positive_rate": 0.1667,
+    "early_warning_rate": 0.1667,
+    "average_horizon_to_confirmation": 6.8,
+    "partial_rate": 0.0833,
+    "failed_rate": 0.0,
+    "narrative_confirmation_rate": 0.8333
+  },
+  "events": [
+    {
+      "event_index": 1,
+      "timestamp": "2026-05-21 01:15:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "interpretation": "Intermediate cognition: IC_CONTINUATION_WEAKENING (LOW) anchored to LOCAL_EXHAUSTION. effort-down/price-up; delta5=-1068, price5=218.7",
+      "observed_outcome": "Over +4 bars: continuation_quality 0.75 (\u0394+0.35), initiative_dominance 0.41 (\u0394-0.01), sign_flips 1.00.",
+      "verdict": "EARLY_WARNING",
+      "false_positive": false,
+      "early_warning": true,
+      "confirmation_horizon": 4,
+      "validation_note": "directional efficiency deteriorated; initiative strength weakened",
+      "context": {
+        "intermediate_state": "IC_CONTINUATION_WEAKENING",
+        "severity": "LOW",
+        "confidence": 0.5,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "effort-down/price-up; delta5=-1068, price5=218.7",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "PARTIAL",
+          "note": "directional efficiency deteriorated; initiative strength weakened",
+          "delta": {
+            "continuation_quality": 0.35,
+            "directional_efficiency": -0.1238,
+            "initiative_strength": -54.4,
+            "initiative_dominance": -0.0076,
+            "sign_flips": 0.25,
+            "directional_persistence": -0.15
+          },
+          "forward": {
+            "continuation_quality": 0.75,
+            "directional_efficiency": 0.0923,
+            "initiative_strength": 513.36,
+            "initiative_dominance": 0.4083,
+            "sign_flips": 1.0,
+            "directional_persistence": 0.25,
+            "price_move": 189.47,
+            "delta_sum": -838.39,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "PARTIAL",
+          "note": "directional efficiency deteriorated",
+          "delta": {
+            "continuation_quality": 0.1,
+            "directional_efficiency": -0.178,
+            "initiative_strength": 65.77,
+            "initiative_dominance": 0.3444,
+            "sign_flips": -0.3214,
+            "directional_persistence": 0.225
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0381,
+            "initiative_strength": 633.53,
+            "initiative_dominance": 0.7603,
+            "sign_flips": 0.4286,
+            "directional_persistence": 0.625,
+            "price_move": 193.27,
+            "delta_sum": -3853.21,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "PARTIAL",
+          "note": "directional efficiency deteriorated",
+          "delta": {
+            "continuation_quality": 0.1,
+            "directional_efficiency": -0.2156,
+            "initiative_strength": 36.65,
+            "initiative_dominance": 0.2141,
+            "sign_flips": -0.2833,
+            "directional_persistence": 0.0375
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0005,
+            "initiative_strength": 604.41,
+            "initiative_dominance": 0.63,
+            "sign_flips": 0.4667,
+            "directional_persistence": 0.4375,
+            "price_move": 4.4,
+            "delta_sum": -6092.45,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 2,
+      "timestamp": "2026-05-21 01:45:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "interpretation": "Intermediate cognition: IC_INITIATIVE_DETERIORATION (HIGH) anchored to LOCAL_EXHAUSTION. initiative MA flip 583 \u2192 -276",
+      "observed_outcome": "Over +4 bars: continuation_quality 0.50 (\u0394-0.10), initiative_dominance 0.48 (\u0394-0.23), sign_flips 0.33.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 4,
+      "validation_note": "directional dominance faded; participation remained subdued",
+      "context": {
+        "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+        "severity": "HIGH",
+        "confidence": 0.58,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "initiative MA flip 583 \u2192 -276",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "CONFIRMED",
+          "note": "directional dominance faded; participation remained subdued",
+          "delta": {
+            "continuation_quality": -0.1,
+            "directional_efficiency": -0.1182,
+            "initiative_strength": 349.87,
+            "initiative_dominance": -0.2289,
+            "sign_flips": -0.1667,
+            "directional_persistence": 0.15
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0543,
+            "initiative_strength": 575.76,
+            "initiative_dominance": 0.4786,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.75,
+            "price_move": 125.14,
+            "delta_sum": -1102.23,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "FAILED",
+          "note": "No initiative deterioration observed forward.",
+          "delta": {
+            "continuation_quality": -0.35,
+            "directional_efficiency": -0.1207,
+            "initiative_strength": 400.76,
+            "initiative_dominance": 0.053,
+            "sign_flips": -0.3571,
+            "directional_persistence": 0.275
+          },
+          "forward": {
+            "continuation_quality": 0.25,
+            "directional_efficiency": 0.0518,
+            "initiative_strength": 626.65,
+            "initiative_dominance": 0.7605,
+            "sign_flips": 0.1429,
+            "directional_persistence": 0.875,
+            "price_move": 259.54,
+            "delta_sum": -3812.42,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "FAILED",
+          "note": "No initiative deterioration observed forward.",
+          "delta": {
+            "continuation_quality": -0.1625,
+            "directional_efficiency": -0.1711,
+            "initiative_strength": 396.11,
+            "initiative_dominance": -0.0656,
+            "sign_flips": -0.1667,
+            "directional_persistence": -0.1625
+          },
+          "forward": {
+            "continuation_quality": 0.4375,
+            "directional_efficiency": 0.0014,
+            "initiative_strength": 622.0,
+            "initiative_dominance": 0.6419,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.4375,
+            "price_move": -13.76,
+            "delta_sum": -6388.27,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 3,
+      "timestamp": "2026-05-21 02:15:00",
+      "intermediate_state": "IC_ROTATIONAL_PRESSURE",
+      "interpretation": "Intermediate cognition: IC_ROTATIONAL_PRESSURE (HIGH) anchored to LOCAL_EXHAUSTION. sign_flips_5=4",
+      "observed_outcome": "Over +8 bars: continuation_quality 0.12 (\u0394-0.68), initiative_dominance 0.60 (\u0394+0.40), sign_flips 0.29.",
+      "verdict": "FALSE_POSITIVE",
+      "false_positive": true,
+      "early_warning": false,
+      "confirmation_horizon": null,
+      "validation_note": "No rotational behavior confirmation forward.",
+      "context": {
+        "intermediate_state": "IC_ROTATIONAL_PRESSURE",
+        "severity": "HIGH",
+        "confidence": 0.54,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "sign_flips_5=4",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "FALSE_POSITIVE",
+          "note": "Directional continuation resumed \u2014 rotational call not supported.",
+          "delta": {
+            "continuation_quality": -0.55,
+            "directional_efficiency": -0.0455,
+            "initiative_strength": 453.05,
+            "initiative_dominance": 0.8083,
+            "sign_flips": -0.75,
+            "directional_persistence": 0.6
+          },
+          "forward": {
+            "continuation_quality": 0.25,
+            "directional_efficiency": 0.0076,
+            "initiative_strength": 753.7,
+            "initiative_dominance": 1.0,
+            "sign_flips": 0.0,
+            "directional_persistence": 1.0,
+            "price_move": 22.94,
+            "delta_sum": -3014.82,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "FAILED",
+          "note": "No rotational behavior confirmation forward.",
+          "delta": {
+            "continuation_quality": -0.675,
+            "directional_efficiency": -0.0524,
+            "initiative_strength": 275.0,
+            "initiative_dominance": 0.4037,
+            "sign_flips": -0.4643,
+            "directional_persistence": 0.35
+          },
+          "forward": {
+            "continuation_quality": 0.125,
+            "directional_efficiency": 0.0007,
+            "initiative_strength": 575.65,
+            "initiative_dominance": 0.5954,
+            "sign_flips": 0.2857,
+            "directional_persistence": 0.75,
+            "price_move": 3.24,
+            "delta_sum": -2741.99,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "FAILED",
+          "note": "No rotational behavior confirmation forward.",
+          "delta": {
+            "continuation_quality": -0.3625,
+            "directional_efficiency": -0.0273,
+            "initiative_strength": 293.75,
+            "initiative_dominance": 0.3116,
+            "sign_flips": -0.4167,
+            "directional_persistence": -0.025
+          },
+          "forward": {
+            "continuation_quality": 0.4375,
+            "directional_efficiency": 0.0258,
+            "initiative_strength": 594.4,
+            "initiative_dominance": 0.5033,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.375,
+            "price_move": -245.66,
+            "delta_sum": -4786.18,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 4,
+      "timestamp": "2026-05-21 03:15:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "interpretation": "Intermediate cognition: IC_CONTINUATION_WEAKENING (HIGH) anchored to LOCAL_EXHAUSTION. effort-down/price-up; delta5=-4037, price5=161.6",
+      "observed_outcome": "Over +4 bars: continuation_quality 0.00 (\u0394-0.40), initiative_dominance 0.17 (\u0394-0.45), sign_flips 0.67.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 4,
+      "validation_note": "continuation quality declined; directional efficiency deteriorated; initiative strength weakened",
+      "context": {
+        "intermediate_state": "IC_CONTINUATION_WEAKENING",
+        "severity": "HIGH",
+        "confidence": 0.61,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "effort-down/price-up; delta5=-4037, price5=161.6",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "CONFIRMED",
+          "note": "continuation quality declined; directional efficiency deteriorated; initiative strength weakened",
+          "delta": {
+            "continuation_quality": -0.4,
+            "directional_efficiency": -0.0354,
+            "initiative_strength": -237.58,
+            "initiative_dominance": -0.4504,
+            "sign_flips": 0.4167,
+            "directional_persistence": -0.3
+          },
+          "forward": {
+            "continuation_quality": 0.0,
+            "directional_efficiency": 0.0055,
+            "initiative_strength": 397.61,
+            "initiative_dominance": 0.1715,
+            "sign_flips": 0.6667,
+            "directional_persistence": 0.5,
+            "price_move": 8.78,
+            "delta_sum": 272.83,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "PARTIAL",
+          "note": "initiative strength weakened",
+          "delta": {
+            "continuation_quality": 0.1,
+            "directional_efficiency": -0.006,
+            "initiative_strength": -59.91,
+            "initiative_dominance": -0.1353,
+            "sign_flips": 0.3214,
+            "directional_persistence": -0.55
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0349,
+            "initiative_strength": 575.28,
+            "initiative_dominance": 0.4866,
+            "sign_flips": 0.5714,
+            "directional_persistence": 0.25,
+            "price_move": -160.39,
+            "delta_sum": -2239.23,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "CONFIRMED",
+          "note": "continuation quality remained weak; initiative strength weakened",
+          "delta": {
+            "continuation_quality": 0.0375,
+            "directional_efficiency": 0.0055,
+            "initiative_strength": -58.73,
+            "initiative_dominance": -0.5737,
+            "sign_flips": 0.2167,
+            "directional_persistence": -0.55
+          },
+          "forward": {
+            "continuation_quality": 0.4375,
+            "directional_efficiency": 0.0464,
+            "initiative_strength": 576.46,
+            "initiative_dominance": 0.0482,
+            "sign_flips": 0.4667,
+            "directional_persistence": 0.25,
+            "price_move": -427.56,
+            "delta_sum": 444.27,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 5,
+      "timestamp": "2026-05-21 06:45:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "interpretation": "Intermediate cognition: IC_INITIATIVE_DETERIORATION (HIGH) anchored to LOCAL_EXHAUSTION. initiative MA flip -514 \u2192 330",
+      "observed_outcome": "Over +8 bars: continuation_quality 0.62 (\u0394+0.03), initiative_dominance 0.75 (\u0394+0.65), sign_flips 0.29.",
+      "verdict": "FALSE_POSITIVE",
+      "false_positive": true,
+      "early_warning": false,
+      "confirmation_horizon": null,
+      "validation_note": "No initiative deterioration observed forward.",
+      "context": {
+        "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+        "severity": "HIGH",
+        "confidence": 0.58,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "initiative MA flip -514 \u2192 330",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "FALSE_POSITIVE",
+          "note": "Initiative strengthened contrary to deterioration narrative.",
+          "delta": {
+            "continuation_quality": -0.1,
+            "directional_efficiency": -0.0228,
+            "initiative_strength": 582.67,
+            "initiative_dominance": 0.9015,
+            "sign_flips": -0.5,
+            "directional_persistence": 0.6
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0673,
+            "initiative_strength": 1012.56,
+            "initiative_dominance": 1.0,
+            "sign_flips": 0.0,
+            "directional_persistence": 1.0,
+            "price_move": 272.73,
+            "delta_sum": 4050.25,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "FALSE_POSITIVE",
+          "note": "Initiative strengthened contrary to deterioration narrative.",
+          "delta": {
+            "continuation_quality": 0.025,
+            "directional_efficiency": -0.0289,
+            "initiative_strength": 199.8,
+            "initiative_dominance": 0.6513,
+            "sign_flips": -0.2143,
+            "directional_persistence": 0.225
+          },
+          "forward": {
+            "continuation_quality": 0.625,
+            "directional_efficiency": 0.0612,
+            "initiative_strength": 629.69,
+            "initiative_dominance": 0.7498,
+            "sign_flips": 0.2857,
+            "directional_persistence": 0.625,
+            "price_move": 308.13,
+            "delta_sum": 3777.32,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "FAILED",
+          "note": "No initiative deterioration observed forward.",
+          "delta": {
+            "continuation_quality": -0.1,
+            "directional_efficiency": -0.0451,
+            "initiative_strength": 145.38,
+            "initiative_dominance": 0.3652,
+            "sign_flips": -0.2333,
+            "directional_persistence": -0.0875
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.045,
+            "initiative_strength": 575.27,
+            "initiative_dominance": 0.4637,
+            "sign_flips": 0.2667,
+            "directional_persistence": 0.3125,
+            "price_move": -413.96,
+            "delta_sum": 4268.0,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 6,
+      "timestamp": "2026-05-21 07:15:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "interpretation": "Intermediate cognition: IC_CONTINUATION_WEAKENING (HIGH) anchored to LOCAL_EXHAUSTION. effort-up/price-down; delta5=3231, price5=-178.1",
+      "observed_outcome": "Over +16 bars: continuation_quality 0.56 (\u0394+0.16), initiative_dominance 0.50 (\u0394-0.33), sign_flips 0.27.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 16,
+      "validation_note": "directional efficiency deteriorated; directional participation declined",
+      "context": {
+        "intermediate_state": "IC_CONTINUATION_WEAKENING",
+        "severity": "HIGH",
+        "confidence": 0.61,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "effort-up/price-down; delta5=3231, price5=-178.1",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "FAILED",
+          "note": "Continuation resumed contrary to weakening narrative: efficient continuation resumed; directional efficiency recovered",
+          "delta": {
+            "continuation_quality": 0.6,
+            "directional_efficiency": 0.0468,
+            "initiative_strength": 350.46,
+            "initiative_dominance": -0.092,
+            "sign_flips": -0.1667,
+            "directional_persistence": 0.35
+          },
+          "forward": {
+            "continuation_quality": 1.0,
+            "directional_efficiency": 0.1235,
+            "initiative_strength": 925.74,
+            "initiative_dominance": 0.7299,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.75,
+            "price_move": 457.5,
+            "delta_sum": 2702.76,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "PARTIAL",
+          "note": "directional participation declined",
+          "delta": {
+            "continuation_quality": 0.35,
+            "directional_efficiency": -0.0108,
+            "initiative_strength": 36.22,
+            "initiative_dominance": -0.4659,
+            "sign_flips": -0.0714,
+            "directional_persistence": -0.025
+          },
+          "forward": {
+            "continuation_quality": 0.75,
+            "directional_efficiency": 0.0659,
+            "initiative_strength": 611.5,
+            "initiative_dominance": 0.356,
+            "sign_flips": 0.4286,
+            "directional_persistence": 0.375,
+            "price_move": 322.51,
+            "delta_sum": 1741.37,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "CONFIRMED",
+          "note": "directional efficiency deteriorated; directional participation declined",
+          "delta": {
+            "continuation_quality": 0.1625,
+            "directional_efficiency": -0.0471,
+            "initiative_strength": 36.65,
+            "initiative_dominance": -0.3261,
+            "sign_flips": -0.2333,
+            "directional_persistence": 0.0375
+          },
+          "forward": {
+            "continuation_quality": 0.5625,
+            "directional_efficiency": 0.0296,
+            "initiative_strength": 611.93,
+            "initiative_dominance": 0.4958,
+            "sign_flips": 0.2667,
+            "directional_persistence": 0.4375,
+            "price_move": -289.4,
+            "delta_sum": 4854.54,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 7,
+      "timestamp": "2026-05-21 08:45:00",
+      "intermediate_state": "IC_ROTATIONAL_PRESSURE",
+      "interpretation": "Intermediate cognition: IC_ROTATIONAL_PRESSURE (HIGH) anchored to LOCAL_EXHAUSTION. sign_flips_5=2; volume_class=stopping",
+      "observed_outcome": "Over +16 bars: continuation_quality 0.50 (\u0394-0.50), initiative_dominance 0.04 (\u0394-0.63), sign_flips 0.33.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 16,
+      "validation_note": "sign alternation increased; directional persistence declined; balanced two-sided auction behavior",
+      "context": {
+        "intermediate_state": "IC_ROTATIONAL_PRESSURE",
+        "severity": "HIGH",
+        "confidence": 0.59,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "sign_flips_5=2; volume_class=stopping",
+        "source_layers": "[\"candle_structure_memory\", \"volume_classification_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "PARTIAL",
+          "note": "sign alternation increased",
+          "delta": {
+            "continuation_quality": -0.5,
+            "directional_efficiency": 0.0332,
+            "initiative_strength": -186.31,
+            "initiative_dominance": -0.0874,
+            "sign_flips": 0.0833,
+            "directional_persistence": 0.15
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.1194,
+            "initiative_strength": 580.28,
+            "initiative_dominance": 0.5838,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.75,
+            "price_move": -277.13,
+            "delta_sum": -1355.04,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "PARTIAL",
+          "note": "balanced two-sided auction behavior",
+          "delta": {
+            "continuation_quality": -0.625,
+            "directional_efficiency": 0.0856,
+            "initiative_strength": -245.74,
+            "initiative_dominance": -0.5534,
+            "sign_flips": -0.1071,
+            "directional_persistence": 0.025
+          },
+          "forward": {
+            "continuation_quality": 0.375,
+            "directional_efficiency": 0.1718,
+            "initiative_strength": 520.85,
+            "initiative_dominance": 0.1178,
+            "sign_flips": 0.1429,
+            "directional_persistence": 0.625,
+            "price_move": -715.82,
+            "delta_sum": 490.68,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "CONFIRMED",
+          "note": "sign alternation increased; directional persistence declined; balanced two-sided auction behavior",
+          "delta": {
+            "continuation_quality": -0.5,
+            "directional_efficiency": -0.0244,
+            "initiative_strength": -90.54,
+            "initiative_dominance": -0.6304,
+            "sign_flips": 0.0833,
+            "directional_persistence": -0.1625
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0618,
+            "initiative_strength": 676.05,
+            "initiative_dominance": 0.0408,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.4375,
+            "price_move": -668.03,
+            "delta_sum": 441.55,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 8,
+      "timestamp": "2026-05-21 09:15:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "interpretation": "Intermediate cognition: IC_INITIATIVE_DETERIORATION (HIGH) anchored to LOCAL_EXHAUSTION. initiative MA flip 859 \u2192 -292",
+      "observed_outcome": "Over +4 bars: continuation_quality 0.50 (\u0394-0.10), initiative_dominance 0.25 (\u0394-0.19), sign_flips 0.33.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 4,
+      "validation_note": "directional dominance faded; participation remained subdued",
+      "context": {
+        "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+        "severity": "HIGH",
+        "confidence": 0.58,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "initiative MA flip 859 \u2192 -292",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "CONFIRMED",
+          "note": "directional dominance faded; participation remained subdued",
+          "delta": {
+            "continuation_quality": -0.1,
+            "directional_efficiency": 0.1894,
+            "initiative_strength": 338.89,
+            "initiative_dominance": -0.1921,
+            "sign_flips": -0.4167,
+            "directional_persistence": 0.35
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.2314,
+            "initiative_strength": 594.55,
+            "initiative_dominance": 0.2491,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.75,
+            "price_move": -550.24,
+            "delta_sum": 592.47,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "FALSE_POSITIVE",
+          "note": "Initiative strengthened contrary to deterioration narrative.",
+          "delta": {
+            "continuation_quality": -0.225,
+            "directional_efficiency": 0.0827,
+            "initiative_strength": 356.7,
+            "initiative_dominance": 0.1943,
+            "sign_flips": -0.6071,
+            "directional_persistence": 0.475
+          },
+          "forward": {
+            "continuation_quality": 0.375,
+            "directional_efficiency": 0.1247,
+            "initiative_strength": 612.36,
+            "initiative_dominance": 0.6355,
+            "sign_flips": 0.1429,
+            "directional_persistence": 0.875,
+            "price_move": -611.04,
+            "delta_sum": 3113.17,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "CONFIRMED",
+          "note": "directional dominance faded; participation remained subdued",
+          "delta": {
+            "continuation_quality": -0.0375,
+            "directional_efficiency": 0.0204,
+            "initiative_strength": 425.92,
+            "initiative_dominance": -0.371,
+            "sign_flips": -0.35,
+            "directional_persistence": 0.0375
+          },
+          "forward": {
+            "continuation_quality": 0.5625,
+            "directional_efficiency": 0.0624,
+            "initiative_strength": 681.58,
+            "initiative_dominance": 0.0702,
+            "sign_flips": 0.4,
+            "directional_persistence": 0.4375,
+            "price_move": -680.14,
+            "delta_sum": 765.36,
+            "bars": 16.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 9,
+      "timestamp": "2026-05-21 10:30:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "interpretation": "Intermediate cognition: IC_CONTINUATION_WEAKENING (MEDIUM) anchored to LOCAL_EXHAUSTION. effort-up/price-down; delta5=1393, price5=-563.2",
+      "observed_outcome": "Over +8 bars: continuation_quality 0.50 (\u0394-0.10), initiative_dominance 0.12 (\u0394+0.10), sign_flips 0.43.",
+      "verdict": "EARLY_WARNING",
+      "false_positive": false,
+      "early_warning": true,
+      "confirmation_horizon": 8,
+      "validation_note": "Weakening confirmed by +8 bars before longer-horizon ambiguity. continuation quality declined; directional efficiency deteriorated",
+      "context": {
+        "intermediate_state": "IC_CONTINUATION_WEAKENING",
+        "severity": "MEDIUM",
+        "confidence": 0.55,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "effort-up/price-down; delta5=1393, price5=-563.2",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "PARTIAL",
+          "note": "continuation quality declined; directional efficiency deteriorated; initiative strength weakened",
+          "delta": {
+            "continuation_quality": -0.35,
+            "directional_efficiency": -0.1665,
+            "initiative_strength": -146.61,
+            "initiative_dominance": 0.8494,
+            "sign_flips": 0.0833,
+            "directional_persistence": 0.15
+          },
+          "forward": {
+            "continuation_quality": 0.25,
+            "directional_efficiency": 0.0207,
+            "initiative_strength": 459.87,
+            "initiative_dominance": 0.8698,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.75,
+            "price_move": -37.99,
+            "delta_sum": 1600.04,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "CONFIRMED",
+          "note": "continuation quality declined; directional efficiency deteriorated",
+          "delta": {
+            "continuation_quality": -0.1,
+            "directional_efficiency": -0.1444,
+            "initiative_strength": 143.1,
+            "initiative_dominance": 0.0967,
+            "sign_flips": 0.1786,
+            "directional_persistence": -0.225
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0428,
+            "initiative_strength": 749.58,
+            "initiative_dominance": 0.1171,
+            "sign_flips": 0.4286,
+            "directional_persistence": 0.375,
+            "price_move": -256.49,
+            "delta_sum": -702.38,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "PARTIAL",
+          "note": "directional efficiency deteriorated",
+          "delta": {
+            "continuation_quality": 0.0667,
+            "directional_efficiency": -0.1681,
+            "initiative_strength": 54.52,
+            "initiative_dominance": 0.0847,
+            "sign_flips": 0.2045,
+            "directional_persistence": -0.35
+          },
+          "forward": {
+            "continuation_quality": 0.6667,
+            "directional_efficiency": 0.0191,
+            "initiative_strength": 661.0,
+            "initiative_dominance": 0.1051,
+            "sign_flips": 0.4545,
+            "directional_persistence": 0.25,
+            "price_move": -151.39,
+            "delta_sum": -833.88,
+            "bars": 12.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 10,
+      "timestamp": "2026-05-21 10:45:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "interpretation": "Intermediate cognition: IC_INITIATIVE_DETERIORATION (HIGH) anchored to LOCAL_EXHAUSTION. initiative MA flip -371 \u2192 466",
+      "observed_outcome": "Over +4 bars: continuation_quality 0.50 (\u0394+0.10), initiative_dominance 0.03 (\u0394-0.41), sign_flips 0.33.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 4,
+      "validation_note": "directional dominance faded; participation remained subdued",
+      "context": {
+        "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+        "severity": "HIGH",
+        "confidence": 0.58,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "initiative MA flip -371 \u2192 466",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "CONFIRMED",
+          "note": "directional dominance faded; participation remained subdued",
+          "delta": {
+            "continuation_quality": 0.1,
+            "directional_efficiency": -0.1592,
+            "initiative_strength": 229.54,
+            "initiative_dominance": -0.4074,
+            "sign_flips": 0.0833,
+            "directional_persistence": -0.3
+          },
+          "forward": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": 0.0177,
+            "initiative_strength": 865.36,
+            "initiative_dominance": 0.0309,
+            "sign_flips": 0.3333,
+            "directional_persistence": 0.5,
+            "price_move": 61.11,
+            "delta_sum": -106.9,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "CONFIRMED",
+          "note": "directional dominance faded; participation remained subdued",
+          "delta": {
+            "continuation_quality": 0.225,
+            "directional_efficiency": -0.17,
+            "initiative_strength": 195.42,
+            "initiative_dominance": -0.4309,
+            "sign_flips": 0.3214,
+            "directional_persistence": -0.55
+          },
+          "forward": {
+            "continuation_quality": 0.625,
+            "directional_efficiency": 0.0069,
+            "initiative_strength": 831.24,
+            "initiative_dominance": 0.0074,
+            "sign_flips": 0.5714,
+            "directional_persistence": 0.25,
+            "price_move": 45.81,
+            "delta_sum": -49.13,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "CONFIRMED",
+          "note": "directional dominance faded; participation remained subdued",
+          "delta": {
+            "continuation_quality": 0.3273,
+            "directional_efficiency": -0.1749,
+            "initiative_strength": 81.41,
+            "initiative_dominance": -0.3272,
+            "sign_flips": 0.25,
+            "directional_persistence": -0.6182
+          },
+          "forward": {
+            "continuation_quality": 0.7273,
+            "directional_efficiency": 0.002,
+            "initiative_strength": 717.23,
+            "initiative_dominance": 0.1111,
+            "sign_flips": 0.5,
+            "directional_persistence": 0.1818,
+            "price_move": 15.71,
+            "delta_sum": -876.37,
+            "bars": 11.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 11,
+      "timestamp": "2026-05-21 11:00:00",
+      "intermediate_state": "IC_CONTINUATION_WEAKENING",
+      "interpretation": "Intermediate cognition: IC_CONTINUATION_WEAKENING (HIGH) anchored to LOCAL_EXHAUSTION. effort-up/price-down; delta5=3092, price5=-317.2",
+      "observed_outcome": "Over +4 bars: continuation_quality 0.25 (\u0394+0.05), initiative_dominance 0.14 (\u0394-0.86), sign_flips 0.67.",
+      "verdict": "CONFIRMED",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 4,
+      "validation_note": "continuation quality remained weak; directional efficiency deteriorated; directional participation declined",
+      "context": {
+        "intermediate_state": "IC_CONTINUATION_WEAKENING",
+        "severity": "HIGH",
+        "confidence": 0.61,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "effort-up/price-down; delta5=3092, price5=-317.2",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "CONFIRMED",
+          "note": "continuation quality remained weak; directional efficiency deteriorated; directional participation declined",
+          "delta": {
+            "continuation_quality": 0.05,
+            "directional_efficiency": -0.1641,
+            "initiative_strength": 319.89,
+            "initiative_dominance": -0.8645,
+            "sign_flips": 0.6667,
+            "directional_persistence": -0.5
+          },
+          "forward": {
+            "continuation_quality": 0.25,
+            "directional_efficiency": 0.0448,
+            "initiative_strength": 785.64,
+            "initiative_dominance": 0.1355,
+            "sign_flips": 0.6667,
+            "directional_persistence": 0.5,
+            "price_move": -140.74,
+            "delta_sum": -425.79,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "CONFIRMED",
+          "note": "directional efficiency deteriorated; directional participation declined",
+          "delta": {
+            "continuation_quality": 0.425,
+            "directional_efficiency": -0.201,
+            "initiative_strength": 235.48,
+            "initiative_dominance": -0.8058,
+            "sign_flips": 0.5714,
+            "directional_persistence": -0.75
+          },
+          "forward": {
+            "continuation_quality": 0.625,
+            "directional_efficiency": 0.0079,
+            "initiative_strength": 701.23,
+            "initiative_dominance": 0.1942,
+            "sign_flips": 0.5714,
+            "directional_persistence": 0.25,
+            "price_move": -44.23,
+            "delta_sum": -1089.22,
+            "bars": 8.0
+          }
+        },
+        "16": {
+          "verdict": "PARTIAL",
+          "note": "directional efficiency deteriorated; directional participation declined",
+          "delta": {
+            "continuation_quality": 0.5,
+            "directional_efficiency": -0.1922,
+            "initiative_strength": 198.58,
+            "initiative_dominance": -0.6805,
+            "sign_flips": 0.5556,
+            "directional_persistence": -0.8
+          },
+          "forward": {
+            "continuation_quality": 0.7,
+            "directional_efficiency": 0.0167,
+            "initiative_strength": 664.33,
+            "initiative_dominance": 0.3195,
+            "sign_flips": 0.5556,
+            "directional_persistence": 0.2,
+            "price_move": -111.23,
+            "delta_sum": -2122.65,
+            "bars": 10.0
+          }
+        }
+      }
+    },
+    {
+      "event_index": 12,
+      "timestamp": "2026-05-21 15:00:00",
+      "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+      "interpretation": "Intermediate cognition: IC_INITIATIVE_DETERIORATION (HIGH) anchored to LOCAL_EXHAUSTION. initiative MA flip 618 \u2192 -249",
+      "observed_outcome": "Over +4 bars: continuation_quality 1.00 (\u0394+0.60), initiative_dominance 0.27 (\u0394+0.08), sign_flips 0.67.",
+      "verdict": "PARTIAL",
+      "false_positive": false,
+      "early_warning": false,
+      "confirmation_horizon": 4,
+      "validation_note": "initiative strength declined",
+      "context": {
+        "intermediate_state": "IC_INITIATIVE_DETERIORATION",
+        "severity": "HIGH",
+        "confidence": 0.58,
+        "anchor_stage2_state": "LOCAL_EXHAUSTION",
+        "anchor_timestamp": "2026-05-20 08:30:00",
+        "reason": "initiative MA flip 618 \u2192 -249",
+        "source_layers": "[\"candle_structure_memory\"]"
+      },
+      "horizons": {
+        "4": {
+          "verdict": "PARTIAL",
+          "note": "initiative strength declined",
+          "delta": {
+            "continuation_quality": 0.6,
+            "directional_efficiency": 0.0231,
+            "initiative_strength": -259.45,
+            "initiative_dominance": 0.0838,
+            "sign_flips": 0.1667,
+            "directional_persistence": 0.1
+          },
+          "forward": {
+            "continuation_quality": 1.0,
+            "directional_efficiency": 0.0262,
+            "initiative_strength": 618.32,
+            "initiative_dominance": 0.2707,
+            "sign_flips": 0.6667,
+            "directional_persistence": 0.5,
+            "price_move": 64.9,
+            "delta_sum": -669.44,
+            "bars": 4.0
+          }
+        },
+        "8": {
+          "verdict": "PARTIAL",
+          "note": "initiative strength declined",
+          "delta": {
+            "continuation_quality": 0.6,
+            "directional_efficiency": 0.0103,
+            "initiative_strength": -341.95,
+            "initiative_dominance": 0.1398,
+            "sign_flips": 0.0,
+            "directional_persistence": 0.0
+          },
+          "forward": {
+            "continuation_quality": 1.0,
+            "directional_efficiency": 0.0134,
+            "initiative_strength": 535.82,
+            "initiative_dominance": 0.3267,
+            "sign_flips": 0.5,
+            "directional_persistence": 0.4,
+            "price_move": 35.9,
+            "delta_sum": -875.27,
+            "bars": 5.0
+          }
+        },
+        "16": {
+          "verdict": "PARTIAL",
+          "note": "initiative strength declined",
+          "delta": {
+            "continuation_quality": 0.6,
+            "directional_efficiency": 0.0103,
+            "initiative_strength": -341.95,
+            "initiative_dominance": 0.1398,
+            "sign_flips": 0.0,
+            "directional_persistence": 0.0
+          },
+          "forward": {
+            "continuation_quality": 1.0,
+            "directional_efficiency": 0.0134,
+            "initiative_strength": 535.82,
+            "initiative_dominance": 0.3267,
+            "sign_flips": 0.5,
+            "directional_persistence": 0.4,
+            "price_move": 35.9,
+            "delta_sum": -875.27,
+            "bars": 5.0
+          }
+        }
+      }
+    }
+  ]
+}

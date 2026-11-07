@@ -1,0 +1,769 @@
+# VPS full-model paper-only stack (host hybrid parity). No exclude profiles.
+# Build context: repository root. Images are immutable; only /app/data is a named volume.
+
+name: ${COMPOSE_PROJECT_NAME:-btcml-vps}
+
+x-runtime-base: &runtime_base
+  image: btc-ml-vps-runtime:${VPS_IMAGE_TAG:-local}
+  build:
+    context: ../..
+    dockerfile: deploy/vps/docker/runtime.Dockerfile
+  # UID comes from image USER (btcml=10001). Do not pin user here so
+  # `compose run --user 0:0` can bootstrap a fresh volume as root.
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  labels:
+    org.btcml.release: "2026.09.22"
+    org.btcml.channel: "release"
+    org.btcml.app: "btc-ml-paper"
+  tmpfs:
+    - /tmp:size=256M,mode=1777
+    - /app/run:size=64M,mode=1777
+    - /app/logs:size=128M,mode=1777
+    - /app/output:size=256M,mode=1777
+    - /app/reports:size=128M,mode=1777
+    - /app/artifacts:size=64M,mode=1777
+    - /app/replays:size=64M,mode=1777
+
+x-runtime-env: &runtime_env
+  BTC_ML_REPO_ROOT: /app
+  PYTHONPATH: /app:/app/src
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  PAPER_ONLY: ${PAPER_ONLY:-true}
+  REAL_EXECUTION_ENABLED: ${REAL_EXECUTION_ENABLED:-false}
+  EXECUTION_ENABLED: ${EXECUTION_ENABLED:-false}
+  VPS_DEPLOYMENT_TAG: ${VPS_DEPLOYMENT_TAG:-VPS_DEPLOY}
+  MARKET_SYMBOL: ${MARKET_SYMBOL:-BTCUSDT}
+  BTC_ML_CONTEXT_REFRESH_DAEMON: ${BTC_ML_CONTEXT_REFRESH_DAEMON:-1}
+
+services:
+  # One-shot volume initializer (not long-running). Writable FS as root.
+  vps-bootstrap:
+    image: btc-ml-vps-runtime:${VPS_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: deploy/vps/docker/runtime.Dockerfile
+    user: "0:0"
+    working_dir: /app
+    environment:
+      <<: *runtime_env
+      VPS_GIT_COMMIT: ${VPS_GIT_COMMIT:-}
+    volumes:
+      - btc_ml_data:/app/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        python /app/scripts/deploy/bootstrap_vps_environment.py
+        --data-root /app/data --repo-root /app --allow-existing
+        --deployment-tag $${VPS_DEPLOYMENT_TAG:-VPS_DEPLOY}
+        && chown -R 10001:10001 /app/data
+    restart: "no"
+    # Intentionally no cap_drop here: root needs DAC override to initialize a
+    # fresh volume that may already be owned by uid 10001 from a prior run.
+    profiles:
+      - bootstrap
+
+  collector-watchdog:
+    <<: *runtime_base
+    environment:
+      <<: *runtime_env
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/collector_watchdog.sh"]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "collector-watchdog",
+          "--pid-file",
+          "run/collector_watchdog.pid",
+          "--allow-missing-health",
+        ]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-20}
+      start_period: ${HEALTH_START_PERIOD:-120s}
+
+  canonical-runtime:
+    <<: *runtime_base
+    image: ${CANONICAL_RUNTIME_IMAGE:-btc-ml-vps-runtime:${VPS_IMAGE_TAG:-local}}
+    build:
+      context: ./cognitive_chain_repair
+      dockerfile: Dockerfile
+    environment:
+      <<: *runtime_env
+      BTC_ML_LEGACY_SOURCE_ROOT: /app/data/legacy_sources
+      BTC_ML_COGNITIVE_CHAIN_LIVE: "1"
+    volumes:
+      - btc_ml_data:/app/data
+      - legacy-source-generation:/app/data/legacy_sources:ro
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/canonical_runtime.sh"]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "canonical-runtime",
+          "--pid-file",
+          "run/canonical_runtime.pid",
+          "--allow-missing-health",
+        ]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-60s}
+
+  context-refresh-daemon:
+    <<: *runtime_base
+    image: ${CONTEXT_REFRESH_DAEMON_IMAGE:-btc-ml-vps-runtime:${VPS_IMAGE_TAG:-local}}
+    environment:
+      <<: *runtime_env
+      CONTEXT_REFRESH_INTERVAL_SECONDS: ${CONTEXT_REFRESH_INTERVAL_SECONDS:-60}
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/context_refresh_daemon.sh"]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "context-refresh-daemon",
+          "--pid-file",
+          "data/runtime/context_refresher.pid",
+          "--allow-missing-health",
+        ]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-60s}
+
+  cognition-runtime:
+    <<: *runtime_base
+    environment:
+      <<: *runtime_env
+      VPS_COGNITION_MAX_AGE_S: ${VPS_COGNITION_MAX_AGE_S:-180}
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/cognition_runtime.sh"]
+    # Measured ~350 MiB / ~1.5 cores live. Headroom is for parquet reads; do
+    # not go below 768m or the cgroup kills the process mid-read.
+    mem_limit: 1536m
+    cpus: 2
+    pids_limit: 256
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/vps/healthchecks/check_cognition.py"]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-20}
+      start_period: ${HEALTH_START_PERIOD:-180s}
+
+  paper-manager:
+    <<: *runtime_base
+    environment:
+      <<: *runtime_env
+      PAPER_POLL_MS: ${PAPER_POLL_MS:-250}
+      PAPER_HEALTH_EVERY_S: ${PAPER_HEALTH_EVERY_S:-2.0}
+      VPS_PAPER_HEALTH_MAX_AGE_S: ${VPS_PAPER_HEALTH_MAX_AGE_S:-45}
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/paper_manager.sh"]
+    # Measured ~420 MiB / ~2 cores live. Headroom is for parquet reads: an OOM
+    # kill here reads as a hang to the watchdog after VPS_PAPER_HEALTH_MAX_AGE_S.
+    # Do not go below 768m.
+    mem_limit: 1536m
+    cpus: 2
+    pids_limit: 256
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/vps/healthchecks/check_paper_manager.py"]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-60s}
+
+  timeframe-manager:
+    <<: *runtime_base
+    image: ${TIMEFRAME_MANAGER_IMAGE:-btc-ml-vps-runtime:${VPS_IMAGE_TAG:-local}}
+    environment:
+      <<: *runtime_env
+      TF_MANAGER_INTERVAL_S: ${TF_MANAGER_INTERVAL_S:-60}
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/timeframe_manager.sh"]
+    depends_on:
+      paper-manager:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "timeframe-manager",
+          "--pid-file",
+          "run/timeframe_manager.pid",
+          "--health-file",
+          "data/runtime/timeframe_manager_health.json",
+          "--allow-missing-health",
+        ]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-90s}
+
+  intrabar-supervisor:
+    <<: *runtime_base
+    environment:
+      <<: *runtime_env
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/intrabar_supervisor.sh"]
+    depends_on:
+      cognition-runtime:
+        condition: service_started
+      paper-manager:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "intrabar-supervisor",
+          "--pid-file",
+          "run/intrabar_process_supervisor.pid",
+          "--health-file",
+          "data/runtime/intrabar_operational_status.json",
+          "--allow-missing-health",
+        ]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-60s}
+
+  trd-outcome2:
+    <<: *runtime_base
+    environment:
+      <<: *runtime_env
+      TRD_OUTCOME2_INTERVAL_S: ${TRD_OUTCOME2_INTERVAL_S:-900}
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/trd_outcome2.sh"]
+    depends_on:
+      paper-manager:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "trd-outcome2",
+          "--pid-file",
+          "run/trd_outcome2_refresh.pid",
+          "--allow-missing-health",
+        ]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-60s}
+
+
+  ops-api:
+    image: ${OPS_API_IMAGE:-btc-ml-vps-ops-api:${VPS_IMAGE_TAG:-local}}
+    labels:
+      org.btcml.release: "2026.09.22"
+      org.btcml.channel: "release"
+      org.btcml.app: "btc-ml-paper"
+    build:
+      context: ../..
+      dockerfile: deploy/vps/docker/dashboard-api.Dockerfile
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256M,mode=1777
+      - /app/run:size=64M,mode=1777
+    environment:
+      <<: *runtime_env
+      PYTHONPATH: /app:/app/src:/app/dashboard/backend
+      DASHBOARD_HOST: ${DASHBOARD_HOST:-0.0.0.0}
+      DASHBOARD_PORT: ${DASHBOARD_PORT:-8080}
+      DASHBOARD_POLL_INTERVAL: ${DASHBOARD_POLL_INTERVAL:-2.0}
+      DASHBOARD_CORS_ORIGINS: ${DASHBOARD_CORS_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+    volumes:
+      # Dashboard observes the live model; it must not write its trading state.
+      - btc_ml_data:/app/data:ro
+      # Read-only: visual_refresher health (context-refresher writes visual_status.json).
+      - visual_public_data:/app/apps/context_visualizer/public/data:ro
+    ports:
+      - "${VPS_PUBLISH_ADDR:-127.0.0.1}:${OPS_API_HOST_PORT:-18080}:8080"
+    # No live measurement (service stopped); ceiling is set so a snapshot
+    # spike dies inside its own limit instead of starving the trading loop.
+    mem_limit: 1536m
+    depends_on:
+      paper-manager:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-20}
+      start_period: ${HEALTH_START_PERIOD:-180s}
+
+  dashboard-ui:
+    image: ${DASHBOARD_UI_IMAGE:-btc-ml-vps-dashboard-ui:${VPS_IMAGE_TAG:-local}}
+    labels:
+      org.btcml.release: "2026.09.22"
+      org.btcml.channel: "release"
+      org.btcml.app: "btc-ml-paper"
+    build:
+      context: ../..
+      dockerfile: deploy/vps/docker/dashboard-ui.Dockerfile
+    ports:
+      - "${VPS_PUBLISH_ADDR:-127.0.0.1}:${DASHBOARD_UI_HOST_PORT:-15173}:80"
+    depends_on:
+      ops-api:
+        condition: service_healthy
+    restart: unless-stopped
+    # Official nginx entrypoint chowns cache dirs; CAP_CHOWN is required.
+    # Keep the surface read-mostly via tmpfs only (no host binds).
+    tmpfs:
+      - /var/cache/nginx:size=32M,mode=1777
+      - /var/run:size=8M,mode=1777
+      - /tmp:size=16M,mode=1777
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+
+  context-refresher:
+    <<: *runtime_base
+    image: ${CONTEXT_REFRESHER_IMAGE:-btc-ml-vps-runtime:${VPS_IMAGE_TAG:-local}}
+    environment:
+      <<: *runtime_env
+      VISUAL_REFRESH_INTERVAL_S: ${VISUAL_REFRESH_INTERVAL_S:-20}
+      ENABLE_TIMEFRAME_CHART_TRUTH: "1"
+      CONTEXT_REFRESHER_PID_PATH: /app/data/runtime/visual_refresher.pid
+      CONTEXT_REFRESHER_LOCK_PATH: /app/run/context_visual_refresher.lock
+    volumes:
+      - btc_ml_data:/app/data
+      - visual_public_data:/app/apps/context_visualizer/public/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/context_refresher.sh"]
+    # Measured ~250 MiB live. Capped harder than the trading services so a
+    # shared host cannot lose memory to the picture.
+    mem_limit: 768m
+    depends_on:
+      ops-api:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "context-refresher",
+          "--pid-file",
+          "data/runtime/visual_refresher.pid",
+          "--health-file",
+          "apps/context_visualizer/public/data/visual_status.json",
+          "--allow-missing-health",
+        ]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-60s}
+
+  hl-vault-executor:
+    <<: *runtime_base
+    profiles:
+      - hl-vault-testnet
+    environment:
+      <<: *runtime_env
+      HL_VAULT_CONFIG: ${HL_VAULT_CONFIG:-/app/config/hl_vault_testnet.json}
+      HL_VAULT_ADDRESS: ${HL_VAULT_ADDRESS:-}
+      HL_ACCOUNT_ADDRESS: ${HL_ACCOUNT_ADDRESS:-}
+      HL_TESTNET_AGENT_PK: ${HL_TESTNET_AGENT_PK:-}
+      HL_TIMEFRAMES: ${HL_TIMEFRAMES:-M15}
+      HL_VAULT_POLL_MS: ${HL_VAULT_POLL_MS:-500}
+      HL_VAULT_FAKE: ${HL_VAULT_FAKE:-false}
+      HL_MAINNET_ENABLED: ${HL_MAINNET_ENABLED:-false}
+    volumes:
+      - btc_ml_data:/app/data
+    command: ["/bin/sh", "/app/deploy/vps/entrypoints/hl_vault_executor.sh"]
+    depends_on:
+      timeframe-manager:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/vps/healthchecks/check_hl_vault.py"]
+      interval: ${HEALTH_INTERVAL:-15s}
+      timeout: ${HEALTH_TIMEOUT:-5s}
+      retries: ${HEALTH_RETRIES:-12}
+      start_period: ${HEALTH_START_PERIOD:-60s}
+
+  legacy-multi-exchange:
+    image: btc-ml-legacy-sources:integrated-binance-20261003-v1
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    user: 10001:10001
+    working_dir: /legacy
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    volumes:
+    - legacy-source-generation:/legacy
+    tmpfs:
+    - /tmp:size=64M,mode=1777
+    entrypoint:
+    - /usr/bin/tini
+    - --
+    command:
+    - python
+    - -u
+    - /opt/btcml-legacy-original/io_runtime.py
+    - /opt/btcml-legacy-original/multi_exchange_collector.py
+    - multi_exchange_flow.parquet
+    restart: unless-stopped
+    labels:
+      org.btcml.purpose: original-binance-futures-analytical-sources
+      org.btcml.release: 2026.09.22
+    healthcheck: {disable: true}
+    mem_limit: 512m
+    cpus: '0.5'
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    build:
+      context: ./legacy_sources/sources
+      dockerfile: proposal/Dockerfile.sources.candidate
+  legacy-volume-clusters:
+    image: btc-ml-legacy-sources:integrated-binance-20261003-v1
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    user: 10001:10001
+    working_dir: /legacy
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    volumes:
+    - legacy-source-generation:/legacy
+    tmpfs:
+    - /tmp:size=64M,mode=1777
+    entrypoint:
+    - /usr/bin/tini
+    - --
+    command:
+    - python
+    - -u
+    - /opt/btcml-legacy-original/io_runtime.py
+    - /opt/btcml-legacy-original/engines/volume_cluster_engine.py
+    - volume_clusters.parquet
+    restart: unless-stopped
+    labels:
+      org.btcml.purpose: original-binance-futures-analytical-sources
+      org.btcml.release: 2026.09.22
+    healthcheck: {disable: true}
+    depends_on:
+      legacy-multi-exchange:
+        condition: service_started
+    network_mode: none
+    mem_limit: 512m
+    cpus: '0.5'
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    build:
+      context: ./legacy_sources/sources
+      dockerfile: proposal/Dockerfile.sources.candidate
+  legacy-volume-reactions:
+    image: btc-ml-legacy-sources:integrated-binance-20261003-v1
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    user: 10001:10001
+    working_dir: /legacy
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    volumes:
+    - legacy-source-generation:/legacy
+    tmpfs:
+    - /tmp:size=64M,mode=1777
+    entrypoint:
+    - /usr/bin/tini
+    - --
+    command:
+    - python
+    - -u
+    - /opt/btcml-legacy-original/io_runtime.py
+    - /opt/btcml-legacy-original/engines/volume_reaction_engine.py
+    - volume_reactions.parquet
+    restart: unless-stopped
+    labels:
+      org.btcml.purpose: original-binance-futures-analytical-sources
+      org.btcml.release: 2026.09.22
+    healthcheck: {disable: true}
+    depends_on:
+      legacy-multi-exchange:
+        condition: service_started
+    network_mode: none
+    mem_limit: 512m
+    cpus: '0.5'
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    build:
+      context: ./legacy_sources/sources
+      dockerfile: proposal/Dockerfile.sources.candidate
+  legacy-volume-memory:
+    image: btc-ml-legacy-sources:integrated-binance-20261003-v1
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    user: 10001:10001
+    working_dir: /legacy
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    volumes:
+    - legacy-source-generation:/legacy
+    tmpfs:
+    - /tmp:size=64M,mode=1777
+    entrypoint:
+    - /usr/bin/tini
+    - --
+    command:
+    - python
+    - -u
+    - /opt/btcml-legacy-original/io_runtime.py
+    - /opt/btcml-legacy-original/engines/volume_memory_engine.py
+    - volume_memory.parquet
+    restart: unless-stopped
+    labels:
+      org.btcml.purpose: original-binance-futures-analytical-sources
+      org.btcml.release: 2026.09.22
+    healthcheck: {disable: true}
+    depends_on:
+      legacy-multi-exchange:
+        condition: service_started
+      legacy-volume-clusters:
+        condition: service_started
+    network_mode: none
+    mem_limit: 512m
+    cpus: '0.5'
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    build:
+      context: ./legacy_sources/sources
+      dockerfile: proposal/Dockerfile.sources.candidate
+  legacy-inventory:
+    image: btc-ml-legacy-sources:integrated-binance-20261003-v1
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    user: 10001:10001
+    working_dir: /legacy
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    volumes:
+    - legacy-source-generation:/legacy
+    tmpfs:
+    - /tmp:size=64M,mode=1777
+    entrypoint:
+    - /usr/bin/tini
+    - --
+    command:
+    - python
+    - -u
+    - /opt/btcml-legacy-original/io_runtime.py
+    - /opt/btcml-legacy-original/engines/inventory_engine.py
+    - inventory_states.parquet
+    restart: unless-stopped
+    labels:
+      org.btcml.purpose: original-binance-futures-analytical-sources
+      org.btcml.release: 2026.09.22
+    healthcheck: {disable: true}
+    depends_on:
+      legacy-multi-exchange:
+        condition: service_started
+    network_mode: none
+    mem_limit: 512m
+    cpus: '0.5'
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    build:
+      context: ./legacy_sources/sources
+      dockerfile: proposal/Dockerfile.sources.candidate
+  legacy-acceptance:
+    image: btc-ml-legacy-sources:integrated-binance-20261003-v1
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    user: 10001:10001
+    working_dir: /legacy
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    volumes:
+    - legacy-source-generation:/legacy
+    tmpfs:
+    - /tmp:size=64M,mode=1777
+    entrypoint:
+    - /usr/bin/tini
+    - --
+    command:
+    - python
+    - -u
+    - /opt/btcml-legacy-original/io_runtime.py
+    - /opt/btcml-legacy-original/engines/acceptance_engine.py
+    - acceptance_states.parquet
+    restart: unless-stopped
+    labels:
+      org.btcml.purpose: original-binance-futures-analytical-sources
+      org.btcml.release: 2026.09.22
+    healthcheck: {disable: true}
+    depends_on:
+      legacy-multi-exchange:
+        condition: service_started
+    network_mode: none
+    mem_limit: 512m
+    cpus: '0.5'
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    build:
+      context: ./legacy_sources/sources
+      dockerfile: proposal/Dockerfile.sources.candidate
+  legacy-regime:
+    image: btc-ml-legacy-sources:integrated-binance-20261003-v1
+    read_only: true
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    user: 10001:10001
+    working_dir: /legacy
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    volumes:
+    - legacy-source-generation:/legacy
+    tmpfs:
+    - /tmp:size=64M,mode=1777
+    entrypoint:
+    - /usr/bin/tini
+    - --
+    command:
+    - python
+    - -u
+    - /opt/btcml-legacy-original/io_runtime.py
+    - /opt/btcml-legacy-original/engines/regime_engine.py
+    - regime_history.parquet
+    restart: unless-stopped
+    labels:
+      org.btcml.purpose: original-binance-futures-analytical-sources
+      org.btcml.release: 2026.09.22
+    healthcheck: {disable: true}
+    depends_on:
+      legacy-multi-exchange:
+        condition: service_started
+    network_mode: none
+    mem_limit: 512m
+    cpus: '0.5'
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    build:
+      context: ./legacy_sources/sources
+      dockerfile: proposal/Dockerfile.sources.candidate
+
+volumes:
+  btc_ml_data:
+    name: ${VPS_VOLUME_NAME:-btc_ml_data_vps}
+  visual_public_data:
+    name: ${VPS_VISUAL_VOLUME_NAME:-btc_ml_visual_public_vps}
+
+  legacy-source-generation:
+    external: true
+    name: btcml_legacy_sources_isolated_20261003

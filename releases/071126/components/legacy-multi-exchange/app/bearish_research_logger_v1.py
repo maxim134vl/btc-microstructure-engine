@@ -1,0 +1,216 @@
+import json
+from datetime import datetime
+
+# =====================================
+# BEARISH RESEARCH CONTEXT
+# =====================================
+
+research_context = {
+
+    "metadata": {
+
+        "created_at": str(datetime.utcnow()),
+        "research_type":
+            "bearish_auction_deterioration",
+        "version": "v1"
+
+    },
+
+    # =================================
+    # BASELINE
+    # =================================
+
+    "baseline_market": {
+
+        "horizon_10_down_rate": 57.64,
+        "horizon_10_avg_move": -47.49
+
+    },
+
+    # =================================
+    # CORE SIGNALS
+    # =================================
+
+    "signals": {
+
+        "unfinished_only": {
+
+            "down_rate": 52.73,
+            "avg_move": -36.94
+
+        },
+
+        "high_volume_only": {
+
+            "down_rate": 72.5,
+            "avg_move": -89.71
+
+        },
+
+        "unfinished_high_volume": {
+
+            "down_rate": 75.0,
+            "avg_move": -143.04
+
+        },
+
+        "unfinished_high_delta": {
+
+            "down_rate": 85.71,
+            "avg_move": -198.37
+
+        },
+
+        "bullish_regime_signal": {
+
+            "down_rate": 100.0,
+            "avg_move": -183.05,
+            "edge_vs_baseline": 42.36
+
+        },
+
+        "bearish_regime_signal": {
+
+            "down_rate": 90.0,
+            "avg_move": -269.24
+
+        }
+
+    },
+
+    # =================================
+    # ABSORPTION
+    # =================================
+
+    "absorption": {
+
+        "signal_efficiency": 0.01559,
+
+        "baseline_efficiency":
+            1.688498,
+
+        "efficiency_ratio": 0.01,
+
+        "positive_absorption_efficiency":
+            0.019042,
+
+        "positive_baseline_efficiency":
+            2.443424,
+
+        "positive_efficiency_ratio":
+            0.0078
+
+    },
+
+    # =================================
+    # DETERIORATION STRUCTURE
+    # =================================
+
+    "deterioration": {
+
+        "phase_1_avg_move":
+            -55.36,
+
+        "phase_2_avg_move":
+            -242.09,
+
+        "phase_2_down_rate":
+            100.0,
+
+        "continuation_max_move":
+            94.51,
+
+        "continuation_final_move":
+            -245.44,
+
+        "continuation_efficiency":
+            -2.6
+
+    },
+
+    # =================================
+    # MICROSTRUCTURE
+    # =================================
+
+    "microstructure": {
+
+        "average_body":
+            30.28,
+
+        "average_upper_wick":
+            68.41,
+
+        "average_lower_wick":
+            51.37,
+
+        "average_close_position":
+            0.43,
+
+        "average_spread":
+            150.05
+
+    },
+
+    # =================================
+    # BEHAVIORAL MODEL
+    # =================================
+
+    "behavioral_sequence": [
+
+        "high_volume",
+
+        "aggressive_delta",
+
+        "poor_price_efficiency",
+
+        "absorption",
+
+        "unfinished_auction",
+
+        "failed_continuation",
+
+        "directional_instability",
+
+        "deterioration_acceleration"
+
+    ],
+
+    # =================================
+    # CORE INTERPRETATION
+    # =================================
+
+    "core_interpretation": (
+
+        "Aggressive buyers continue "
+        "attacking the market but "
+        "auction structure loses "
+        "the ability to sustain "
+        "directional continuation."
+
+    )
+
+}
+
+# =====================================
+# SAVE
+# =====================================
+
+with open(
+    "bearish_context_research_v1.json",
+    "w"
+) as f:
+
+    json.dump(
+        research_context,
+        f,
+        indent=4
+    )
+
+print()
+print(
+    "BEARISH RESEARCH CONTEXT SAVED"
+)
+print(
+    "bearish_context_research_v1.json"
+)
+print()

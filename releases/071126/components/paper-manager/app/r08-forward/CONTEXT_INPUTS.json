@@ -1,0 +1,45 @@
+{
+  "observed_at": "2026-11-03T14:03:19.401638+00:00",
+  "timeframes": {
+    "M15": {
+      "episode": "M15:1767",
+      "direction": "LONG",
+      "available_at": "2026-11-03T13:56:23.519543+00:00",
+      "target_open": "2026-11-03T13:30:00+00:00",
+      "target_close": "2026-11-03T13:45:00+00:00",
+      "generation_id": "f937061db3bfc161aec076927c72f2f642e282ecb0763307ebd11d44fed335e5",
+      "manifest_sha256": "f78702880e1da3800b038f25f2eec027d12dbd618028a81e06ecdd470cb029f3",
+      "state": {}
+    },
+    "M30": {
+      "episode": "M30:14",
+      "direction": "LONG",
+      "available_at": "2026-11-03T13:43:18.647775+00:00",
+      "target_open": "2026-11-03T13:00:00+00:00",
+      "target_close": "2026-11-03T13:30:00+00:00",
+      "generation_id": "0309740446891884df1d30484bd1b98116396d1df4a150ebdc0afc966142993e",
+      "manifest_sha256": "b1ffa722dd4e101b77ce51950cb647cecfece4fcb84ab74fe806b97a56609c21",
+      "state": {}
+    },
+    "H1": {
+      "episode": "H1:8",
+      "direction": "LONG",
+      "available_at": "2026-11-03T13:15:52.285732+00:00",
+      "target_open": "2026-11-03T12:00:00+00:00",
+      "target_close": "2026-11-03T13:00:00+00:00",
+      "generation_id": "0efa1c27be0eeabccbd3344a896dae6230ef0ed7b6efee9644a53ef1371aa247",
+      "manifest_sha256": "49915b1821637ff6ca348928c7189c87f0b5a758afa27d1c948602ca272d1bc6",
+      "state": {}
+    },
+    "H4": {
+      "episode": "H4:4",
+      "direction": "LONG",
+      "available_at": "2026-11-03T12:17:25.758767+00:00",
+      "target_open": "2026-11-03T08:00:00+00:00",
+      "target_close": "2026-11-03T12:00:00+00:00",
+      "generation_id": "54e114d75206d7eb69ba9b2e6c8c6668bcfea2adf6717afe5df214eee8c206b8",
+      "manifest_sha256": "8c1799e664e2b5fe5f357d018838f0c8f0d8072ae62b6a53c8d1dff5097ad03d",
+      "state": {}
+    }
+  }
+}

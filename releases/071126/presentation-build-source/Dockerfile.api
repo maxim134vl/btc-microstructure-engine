@@ -1,0 +1,3 @@
+FROM btcml-release-base-api:071126
+COPY dashboard/backend/app/ /app/dashboard/backend/app/
+LABEL org.btcml.release="071126" org.btcml.component="ops-api"

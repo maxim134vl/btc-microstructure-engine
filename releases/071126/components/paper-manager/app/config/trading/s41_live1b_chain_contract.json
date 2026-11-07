@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "contract_id": "S41_LIVE1B_CHAIN_V1",
+  "phase": 2,
+  "status": "ACTIVE",
+  "purpose": "Single entry authority: closed-bar cognition with volume classes → S4.1 commands → LIVE1B books. LIVE1A journal is never an entry source.",
+  "owners": {
+    "context_truth": "market_context_lifecycle_memory.parquet",
+    "volume_classes": "volume_classification_memory.parquet → volume_response_state.parquet → auction_episode_memory",
+    "entry_authority": "S4.1_TIMEFRAME_MANAGER",
+    "execution_owner": "LIVE1B_INTRABAR_PAPER",
+    "journal_role": "OBSERVE_ONLY"
+  },
+  "entry_source": "s41_command_bus",
+  "forbidden_production_entry_source": "context_journal",
+  "mutual_exclusion": "journal_entry XOR s41_entry; never both",
+  "do_not_restore": [
+    "MIN_ACTIVE_CONTEXT_HOLD_BARS=3",
+    "bar-count anti-saw",
+    "M15 inheritance onto M30/H1/H4",
+    "LIVE1A journal OPEN/FLIP/END fills",
+    "wait-one-bar OPEN"
+  ],
+  "entry_requires_confirmed_raw_status": true,
+  "entry_requires_min_process_strength": false,
+  "invariants": [
+    {
+      "id": "OWNER_SINGLE",
+      "must": "production entry_source is s41_command_bus; LIVE1B S41CommandConsumer is constructed; journal poll is observe-only"
+    },
+    {
+      "id": "JOURNAL_OBSERVE_ONLY",
+      "must": "when entry_source=s41_command_bus, CONTEXT_START/FLIP must not open a LIVE1B position"
+    },
+    {
+      "id": "PROVISIONAL_NOT_MANAGER",
+      "must": "PROVISIONAL_INTRABAR resolve_timeframe_state is not actionable for S4.1"
+    },
+    {
+      "id": "NO_M15_INHERITANCE",
+      "must": "untagged lifecycle parquet is M15-only; H1 without own rows is NO_LIFECYCLE_ROW, not M15 direction"
+    },
+    {
+      "id": "HOLD_ZERO",
+      "must": "MIN_ACTIVE_CONTEXT_HOLD_BARS=0; CONFIRMED_OPPOSITE_CONFIRM_BARS=1; ANTI_SAW_ENABLED=false"
+    },
+    {
+      "id": "EPISODE_ONESHOT",
+      "must": "journal CONTEXT_START is one-shot per episode; S4.1 OPEN follows current parquet direction and may re-enter after TP/SL while that episode remains directional; CONTEXT_END still blocks via ended_episodes; FLIP to opposite episode still allowed"
+    },
+    {
+      "id": "COGNITION_EXECUTION",
+      "must": "S4.1 desired position equals closed-bar parquet direction the chart paints; restated opposite on the same source_bar_close is followed; path-density anti-saw vetoes flat OPEN and ATOMIC_FLIP OPEN when the closed-bar window is a saw; CLOSE/SL/TP/HOLD are not gated"
+    },
+    {
+      "id": "ATOMIC_FLIP",
+      "must": "LONG open + SHORT_CONTEXT ACTIVE in one manager cycle emits CLOSE and opposite OPEN (or intent FLIP), not CLOSE alone"
+    },
+    {
+      "id": "RETRY_MARKET",
+      "must": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY and missing local BBO must not consume the command_id"
+    },
+    {
+      "id": "VOLUME_CLASS_LINEAGE",
+      "must": "S4.1 actionable context is closed-bar parquet lineage, not LIVE1A volume_class=unknown"
+    },
+    {
+      "id": "CHART_FOLLOWS_OWNER",
+      "must": "entry_source=s41_command_bus paints parquet lifecycle bands, not LIVE1A journal"
+    },
+    {
+      "id": "CUTOVER_SCRIPTS",
+      "must": "hybrid cutover and VPS bootstrap write entry_source=s41_command_bus and do not say S4.1 is not entry authority"
+    },
+    {
+      "id": "LOADER_ALLOWS_S41",
+      "must": "canonical load_intrabar_paper_config accepts production s41_command_bus"
+    },
+    {
+      "id": "COGNITION_OWNS_S41",
+      "must": "when entry_source=s41_command_bus, load_sources reads market_context_lifecycle_memory.parquet not LIVE1A journal; OBSERVE/NO_ACTIVE keeps the living LONG/SHORT so S4.1 HOLD not CLOSE; flatten only on opposite ACTIVE context"
+    },
+    {
+      "id": "OBSERVE_HOLD",
+      "must": "open LONG holds through OBSERVE and resumes if LONG returns; open SHORT holds through OBSERVE and resumes if SHORT returns; CLOSE only when painted context becomes the opposite ACTIVE"
+    },
+    {
+      "id": "OPPOSITE_THROUGH_OBSERVE",
+      "must": "lifecycle never paints LONG→SHORT or SHORT→LONG; confirmed opposite ACTIVE ends living thesis to OBSERVE; opposite activates only from OBSERVE on a later bar"
+    },
+    {
+      "id": "ENTRY_CONFIRMED_RAW",
+      "must": "flat-slot OPEN requires raw_context_status ACTIVE on the resolved lifecycle row; DEVELOPING/OBSERVE while lifecycle ACTIVE is NO_ACTION RAW_STATUS_NOT_CONFIRMED; missing/UNKNOWN fail-open; ATOMIC_FLIP_OPEN is not gated by raw status; CLOSE/HOLD unchanged"
+    },
+    {
+      "id": "PROCESS_STRENGTH_TRADE",
+      "must": "OPEN requires the existing Context Phase / Trend Kill Switch and DRA/R2 admission, never a numeric process_strength threshold. Confirmed opposite ACTIVE own-TF Canonical Lifecycle authorizes contextual CLOSE without numeric veto; OBSERVE holds, SL/TP remain independent."
+    },
+    {
+      "id": "NEAR_TP_MISS",
+      "must": "each TF independently: open slot + that TF's closed bar (bar close after position opened, not forming) extreme within miss_bps of TP, TP not printed on the bar, close still short of TP → CLOSE NEAR_TP_MISS on that bar close; long high/close below TP, short low/close above TP; no next-bar wait; saw/strength do not gate this CLOSE; not ATOMIC_FLIP so same cycle does not OPEN; later cycles re-enter under canonical OPEN"
+    }
+  ],
+  "near_tp_miss": {
+    "enabled": true,
+    "miss_bps": 10.0,
+    "per_timeframe": true,
+    "applies_to": [
+      "M15",
+      "M30",
+      "H1",
+      "H4"
+    ]
+  },
+  "context_close_requires_min_process_strength": false,
+  "entry_context_policy": "Final Context direction; mandatory proven Context Phase and existing Trend Kill Switch/DRA/R2/entry admission; POLICY_NOT_APPROVED remains fail-closed"
+}

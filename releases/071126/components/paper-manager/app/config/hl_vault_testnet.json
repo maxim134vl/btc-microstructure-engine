@@ -1,0 +1,41 @@
+{
+  "schema_version": "hl_vault_execution_v1",
+  "network": "testnet",
+  "coin": "BTC",
+  "vault_address": null,
+  "account_address": null,
+  "timeframes": ["M15"],
+  "max_open_positions_per_timeframe": 1,
+  "stop_loss_bps": 100.0,
+  "take_profit_bps": 150.0,
+  "max_risk_per_trade_pct": 1.0,
+  "max_risk_per_trade_usd": 10.0,
+  "ioc_slippage_bps": 10.0,
+  "leverage": 5,
+  "is_cross": true,
+  "max_margin_usage_pct": 50.0,
+  "max_basis_vs_paper_bps": 50.0,
+  "max_consecutive_exchange_errors": 5,
+  "hard_cap_order_btc": 0.001,
+  "command_bus": "production",
+  "s41_consume_commands_after": null,
+  "books_root": "data/trading/hyperliquid_vault",
+  "paper_books_root": "data/trading/intrabar_paper",
+  "paper_epochs_root": "data/trading/paper_epochs",
+  "kill_flag_relpath": "data/trading/hyperliquid_vault/KILL",
+  "soak": {
+    "min_days": 28,
+    "max_days": 56,
+    "min_paired_fills": 30,
+    "max_liquidations": 0,
+    "min_fill_rate": 0.8,
+    "max_median_abs_basis_bps": 40.0,
+    "require_kill_switch_tested": true
+  },
+  "mainnet": {
+    "creation_fee_usd": 10000,
+    "min_leader_deposit_usd": 100,
+    "min_leader_share_pct": 5.0,
+    "promotion": "private_run"
+  }
+}

@@ -1,0 +1,10 @@
+FROM btc-ml-paper-manager:recovery-candidate-20261004-v1
+COPY src/btc_ml/trading/intrabar_paper/engine.py /app/src/btc_ml/trading/intrabar_paper/engine.py
+COPY src/btc_ml/trading/intrabar_paper/books.py /app/src/btc_ml/trading/intrabar_paper/books.py
+COPY src/btc_ml/trading/intrabar_paper/s41_command_consumer.py /app/src/btc_ml/trading/intrabar_paper/s41_command_consumer.py
+COPY src/btc_ml/trading/anti_saw_path_density.py /app/src/btc_ml/trading/anti_saw_path_density.py
+COPY live/run_intrabar_paper_manager.py /app/scripts/live/run_intrabar_paper_manager.py
+WORKDIR /app
+USER btcml
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/bin/sh", "/app/deploy/vps/entrypoints/paper_manager.sh"]

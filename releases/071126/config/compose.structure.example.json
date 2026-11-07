@@ -1,0 +1,670 @@
+{
+  "name": "btcml-vps-smoke",
+  "services": {
+    "timeframe-manager": {
+      "image": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+      "entrypoint": null,
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/financial_trend_service.sh",
+        "timeframe-manager"
+      ],
+      "user": "btcml",
+      "working_dir": "/app",
+      "read_only": true,
+      "restart": "no",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "timeframe-manager",
+          "--pid-file",
+          "run/timeframe_manager.pid",
+          "--health-file",
+          "data/runtime/timeframe_manager_health.json",
+          "--allow-missing-health"
+        ],
+        "timeout": "15s",
+        "interval": "20s",
+        "retries": 30,
+        "start_period": "5m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/timeframe-manager.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "paper-manager": {
+      "image": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+      "entrypoint": null,
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/financial_candidate_paper.sh",
+        "--continuity-mode",
+        "FLAT_START",
+        "--fresh-live-domain",
+        "paper-t0-20261104T182435Z"
+      ],
+      "user": "10001:10001",
+      "working_dir": "/app",
+      "read_only": true,
+      "restart": "no",
+      "cpus": 2,
+      "mem_limit": "1610612736",
+      "pids_limit": 256,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=256M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/replays:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_paper_manager.py"
+        ],
+        "timeout": "15s",
+        "interval": "20s",
+        "retries": 30,
+        "start_period": "5m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/paper-manager.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "context-refresh-daemon": {
+      "image": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+      "entrypoint": null,
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/context_refresh_daemon.sh"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=256M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/replays:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "context-refresh-daemon",
+          "--pid-file",
+          "data/runtime/context_refresher.pid",
+          "--allow-missing-health"
+        ],
+        "timeout": "15s",
+        "interval": "20s",
+        "retries": 30,
+        "start_period": "5m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/context-refresh-daemon.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "context-refresher": {
+      "image": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/context_refresher.sh"
+      ],
+      "user": "btcml",
+      "working_dir": "/app",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "mem_limit": "805306368",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "context-refresher",
+          "--pid-file",
+          "data/runtime/visual_refresher.pid",
+          "--health-file",
+          "apps/context_visualizer/public/data/visual_status.json",
+          "--allow-missing-health"
+        ],
+        "timeout": "5s",
+        "interval": "15s",
+        "retries": 12,
+        "start_period": "1m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/context-refresher.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "legacy-volume-clusters": {
+      "image": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-pair/legacy_pair_runtime.py",
+        "--root",
+        "/legacy"
+      ],
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "cpus": 1,
+      "mem_limit": "1073741824",
+      "pids_limit": 128,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/opt/btcml-legacy-pair/legacy_pair_runtime.py",
+          "--root",
+          "/legacy",
+          "--health",
+          "both"
+        ],
+        "timeout": "2m0s",
+        "interval": "30s",
+        "retries": 3,
+        "start_period": "3m0s",
+        "disable": true
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/legacy-volume-clusters.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "canonical-runtime": {
+      "image": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+      "entrypoint": null,
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/canonical_runtime.sh"
+      ],
+      "read_only": true,
+      "restart": "no",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=256M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/replays:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "canonical-runtime",
+          "--pid-file",
+          "run/canonical_runtime.pid",
+          "--allow-missing-health"
+        ],
+        "timeout": "15s",
+        "interval": "20s",
+        "retries": 30,
+        "start_period": "5m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/canonical-runtime.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "intrabar-supervisor": {
+      "image": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+      "entrypoint": null,
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/intrabar_supervisor.sh"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=256M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/replays:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "intrabar-supervisor",
+          "--pid-file",
+          "run/intrabar_process_supervisor.pid",
+          "--health-file",
+          "data/runtime/intrabar_operational_status.json",
+          "--allow-missing-health"
+        ],
+        "timeout": "15s",
+        "interval": "20s",
+        "retries": 30,
+        "start_period": "5m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/intrabar-supervisor.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "legacy-volume-memory": {
+      "image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-memory-regime/legacy_pair_runtime.py",
+        "--root",
+        "/legacy"
+      ],
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "cpus": 1,
+      "mem_limit": "1073741824",
+      "pids_limit": 128,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "timeout": "1m0s",
+        "disable": true
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/legacy-volume-memory.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "legacy-volume-reactions": {
+      "image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-reactions-acceptance/legacy_pair_runtime.py",
+        "--root",
+        "/legacy"
+      ],
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "cpus": 1,
+      "mem_limit": "1073741824",
+      "pids_limit": 128,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "timeout": "1m0s",
+        "disable": true
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/legacy-volume-reactions.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "legacy-multi-exchange": {
+      "image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-original/io_runtime.py",
+        "/opt/btcml-legacy-original/multi_exchange_collector.py",
+        "multi_exchange_flow.parquet"
+      ],
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "cpus": 0.5,
+      "mem_limit": "536870912",
+      "pids_limit": 64,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "timeout": "1m0s",
+        "disable": true
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/legacy-multi-exchange.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "collector-watchdog": {
+      "image": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+      "entrypoint": null,
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/collector_watchdog.sh"
+      ],
+      "read_only": true,
+      "restart": "unless-stopped",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=256M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/replays:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "collector-watchdog",
+          "--pid-file",
+          "run/collector_watchdog.pid",
+          "--allow-missing-health"
+        ],
+        "timeout": "15s",
+        "interval": "20s",
+        "retries": 30,
+        "start_period": "5m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/collector-watchdog.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "cognition-runtime": {
+      "image": "sha256:348073d3a7300d3a402bea47f770505486ce4b4f6112f1c2f1b59e57e62540e8",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/cognition_runtime.sh"
+      ],
+      "user": "btcml",
+      "working_dir": "/app",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "pids_limit": 256,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=256M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/replays:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_cognition.py"
+        ],
+        "timeout": "15s",
+        "interval": "20s",
+        "retries": 30,
+        "start_period": "5m0s"
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/cognition-runtime.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "ops-api": {
+      "image": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "run_api.py"
+      ],
+      "user": "btcml",
+      "working_dir": "/app/dashboard/backend",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "mem_limit": 1610612736,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "curl",
+          "-fsS",
+          "http://127.0.0.1:8080/health"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "start_period": "300000000000ns",
+        "retries": 30
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/ops-api.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    },
+    "dashboard-ui": {
+      "image": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+      "entrypoint": [
+        "/docker-entrypoint.sh"
+      ],
+      "command": [
+        "nginx",
+        "-g",
+        "daemon off;"
+      ],
+      "working_dir": "/",
+      "read_only": false,
+      "restart": "unless-stopped",
+      "tmpfs": [
+        "/tmp:size=16M,mode=1777",
+        "/var/cache/nginx:size=32M,mode=1777",
+        "/var/run:size=8M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1/"
+        ],
+        "interval": "15000000000ns",
+        "timeout": "5000000000ns",
+        "start_period": "20000000000ns",
+        "retries": 8
+      },
+      "env_file": [
+        "./PRIVATE_RUNTIME_ENV/dashboard-ui.env"
+      ],
+      "labels": {
+        "btcml.release": "071126",
+        "btcml.template": "NOT_DEPLOYABLE_WITHOUT_PRIVATE_MOUNTS_AND_BINDINGS"
+      }
+    }
+  }
+}

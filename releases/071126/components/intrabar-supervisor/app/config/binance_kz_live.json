@@ -1,0 +1,33 @@
+{
+  "schema_version": "binance_kz_execution_v1",
+  "network": "live",
+  "account_mode": "portfolio_margin",
+  "real_execution_enabled": false,
+  "symbol": "BTCUSDT",
+  "timeframes": ["M15"],
+  "leverage": 2,
+  "stop_loss_bps": 100.0,
+  "take_profit_bps": 150.0,
+  "ioc_slippage_bps": 10.0,
+  "max_risk_per_trade_pct": 1.0,
+  "min_unimmr_open": 2.0,
+  "kill_unimmr": 1.5,
+  "max_bbo_age_ms": 2000.0,
+  "max_consecutive_exchange_errors": 5,
+  "qty_step": 0.001,
+  "tick_size": 0.1,
+  "command_bus": "production",
+  "s41_consume_commands_after": null,
+  "papi_url": "https://papi.binance.com",
+  "fapi_url": "https://fapi.binance.com",
+  "user_ws_url": "wss://fstream.binance.com/pm/ws",
+  "public_ws_url": "wss://fstream.binance.com",
+  "books_root": "data/trading/binance_kz",
+  "paper_books_root": "data/trading/intrabar_paper",
+  "paper_epochs_root": "data/trading/paper_epochs",
+  "kill_flag_relpath": "data/trading/binance_kz/KILL",
+  "hybrid_sizing": {
+    "enabled": true,
+    "artifacts_dir": "config/trading/hybrid_sizing"
+  }
+}

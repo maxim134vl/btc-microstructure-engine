@@ -1,0 +1,431 @@
+{
+  "ack_cutoff_handoff": {
+    "budgets": "unchanged",
+    "diagnostic": "One Futures overflow traceback record per process only",
+    "diagnostic_failure": "Original overflow handling/socket close always continues if traceback formatting fails",
+    "processing": "Keep already committed RAW/ACK in existing bounded queue until next actual wall slice; single worker wait releases receive condition; stop/deadline wakes remain bounded; no forced availability",
+    "qualification_or_permission_granted": false,
+    "timestamp_correction": false,
+    "validator_unchanged": true
+  },
+  "amendment": {
+    "authorization": "Current owner instruction: FIX RELEASE/PROVENANCE COUPLING AND COMPLETE DEPLOYMENT",
+    "changed_file": "src/btc_ml/trading/intrabar_paper/working_admission.py",
+    "final_sha256": "9207ac125cbbdd9f439539e0becb4104f859497c9c11c03c1b402165d8b1aa4b",
+    "previous_sha256": "4be130fd424daf7880ee1be758dc9f853c6196b07e21ec7bf5fc514656cf78ec",
+    "scope": "Only working_admission explicit current release environment input; original financial descriptor, policy and historical provenance unchanged"
+  },
+  "approved_cached_guard_fix": {
+    "after_sha256": "cb2d65ea343c9153532cb376efbc05a36fc71cad5a945fd1cd6b2ba14d16a9de",
+    "before_sha256": "2bf2f55c021efc9f5949466efaeccf47bbc4c8a47e02864fff59e3817b7b3521",
+    "financial_core_four_pins_unchanged": true,
+    "historical_provenance_unchanged": true,
+    "owner_authorization": "2026-11-06 explicit: cached-branch ColdValidator._verify change preserving protections, saved-input equivalence, install and continue R08/Futures overflow; budgets/base12 unchanged; REAL disabled",
+    "scope": "Only discard-free cached preparation; cold path original, one original fresh source/mount/member check retained at branch boundary; every authoritative prefix/final/rollback check unchanged",
+    "tests": {
+      "FAIL": 0,
+      "PASS": 32,
+      "native_helper_origin": "installed Paper27",
+      "result_sha256": "395db357f058ad612194f171650cdd882763ff692b0a7f34079dc5a990cf85d0",
+      "saved_fixture_bytes": 1059662
+    },
+    "timeframe": "installed V26 unchanged"
+  },
+  "based_on": {
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_CACHED_GUARD_OVERFLOW_FIX_20261106/accepted-current-release.json": "adfee7cce8a00abcc63e4987c2d89f53495207c726e81413d2d20ac104b1a4b4",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_CACHED_GUARD_OVERFLOW_FIX_20261106/cached-path-reuse-v29/accepted-current-release.json": "fb5faf0eba8ac4d9215b2a7368bb0bf2432334bbea490cdb246def2074a69a74",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_CACHED_GUARD_OVERFLOW_FIX_20261106/condition-anchor-reuse-v30/accepted-current-release.json": "ef8138cb9c00ec460d3d1f0c1bc11e164613484460e306d227b04e86f2f45178",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_CACHED_GUARD_OVERFLOW_FIX_20261106/observer-empty-tls-retry-v33/accepted-current-release.json": "a68ff9c4b0fc588edc9ceb348cc5df2da07dc4147670f6bf58161b8fd6fe25d6",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_CACHED_GUARD_OVERFLOW_FIX_20261106/wal-health-snapshot-v32/accepted-current-release.json": "dde7ff2135dfd0dc8f8a8b849177287ce9ddc3bdff0afe9ecee7a82ffb099272",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_CACHED_GUARD_OVERFLOW_FIX_20261106/wal-metadata-scan-v31/accepted-current-release.json": "76e4a238049d916fbabaab6303616b64f2891dca2a195576ffd45664b9f54f73",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_EXECUTION_RELEASE_20261104/RELEASE_MANIFEST.json": "825312bf0307e201c9f10c1181a1ad72a5aca340f6ce2694a5ab9c8ea4f55f80",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_FINAL_EXECUTION_ACTIVATION_20261105/candidate/accepted-current-release.json": "7c4f7e528f6e92ab00987e4252b8a3198bec273287cbcb20bb0bca2cbff58515",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_FINAL_EXECUTION_ACTIVATION_20261105/startup-reuse-v13/accepted-current-release.json": "950d5189538c76def1dcf7c614e93394dd876763c48ea7eb2b6920a395bf0eba",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_RECORDER_FUTURES_OVERFLOW_FIX_20261106/availability-and-overflow-v23/accepted-current-release.json": "9b2983a81786eb22e3dc9ca5d8506aaff06c6567d8bb71205def0c72603940e0",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_RECORDER_FUTURES_OVERFLOW_FIX_20261106/availability-and-overflow-v24/accepted-current-release.json": "b9a540994ab75c1635466745b788901392d959055292a95f4cc3bff33b70d639",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_RECORDER_FUTURES_OVERFLOW_FIX_20261106/futures-fd-v19/accepted-current-release.json": "24fecc2165dad13381e1c15a590723169084b156a9615cb86aa101ddf94b444d",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_RECORDER_FUTURES_OVERFLOW_FIX_20261106/incremental-quota-v21/accepted-current-release.json": "5b2590e1fbdf665f7a8d158e48e14d9712ed04b007c0adf20a28dca2c982f4a1",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_RUNTIME_WIRING_20261104/MANIFEST.json": "6849fbb1b4f1237076aed25741d74a6c648efbef80e1330853438ec3ff431288",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_RUNTIME_WIRING_20261104/provenance-fix-20261104/ACCEPTED_RELEASE.json": "6ed76ee60d3f15e5652800c4b7b90f165f2a142298734354a6ada116adc50316",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_RUNTIME_WIRING_20261104/startup-feed-fix-20261104/ACCEPTED_RELEASE.json": "43b11c58b00ccfa738c1442a021e39294c1d0f3afe1aacac378a6f25eda6c166",
+    "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_T0_START_20261104/observer-runtime-bugs-20261105/context/accepted-current-release.json": "8fc3b4b2ba6fc017cb43dc7846b72beb7fbe07c054fb3e86477c5371004c9d2b"
+  },
+  "bounded_runtime_io_reuse": {
+    "budgets": "unchanged",
+    "futures_WAL": "one serialized append descriptor, per-message flush and existing hard/periodic fsync unchanged",
+    "qualification_or_trading_permission": false,
+    "recorder_ACK": "exact last committed ACK bytes, seq/hash matched, physical fallback retained"
+  },
+  "build_parent_image": "sha256:2b4bd7ccd5df7b30616053e302ee776ddbbd664b1c31c978dbb3d29c310f86de",
+  "build_parent_images": {
+    "paper-manager": "sha256:d58463d6da681a526e4dea4659d77239c3e8fe112c623ff707466838b3f9edc1",
+    "timeframe-manager": "sha256:0429ab26ea671678aa72a02085d7f0aed1953a3f4b0ad92806856ed352dd92e8"
+  },
+  "cached_member_path_scope": {
+    "after_sha256": "cd6241162e53de26031c10eb4f0e480b15158558c41198aadf8552fa86f0bd2f",
+    "before_sha256": "cb2d65ea343c9153532cb376efbc05a36fc71cad5a945fd1cd6b2ba14d16a9de",
+    "checks": {
+      "FAIL": 0,
+      "PASS": 41,
+      "result_sha256": "5713d4b148eec26396a42d98af2d914395b590ce47847312e267f5f43a31456f"
+    },
+    "financial_core_four_pins_unchanged": true,
+    "historical_provenance_unchanged": true,
+    "scope": "Existing bounded validated_path_reads around unchanged cached member loop only. Full native activation at entry and exit, no persistent authority or mutable data cache. Cold branch unchanged."
+  },
+  "component_files_sha256": {
+    "paper-manager": {
+      "/app/ops_owner_projections.py": "8edd0d9e7cdb7af6a52303adafdf420d88c2b03a3a0e8684e2c977f785950609",
+      "/app/r08-forward/receive_worker.py": "a6601635f252f5f0a982fefec6ac9c89e1aff5fb009b527bd86bf7fdcf32924a",
+      "/app/r08-forward/src/recorder.py": "3455c430dbcb5e91bad7a9c36e8d011aa7577574818143c331e42b0dc458162f",
+      "/app/r08-forward/src/storage.py": "2e28a8e6e5ca16a7bba76e9c0c65f68a06734acce49dc3f24eb1a374d04b9dfb",
+      "/app/scripts/live/run_intrabar_paper_manager.py": "9298e6b37b126caf9bd53f11a835da3b2c841af5f796e75e3fb1d87bc9561c50",
+      "/app/src/btc_ml/runtime/financial_trend_environment.py": "ac9effdcc9875dd304adf67840f4bf883c3c4d7fe91acbe2ccba2c86671b6e34",
+      "/app/src/btc_ml/runtime/r08_live_source.py": "5824fd71a9fd899e484d576911c61d63169741105a13f3e66f894909d5ab5189",
+      "/app/src/btc_ml/runtime/r08_service.py": "222634230a6059aa4987c185f00e2105c4f437c854945db26dd3fea874cabcc4",
+      "/app/src/btc_ml/trading/intrabar_paper/cold_forward_guard.py": "cd6241162e53de26031c10eb4f0e480b15158558c41198aadf8552fa86f0bd2f",
+      "/app/src/btc_ml/trading/intrabar_paper/execution_market_wal.py": "f096d750185752d6f6864a04159271db906c66af92c7d3d933502adc254e036b",
+      "/app/src/btc_ml/trading/intrabar_paper/financial_authority_runtime.py": "330d47963e45677e299566d19ce2b62b171bbcf9692922b63ed297b807d290db",
+      "/app/src/btc_ml/trading/intrabar_paper/legacy_admission.py": "b7f4c3b63b85b31d080d4b36f2ea60433cee45693cec7b885ba97d20ce7cb049",
+      "/app/src/btc_ml/trading/intrabar_paper/verified_continuation.py": "720ac64f57c312bcedd53a060140222857fb3d081d7384f112c1691de96bc155",
+      "/app/src/btc_ml/trend/context_trend_integration.py": "028a3be3fd6df7e076507eee6d179c8a8a5ff4239bc73d7b5f82d0e87ebd6c2c",
+      "/app/src/btc_ml/trend/real_scope_proof.py": "f59bdf9665e689f75bc24b712c6cdaca6a0c64f8a3c9711382008488c7140ede",
+      "/app/src/btc_ml/trend/recorder_live_adapter.py": "2472660653f564b614ca42facc20b6afa3fe1cddc45b0f918c73246347fa51ac",
+      "/app/src/btc_ml/trend/trend_research_system.py": "d1f04ffbe71511e52f0f389362db6ebc4692b925603859bc343e645769fd0413",
+      "r08-forward/src/recorder.py": "08dc4b281389f9777c9f8538a44fd27ec1856e93ec6dd296304309abe271f6c4",
+      "src/btc_ml/runtime/container_preflight.py": "7f2d8c5ed2c8920da002748c6357d9fa6ee17d935108a51e0a0273238b3999e3",
+      "src/btc_ml/runtime/paper_financial_policy.py": "304ae614f21a3f7130553027c3e236598a8792d75fe6d052ca3fb5a9145504ad",
+      "src/btc_ml/trading/intrabar_paper/fresh_live_continuity.py": "c6589a2785fd49ddeb98f489beaaf73d8f32bb0e56145c5a0aff99f985f04d64",
+      "src/btc_ml/trend/real_scope_proof.py": "f59bdf9665e689f75bc24b712c6cdaca6a0c64f8a3c9711382008488c7140ede"
+    },
+    "timeframe-manager": {
+      "/app/src/btc_ml/runtime/financial_trend_environment.py": "ac9effdcc9875dd304adf67840f4bf883c3c4d7fe91acbe2ccba2c86671b6e34",
+      "/app/src/btc_ml/trading/intrabar_paper/cold_forward_guard.py": "a4e923534746836ded2d4de5b7ebd9f881a419fd0e4f06737305ab0b572c8a44",
+      "/app/src/btc_ml/trading/intrabar_paper/financial_authority_runtime.py": "330d47963e45677e299566d19ce2b62b171bbcf9692922b63ed297b807d290db",
+      "/app/src/btc_ml/trading/intrabar_paper/legacy_admission.py": "b7f4c3b63b85b31d080d4b36f2ea60433cee45693cec7b885ba97d20ce7cb049",
+      "/app/src/btc_ml/trading/intrabar_paper/verified_continuation.py": "720ac64f57c312bcedd53a060140222857fb3d081d7384f112c1691de96bc155",
+      "/app/src/btc_ml/trading/live1b_position_views.py": "8db0304cb3700b312c8edd59c9efea841d058533dc353368d67b393c9f6aa0e6",
+      "/app/src/btc_ml/trend/context_trend_integration.py": "028a3be3fd6df7e076507eee6d179c8a8a5ff4239bc73d7b5f82d0e87ebd6c2c",
+      "/app/src/btc_ml/trend/real_scope_proof.py": "f59bdf9665e689f75bc24b712c6cdaca6a0c64f8a3c9711382008488c7140ede",
+      "/app/src/btc_ml/trend/recorder_live_adapter.py": "20635b4d46fbe6cd3a363f880d39e744c1ba1e59ff55ce1bcc98c270f5862765",
+      "/app/src/btc_ml/trend/trend_research_system.py": "d1f04ffbe71511e52f0f389362db6ebc4692b925603859bc343e645769fd0413",
+      "src/btc_ml/trend/real_scope_proof.py": "f59bdf9665e689f75bc24b712c6cdaca6a0c64f8a3c9711382008488c7140ede"
+    }
+  },
+  "context_binding_semantics": "Latest actually published native Context reference, with original target/activation clocks; not a claim of market-bar freshness or trading admission",
+  "continuation_source_selection_reuse": {
+    "after": "720ac64f57c312bcedd53a060140222857fb3d081d7384f112c1691de96bc155",
+    "before": "61619e540c7311f553b593cd7c5da3b1c2e70b20ce2398b5cc31ab99249de0af",
+    "change": "Hoist unchanged RO source/reference selections within one original immutable-path collection; complete authority entry/exit revalidation and every independent signature preserved",
+    "no_historical_data_changes": true,
+    "targeted_checks": {
+      "FAIL": 0,
+      "PASS": 16
+    }
+  },
+  "existing_rest_transport_wiring": {
+    "URL_TLS_timeout_limits": "UNCHANGED",
+    "component": "ResumeCaptureTransport",
+    "current": "same previously accepted native transport, one lazy Session per serial processor",
+    "previous": "FLAT_START default fetch used requests.get per request",
+    "tests": {
+      "FAIL": 0,
+      "PASS": 4,
+      "file": "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_FINAL_EXECUTION_ACTIVATION_20261105/queue-metadata-v16/SESSION_WIRING_CHECKS.json"
+    }
+  },
+  "explicit_startup_inputs": [
+    "BTC_ML_IMPLEMENTATION_RELEASE",
+    "BTC_ML_IMPLEMENTATION_RELEASE_SHA256",
+    "BTC_ML_IMPLEMENTATION_ROLE"
+  ],
+  "file_sha256": {
+    "context/execution_market_checkpoint.py": "8ed5b958c6fb7f5f99675e8674361839580baecf5e0c76ed33617a0af6a3e6f8",
+    "context/execution_market_processor.py": "328ca0113918ecf8e4840e1c955d348bac3b6858c92c20720720ae154a3f0f47",
+    "context/fresh_live_continuity.py": "de0f3f76b6c0b13610e5e0d5e6d0bec00c0f6779a514072e955fda01ccf08a90",
+    "context/ops_owner_projections.py": "5225e28f45ab5d298ac1ddc906f164a4a63aea8f82aa449d43ab1d042d32feb6",
+    "context/ops_publication_contract.py": "bf19f88cb1cc3dfd74f3339d099e873f388bf6a385cd916f42a21e93e9aa855d",
+    "context/r08-forward/canary_runner.py": "2b4d2980151c30219b33dfd120aab1c5d7a91f33ebbaa33224601f1f8cc95280",
+    "context/r08-forward/live_processing.py": "a383d7800790d19dfa95edaaef4d904698a4bfb00827b739b1a7f98285878440",
+    "context/r08-forward/r08_spot/__init__.py": "a9c631af5d926a55bb0357d63956bf7d7afd28efa9c2edf3c1236173eb97de19",
+    "context/r08-forward/receive_worker.py": "61d6b05f89f650bbdf4be309dc3a1dd9e5c1cd688594ca843ade91079e4c472a",
+    "context/r08-forward/src/entrypoint.py": "70543997450b5054297ecec6ef0e43aa129971471d817e64f45ef281d5975635",
+    "context/r08-forward/src/observer.py": "379168691ef6da86d78066acc6464b75a71dc7a6cddbec1075e0dfccb4bec5db",
+    "context/r08-forward/src/recorder.py": "08dc4b281389f9777c9f8538a44fd27ec1856e93ec6dd296304309abe271f6c4",
+    "context/r08-forward/src/storage.py": "bc2da5183abbde83dba1d406e7ffe1bd451f7eebd04a743f1809b67b8c52a318",
+    "context/r08-forward/src/transport.py": "425de2114eb00c34cb79d621cf72e609062c0c808d1d49f0839e092b135850c3",
+    "context/r08-forward/src/ws_connection.py": "d6c9ad141b98664d6e5f8fe501698091c84d7852d7ed7750184787b1e97077de",
+    "context/run_intrabar_paper_manager.py": "8e69bc7db2dc109708b792b51618fa0fa1ed6c5b4a4b1283ea083e65a1f97064",
+    "context/s41_command_consumer.py": "003e66f5bf27ce5300722d8732e954664a7a5784ba6ccd9a720ee9e52f9e04fd",
+    "context/src/btc_ml/runtime/container_preflight.py": "7f2d8c5ed2c8920da002748c6357d9fa6ee17d935108a51e0a0273238b3999e3",
+    "context/src/btc_ml/runtime/paper_financial_policy.py": "304ae614f21a3f7130553027c3e236598a8792d75fe6d052ca3fb5a9145504ad",
+    "context/src/btc_ml/runtime/r08_live_source.py": "114d01162fbf20aceffddaa9c754780f69325fe2ef682e0d10dff7759f814702",
+    "context/src/btc_ml/trading/intrabar_paper/fresh_live_continuity.py": "c6589a2785fd49ddeb98f489beaaf73d8f32bb0e56145c5a0aff99f985f04d64",
+    "context/src/btc_ml/trend/real_scope_proof.py": "f59bdf9665e689f75bc24b712c6cdaca6a0c64f8a3c9711382008488c7140ede",
+    "context/timeframe_manager_daemon.py": "56c9e66c0e09bf178049c0d4ac3663362af59f29ae7fe7dd82bc15f51c0993c0",
+    "context/working_admission.py": "9207ac125cbbdd9f439539e0becb4104f859497c9c11c03c1b402165d8b1aa4b"
+  },
+  "final65_reference_path_scope": {
+    "actual_site": "already_processed -> lookup -> command_check -> a.reference -> load_policy (2026-11-06T14:07:41.944973Z)",
+    "after_sha256": "b7f4c3b63b85b31d080d4b36f2ea60433cee45693cec7b885ba97d20ce7cb049",
+    "before_sha256": "296c0406448f45c934d9cd5fa789b2476953dc8934e99cbcb1fdc37f2c19a339",
+    "checks": {
+      "FAIL": 0,
+      "PASS": 41,
+      "sha256": "dfeebf6d5439159a04f5e7be5309bf154937dc8a342fb93ae2975aea58ffb7e4"
+    },
+    "current_implementation_pin_updated_for_both_roles": true,
+    "direct_admission_activations": [
+      7,
+      2
+    ],
+    "g1_cached_activations": [
+      30,
+      20
+    ],
+    "historical_provenance_unchanged": true,
+    "native_cold_cached_proof_and_state_equal": true,
+    "production_throughput_not_inferred_from_fixture": true,
+    "scope": "Existing validated_path_reads around unchanged load_policy body only; all five original reference content SHA checks retained. Full original admission at scope entry/exit, no persistent cache, no new authority or financial arithmetic."
+  },
+  "final_runtime_optimization": {
+    "authorization": "FINAL EXECUTION ACTIVATION WITH AUTONOMOUS RUNTIME OPTIMIZATION",
+    "financial_implementation_pins_unchanged": true,
+    "historical_provenance_unchanged": true,
+    "no_pre_T0_recovery": true,
+    "scope": "Reuse already opened Recorder directory descriptors; exact retained file format/fsync/ACK order unchanged. Start observer-only owned child after native books/fence independent of Futures fresh_ready; all OPEN checks unchanged.",
+    "source_files": {
+      "context/r08-forward/src/storage.py": "674489c685b52d7803e3f65507bea9b30ede40c1f07c165926fdf5e3e2fce440",
+      "context/run_intrabar_paper_manager.py": "86b268c545bb0c39eec037dad060ae88238c6c8a435ea1d80dabd2c59350579b"
+    }
+  },
+  "financial_approval_or_trading_permission": false,
+  "flat_gap_writer_handoff": {
+    "historical_runtime_fallback": "New native barrier 1043 COMPLETE observed at 21:52:04; original fallback flags were not logged, so historical flag attribution is not claimed.",
+    "scope": "Re-evaluate original pending/flat/fence/proof conditions after existing books EX ownership; unresolved pending/nonflat/unbound state still invokes original native quarantine after releasing EX. Cutoff still uses actual utc_now, rollback preserved. One ordinary diagnostic record explains any true fallback.",
+    "tests": "7 targeted fixture checks PASS; no financial qualification"
+  },
+  "futures_health_io": {
+    "checks": {
+      "FAIL": 0,
+      "PASS": 17
+    },
+    "evidence": "health-io-outside-lock-v27/FUTURES_EXACT_OVERFLOW.log",
+    "scope": "Paper only. Measure WAL storage bytes before existing engine execution lock; reuse one value only within this health call/context. Entire original locked head/native-health/publication body and native WAL append/flush/fsync/recovery/retention unchanged. No background service/persistent cache/trading input change.",
+    "timeframe": "unchanged installed V26, role-specific release manifest remains V26"
+  },
+  "futures_health_metadata_scan": {
+    "after_sha256": "3b58f057bc5e85b71c2de3cde8112fe9e14db8dc7b4a449478d6833a40edd5e0",
+    "before_sha256": "5abf2c86669a1d6e2e7e4f5ebddcfe774c6ef8a1756db399bf8a0de06f8a9b6d",
+    "checks": {
+      "FAIL": 0,
+      "PASS": 5,
+      "sha256": "d1e1547beeedeb889b3779088233880b64a58b5071028701b12fed2563b76786"
+    },
+    "reason": "2026-11-06T12:23:28.642709Z actual overflow stack in full WAL health metadata scan",
+    "scope": "One ephemeral scandir metadata pass replaces double Path stat per file; exact fresh full byte total, no retained size cache. No append/ACK/fsync/recovery/limit change",
+    "small_fixture_measurements_not_production_speed_guarantee": true
+  },
+  "futures_health_metadata_slice": {
+    "actual_failure_at": "2026-11-06T13:29:55.697731Z",
+    "checks": {
+      "FAIL": 0,
+      "PASS": 9,
+      "sha256": "6f6a55a6f91f738ce8292ee4bcab0395e0b3865fd3ac01213fac71f3dfb78288"
+    },
+    "scope": "Same existing per-health context before execution_lock additionally contains native archive/closed/segment count fields. One native reader call per list. Uncached standalone values unchanged; no persistent cache, no market or financial admission caching.",
+    "telemetry_time": "before engine lock; current checkpoint/market/financial health remains under original lock",
+    "trading_and_durable_code_unchanged": true
+  },
+  "implementation_sha256": {
+    "paper-manager": {
+      "financial_authority_runtime.py": "330d47963e45677e299566d19ce2b62b171bbcf9692922b63ed297b807d290db",
+      "legacy_admission.py": "b7f4c3b63b85b31d080d4b36f2ea60433cee45693cec7b885ba97d20ce7cb049",
+      "unified_financial_authority.py": "c316c2ee388835e8ebf64d24fcbf27ab8b23e7bf899d1be8db32822e8bad733b",
+      "working_admission.py": "9207ac125cbbdd9f439539e0becb4104f859497c9c11c03c1b402165d8b1aa4b"
+    },
+    "timeframe-manager": {
+      "financial_authority_runtime.py": "330d47963e45677e299566d19ce2b62b171bbcf9692922b63ed297b807d290db",
+      "legacy_admission.py": "b7f4c3b63b85b31d080d4b36f2ea60433cee45693cec7b885ba97d20ce7cb049",
+      "unified_financial_authority.py": "5a1b62731f1eb7f8e8ff902e1040824a40dbca889fdd9019f59f81083b09c046",
+      "working_admission.py": "9207ac125cbbdd9f439539e0becb4104f859497c9c11c03c1b402165d8b1aa4b"
+    }
+  },
+  "observer_bootstrap": {
+    "at": "2026-11-05T04:49:53.110496+00:00",
+    "base_image": "sha256:11cc6c1624b7407495b45fcceef1250f7ebd6f86327b788c2ce662b40946e4ca",
+    "owner_authorization": "2026-11-05: explicit approval R08_OBSERVER_BOOTSTRAP_DRAFT, observer-only; no PAPER OPEN relaxation",
+    "parent_manifest_sha256": "ec589d6bb9378ee34a290c117aeb8b0bba475bf1bda79fd4b3ff9c0ba3c2650d",
+    "reviewed_diff_sha256": "f864a1cfbc75925bd6177223e740979b3ba5ca33b5eb090febcd899697696689",
+    "scope": "current_contexts pre-capture observation only; unchanged full PAPER validation, no artificial LIVE_QUALIFIED, S0/S1 or OPEN permission",
+    "source_after": "b99e019ef653469a5f867c480e9ffd328d7dbe2be8b1afed68c0003e60eda828",
+    "source_before": "0d22dd684832e19ee0f538f1deed695339a785ff7f4d754897dcf1328cf2ceb4"
+  },
+  "observer_empty_tls_retry": {
+    "Recorder_7_source_pins_and_R08_12_implementation_pins_unchanged": true,
+    "after_sha256": "222634230a6059aa4987c185f00e2105c4f437c854945db26dd3fea874cabcc4",
+    "before_sha256": "306feea5fc59ff33ca60d6ea6abcd22f3256d250c8507e8d98a0609758ba5d17",
+    "checks": {
+      "FAIL": 0,
+      "PASS": 41,
+      "sha256": "888aaf146a210fcba0a96a99628c0aaceb33ab2e4239212001db78118fbc0df6"
+    },
+    "financial_core_pins_unchanged": true,
+    "no_foreign_writer_or_permission_created": true,
+    "qualification_transport_timeout_budgets_trading_unchanged": true,
+    "scope": "Permanent Paper-owned observer only; exactly one retry after exact TLS EOF before any original message, no admitted cursor, no frozen INIT/baseline or pending receive; old pointer/capture preserved, new UUID via unchanged native source launcher. No retry for other failures, data, budget, missing mount, or second TLS error."
+  },
+  "observer_runtime_bugfixes": {
+    "base_image": "sha256:5c3d7c5411ade2ac823ad216585b9bb1d9ca6cc515e129a92529dc9a5b97fbeb",
+    "cleanup": "Single snapshot attempt/result per lifecycle, normal and exception cleanup reuse it",
+    "endpoint": "Reuse existing cfg.endpoint as accepted live launcher does; reader/source check untouched",
+    "open_guards_unchanged": true,
+    "owner_authorization": "Fix exactly combined endpoint wiring and duplicate persist_unprocessed; one new forward observer start, no old packet replay",
+    "source_after": "114d01162fbf20aceffddaa9c754780f69325fe2ef682e0d10dff7759f814702",
+    "source_before": "b99e019ef653469a5f867c480e9ffd328d7dbe2be8b1afed68c0003e60eda828",
+    "source_capture_restart": "Preserve failed capture and unacknowledged input; archive only old active-source pointer while writer stopped so native startup creates one new capture"
+  },
+  "parent_release_sha256": "8776965297b583bc73682944420a8b700839d2283b319ab116e54aea5374feb9",
+  "queue_and_metadata_fix": {
+    "checks": {
+      "FAIL": 0,
+      "PASS": 18,
+      "file": "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_FINAL_EXECUTION_ACTIVATION_20261105/queue-metadata-v16/CHECKS.json"
+    },
+    "native_checks": "full namespace scan with DirEntry types; one lstat rather than three metadata syscalls per certified member; ColdValidator full/suffix algorithms unchanged",
+    "queue": "use existing Condition for durable counters and adapter lookups; no lock across ingest or disk writes",
+    "worker_failure": "single original traceback at failure, no per-event instrumentation"
+  },
+  "r08_condition_anchor_reuse": {
+    "after_sha256": "d1f04ffbe71511e52f0f389362db6ebc4692b925603859bc343e645769fd0413",
+    "before_sha256": "f8b6fa736b26f9293263445a48586095fef8667a2e19f673d3111bc0bf2d8a9a",
+    "saved_native_states_equal": 72,
+    "scope": "Restore only native sealed immutable condition anchors once per object; process-local cache bounded to eight; mutable input always original obs_restore. No measurement, trade logic, Journal, durable ACK, clock or budget change.",
+    "source": "exact installed Paper28",
+    "source_implementation_hashes_new_capture": "Native implementation_hashes() computes actual 12 files; no old capture or INIT rewritten",
+    "technical_regression_only": true,
+    "tests": {
+      "FAIL": 0,
+      "PASS": 8,
+      "sha256": "e0cb486302695e92355d9b9fe1b7d74f0e2cf0ee85197c32d43012725e611387"
+    }
+  },
+  "reader_scan_amendment": {
+    "Paper": "unchanged V16-session; its own release manifest/pin remains unchanged",
+    "change": "use the same full DirEntry symlink guard already installed in V16 for the direct reader pins() call",
+    "tests": "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_FINAL_EXECUTION_ACTIVATION_20261105/reader-scan-v17/CHECKS.json"
+  },
+  "recorder_incremental_quota": {
+    "budgets": "unchanged",
+    "change": "Use existing one-writer byte accounting between opens; reconstruct retained usage on open, no directory-mtime-triggered full capture scan per delivery",
+    "old_captures": "unchanged",
+    "publishing_and_durable_ACK": "unchanged byte/phase logic",
+    "source_sha256": "2e28a8e6e5ca16a7bba76e9c0c65f68a06734acce49dc3f24eb1a374d04b9dfb"
+  },
+  "recorder_metadata_compaction": {
+    "budgets_unchanged": true,
+    "format": "INLINE_TRANSACTION_RECEIPT_V1",
+    "large_control_records": "legacy physical layout",
+    "metadata_first_durable": "ROOT_MANIFEST_COMMIT",
+    "normalized_and_coverage_exact_bytes_inline": true,
+    "physical_RAW_and_ACK": true
+  },
+  "recorder_receipt_encoding": {
+    "after": 9,
+    "encoding": "INLINE_SEALED_V1",
+    "new_capture_required": true,
+    "no_historical_rewrite": true,
+    "publications_per_event_before": 13,
+    "scope": "Only new Recorder DELIVERY records; four exact sealed technical receipts move inside their existing sealed transaction. Native RAW, normalized core, coverage, transaction/manifest and original post-commit ACK remain separately persisted and verified. Legacy four-file reader and all original field/clock/SHA checks preserved.",
+    "tests": "24 input receipt bindings plus six legacy/error checks; storage and Recorder restore; one sequential 24-input comparison; fixture-only"
+  },
+  "release_id": "BTCML_CACHED_AND_REFERENCE_PATH_SCOPE_20261106_V34",
+  "role_bases": {
+    "paper-manager": "sha256:b8ac0f188538130ae270a5475a8c43ace0d33cf78afe629599ab5c2c3def49a4",
+    "timeframe-manager": "sha256:75864bc583fa34e216fa5f73a575ecf3b2b6bded7716ae68b56afcc85796ec13"
+  },
+  "runtime_path_resolution": {
+    "current_release_implementation_pin_amended": true,
+    "financial_arithmetic": "unchanged",
+    "historical_provenance": "snapshot/approval/binding/anchor and financial data untouched",
+    "new_runtime_sha256": "330d47963e45677e299566d19ce2b62b171bbcf9692922b63ed297b807d290db",
+    "old_runtime_sha256": "a17d11cf47b75c2ab1c634e1dc494681696d4b51e09ddf1900fffcd25647e19e",
+    "owner_authorization": "FINAL EXECUTION ACTIVATION runtime optimization; current Recorder/Futures overflow request",
+    "persistent_authority_cache": false,
+    "scope": "case_guard read-only path resolution only; complete original activate/admission checks at entry AND exit; all path and symlink checks unchanged",
+    "targeted_checks": {
+      "path_checks": 25,
+      "worker_error_checks": 2
+    }
+  },
+  "schema": "BTCML_ACCEPTED_EXECUTION_RELEASE_V1",
+  "startup_amendment": {
+    "files_sha256": {
+      "r08-forward/canary_runner.py": "2b4d2980151c30219b33dfd120aab1c5d7a91f33ebbaa33224601f1f8cc95280",
+      "r08-forward/live_processing.py": "a383d7800790d19dfa95edaaef4d904698a4bfb00827b739b1a7f98285878440",
+      "r08-forward/r08_spot/__init__.py": "a9c631af5d926a55bb0357d63956bf7d7afd28efa9c2edf3c1236173eb97de19",
+      "r08-forward/receive_worker.py": "61d6b05f89f650bbdf4be309dc3a1dd9e5c1cd688594ca843ade91079e4c472a",
+      "r08-forward/src/entrypoint.py": "70543997450b5054297ecec6ef0e43aa129971471d817e64f45ef281d5975635",
+      "r08-forward/src/observer.py": "379168691ef6da86d78066acc6464b75a71dc7a6cddbec1075e0dfccb4bec5db",
+      "r08-forward/src/recorder.py": "d0cdc228d3ea9896ad123b84e385998799d7b6be759e473748d95da6301c5422",
+      "r08-forward/src/storage.py": "674489c685b52d7803e3f65507bea9b30ede40c1f07c165926fdf5e3e2fce440",
+      "r08-forward/src/transport.py": "425de2114eb00c34cb79d621cf72e609062c0c808d1d49f0839e092b135850c3",
+      "r08-forward/src/ws_connection.py": "d6c9ad141b98664d6e5f8fe501698091c84d7852d7ed7750184787b1e97077de",
+      "src/btc_ml/runtime/r08_live_source.py": "114d01162fbf20aceffddaa9c754780f69325fe2ef682e0d10dff7759f814702"
+    },
+    "scope": "Correct Recorder package imports and bind observational R08 to actual published own-TF canonical Context packets through the unchanged native verifier; execution Timeframe freshness/decisions unchanged",
+    "source_pins": "Existing runtime hashes its actual seven src/*.py files before starting a new genuine capture; old captures unchanged"
+  },
+  "startup_proof_reuse": {
+    "checks": "8 compact fixture checks PASS; not financial qualification",
+    "financial_implementation_pins_unchanged": true,
+    "historical_provenance_unchanged": true,
+    "scope": "Remove two duplicate native cold proofs inside the same Paper preflight; retain initial full native proof, exact head SHA captured under original SH lock, existing coherent raw-head verifier and pending/head rechecks. No persistent continuation certificate or new trust input."
+  },
+  "t0_amendment": {
+    "boundary_correction": "Owner T0 filters poll delivery only; consumer.consume_after retains its qualified config value required by native quarantine. No financial guard or historical binding changed.",
+    "command_read_reuse": "T0 only: one coherent bus frame for four TFs; unchanged full file identity + poll boundary + processed-ID set reuses only pending command payloads. No cached admission/market/risk outcome; original poll/action/confirmation branches remain. Concurrent bus write invalidates reuse. No old command replay.",
+    "empty_r2_reconciliation": "T0 only, exact native ContextTrendIntegration with no systems and no positions: skip reconciliation before reading the command book. Its original body otherwise acquires financial EX/full verifier before iterating zero eligible R2 systems. Native R2 method, OPEN policy denial, financial engine and protective exits unchanged; nonT0/positions/nonempty/unknown integration retain original reconciliation. Eight addressed code checks PASS; no standalone history verifier executed.",
+    "files": {
+      "fresh_live_continuity.py": "de0f3f76b6c0b13610e5e0d5e6d0bec00c0f6779a514072e955fda01ccf08a90",
+      "run_intrabar_paper_manager.py": "86b268c545bb0c39eec037dad060ae88238c6c8a435ea1d80dabd2c59350579b",
+      "s41_command_consumer.py": "003e66f5bf27ce5300722d8732e954664a7a5784ba6ccd9a720ee9e52f9e04fd",
+      "timeframe_manager_daemon.py": "56c9e66c0e09bf178049c0d4ac3663362af59f29ae7fe7dd82bc15f51c0993c0"
+    },
+    "flat_gap_fence": "Only owner-selected T0 while no open positions and no pending financial write: persist current-stream stale-OPEN cutoff in existing boundary, retain native validation and durable processing of every post-T0 gap event; original financial barrier for non-flat/pending/default paths.",
+    "lock_order": "Anchor publication lock released before calling existing processor; recovery callback may persist flat T0 cutoff under boundary lock without processor/boundary lock inversion.",
+    "ops_wiring": "Connect existing owner-publication functions to native Paper health / Timeframe completed cycle. No new calculation, API historical reader, trading admission or financial algorithm. Existing native outputs only; failure cannot affect trade outcomes.",
+    "owner_decision": "2026-11-04T18:24:35.646615+00:00",
+    "restart_fence": "Explicit T0, flat and native check_locked successful: reuse native COMPLETED retained command fence. Persist actual current cutoff in existing live boundary before WS, plus original OPEN TTL/identity checks. Pending/unverified state fails native check; IN_PROGRESS or positions retain original quarantine.",
+    "scope": "Explicit native T0 domain; existing command consume_after/activation cutoff; reuse the SAME completed pre-WS command fence at T0 activation to avoid blocking market input on an identical second barrier. Existing defaults/trading calculations/financial algorithms unchanged.",
+    "startup_order": "T0: complete native books/fence and fresh WS activation, then start the one Paper-owned R08 child. Empty native Trend binding keeps NO_ENTRY and skips unnecessary old phase traversal until genuine source exists."
+  },
+  "t0_checkpoint_compact_io": {
+    "addressed_checks": "COMPACT_CHECKPOINT_CHECKS.json;14PASS;isolated-only",
+    "at": "2026-11-05T02:19:19.085491+00:00",
+    "final_sha256": "8ed5b958c6fb7f5f99675e8674361839580baecf5e0c76ed33617a0af6a3e6f8",
+    "financial_implementation_pins_unchanged": true,
+    "format_document": "CHECKPOINT_FORMAT.md",
+    "previous_sha256": "858f0114a0a3e1d7f00ab8bdef1d8c444c58d73099a27a65e243bd2c7669db7e",
+    "scope": "Lossless on-disk inclusive ID ranges with V1 logical interface/reader/export; same mandatory atomic/file+directory durability; malformed existing state fails closed without cursor reset"
+  },
+  "t0_hard_append_io": {
+    "addressed_checks": "AGG_HARD_APPEND_SYNC_CHECKS.json;8PASS;fixture-only",
+    "at": "2026-11-05T01:19:38.553593+00:00",
+    "final_sha256": "328ca0113918ecf8e4840e1c955d348bac3b6858c92c20720720ae154a3f0f47",
+    "financial_implementation_pins_unchanged": true,
+    "previous_sha256": "2c6104d24512146723c3af755954c95908cce59bf28f9e70118d645f3e6d1054",
+    "scope": "Only redundant pre-sync of soft BBO before a successful native hard AGG append; mandatory hard sync still precedes dispatch; failure prefix sync and protective path retained"
+  },
+  "targeted_checks": {
+    "FAIL": 0,
+    "PASS": 16,
+    "path": "/Volumes/MaksTiger/BTC-ML-CONTROLLED-STAGE1-START-2026-10-08/analysis/BTCML_FINAL_EXECUTION_ACTIVATION_20261105/observer-binding-v15/CHECKS.json"
+  },
+  "technical_changes": [
+    "Observer-only native calculations and read-only descriptor without PAPER authority",
+    "Phase verification uses authentic own-TF published target",
+    "Explicit Context/Financial roots in newly created PAPER permission",
+    "No full financial proof for exact no-op R2 calls"
+  ]
+}

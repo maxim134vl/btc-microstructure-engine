@@ -1,0 +1,28 @@
+{
+  "version": "DRA_PASSIVE_LIVE_CANARY_V1",
+  "endpoint": "wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@kline_15m/btcusdt@kline_30m/btcusdt@kline_1h/btcusdt@kline_4h",
+  "volume_uuid": "DB659F02-B68F-4223-9AB7-D68B27CEFE71",
+  "duration_seconds": 1200,
+  "max_unique": 32768,
+  "max_delivered": 32768,
+  "quota_bytes": 13958643712,
+  "rss_bytes": 536870912,
+  "queue_items": 1024,
+  "queue_bytes": 8388608,
+  "network_default": false,
+  "attempts": 1,
+  "auto_reconnect": false,
+  "rest_backfill": false,
+  "context_observer": false,
+  "origin": "LIVE_CAPTURE_RESEARCH_RECORDER",
+  "source_pins": {
+    "common.py": "46a4c95c18fe47edb0eacae9d919f3f798b2a9341c78163f6065f6bdea471bca",
+    "entrypoint.py": "823518ccd109174e61763ccff573c1edc61e5690453947a25e0c8e66eb717576",
+    "observer.py": "d0f9ed5181d2bc0af637bcb6e0e029f4cd69e9a8796e19b0b8cf93eadaf7dd0c",
+    "recorder.py": "cf0eb4ecf848d86c58b242ce34b956725b1fb5ca3fd7d77cd7540e16e67eb90e",
+    "storage.py": "0acb7b77d4a9bf15e2011119aa5673e40f4d25b7cd28406c50d4f25d249182c0",
+    "transport.py": "11c57965e6debbcf5f9ea1a1c3b586133f7dfb3622f0d4c6b06f1d84f88e8f6f",
+    "ws_connection.py": "78cf14902bc7f7cf868925cb631ca4ec5725d3a679ceaadebc9fda582e261d05"
+  },
+  "max_transactions": 65568
+}

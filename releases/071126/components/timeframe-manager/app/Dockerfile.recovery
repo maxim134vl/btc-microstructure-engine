@@ -1,0 +1,6 @@
+FROM btc-ml-runtime:live1b-running-rootfs-20261004
+COPY src/btc_ml/trading/intrabar_paper/execution_market_backfill.py /app/src/btc_ml/trading/intrabar_paper/execution_market_backfill.py
+COPY src/btc_ml/trading/intrabar_paper/execution_market_state.py /app/src/btc_ml/trading/intrabar_paper/execution_market_state.py
+COPY src/btc_ml/trading/intrabar_paper/execution_market_processor.py /app/src/btc_ml/trading/intrabar_paper/execution_market_processor.py
+COPY src/btc_ml/trading/intrabar_paper/s41_command_consumer.py /app/src/btc_ml/trading/intrabar_paper/s41_command_consumer.py
+COPY live/run_intrabar_paper_manager.py /app/scripts/live/run_intrabar_paper_manager.py

@@ -1,0 +1,242 @@
+[
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-06T23:02:16.501148Z",
+    "event": "REFRESH_FAILED",
+    "cycle_id": "20261106T221600Z-26",
+    "duration_s": 2775.351,
+    "result": "REFRESH_FAILED",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-06T23:02:16.529067Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261106T221600Z-26",
+    "cycle_duration_seconds": 2775.428327,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-06T23:35:16.769679Z",
+    "event": "REFRESH_SUCCESS",
+    "cycle_id": "20261106T231601Z-27",
+    "duration_s": 1155.615,
+    "result": "REFRESH_SUCCESS",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-06T23:35:16.778249Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261106T231601Z-27",
+    "cycle_duration_seconds": 1155.798453,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-06T23:52:38.051590Z",
+    "event": "REFRESH_FAILED",
+    "cycle_id": "20261106T234600Z-28",
+    "duration_s": 397.009,
+    "result": "REFRESH_FAILED",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T00:21:40.614678Z",
+    "event": "REFRESH_SUCCESS",
+    "cycle_id": "20261107T000100Z-29",
+    "duration_s": 1239.614,
+    "result": "REFRESH_SUCCESS",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T00:21:40.615970Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261107T000100Z-29",
+    "cycle_duration_seconds": 1239.794102,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T00:45:58.194263Z",
+    "event": "REFRESH_SUCCESS",
+    "cycle_id": "20261107T003100Z-30",
+    "duration_s": 897.336,
+    "result": "REFRESH_SUCCESS",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T00:46:02.403432Z",
+    "event": "PIPELINE_PENDING",
+    "cycle_id": "20261107T004600Z-31",
+    "duration_s": 1.588,
+    "result": "PIPELINE_PENDING",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T01:13:55.196520Z",
+    "event": "REFRESH_SUCCESS",
+    "cycle_id": "20261107T010101Z-32",
+    "duration_s": 773.889,
+    "result": "REFRESH_SUCCESS",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T01:16:04.274480Z",
+    "event": "PIPELINE_PENDING",
+    "cycle_id": "20261107T011601Z-33",
+    "duration_s": 2.9,
+    "result": "PIPELINE_PENDING",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T07:09:30.735709Z",
+    "event": "REFRESH_SUCCESS",
+    "cycle_id": "20261107T013101Z-34",
+    "duration_s": 20309.355,
+    "result": "REFRESH_SUCCESS",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T07:09:30.764517Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261107T013101Z-34",
+    "cycle_duration_seconds": 20309.313145,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T07:27:44.433639Z",
+    "event": "REFRESH_FAILED",
+    "cycle_id": "20261107T071601Z-35",
+    "duration_s": 702.832,
+    "result": "REFRESH_FAILED",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T08:32:45.118602Z",
+    "event": "REFRESH_SUCCESS",
+    "cycle_id": "20261107T073101Z-36",
+    "duration_s": 3703.446,
+    "result": "REFRESH_SUCCESS",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T08:32:45.123744Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261107T073101Z-36",
+    "cycle_duration_seconds": 3703.386933,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T09:36:09.733268Z",
+    "event": "REFRESH_FAILED",
+    "cycle_id": "20261107T084603Z-37",
+    "duration_s": 2999.649,
+    "result": "REFRESH_FAILED",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T09:36:09.958549Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261107T084603Z-37",
+    "cycle_duration_seconds": 3004.864591,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T10:37:37.788515Z",
+    "event": "REFRESH_FAILED",
+    "cycle_id": "20261107T094601Z-38",
+    "duration_s": 3095.797,
+    "result": "REFRESH_FAILED",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T10:37:37.796305Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261107T094601Z-38",
+    "cycle_duration_seconds": 3095.755957,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T11:13:30.941778Z",
+    "event": "REFRESH_FAILED",
+    "cycle_id": "20261107T104601Z-39",
+    "duration_s": 1648.801,
+    "result": "REFRESH_FAILED",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T11:13:30.978972Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261107T104601Z-39",
+    "cycle_duration_seconds": 1648.961065,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T11:50:21.328422Z",
+    "event": "REFRESH_SUCCESS",
+    "cycle_id": "20261107T111602Z-40",
+    "duration_s": 2059.139,
+    "result": "REFRESH_SUCCESS",
+    "component": "context_refresh_daemon"
+  },
+  {
+    "service": "context-refresh-daemon",
+    "source": "context-refresh-daemon.last-logs.txt",
+    "timestamp": "2026-11-07T11:50:21.334363Z",
+    "event": "REFRESH_INTERVAL_OVERRUN",
+    "cycle_id": "20261107T111602Z-40",
+    "cycle_duration_seconds": 2059.24949,
+    "configured_interval_seconds": 900.0,
+    "component": "context_refresh_daemon"
+  }
+]

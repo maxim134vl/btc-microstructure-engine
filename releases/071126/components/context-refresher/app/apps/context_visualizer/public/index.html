@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BTC-ML Live Context + Paper Trades</title>
+    <script>
+      (function () {
+        try {
+          var KEY = "btcml-context-visual-theme";
+          var mode = localStorage.getItem(KEY) || "system";
+          var resolved = mode;
+          if (mode === "system") {
+            resolved = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (_e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./lifecycle.css?v=ops-style-polish" />
+    <style>
+      /* VIS3C: one standalone TF chart per URL — no multi-panel GRID in DOM */
+      .tf-grid-shell { display: flex; flex-direction: column; gap: 8px; width: 100%; min-height: 0; flex: 1; min-width: 0; }
+      .tf-workspace-toolbar {
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+        font-size: var(--font-sm); color: var(--text-secondary);
+      }
+      .tf-workspace-toolbar button {
+        appearance: none; border: 1px solid var(--panel-border); background: var(--panel-bg);
+        color: var(--text-primary); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+        font: inherit;
+      }
+      .tf-workspace-toolbar button:hover { border-color: var(--text-muted); }
+      .tf-workspace-toolbar .hint { color: var(--text-muted); font-size: 0.72rem; }
+      .tf-nav {
+        display: flex; gap: 4px; align-items: center;
+        margin-right: 8px;
+      }
+      .tf-nav a {
+        appearance: none; text-decoration: none;
+        border: 1px solid var(--panel-border); background: var(--panel-bg);
+        color: var(--text-secondary); border-radius: 6px; padding: 3px 9px;
+        font: inherit; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
+      }
+      .tf-nav a:hover { color: var(--text-primary); border-color: var(--text-muted); }
+      .tf-nav a[aria-current="page"] {
+        color: var(--text-primary);
+        border-color: var(--accent-info, #64d2ff);
+        background: rgba(100, 210, 255, 0.12);
+      }
+      .tf-chart-host {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+      }
+      .tf-chart-panel {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius-md);
+        background: var(--chart-bg);
+        overflow: hidden;
+      }
+      .tf-chart-header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 10px;
+        align-items: baseline;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--panel-border);
+        font-size: var(--font-sm);
+        color: var(--text-secondary);
+        min-width: 0;
+      }
+      .tf-chart-header .tf-name { color: var(--text-primary); font-weight: 600; letter-spacing: 0.02em; }
+      .tf-chart-header .tf-context { color: var(--text-primary); font-weight: 500; }
+      .tf-chart-nav {
+        display: flex; gap: 4px; padding: 2px 8px 4px; border-bottom: 1px solid var(--panel-border);
+      }
+      .tf-chart-nav button {
+        appearance: none; border: 0; background: transparent; color: var(--text-muted);
+        font: inherit; font-size: 0.7rem; padding: 2px 6px; cursor: pointer; border-radius: 4px;
+      }
+      .tf-chart-nav button:hover { background: rgba(127,127,127,0.12); color: var(--text-primary); }
+      .tf-chart-body { position: relative; flex: 1; min-height: 0; min-width: 0; }
+      .tf-chart-body canvas {
+        width: 100%; height: 100%; display: block; min-width: 0; max-width: 100%;
+        cursor: crosshair; touch-action: none;
+      }
+      .tf-chart-empty {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: var(--text-muted); font-size: var(--font-sm); pointer-events: none;
+      }
+      .tf-chart-empty[hidden] { display: none !important; }
+      .lifecycle-main-split { grid-template-columns: 1fr; }
+      .lifecycle-side { display: none !important; }
+      #tradeDetailPanel {
+        border: 1px solid var(--panel-border); border-radius: var(--radius-md);
+        background: var(--panel-bg); padding: 8px 10px; font-size: 0.78rem;
+        color: var(--text-secondary); min-height: 2.2rem;
+      }
+      #tradeDetailPanel.hidden { display: none; }
+    </style>
+  </head>
+  <body class="lifecycle-surface ops-surface">
+    <div class="lifecycle-shell" id="viewerRoot">
+      <div id="viewerErrorPanel" class="lifecycle-error-panel hidden" role="alert" aria-live="assertive"></div>
+      <header class="lifecycle-status" aria-label="Chart workspace status">
+        <div class="lifecycle-status-left">
+          <div class="lifecycle-status-main" id="statusLine">TF chart · standalone</div>
+          <div class="lifecycle-chip-row" id="statusChips" aria-label="Status chips"></div>
+        </div>
+        <div class="lifecycle-status-center">
+          <span id="refreshLine" class="lifecycle-refresh-line" title="Visual freshness">SOURCE…</span>
+          <span id="sourceLine" class="lifecycle-source-line" hidden>source</span>
+        </div>
+        <div class="lifecycle-status-right">
+          <nav class="tf-nav" id="tfNav" aria-label="Timeframe pages">
+            <a href="./index.html?tf=M15" data-tf="M15">M15</a>
+            <a href="./index.html?tf=M30" data-tf="M30">M30</a>
+            <a href="./index.html?tf=H1" data-tf="H1">H1</a>
+            <a href="./index.html?tf=H4" data-tf="H4">H4</a>
+          </nav>
+          <label class="lifecycle-range">
+            History pack
+            <select id="rangeSelect" aria-label="Loaded history pack">
+              <option value="latest500" selected>Last 500 bars</option>
+              <option value="latest100">Latest 100</option>
+              <option value="latest1000">Latest 1000</option>
+              <option value="last7d">Last 7 days</option>
+              <option value="last14d">Last 14 days</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <div id="truthBanner" class="lifecycle-truth-banner" aria-live="polite" style="font-size:0.72rem;line-height:1.25;color:var(--text-muted);max-width:14rem;text-align:right">Trading runtime: LIVE PAPER</div>
+          <label class="lifecycle-theme-toggle">
+            Theme
+            <select id="themeSelect" class="lifecycle-theme-select" aria-label="Theme">
+              <option value="system">System</option>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </label>
+          <a class="lifecycle-debug-link" href="./debug.html">Debug</a>
+        </div>
+      </header>
+
+      <main class="lifecycle-main lifecycle-main-split">
+        <div class="tf-grid-shell" id="tfGridShell">
+          <div class="tf-workspace-toolbar" aria-label="Viewport controls">
+            <button type="button" id="btnResetView" aria-label="Reset viewport">Reset</button>
+            <button type="button" id="btnFitView" aria-label="Fit loaded history">Fit</button>
+            <button type="button" id="btnGoLatest" aria-label="Go to latest">Go to latest</button>
+            <span class="hint">Wheel = zoom · Drag = pan · UTC · Standalone TF · No global lifecycle strip</span>
+          </div>
+          <div class="tf-chart-host" id="tfChartHost" data-mode="standalone"></div>
+          <div id="tradeDetailPanel" class="hidden" aria-live="polite"></div>
+        </div>
+        <div id="hoverReadout" class="lifecycle-hover-readout hidden" aria-live="polite"></div>
+      </main>
+    </div>
+    <script src="./lifecycle_app.js?v=live1b2-epoch-overlays"></script>
+  </body>
+</html>

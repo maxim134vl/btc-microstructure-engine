@@ -1,0 +1,699 @@
+{
+  "run_id": "20260720_132423",
+  "generated_at": "2026-07-20T13:24:23.442886",
+  "lookback_days": 7,
+  "forward_horizon": 11,
+  "summary": {
+    "event_count": 11,
+    "verdict_distribution": {
+      "PARTIAL": 4,
+      "CONTRADICTORY": 4,
+      "CONTEXT_FAILURE": 1,
+      "FALSE_NARRATIVE": 2
+    },
+    "reasoning_accuracy": 0.0,
+    "probabilistic_calibration_quality": 0.0,
+    "contradiction_frequency": 0.3636,
+    "synthesis_stability": 0.0909,
+    "narrative_coherence": 0.7364,
+    "confidence_drift": 0.0,
+    "regime_interpretation_accuracy": 0.0,
+    "transition_logic_quality": 0.3636,
+    "overconfident_rate": 0.0,
+    "context_failure_rate": 0.0909
+  },
+  "events": [
+    {
+      "event_index": 1,
+      "timestamp": "2026-07-13 13:45:00",
+      "stage1_inputs": [
+        "stopping volume",
+        "stopping",
+        "absorption response",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Structural reversal synthesis, regime absorption regime, persistence h1 confirmed, location lower absorption, elevated downside continuation probability.",
+      "observed_outcome": "Market moved flat 0.08% over next 11 candles.",
+      "verdict": "PARTIAL",
+      "validation_note": "Partial market confirmation of Stage 2 reasoning.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.85,
+      "contradiction_score": 0.25,
+      "contradiction_level": "MODERATE",
+      "contradiction_issues": [
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "PARTIAL",
+      "context_score": 0.367,
+      "context_note": "Stage 1 inputs partially support Stage 2 narrative.",
+      "bias_source": "synthesis_state",
+      "bias_label": "structural reversal with multi-timeframe confirmation",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 0.078,
+        "max_up_pct": 1.068,
+        "max_down_pct": 0.348,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "flat"
+      },
+      "context": {
+        "timestamp": "2026-07-13 13:45:00",
+        "stage1_inputs": [
+          "stopping volume",
+          "stopping",
+          "absorption response",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Structural reversal synthesis, regime absorption regime, persistence h1 confirmed, location lower absorption, elevated downside continuation probability.",
+        "synthesis_state": "STRUCTURAL_REVERSAL",
+        "trigger_event": "STOPPING_VOLUME",
+        "persistence": "H1_CONFIRMED",
+        "persistence_score": 0.75,
+        "structural_rank": "HIGH",
+        "alignment_score": 0.75,
+        "location_bias": "LOWER_ABSORPTION",
+        "auction_regime": "ABSORPTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.323170731707317,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 2,
+      "timestamp": "2026-07-13 17:30:00",
+      "stage1_inputs": [
+        "stopping volume",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location lower absorption, elevated downside continuation probability.",
+      "observed_outcome": "Market moved up 0.19% over next 11 candles.",
+      "verdict": "PARTIAL",
+      "validation_note": "Partial market confirmation of Stage 2 reasoning.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.25,
+      "contradiction_level": "MODERATE",
+      "contradiction_issues": [
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "PARTIAL",
+      "context_score": 0.367,
+      "context_note": "Stage 1 inputs partially support Stage 2 narrative.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 0.186,
+        "max_up_pct": 0.359,
+        "max_down_pct": 0.446,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "up"
+      },
+      "context": {
+        "timestamp": "2026-07-13 17:30:00",
+        "stage1_inputs": [
+          "stopping volume",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location lower absorption, elevated downside continuation probability.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "STOPPING_VOLUME",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "LOWER_ABSORPTION",
+        "auction_regime": "DISTRIBUTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.328696099050192,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 3,
+      "timestamp": "2026-07-14 12:30:00",
+      "stage1_inputs": [
+        "buying climax",
+        "climax",
+        "absorption response",
+        "buyer initiative"
+      ],
+      "stage2_interpretation": "Intermediate reversal synthesis, regime absorption regime, persistence m30 confirmed, location upper distribution, elevated downside continuation probability.",
+      "observed_outcome": "Market moved up 1.49% over next 11 candles.",
+      "verdict": "CONTRADICTORY",
+      "validation_note": "Internal reasoning conflicts detected.",
+      "synthesis_verdict": "CONFIRMED",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.75,
+      "contradiction_score": 0.65,
+      "contradiction_level": "HIGH",
+      "contradiction_issues": [
+        "bullish regime during buyer climax",
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "HIGH",
+      "context_score": 0.533,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "intermediate reversal structure",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 1.487,
+        "max_up_pct": 1.573,
+        "max_down_pct": 0.0,
+        "follow_through": "MODERATE",
+        "forward_candles": 11,
+        "direction": "up"
+      },
+      "context": {
+        "timestamp": "2026-07-14 12:30:00",
+        "stage1_inputs": [
+          "buying climax",
+          "climax",
+          "absorption response",
+          "buyer initiative"
+        ],
+        "stage2_interpretation": "Intermediate reversal synthesis, regime absorption regime, persistence m30 confirmed, location upper distribution, elevated downside continuation probability.",
+        "synthesis_state": "INTERMEDIATE_REVERSAL",
+        "trigger_event": "BUYING_CLIMAX",
+        "persistence": "M30_CONFIRMED",
+        "persistence_score": 0.5,
+        "structural_rank": "MEDIUM",
+        "alignment_score": 0.5,
+        "location_bias": "UPPER_DISTRIBUTION",
+        "auction_regime": "ABSORPTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.323170731707317,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 4,
+      "timestamp": "2026-07-14 13:15:00",
+      "stage1_inputs": [
+        "buying climax",
+        "climax exhaustion",
+        "absorption response",
+        "buyer initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime absorption regime, persistence m15 only, location upper distribution, elevated downside continuation probability.",
+      "observed_outcome": "Market moved up 1.21% over next 11 candles.",
+      "verdict": "CONTRADICTORY",
+      "validation_note": "Internal reasoning conflicts detected.",
+      "synthesis_verdict": "FALSE_NARRATIVE",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.65,
+      "contradiction_level": "HIGH",
+      "contradiction_issues": [
+        "bullish regime during buyer climax",
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "HIGH",
+      "context_score": 0.533,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 1.212,
+        "max_up_pct": 1.576,
+        "max_down_pct": 0.591,
+        "follow_through": "MODERATE",
+        "forward_candles": 11,
+        "direction": "up"
+      },
+      "context": {
+        "timestamp": "2026-07-14 13:15:00",
+        "stage1_inputs": [
+          "buying climax",
+          "climax exhaustion",
+          "absorption response",
+          "buyer initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime absorption regime, persistence m15 only, location upper distribution, elevated downside continuation probability.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "BUYING_CLIMAX",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "UPPER_DISTRIBUTION",
+        "auction_regime": "ABSORPTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.38738738738738737,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 5,
+      "timestamp": "2026-07-14 16:00:00",
+      "stage1_inputs": [
+        "buying climax",
+        "absorption response",
+        "buyer initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime absorption regime, persistence m15 only, location upper distribution, elevated downside continuation probability.",
+      "observed_outcome": "Market moved down 0.25% over next 11 candles.",
+      "verdict": "CONTRADICTORY",
+      "validation_note": "Internal reasoning conflicts detected.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "NEUTRAL",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence level broadly consistent with weak follow-through.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.65,
+      "contradiction_level": "HIGH",
+      "contradiction_issues": [
+        "bullish regime during buyer climax",
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "HIGH",
+      "context_score": 0.533,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": -0.25,
+        "max_up_pct": 0.247,
+        "max_down_pct": 0.776,
+        "follow_through": "WEAK",
+        "forward_candles": 11,
+        "direction": "down"
+      },
+      "context": {
+        "timestamp": "2026-07-14 16:00:00",
+        "stage1_inputs": [
+          "buying climax",
+          "absorption response",
+          "buyer initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime absorption regime, persistence m15 only, location upper distribution, elevated downside continuation probability.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "BUYING_CLIMAX",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "UPPER_DISTRIBUTION",
+        "auction_regime": "ABSORPTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.323170731707317,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 6,
+      "timestamp": "2026-07-16 08:15:00",
+      "stage1_inputs": [
+        "stopping volume",
+        "climax",
+        "climax exhaustion",
+        "absorption response",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Intermediate reversal synthesis, regime absorption regime, persistence m30 confirmed, location lower absorption, elevated downside continuation probability.",
+      "observed_outcome": "Market moved flat 0.01% over next 11 candles.",
+      "verdict": "PARTIAL",
+      "validation_note": "Partial market confirmation of Stage 2 reasoning.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.75,
+      "contradiction_score": 0.25,
+      "contradiction_level": "MODERATE",
+      "contradiction_issues": [
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "HIGH",
+      "context_score": 0.533,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "intermediate reversal structure",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 0.015,
+        "max_up_pct": 0.342,
+        "max_down_pct": 0.221,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "flat"
+      },
+      "context": {
+        "timestamp": "2026-07-16 08:15:00",
+        "stage1_inputs": [
+          "stopping volume",
+          "climax",
+          "climax exhaustion",
+          "absorption response",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Intermediate reversal synthesis, regime absorption regime, persistence m30 confirmed, location lower absorption, elevated downside continuation probability.",
+        "synthesis_state": "INTERMEDIATE_REVERSAL",
+        "trigger_event": "STOPPING_VOLUME",
+        "persistence": "M30_CONFIRMED",
+        "persistence_score": 0.5,
+        "structural_rank": "MEDIUM",
+        "alignment_score": 0.5,
+        "location_bias": "LOWER_ABSORPTION",
+        "auction_regime": "ABSORPTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.38738738738738737,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 7,
+      "timestamp": "2026-07-17 06:15:00",
+      "stage1_inputs": [
+        "stopping volume",
+        "climax exhaustion",
+        "absorption response",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Structural reversal synthesis, regime absorption regime, persistence h1 confirmed, location lower absorption, elevated downside continuation probability.",
+      "observed_outcome": "Market moved flat 0.05% over next 11 candles.",
+      "verdict": "CONTEXT_FAILURE",
+      "validation_note": "Stage 2 narrative poorly supported by Stage 1 inputs.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.85,
+      "contradiction_score": 0.25,
+      "contradiction_level": "MODERATE",
+      "contradiction_issues": [
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "CONTEXT_FAILURE",
+      "context_score": 0.2,
+      "context_note": "Stage 2 reasoning weakly connected to Stage 1 observations.",
+      "bias_source": "synthesis_state",
+      "bias_label": "structural reversal with multi-timeframe confirmation",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 0.054,
+        "max_up_pct": 0.084,
+        "max_down_pct": 0.421,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "flat"
+      },
+      "context": {
+        "timestamp": "2026-07-17 06:15:00",
+        "stage1_inputs": [
+          "stopping volume",
+          "climax exhaustion",
+          "absorption response",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Structural reversal synthesis, regime absorption regime, persistence h1 confirmed, location lower absorption, elevated downside continuation probability.",
+        "synthesis_state": "STRUCTURAL_REVERSAL",
+        "trigger_event": "STOPPING_VOLUME",
+        "persistence": "H1_CONFIRMED",
+        "persistence_score": 0.75,
+        "structural_rank": "HIGH",
+        "alignment_score": 0.75,
+        "location_bias": "LOWER_ABSORPTION",
+        "auction_regime": "ABSORPTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.38738738738738737,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 8,
+      "timestamp": "2026-07-18 09:15:00",
+      "stage1_inputs": [
+        "stopping volume",
+        "stopping",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location lower absorption, elevated downside continuation probability.",
+      "observed_outcome": "Market moved up 0.31% over next 11 candles.",
+      "verdict": "FALSE_NARRATIVE",
+      "validation_note": "Stage 2 narrative contradicted by market behavior.",
+      "synthesis_verdict": "FALSE_NARRATIVE",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.25,
+      "contradiction_level": "MODERATE",
+      "contradiction_issues": [
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "PARTIAL",
+      "context_score": 0.367,
+      "context_note": "Stage 1 inputs partially support Stage 2 narrative.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 0.307,
+        "max_up_pct": 0.443,
+        "max_down_pct": 0.0,
+        "follow_through": "WEAK",
+        "forward_candles": 11,
+        "direction": "up"
+      },
+      "context": {
+        "timestamp": "2026-07-18 09:15:00",
+        "stage1_inputs": [
+          "stopping volume",
+          "stopping",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location lower absorption, elevated downside continuation probability.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "STOPPING_VOLUME",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "LOWER_ABSORPTION",
+        "auction_regime": "DISTRIBUTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.368421052631579,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 9,
+      "timestamp": "2026-07-18 13:00:00",
+      "stage1_inputs": [
+        "selling climax",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location lower capitulation, elevated downside continuation probability.",
+      "observed_outcome": "Market moved up 0.17% over next 11 candles.",
+      "verdict": "CONTRADICTORY",
+      "validation_note": "Internal reasoning conflicts detected.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.65,
+      "contradiction_level": "HIGH",
+      "contradiction_issues": [
+        "bearish regime during seller climax",
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "HIGH",
+      "context_score": 0.533,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 0.172,
+        "max_up_pct": 0.285,
+        "max_down_pct": 0.078,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "up"
+      },
+      "context": {
+        "timestamp": "2026-07-18 13:00:00",
+        "stage1_inputs": [
+          "selling climax",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location lower capitulation, elevated downside continuation probability.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "SELLING_CLIMAX",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "LOWER_CAPITULATION",
+        "auction_regime": "DISTRIBUTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.4108527131782946,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 10,
+      "timestamp": "2026-07-19 00:15:00",
+      "stage1_inputs": [
+        "buying climax",
+        "buyer initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location upper distribution, elevated downside continuation probability.",
+      "observed_outcome": "Market moved flat 0.09% over next 11 candles.",
+      "verdict": "PARTIAL",
+      "validation_note": "Partial market confirmation of Stage 2 reasoning.",
+      "synthesis_verdict": "PARTIAL",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.25,
+      "contradiction_level": "MODERATE",
+      "contradiction_issues": [
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "HIGH",
+      "context_score": 0.533,
+      "context_note": "Stage 1 observations support Stage 2 synthesis.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": -0.091,
+        "max_up_pct": 0.273,
+        "max_down_pct": 0.139,
+        "follow_through": "NONE",
+        "forward_candles": 11,
+        "direction": "flat"
+      },
+      "context": {
+        "timestamp": "2026-07-19 00:15:00",
+        "stage1_inputs": [
+          "buying climax",
+          "buyer initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime distribution regime, persistence m15 only, location upper distribution, elevated downside continuation probability.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "BUYING_CLIMAX",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "UPPER_DISTRIBUTION",
+        "auction_regime": "DISTRIBUTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.37221310167657123,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    },
+    {
+      "event_index": 11,
+      "timestamp": "2026-07-20 08:30:00",
+      "stage1_inputs": [
+        "stopping volume",
+        "stopping",
+        "absorption response",
+        "seller initiative"
+      ],
+      "stage2_interpretation": "Local exhaustion synthesis, regime absorption regime, persistence m15 only, location lower absorption, elevated downside continuation probability.",
+      "observed_outcome": "Market moved up 0.68% over next 11 candles.",
+      "verdict": "FALSE_NARRATIVE",
+      "validation_note": "Stage 2 narrative contradicted by market behavior.",
+      "synthesis_verdict": "FALSE_NARRATIVE",
+      "confidence_quality": "MISCALIBRATED",
+      "confidence_score": 0.0,
+      "calibration_note": "Confidence (0%) did not match observed behavior.",
+      "narrative_coherence": 0.7,
+      "contradiction_score": 0.25,
+      "contradiction_level": "MODERATE",
+      "contradiction_issues": [
+        "unfinished_auction_weak_persistence",
+        "contradiction cluster: unfinished_persistence\": [\"unfinished_auction_weak_persistence\"]"
+      ],
+      "context_integrity": "PARTIAL",
+      "context_score": 0.367,
+      "context_note": "Stage 1 inputs partially support Stage 2 narrative.",
+      "bias_source": "synthesis_state",
+      "bias_label": "local exhaustion with downside risk",
+      "transition_state": "FULL_COGNITIVE_TRANSITION",
+      "outcome": {
+        "move_pct": 0.677,
+        "max_up_pct": 0.82,
+        "max_down_pct": 0.0,
+        "follow_through": "WEAK",
+        "forward_candles": 11,
+        "direction": "up"
+      },
+      "context": {
+        "timestamp": "2026-07-20 08:30:00",
+        "stage1_inputs": [
+          "stopping volume",
+          "stopping",
+          "absorption response",
+          "seller initiative"
+        ],
+        "stage2_interpretation": "Local exhaustion synthesis, regime absorption regime, persistence m15 only, location lower absorption, elevated downside continuation probability.",
+        "synthesis_state": "LOCAL_EXHAUSTION",
+        "trigger_event": "STOPPING_VOLUME",
+        "persistence": "M15_ONLY",
+        "persistence_score": 0.25,
+        "structural_rank": "LOW",
+        "alignment_score": 0.25,
+        "location_bias": "LOWER_ABSORPTION",
+        "auction_regime": "ABSORPTION_REGIME",
+        "conviction_probability": 0.0,
+        "regime_confidence": 0.30581540389920137,
+        "distribution_probability": 1.0,
+        "belief_state": NaN,
+        "contradiction_flags": "unfinished_auction_weak_persistence"
+      }
+    }
+  ]
+}

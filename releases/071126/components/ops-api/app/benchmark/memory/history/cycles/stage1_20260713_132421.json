@@ -1,0 +1,59 @@
+{
+  "entry": {
+    "layer": "stage1",
+    "run_id": "20260713_132421",
+    "generated_at": "2026-07-13T13:24:21.249096",
+    "summary": {
+      "event_count": 307,
+      "verdict_distribution": {
+        "FALSE POSITIVE": 41,
+        "FAILED": 6,
+        "CONFIRMED": 117,
+        "PARTIAL": 143
+      },
+      "initiative_accuracy": 0.2353,
+      "climax_confirmation_rate": 0.6239,
+      "stopping_quality_rate": 0.2917,
+      "transition_stability": 0.0,
+      "probabilistic_consistency": 0.3161,
+      "false_positive_rate": 0.1531,
+      "confirmed_rate": 0.3811,
+      "follow_through_strong_rate": 0.0358,
+      "market_structure_coherence": 0.614
+    },
+    "drift": null,
+    "calibration": null,
+    "ontology": null,
+    "cognition_health": null,
+    "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage1_benchmark_20260713_132421.json",
+    "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage1_forensic_20260713_132421.md",
+    "event_count": 307
+  },
+  "payload": {
+    "run_id": "20260713_132421",
+    "generated_at": "2026-07-13T13:24:21.249096",
+    "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage1_forensic_20260713_132421.md",
+    "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage1_benchmark_20260713_132421.json",
+    "export_csv": "/Users/fontecrypto/btc-ml/benchmark/exports/stage1_summary_20260713_132421.csv",
+    "visuals": [],
+    "summary": {
+      "event_count": 307,
+      "verdict_distribution": {
+        "FALSE POSITIVE": 41,
+        "FAILED": 6,
+        "CONFIRMED": 117,
+        "PARTIAL": 143
+      },
+      "initiative_accuracy": 0.2353,
+      "climax_confirmation_rate": 0.6239,
+      "stopping_quality_rate": 0.2917,
+      "transition_stability": 0.0,
+      "probabilistic_consistency": 0.3161,
+      "false_positive_rate": 0.1531,
+      "confirmed_rate": 0.3811,
+      "follow_through_strong_rate": 0.0358,
+      "market_structure_coherence": 0.614
+    },
+    "status": "OK"
+  }
+}

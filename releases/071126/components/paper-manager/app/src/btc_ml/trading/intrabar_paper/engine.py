@@ -1,0 +1,1778 @@
+"""Intrabar paper execution engine: context events → causal BBO fills."""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+import threading
+from functools import wraps
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+from .bbo import CausalBBOStore, fill_price_for, resolve_context_entry_price
+from .books import EpochBooks
+from .performance_eligibility import is_void_position_row
+from .config import IntrabarPaperConfig
+from .consumer import (
+    ENTRY_EVENTS,
+    EXIT_EVENTS,
+    ContextEventConsumer,
+    idempotency_key,
+)
+from .economics import closed_trade_economics, resolve_risk_sizing
+from .entry_eligibility import replay_entry_block_reason, stale_entry_block_reason
+from btc_ml.live.intrabar.context_event_freshness import entry_freshness_block_reason, is_provisional_context_end
+from .epoch import PaperEpoch
+from .sleeves import SleeveLedger
+from btc_ml.trading.anti_saw_path_density import PathDensitySawFilter
+
+
+def _serialized(method):
+    @wraps(method)
+    def invoke(self, *args, **kwargs):
+        with self._execution_lock:
+            name = method.__name__
+            # The original BBO method only changes the quote in RAM when no
+            # exit is pending; the original tick method has no economic effect
+            # with no positions. Invoke those original methods in order under
+            # the same thread lock, without millions of pointless SSD receipt
+            # existence checks. Any uncertain commit still requires restart.
+            if not self.books.commit.poisoned and not self.pending_exits:
+                if name == "update_bbo_from_market" or (name == "update_from_trade" and not self.positions):
+                    return method(self, *args, **kwargs)
+            if name == "apply_s41_manager_command":
+                event = args[0] if args else kwargs["command"]
+                identity = event.get("command_id")
+            elif name == "process_context_event":
+                event = args[0] if args else kwargs["event"]
+                identity = event.get("context_event_id") or event.get("event_id")
+            else:
+                identity = kwargs.get("source_event_id") or kwargs.get("book_update_id") or kwargs.get("receive_monotonic_ns")
+            if identity is None:
+                # Missing command identifiers retain the original rejection path.
+                return method(self, *args, **kwargs)
+            key = f"{self.epoch.paper_epoch_id}|{name}|{identity}"
+            is_open = name == "apply_s41_manager_command" and str(event.get("intent", "")).startswith("OPEN")
+            try:
+                with self.books.exclusive(blocking=not is_open):
+                    if is_open and self.books.commit.pending.exists():
+                        return {"status": "ENTRY_PENDING_PUBLICATION", "command_id": identity}
+                    return self.books.commit.run(key, lambda: method(self, *args, **kwargs), self, {"method": name, "args": args, "kwargs": kwargs})
+            except BlockingIOError:
+                if is_open:
+                    return {"status": "ENTRY_PENDING_WRITER_CONTENTION", "command_id": identity}
+                raise
+    return invoke
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def context_episode_is_closed(exit_reason: Any) -> bool:
+    """True when the episode itself ended; TP/SL/FLIP leave it tradable."""
+    text = str(exit_reason or "").upper()
+    return text.startswith("CONTEXT_END")
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    """Parse ISO or unix seconds/ms/ns into UTC. None if unknown."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            n = float(value)
+        else:
+            text = str(value).strip()
+            if not text or text.lower() in {"nan", "nat", "none", "null"}:
+                return None
+            if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+                n = float(text)
+            else:
+                stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                return stamp.astimezone(timezone.utc)
+        if n <= 1e9:
+            # Not a unix-second clock (Binance T is ms ~1.7e12). Fixture stubs use T=1.
+            return None
+        if n > 1e18:
+            n /= 1e9
+        elif n > 1e12:
+            n /= 1e3
+        return datetime.fromtimestamp(n, tz=timezone.utc)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:16]}"
+
+
+def protective_trade_datetime(
+    *,
+    market_provenance: dict[str, Any] | None,
+    receive_timestamp: str | None,
+) -> datetime | None:
+    """Exchange trade clock for TP/SL. Receive time is not the tape clock."""
+    if market_provenance:
+        trade_ts = _as_utc_datetime(market_provenance.get("exchange_trade_timestamp"))
+        if trade_ts is not None:
+            return trade_ts
+        if bool(market_provenance.get("backfill")):
+            return None
+    return _as_utc_datetime(receive_timestamp)
+
+def _occurrence_timestamp(event: dict[str, Any], event_timestamp: str | None) -> str | None:
+    """Context occurrence clock for provenance; never used as opened_at."""
+    for key in (
+        "context_occurrence_timestamp",
+        "context_origin_timestamp",
+        "original_context_timestamp",
+    ):
+        val = event.get(key)
+        if val is not None and str(val).strip():
+            return str(val)
+    if event_timestamp is not None and str(event_timestamp).strip():
+        return str(event_timestamp)
+    return None
+
+
+@dataclass
+class OpenPosition:
+    position_id: str
+    timeframe: str
+    side: str
+    quantity: float
+    entry_price: float
+    stop_loss_price: float
+    take_profit_price: float
+    risk_amount_usd: float
+    lifecycle_episode_id: str | None
+    context_event_id: str
+    entry_fill_id: str
+    entry_command_id: str
+    entry_monotonic_ns: int
+    traded_episode_ids: set[str] = field(default_factory=set)
+    entry_decision_ts: str | None = None
+    opened_at: str | None = None
+
+
+@dataclass
+class PendingExit:
+    timeframe: str
+    reason: str
+    context_event_id: str
+    command_monotonic_ns: int
+    trigger_type: str
+    trigger_event_id: str
+    trigger_timestamp: str | None
+    trigger_price: float | None
+    flip_to_side: str | None = None
+    episode_id: str | None = None
+    event: dict[str, Any] | None = None
+
+
+class IntrabarPaperEngine:
+    """Per-timeframe single-position paper engine with causal BBO fills."""
+
+    def __init__(
+        self,
+        *,
+        cfg: IntrabarPaperConfig,
+        epoch: PaperEpoch,
+        books: EpochBooks | None = None,
+        consumer: ContextEventConsumer | None = None,
+        activation_monotonic_ns: int | None = None,
+        saw_filter: PathDensitySawFilter | None = None,
+        execution_clock: Callable[[], str] | None = None,
+    ) -> None:
+        self._execution_lock = threading.RLock()
+        self.cfg = cfg
+        # Historical replay supplies its market clock; live retains wall-clock fills.
+        # Preserve the release/user execution clock; live defaults to wall clock.
+        self.execution_clock = execution_clock or _utc_iso
+        self.epoch = epoch
+        self.equity = float(epoch.initial_equity_usd)
+        self.realized_pnl = 0.0
+        self.unrealized_pnl = 0.0
+        epoch_root = cfg.books_root / epoch.paper_epoch_id
+        self.epoch_root = epoch_root
+        self.books = books or EpochBooks(epoch_root / "books", paper_epoch_id=epoch.paper_epoch_id)
+        ck_path = epoch_root / "context_consumer_checkpoint.json"
+        act_mono = activation_monotonic_ns
+        if act_mono is None:
+            act_mono = epoch.activated_at_monotonic_ns
+        self.consumer = consumer or ContextEventConsumer(
+            journal_root=cfg.context_journal_root,
+            checkpoint_path=ck_path,
+            paper_epoch_id=epoch.paper_epoch_id,
+            activated_at_monotonic_ns=act_mono,
+            activated_at_iso=epoch.activated_at,
+        )
+        self.bbo = CausalBBOStore()
+        self.positions: dict[str, OpenPosition] = {}
+        self.traded_episodes: set[str] = set()
+        self.ended_episodes: set[str] = set()
+        self.pending_exits: dict[str, PendingExit] = {}
+        self.blocked_commands = 0
+        self.last_command: dict[str, Any] | None = None
+        self.last_fill: dict[str, Any] | None = None
+        self.last_context_event: dict[str, Any] | None = None
+        self.errors: list[str] = []
+        self._command_seq = 0
+        self.execution_market: Any | None = None
+        self.health_path = epoch_root / "health.json"
+        self.last_health_write_error: str | None = None
+        self.trading_contract = self._load_trading_contract(epoch_root)
+        self.saw_filter = saw_filter or PathDensitySawFilter(cfg_raw=cfg.raw, repo_root=cfg.books_root.parents[2])
+        self.last_saw: dict[str, Any] | None = None
+        self.sleeves = SleeveLedger.load(epoch_root)
+        self.capital_model = str(
+            ((self.trading_contract or {}).get("capital") or {}).get("capital_model")
+            or ("PER_TIMEFRAME_REALIZED_EQUITY" if self.sleeves is not None else "SHARED_MASTER_REALIZED_EQUITY")
+        )
+        with self.books.exclusive():
+            self.books.commit.recover()
+            from .execution_commit import verify_committed_head
+            head = verify_committed_head(epoch_root, epoch.paper_epoch_id) if (self.books.commit.root / "head.json").exists() else None
+            self._refresh_financial_state(head)
+
+    def _refresh_financial_state(self, head):
+        """Reload the entire durable ledger and books under original EX ownership."""
+        if not self.books.owns_exclusive():
+            raise RuntimeError("FINANCIAL_REFRESH_REQUIRES_EX")
+        self.sleeves = SleeveLedger.load(self.epoch_root)
+        self.positions = {}
+        self._restore_open_positions()
+        if self.sleeves is not None:
+            owned = self.books.open_positions()
+            by_tf = {}
+            for row in owned:
+                tf = str(row["timeframe"])
+                if tf in by_tf:
+                    raise RuntimeError("FINANCIAL_MULTIPLE_OWN_POSITIONS")
+                by_tf[tf] = row
+            for tf, sleeve in self.sleeves.sleeves.items():
+                row = by_tf.get(tf)
+                if sleeve.open_position_id != (row["position_id"] if row else None):
+                    raise RuntimeError("FINANCIAL_OCCUPANCY_CONFLICT")
+                if row and float(sleeve.open_position_risk_usd) != float(row["risk_amount_usd"]):
+                    raise RuntimeError("FINANCIAL_RISK_CONFLICT")
+            if head and any(head["publication"]["scopes"][tf]["sleeve"] != sleeve.to_dict()
+                    for tf, sleeve in self.sleeves.sleeves.items()):
+                raise RuntimeError("FINANCIAL_SCOPE_LEDGER_CONFLICT")
+            master = self.sleeves.master_snapshot()
+            self.equity = float(master["master_current_equity_usd"])
+            self.realized_pnl = float(master["master_realized_net_pnl_usd"])
+
+    @staticmethod
+    def _load_trading_contract(epoch_root: Path) -> dict[str, Any] | None:
+        path = Path(epoch_root) / "trading_contract.json"
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if isinstance(raw, dict) and isinstance(raw.get("trading_contract_manifest"), dict):
+            return raw["trading_contract_manifest"]
+        return raw if isinstance(raw, dict) else None
+
+    def _uses_sleeves(self) -> bool:
+        return self.sleeves is not None and self.capital_model == "PER_TIMEFRAME_REALIZED_EQUITY"
+
+    def _restore_open_positions(self) -> None:
+        for row in self.books.open_positions():
+            tf = str(row["timeframe"])
+            ep = row.get("lifecycle_episode_id")
+            pos = OpenPosition(
+                position_id=str(row["position_id"]),
+                timeframe=tf,
+                side=str(row["side"]).upper(),
+                quantity=float(row["quantity"]),
+                entry_price=float(row["entry_price"]),
+                stop_loss_price=float(row["stop_loss_price"]),
+                take_profit_price=float(row["take_profit_price"]),
+                risk_amount_usd=float(row.get("risk_amount_usd") or self.cfg.max_risk_per_trade_usd),
+                lifecycle_episode_id=str(ep) if ep else None,
+                context_event_id=str(row.get("entry_context_event_id") or ""),
+                entry_fill_id=str(row.get("entry_fill_id") or ""),
+                entry_command_id=str(row.get("entry_command_id") or ""),
+                entry_monotonic_ns=int(row.get("entry_monotonic_ns") or 0),
+                opened_at=row.get("opened_at") or row.get("execution_timestamp"),
+                entry_decision_ts=row.get("entry_decision_ts") or row.get("evaluation_timestamp") or row.get("decision_available_at") or row.get("context_occurrence_timestamp"),
+            )
+            if ep:
+                self.traded_episodes.add(str(ep))
+                pos.traded_episode_ids.add(str(ep))
+            self.positions[tf] = pos
+        for trade in self.books.closed_trades():
+            episode = trade.get("lifecycle_episode_id")
+            if episode:
+                self.traded_episodes.add(str(episode))
+        if self._uses_sleeves():
+            # Sleeve ledger is the equity source of truth; recover ended episodes only.
+            for t in self.books.closed_trades():
+                ep = t.get("lifecycle_episode_id")
+                if ep and context_episode_is_closed(t.get("exit_reason")):
+                    self.ended_episodes.add(str(ep))
+            return
+        for t in self.books.closed_trades():
+            self.realized_pnl += float(t.get("net_pnl_usd") or 0.0)
+            ep = t.get("lifecycle_episode_id")
+            if ep and context_episode_is_closed(t.get("exit_reason")):
+                self.ended_episodes.add(str(ep))
+        self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
+
+    def execution_market_ready_for_entry(self) -> bool:
+        if self.execution_market is None:
+            return True
+        return bool(self.execution_market.execution_market_ready_for_entry())
+
+    def attach_execution_market(self, processor: Any) -> None:
+        self.execution_market = processor
+
+    @_serialized
+    def update_bbo_from_market(
+        self,
+        *,
+        best_bid: float,
+        best_ask: float,
+        receive_monotonic_ns: int,
+        receive_timestamp: str | None = None,
+        book_update_id: str | None = None,
+        source_event_id: str | None = None,
+        market_provenance: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        self.bbo.update_from_book_ticker(
+            best_bid=best_bid,
+            best_ask=best_ask,
+            receive_monotonic_ns=receive_monotonic_ns,
+            receive_timestamp=receive_timestamp,
+            book_update_id=book_update_id,
+            source_event_id=source_event_id,
+            domain="local",
+        )
+        actions: list[dict[str, Any]] = []
+        for tf in list(self.pending_exits.keys()):
+            done = self._try_pending_exit(tf)
+            if done:
+                actions.extend(done if isinstance(done, list) else [done])
+        return actions
+
+    @_serialized
+    def update_from_trade(
+        self,
+        *,
+        price: float,
+        receive_monotonic_ns: int,
+        receive_timestamp: str | None = None,
+        source_event_id: str | None = None,
+        market_provenance: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._check_tp_sl_on_market(
+            trigger_monotonic_ns=receive_monotonic_ns,
+            trigger_event_id=source_event_id or f"trade_{receive_monotonic_ns}",
+            trigger_timestamp=receive_timestamp,
+            trade_price=float(price),
+            use_local_bbo=True,
+            market_provenance=market_provenance,
+        )
+
+    @_serialized
+    def process_context_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        """Process one context journal event; returns list of actions taken."""
+        actions: list[dict[str, Any]] = []
+        self.last_context_event = {
+            "context_event_id": event.get("context_event_id") or event.get("event_id"),
+            "event_type": event.get("event_type") or event.get("type"),
+            "timeframe": event.get("timeframe"),
+            "side": event.get("side") or event.get("direction") or event.get("context_side"),
+            "event_monotonic_ns": event.get("event_monotonic_ns"),
+        }
+        self.bbo.update_from_context_event(event)
+        # Retry pending exits first (causal BBO may now be available)
+        for tf in list(self.pending_exits.keys()):
+            done = self._try_pending_exit(tf)
+            if done:
+                actions.extend(done if isinstance(done, list) else [done])
+
+        etype = str(event.get("event_type") or event.get("type") or "").upper()
+        tf = str(event.get("timeframe") or "").upper()
+        if tf not in self.cfg.timeframes:
+            return actions
+        side = self._event_side(event)
+        mono = int(event.get("event_monotonic_ns") or 0)
+        eid = str(event.get("context_event_id") or event.get("event_id") or _new_id("cev"))
+        episode = event.get("lifecycle_episode_id") or event.get("episode_id")
+
+        if etype == "CONTEXT_FLIP":
+            pos = self.positions.get(tf)
+            if self._is_foreign_lifecycle_episode(episode, pos):
+                return actions
+            flip_from = self._context_to_side(
+                event.get("from_side") or event.get("flip_from") or event.get("previous_context")
+            )
+            flip_to = self._context_to_side(
+                event.get("to_side") or event.get("flip_to") or event.get("new_context") or side
+            )
+            # Close existing if opposite
+            if pos and (not flip_from or pos.side == flip_from):
+                if flip_to and flip_to != pos.side:
+                    exit_act = self._exit_position(
+                        tf=tf,
+                        trigger_type="CONTEXT_FLIP",
+                        trigger_event_id=eid,
+                        trigger_timestamp=event.get("event_timestamp"),
+                        trigger_monotonic_ns=mono,
+                        trigger_price=event.get("context_event_price") or event.get("price"),
+                        context_event_id=eid,
+                        flip_to_side=flip_to,
+                        episode_id=str(episode) if episode else None,
+                        event=event,
+                    )
+                    if exit_act:
+                        actions.append(exit_act)
+            # Open new side after exit (strict ordering: exit mono < entry mono)
+            if flip_to in {"LONG", "SHORT"}:
+                entry_mono = mono + 1
+                entry_act = self._enter_position(
+                    tf=tf,
+                    side=flip_to,
+                    event_type="CONTEXT_FLIP",
+                    context_event_id=eid,
+                    event_monotonic_ns=entry_mono,
+                    event_timestamp=event.get("event_timestamp"),
+                    context_event_price=event.get("context_event_price") or event.get("price"),
+                    episode_id=str(episode) if episode else None,
+                    event=event,
+                )
+                if entry_act:
+                    actions.append(entry_act)
+            return actions
+
+        if etype == "CONTEXT_START" and side in {"LONG", "SHORT"}:
+            entry_act = self._enter_position(
+                tf=tf,
+                side=side,
+                event_type="CONTEXT_START",
+                context_event_id=eid,
+                event_monotonic_ns=mono,
+                event_timestamp=event.get("event_timestamp"),
+                context_event_price=event.get("context_event_price") or event.get("price"),
+                episode_id=str(episode) if episode else None,
+                event=event,
+            )
+            if entry_act:
+                actions.append(entry_act)
+            return actions
+
+        if etype == "CONTEXT_END":
+            pos = self.positions.get(tf)
+            if self._is_foreign_lifecycle_episode(episode, pos):
+                return actions
+            if is_provisional_context_end(event):
+                actions.append(
+                    {
+                        "status": "EXIT_IGNORED_PROVISIONAL_CONTEXT_END",
+                        "timeframe": tf,
+                        "context_event_id": eid,
+                        "lifecycle_episode_id": str(episode) if episode else None,
+                    }
+                )
+                return actions
+            if episode:
+                self.ended_episodes.add(str(episode))
+            if pos and (not side or side == pos.side or side in {"OBSERVE", "STAND_ASIDE", ""}):
+                # END for matching side (or end of episode)
+                end_side = side if side in {"LONG", "SHORT"} else pos.side
+                if end_side == pos.side:
+                    exit_act = self._exit_position(
+                        tf=tf,
+                        trigger_type="CONTEXT_END",
+                        trigger_event_id=eid,
+                        trigger_timestamp=event.get("event_timestamp"),
+                        trigger_monotonic_ns=mono,
+                        trigger_price=event.get("context_event_price") or event.get("price"),
+                        context_event_id=eid,
+                        episode_id=str(episode) if episode else None,
+                        event=event,
+                    )
+                    if exit_act:
+                        actions.append(exit_act)
+            return actions
+
+        # OBSERVE / STAND_ASIDE / unknown — no entry
+        return actions
+
+    @_serialized
+    def poll_context_journal(self) -> list[dict[str, Any]]:
+        if str(getattr(self.cfg, "entry_source", "context_journal") or "context_journal") == "s41_command_bus":
+            return self._drain_journal_observe_only()
+        all_actions: list[dict[str, Any]] = []
+        for ev in self.consumer.iter_new_events(
+            max_entry_signal_age_seconds=self.cfg.context_event_max_age_seconds,
+        ):
+            actions = self.process_context_event(ev)
+            eid = str(ev.get("context_event_id") or ev.get("event_id") or "")
+            mono = int(ev.get("event_monotonic_ns") or 0)
+            # Mark consumption of the event itself (even if no trade)
+            consume_key = idempotency_key(
+                paper_epoch_id=self.epoch.paper_epoch_id,
+                context_event_id=eid,
+                timeframe=str(ev.get("timeframe") or "NA"),
+                action="CONSUME",
+            )
+            if not self.consumer.already_processed(consume_key):
+                self.consumer.mark_processed(
+                    key=consume_key,
+                    context_event_id=eid,
+                    event_monotonic_ns=mono,
+                    path=ev.get("_journal_path"),
+                    offset=ev.get("_journal_offset"),
+                )
+            self.consumer.save()
+            all_actions.extend(actions)
+        return all_actions
+
+    def _drain_journal_observe_only(self) -> list[dict[str, Any]]:
+        """Advance journal cursor without opening/closing (hybrid S4.1 command mode)."""
+        for ev in self.consumer.iter_new_events(
+            max_entry_signal_age_seconds=self.cfg.context_event_max_age_seconds,
+        ):
+            self.bbo.update_from_context_event(ev)
+            etype = str(ev.get("event_type") or ev.get("type") or "").upper()
+            episode = ev.get("lifecycle_episode_id") or ev.get("episode_id")
+            if etype == "CONTEXT_END" and episode:
+                self.ended_episodes.add(str(episode))
+            eid = str(ev.get("context_event_id") or ev.get("event_id") or "")
+            mono = int(ev.get("event_monotonic_ns") or 0)
+            consume_key = idempotency_key(
+                paper_epoch_id=self.epoch.paper_epoch_id,
+                context_event_id=eid,
+                timeframe=str(ev.get("timeframe") or "NA"),
+                action="CONSUME_OBSERVE",
+            )
+            if not self.consumer.already_processed(consume_key):
+                self.consumer.mark_processed(
+                    key=consume_key,
+                    context_event_id=eid,
+                    event_monotonic_ns=mono,
+                    path=ev.get("_journal_path"),
+                    offset=ev.get("_journal_offset"),
+                )
+            self.consumer.save()
+        return []
+
+    @staticmethod
+    def _s41_reason_blob(command: Mapping[str, Any] | None) -> str:
+        raw = (command or {}).get("reason_codes")
+        if isinstance(raw, list):
+            return " ".join(str(x) for x in raw)
+        return str(raw or "")
+
+    @staticmethod
+    def _s41_close_trigger_type(command: dict[str, Any]) -> str:
+        upper = IntrabarPaperEngine._s41_reason_blob(command).upper()
+        if "TAKE_PROFIT" in upper:
+            return "TAKE_PROFIT"
+        if "STOP_LOSS" in upper:
+            return "STOP_LOSS"
+        return "S41_COMMAND_CLOSE"
+
+    @staticmethod
+    def _s41_close_target_side(command: Mapping[str, Any] | None) -> str | None:
+        """Side the CLOSE was decided against. None if the command does not say.
+
+        PREVIEW_CLOSE_LONG_STOP_LOSS must not flatten a later SHORT.
+        """
+        upper = IntrabarPaperEngine._s41_reason_blob(command).upper()
+        long_hit = "PREVIEW_CLOSE_LONG" in upper or "CLOSE_LONG" in upper
+        short_hit = "PREVIEW_CLOSE_SHORT" in upper or "CLOSE_SHORT" in upper
+        if long_hit and not short_hit:
+            return "LONG"
+        if short_hit and not long_hit:
+            return "SHORT"
+        return None
+
+    @_serialized
+    def apply_s41_manager_command(self, command: dict[str, Any]) -> dict[str, Any] | None:
+        """Execute one S4.1 manager command against LIVE1B books (hybrid)."""
+        intent = str(command.get("intent") or "").upper()
+        tf = str(command.get("timeframe") or "").upper()
+        command_id = str(command.get("command_id") or "").strip()
+        if tf not in self.cfg.timeframes or not command_id:
+            return {"status": "REJECTED_BAD_COMMAND", "command_id": command_id, "timeframe": tf}
+        episode = command.get("lifecycle_episode_id") or command.get("timeframe_episode_id")
+        mono = int(time.monotonic_ns())
+        event = {
+            "manager_command_id": command_id,
+            "lifecycle_episode_id": episode,
+            "event_timestamp": command.get("evaluation_timestamp") or command.get("created_at"),
+            "context_origin_price": command.get("context_origin_price"),
+            "context_started_at": command.get("context_started_at"),
+            "context_event_price": command.get("context_origin_price"),
+            "from_manager_command": True,
+            "approved_risk_usd": command.get("approved_risk_usd"),
+            **{key: command.get(key) for key in ("risk_approval_contract", "risk_usd_semantics",
+               "approved_risk_pct", "risk_equity_snapshot_usd", "risk_paper_epoch_id")},
+            "decision_id": command.get("decision_id"),
+            **{key: command.get(key) for key in ("requested_risk_usd", "portfolio_open_risk_usd",
+                "cross_timeframe_metadata", "timeframe_direction", "source_bar_close", "context_started_at")},
+            "evaluation_timestamp": command.get("evaluation_timestamp"),
+            "reason_codes": command.get("reason_codes"),
+        }
+        if intent in {"OPEN_LONG", "OPEN_SHORT"}:
+            from ..sleeve_risk_contract import fence_open
+            reason = fence_open(command, self.books, self.sleeves)
+            if reason:
+                return {"status": reason, "command_id": command_id, "timeframe": tf}
+            self.books.commit._phase("open_authority_fenced")
+            if command.get("risk_approval_contract") is not None:
+                from ..sleeve_risk_contract import validate
+                reason = validate(command, self.epoch.paper_epoch_id,
+                    self.sleeves.get(tf).risk_pct_per_trade if self.sleeves is not None else None)
+                if reason:
+                    return {"status": reason, "command_id": command_id, "timeframe": tf}
+            side = "LONG" if intent == "OPEN_LONG" else "SHORT"
+            return self._enter_position(
+                tf=tf,
+                side=side,
+                event_type="S41_COMMAND_OPEN",
+                context_event_id=command_id,
+                event_monotonic_ns=mono,
+                event_timestamp=str(event.get("event_timestamp") or ""),
+                context_event_price=event.get("context_origin_price"),
+                episode_id=str(episode) if episode else None,
+                event=event,
+                from_manager_command=True,
+            )
+
+        if intent == "CLOSE":
+            pos = self.positions.get(tf)
+            if not pos:
+                return {
+                    "status": "CLOSE_NO_POSITION",
+                    "command_id": command_id,
+                    "timeframe": tf,
+                }
+            target_side = self._s41_close_target_side(command)
+            pos_side = str(pos.side or "").upper()
+            if target_side and target_side != pos_side:
+                return {
+                    "status": "CLOSE_SIDE_MISMATCH",
+                    "command_id": command_id,
+                    "timeframe": tf,
+                    "position_side": pos_side,
+                    "command_side": target_side,
+                }
+            cmd_ts = _as_utc_datetime(command.get("evaluation_timestamp")) or _as_utc_datetime(
+                command.get("created_at")
+            )
+            entry_decision_ts = _as_utc_datetime(pos.entry_decision_ts)
+            # Decision clocks only. Fill `opened_at` lags paper and must not
+            # reject a later CLOSE of the same occupancy.
+            if (
+                cmd_ts is not None
+                and entry_decision_ts is not None
+                and cmd_ts < entry_decision_ts
+            ):
+                return {
+                    "status": "CLOSE_STALE_FOR_NEWER_POSITION",
+                    "command_id": command_id,
+                    "timeframe": tf,
+                    "entry_decision_ts": pos.entry_decision_ts,
+                    "command_ts": command.get("evaluation_timestamp") or command.get("created_at"),
+                }
+            trigger = self._s41_close_trigger_type(command)
+            protective = trigger in {"TAKE_PROFIT", "STOP_LOSS", "TP", "SL", "STOP"}
+            return self._exit_position(
+                tf=tf,
+                trigger_type=trigger,
+                trigger_event_id=command_id,
+                trigger_timestamp=str(event.get("event_timestamp") or ""),
+                trigger_monotonic_ns=mono,
+                trigger_price=None if protective else event.get("context_origin_price"),
+                context_event_id=command_id,
+                episode_id=str(episode) if episode else None,
+                event=event,
+                use_local_bbo=not protective,
+            )
+        return {"status": "IGNORED", "intent": intent, "command_id": command_id, "timeframe": tf}
+
+    @staticmethod
+    def _context_to_side(value: Any) -> str:
+        u = str(value or "").upper()
+        if u in {"LONG", "LONG_CONTEXT"}:
+            return "LONG"
+        if u in {"SHORT", "SHORT_CONTEXT"}:
+            return "SHORT"
+        if u in {"OBSERVE", "STAND_ASIDE"}:
+            return u
+        return ""
+
+    def _event_side(self, event: dict[str, Any]) -> str:
+        for k in ("side", "direction", "context_side", "to_side", "new_context"):
+            side = self._context_to_side(event.get(k))
+            if side:
+                return side
+        return ""
+
+    @staticmethod
+    def _is_foreign_lifecycle_episode(episode: Any, pos: OpenPosition | None) -> bool:
+        """True when an identified event episode must not touch a different open position."""
+        event_episode_id = str(episode).strip() if episode else ""
+        if not event_episode_id or pos is None:
+            return False
+        position_episode_id = str(pos.lifecycle_episode_id or "").strip()
+        return event_episode_id != position_episode_id
+
+    def _next_command_mono(self, base: int) -> int:
+        self._command_seq += 1
+        return int(base) + self._command_seq
+
+    def _enter_position(
+        self,
+        *,
+        tf: str,
+        side: str,
+        event_type: str,
+        context_event_id: str,
+        event_monotonic_ns: int,
+        event_timestamp: str | None,
+        context_event_price: Any,
+        episode_id: str | None,
+        event: dict[str, Any],
+        from_manager_command: bool = False,
+    ) -> dict[str, Any] | None:
+        action = "ENTRY"
+        key = idempotency_key(
+            paper_epoch_id=self.epoch.paper_epoch_id,
+            context_event_id=context_event_id,
+            timeframe=tf,
+            action=f"{action}_{side}",
+        )
+        if self.consumer.already_processed(key):
+            return {"status": "DUPLICATE_PREVENTED", "key": key}
+        if side not in {"LONG", "SHORT"}:
+            return None
+        if not from_manager_command and event_type not in ENTRY_EVENTS:
+            return None
+        if not from_manager_command:
+            replay_reason = replay_entry_block_reason(event)
+            if replay_reason:
+                self._block(replay_reason, tf, context_event_id, side, event=event)
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
+                return {"status": replay_reason, "timeframe": tf, "context_event_id": context_event_id}
+            freshness_reason = entry_freshness_block_reason(
+                event,
+                max_age_seconds=self.cfg.context_event_max_age_seconds,
+            )
+            if freshness_reason:
+                self._block(freshness_reason, tf, context_event_id, side, event=event)
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
+                return {"status": freshness_reason, "timeframe": tf, "context_event_id": context_event_id}
+            stale_reason = stale_entry_block_reason(
+                event,
+                max_age_seconds=self.cfg.context_event_max_age_seconds,
+            )
+            if stale_reason:
+                self._block(stale_reason, tf, context_event_id, side, event=event)
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
+                return {"status": stale_reason, "timeframe": tf, "context_event_id": context_event_id}
+        saw = self.saw_filter.evaluate(timeframe=tf, as_of=event_timestamp)
+        self.last_saw = saw.to_dict()
+        # Journal START and S4.1 OPEN both skip a saw. Exits stay free.
+        if saw.block:
+            self._block(
+                saw.reason or "ENTRY_BLOCKED_SAW_PATH_DENSITY",
+                tf,
+                context_event_id,
+                side,
+                event=event,
+                extra={"saw": saw.to_dict()},
+            )
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {
+                "status": saw.reason or "ENTRY_BLOCKED_SAW_PATH_DENSITY",
+                "timeframe": tf,
+                "context_event_id": context_event_id,
+                "saw": saw.to_dict(),
+            }
+        with self.books.exclusive():
+            return self._enter_position_locked(
+                tf=tf, side=side, event_type=event_type, context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns, event_timestamp=event_timestamp,
+                context_event_price=context_event_price, episode_id=episode_id, event=event,
+                from_manager_command=from_manager_command, key=key,
+            )
+
+    def _open_book_rows_for_tf(self, tf: str) -> list[dict[str, Any]]:
+        wanted = str(tf or "").upper()
+        return [
+            row
+            for row in self.books.open_positions()
+            if str(row.get("timeframe") or "").upper() == wanted
+        ]
+
+    def _command_already_opened(self, context_event_id: str) -> bool:
+        command_id = str(context_event_id or "").strip()
+        if not command_id:
+            return False
+        for row in self.books.latest_positions().values():
+            if is_void_position_row(row):
+                continue
+            existing = str(
+                row.get("entry_context_event_id") or row.get("manager_command_id") or ""
+            ).strip()
+            if existing == command_id:
+                return True
+        return False
+
+    def _enter_position_locked(
+        self,
+        *,
+        tf: str,
+        side: str,
+        event_type: str,
+        context_event_id: str,
+        event_monotonic_ns: int,
+        event_timestamp: str | None,
+        context_event_price: Any,
+        episode_id: str | None,
+        event: dict[str, Any],
+        from_manager_command: bool,
+        key: str,
+    ) -> dict[str, Any] | None:
+        from .execution_commit import CURRENT
+        active = CURRENT.get()
+        source = getattr(active, "source", {})
+        if (self.cfg.entry_source != "s41_command_bus" or not from_manager_command
+                or source.get("method") != "apply_s41_manager_command"):
+            reason = "ENTRY_BLOCKED_SOURCE_OWNERSHIP" if self.cfg.entry_source == "s41_command_bus" else "ENTRY_BLOCKED_MODE_AUTHORITY_UNQUALIFIED"
+            self._block(reason, tf, context_event_id, side)
+            return {"status": reason, "timeframe": tf, "context_event_id": context_event_id}
+        command = (source.get("args") or [source.get("kwargs", {}).get("command", {})])[0]
+        if command.get("command_id") != context_event_id or command.get("timeframe") != tf:
+            raise RuntimeError("OPEN_SOURCE_IDENTITY_CONFLICT")
+        from ..sleeve_risk_contract import fence_open
+        reason = fence_open(command, self.books, self.sleeves)
+        if reason:
+            return {"status": reason, "timeframe": tf, "context_event_id": context_event_id}
+        # Reuse original command eligibility and bar-finality guards at the sink.
+        from .s41_command_consumer import S41CommandConsumer
+        from btc_ml.trading.timeframe_state_adapter import closed_bar_superseded
+        guard = S41CommandConsumer(self, checkpoint_path=self.epoch_root / "s41_command_cursor.json", consume_after=None, bus=getattr(self,"_s41_bus",None))
+        from .execution_commit import command_association, canonical
+        rows = guard.bus.frame()
+        original = rows[rows["command_id"] == command["command_id"]].to_dict("records")
+        if len(original) != 1:
+            return {"status": "ENTRY_PENDING_ORIGINAL_COMMAND_RECORD", "timeframe": tf}
+        incoming = command_association({"method": "apply_s41_manager_command", "args": [command], "kwargs": {}})
+        retained = command_association({"method": "apply_s41_manager_command", "args": [original[0]], "kwargs": {}})
+        if canonical(incoming) != canonical(retained):
+            return {"status": "ENTRY_BLOCKED_ORIGINAL_COMMAND_PAYLOAD", "timeframe": tf}
+        reason = guard._open_block_reason(command)
+        if reason:
+            return {"status": reason, "timeframe": tf, "context_event_id": context_event_id}
+        from btc_ml.trading.portfolio_risk import PortfolioRiskCoordinator
+        from .execution_commit import verify_committed_head, open_authority
+        latest_head = verify_committed_head(self.epoch_root, self.epoch.paper_epoch_id)
+        views = {own: {"position_source": "live1b_epoch_books", "paper_epoch_id": self.epoch.paper_epoch_id,
+            "sleeve_current_equity_usd": sleeve.current_equity_usd, "sleeve_risk_pct_per_trade": sleeve.risk_pct_per_trade,
+            "open_position": {"position_id": sleeve.open_position_id} if sleeve.open_position_id else None,
+            "execution_authority": open_authority(latest_head, own, sleeve.to_dict())}
+            for own, sleeve in self.sleeves.sleeves.items()}
+        risk = PortfolioRiskCoordinator.load(self.cfg.books_root.parents[2] / "config/timeframe_trader_risk.json").with_live1b_sleeves(views)
+        exposure = risk.evaluate(timeframe=tf, requested_risk_usd=self.sleeves.get(tf).next_risk_budget_usd,
+            open_risk_by_timeframe={own: sleeve.open_position_risk_usd for own, sleeve in self.sleeves.sleeves.items()},
+            open_positions_by_timeframe={own: int(sleeve.open_position_id is not None) for own, sleeve in self.sleeves.sleeves.items()})
+        if not exposure.approved:
+            return {"status": "ENTRY_BLOCKED_" + str(exposure.reason), "timeframe": tf}
+        if closed_bar_superseded(timeframe=tf,
+                source_bar_close=command.get("source_bar_close"), now=_utc_iso()):
+            return {"status": "ENTRY_BLOCKED_STALE_CLOSED_BAR_SUPERSEDED", "timeframe": tf}
+        if tf in self.positions or self._open_book_rows_for_tf(tf):
+            self._block("ENTRY_BLOCKED_ACTIVE_POSITION", tf, context_event_id, side)
+            return {"status": "ENTRY_BLOCKED_ACTIVE_POSITION", "timeframe": tf, "context_event_id": context_event_id}
+        if self._command_already_opened(context_event_id):
+            self._block("ENTRY_BLOCKED_DUPLICATE_COMMAND", tf, context_event_id, side)
+            self.consumer.mark_processed(key=key, context_event_id=context_event_id, event_monotonic_ns=event_monotonic_ns)
+            self.consumer.save()
+            return {"status": "ENTRY_BLOCKED_DUPLICATE_COMMAND", "timeframe": tf, "context_event_id": context_event_id}
+        if not self.execution_market_ready_for_entry():
+            self._block("ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", tf, context_event_id, side, event=event)
+            return {"status": "ENTRY_BLOCKED_EXECUTION_MARKET_NOT_READY", "timeframe": tf}
+        # Episode lock only after CONTEXT_END. TP/SL leave the episode tradable.
+        if (
+            event_type == "CONTEXT_START" and not from_manager_command
+            and episode_id and episode_id in self.ended_episodes
+        ):
+            self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
+            return None
+        if (
+            from_manager_command and event_type == "S41_COMMAND_OPEN"
+            and episode_id and episode_id in self.ended_episodes
+        ):
+            self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
+            return {"status": "ENTRY_BLOCKED_EPISODE_ALREADY_TRADED",
+                    "timeframe": tf, "context_event_id": context_event_id}
+
+        # Journal CONTEXT_START is one-shot per episode so TP/SL do not
+        # re-open a chase. S4.1 command-bus OPEN is not this gate: it must
+        # match the painted cognitive layer after TP/SL or a restated row.
+        if (
+            episode_id
+            and episode_id in self.traded_episodes
+            and event_type == "CONTEXT_START"
+            and not from_manager_command
+        ):
+            self._block("ENTRY_BLOCKED_EPISODE_ALREADY_TRADED", tf, context_event_id, side)
+            return None
+
+        occurrence_px = resolve_context_entry_price(event, context_event_price)
+        if from_manager_command:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_live_local_entry_bbo(
+                max_age_ms=self.cfg.max_bbo_age_ms,
+                now_monotonic_ns=event_monotonic_ns,
+            )
+        else:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
+                command_monotonic_ns=event_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
+        if bbo is None:
+            self._block(reason or "ENTRY_BLOCKED_NO_CAUSAL_BBO", tf, context_event_id, side)
+            if not from_manager_command:
+                self.consumer.mark_processed(
+                    key=key,
+                    context_event_id=context_event_id,
+                    event_monotonic_ns=event_monotonic_ns,
+                )
+            return {"status": reason, "timeframe": tf}
+
+        fill_px = fill_price_for(side=side, action="ENTRY", bbo=bbo)
+        entry_price_source = (
+            "execution_market_bbo" if bbo_domain == "local" else "causal_bbo_entry"
+        )
+
+        equity_at_entry = float(self.equity)
+        risk_pct_at_entry = float(self.cfg.max_risk_per_trade_pct)
+        risk_budget_usd: float | None = None
+        if self._uses_sleeves() and self.sleeves is not None:
+            sleeve = self.sleeves.get(tf)
+            equity_at_entry = float(sleeve.current_equity_usd)
+            risk_pct_at_entry = float(sleeve.risk_pct_per_trade)
+            risk_budget_usd = float(sleeve.next_risk_budget_usd)
+            sizing = resolve_risk_sizing(
+                cfg=self.cfg,
+                side=side,
+                entry_price=fill_px,
+                equity_usd=equity_at_entry,
+                risk_budget_usd=risk_budget_usd,
+            )
+        else:
+            sizing = resolve_risk_sizing(
+                cfg=self.cfg, side=side, entry_price=fill_px, equity_usd=self.equity
+            )
+            risk_budget_usd = float(sizing.risk_amount_usd)
+        if not sizing.ok or sizing.quantity is None:
+            self._block(sizing.block_reason or "ENTRY_BLOCKED_RISK", tf, context_event_id, side)
+            self.consumer.mark_processed(
+                key=key,
+                context_event_id=context_event_id,
+                event_monotonic_ns=event_monotonic_ns,
+            )
+            return {"status": sizing.block_reason, "timeframe": tf}
+
+        cmd_id = _new_id("cmd")
+        order_id = _new_id("ord")
+        fill_id = _new_id("fill")
+        pos_id = _new_id("pos")
+        signal_id = _new_id("sig")
+        execution_ts = self.execution_clock()
+        occurrence_ts = _occurrence_timestamp(event, event_timestamp)
+        entry_decision_ts = (str(event.get("evaluation_timestamp") or "").strip()
+                             or str(event.get("decision_available_at") or "").strip()
+                             or occurrence_ts)
+        decision_available_at = event.get("decision_available_at")
+        materialized_timestamp = event.get("materialized_timestamp") or event.get("ingested_at")
+        cmd_mono = event_monotonic_ns
+        stop_distance_usd = float(sizing.stop_distance or 0.0)
+        notional_usd = float(sizing.entry_notional or 0.0)
+        capital_snap = {
+            "equity_at_entry_usd": equity_at_entry,
+            "risk_pct_at_entry": risk_pct_at_entry,
+            "risk_budget_usd": float(risk_budget_usd or sizing.risk_amount_usd),
+            "stop_distance_usd": stop_distance_usd,
+            "notional_usd": notional_usd,
+        }
+        if event.get("risk_approval_contract"):
+            capital_snap.update({key: event.get(key) for key in ("risk_approval_contract",
+                "risk_usd_semantics", "approved_risk_pct", "risk_equity_snapshot_usd",
+                "risk_paper_epoch_id", "approved_risk_usd")})
+        provenance_snap = {
+            "context_event_price": occurrence_px,
+            "context_occurrence_timestamp": occurrence_ts,
+            "decision_available_at": decision_available_at,
+            "entry_decision_ts": entry_decision_ts,
+            "materialized_timestamp": materialized_timestamp,
+            "execution_timestamp": execution_ts,
+            "entry_price_source": entry_price_source,
+            "execution_bbo_domain": bbo_domain,
+            "manager_command_id": event.get("manager_command_id"),
+            "entry_source": "s41_command_bus" if from_manager_command else "context_journal",
+            "evaluation_timestamp": event.get("evaluation_timestamp"),
+        }
+        price_snap = {
+            "paper_fill_price": fill_px,
+            "execution_price": fill_px,
+            "best_bid": bbo.best_bid,
+            "best_ask": bbo.best_ask,
+            "book_update_id": bbo.book_update_id,
+            "bbo_receive_timestamp": bbo.receive_timestamp,
+            "bbo_receive_monotonic_ns": bbo.receive_monotonic_ns,
+            "bbo_age_ms": age_ms,
+            **provenance_snap,
+        }
+
+        signal = self.books.append(
+            "signals",
+            {
+                "signal_id": signal_id,
+                "timeframe": tf,
+                "side": side,
+                "event_type": event_type,
+                "context_event_id": context_event_id,
+                "lifecycle_episode_id": episode_id,
+                "ts": execution_ts,
+                "event_monotonic_ns": event_monotonic_ns,
+                "quantity": sizing.quantity,
+                "entry_price": fill_px,
+                "execution_price": fill_px,
+                "execution_timestamp": execution_ts,
+                **capital_snap,
+                **provenance_snap,
+            },
+        )
+        command = self.books.append(
+            "commands",
+            {
+                "command_id": cmd_id,
+                "signal_id": signal_id,
+                "timeframe": tf,
+                "side": side,
+                "action": "ENTRY",
+                "context_event_id": context_event_id,
+                "command_monotonic_ns": cmd_mono,
+                "ts": execution_ts,
+                "quantity": sizing.quantity,
+                **price_snap,
+                **capital_snap,
+            },
+        )
+        self.books.append(
+            "orders",
+            {
+                "order_id": order_id,
+                "command_id": cmd_id,
+                # Expose position identity for notification dedup across
+                # commands/orders/fills/positions streams (e.g. price-only alerts).
+                "position_id": pos_id,
+                "timeframe": tf,
+                "side": side,
+                "action": "ENTRY",
+                "quantity": sizing.quantity,
+                "status": "FILLED",
+                "ts": execution_ts,
+                **capital_snap,
+            },
+        )
+        fill = self.books.append(
+            "fills",
+            {
+                "fill_id": fill_id,
+                "order_id": order_id,
+                "command_id": cmd_id,
+                "position_id": pos_id,
+                "timeframe": tf,
+                "side": side,
+                "action": "ENTRY",
+                "gross_entry_price": fill_px,
+                "quantity": sizing.quantity,
+                "entry_fee_bps": self.cfg.entry_fee_bps,
+                "entry_slippage_bps": self.cfg.entry_slippage_bps,
+                "ts": execution_ts,
+                "fill_monotonic_ns": cmd_mono,
+                **price_snap,
+                **capital_snap,
+            },
+        )
+        pos_row = self.books.append(
+            "positions",
+            {
+                "position_id": pos_id,
+                "timeframe": tf,
+                "side": side,
+                "status": "OPEN",
+                "quantity": sizing.quantity,
+                "entry_price": fill_px,
+                "stop_loss_price": sizing.stop_loss_price,
+                "take_profit_price": sizing.take_profit_price,
+                "risk_amount_usd": sizing.risk_amount_usd,
+                "lifecycle_episode_id": episode_id,
+                "entry_context_event_id": context_event_id,
+                "context_event_age_seconds": event.get("event_age_seconds"),
+                "entry_fill_id": fill_id,
+                "entry_command_id": cmd_id,
+                "entry_monotonic_ns": cmd_mono,
+                "opened_at": execution_ts,
+                "execution_timestamp": execution_ts,
+                "execution_price": fill_px,
+                **capital_snap,
+                **provenance_snap,
+            },
+        )
+        self.positions[tf] = OpenPosition(
+            position_id=pos_id,
+            timeframe=tf,
+            side=side,
+            quantity=float(sizing.quantity),
+            entry_price=fill_px,
+            stop_loss_price=float(sizing.stop_loss_price or 0.0),
+            take_profit_price=float(sizing.take_profit_price or 0.0),
+            risk_amount_usd=float(sizing.risk_amount_usd),
+            lifecycle_episode_id=episode_id,
+            context_event_id=context_event_id,
+            entry_fill_id=fill_id,
+            entry_command_id=cmd_id,
+            entry_monotonic_ns=cmd_mono,
+            entry_decision_ts=entry_decision_ts,
+            opened_at=execution_ts,
+        )
+        if self._uses_sleeves() and self.sleeves is not None:
+            self.sleeves.mark_open(tf, pos_id, float(sizing.risk_amount_usd))
+        if episode_id:
+            self.traded_episodes.add(episode_id)
+        self.consumer.mark_processed(
+            key=key,
+            context_event_id=context_event_id,
+            event_monotonic_ns=event_monotonic_ns,
+        )
+        self.last_command = command
+        self.last_fill = fill
+        return {"status": "ENTERED", "position": pos_row, "fill": fill, "signal": signal}
+
+    def _exit_position(
+        self,
+        *,
+        tf: str,
+        trigger_type: str,
+        trigger_event_id: str,
+        trigger_timestamp: str | None,
+        trigger_monotonic_ns: int,
+        trigger_price: Any,
+        context_event_id: str,
+        flip_to_side: str | None = None,
+        episode_id: str | None = None,
+        use_local_bbo: bool = False,
+        market_provenance: dict[str, Any] | None = None,
+        event: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        pos = self.positions.get(tf)
+        if not pos:
+            return None
+        action = "EXIT"
+        key = idempotency_key(
+            paper_epoch_id=self.epoch.paper_epoch_id,
+            context_event_id=context_event_id,
+            timeframe=tf,
+            action=f"{action}_{pos.side}_{trigger_type}",
+        )
+        if self.consumer.already_processed(key):
+            return {"status": "DUPLICATE_PREVENTED", "key": key}
+
+        trigger_u = str(trigger_type).upper()
+
+        protective_level: float | None = None
+        if trigger_u in {"SL", "STOP", "STOP_LOSS"}:
+            protective_level = float(pos.stop_loss_price)
+        elif trigger_u in {"TP", "TAKE_PROFIT"}:
+            protective_level = float(pos.take_profit_price)
+
+        if protective_level is not None:
+            event_price = (
+                float(trigger_price)
+                if trigger_price is not None
+                else protective_level
+            )
+            return self._complete_exit(
+                pos=pos,
+                key=key,
+                bbo=None,
+                age_ms=None,
+                trigger_type=trigger_type,
+                trigger_event_id=trigger_event_id,
+                trigger_timestamp=trigger_timestamp,
+                trigger_monotonic_ns=trigger_monotonic_ns,
+                trigger_price=event_price,
+                context_event_id=context_event_id,
+                episode_id=episode_id or pos.lifecycle_episode_id,
+                execution_price_override=event_price,
+                market_provenance=market_provenance,
+            )
+
+        if use_local_bbo:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_live_local_entry_bbo(
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
+            if reason == "ENTRY_BLOCKED_NO_CAUSAL_BBO":
+                reason = "EXIT_PENDING_NO_CAUSAL_BBO"
+        else:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
+                command_monotonic_ns=trigger_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
+            if reason == "ENTRY_BLOCKED_NO_CAUSAL_BBO":
+                reason = "EXIT_PENDING_NO_CAUSAL_BBO"
+        if bbo is None:
+            self.pending_exits[tf] = PendingExit(
+                timeframe=tf,
+                reason=reason or "EXIT_PENDING_NO_CAUSAL_BBO",
+                context_event_id=context_event_id,
+                command_monotonic_ns=trigger_monotonic_ns,
+                trigger_type=trigger_type,
+                trigger_event_id=trigger_event_id,
+                trigger_timestamp=trigger_timestamp,
+                trigger_price=float(trigger_price) if trigger_price is not None else None,
+                flip_to_side=flip_to_side,
+                episode_id=episode_id,
+                event=event,
+            )
+            self.blocked_commands += 1
+            return {"status": reason, "timeframe": tf}
+
+        return self._complete_exit(
+            pos=pos,
+            key=key,
+            bbo=bbo,
+            age_ms=age_ms,
+            trigger_type=trigger_type,
+            trigger_event_id=trigger_event_id,
+            trigger_timestamp=trigger_timestamp,
+            trigger_monotonic_ns=trigger_monotonic_ns,
+            trigger_price=trigger_price,
+            context_event_id=context_event_id,
+            episode_id=episode_id or pos.lifecycle_episode_id,
+            market_provenance=market_provenance,
+            event=event,
+            bbo_domain=bbo_domain,
+        )
+
+    def _try_pending_exit(self, tf: str) -> list[dict[str, Any]] | None:
+        pend = self.pending_exits.get(tf)
+        pos = self.positions.get(tf)
+        if not pend or not pos:
+            return None
+        bbo, reason, age_ms, bbo_domain = self.bbo.resolve_live_local_entry_bbo(
+            max_age_ms=self.cfg.max_bbo_age_ms,
+        )
+        if bbo is None:
+            bbo, reason, age_ms, bbo_domain = self.bbo.resolve_execution_entry_bbo(
+                command_monotonic_ns=pend.command_monotonic_ns,
+                max_age_ms=self.cfg.max_bbo_age_ms,
+            )
+        if bbo is None:
+            return None
+        key = idempotency_key(
+            paper_epoch_id=self.epoch.paper_epoch_id,
+            context_event_id=pend.context_event_id,
+            timeframe=tf,
+            action=f"EXIT_{pos.side}_{pend.trigger_type}",
+        )
+        del self.pending_exits[tf]
+        exit_act = self._complete_exit(
+            pos=pos,
+            key=key,
+            bbo=bbo,
+            age_ms=age_ms,
+            trigger_type=pend.trigger_type,
+            trigger_event_id=pend.trigger_event_id,
+            trigger_timestamp=pend.trigger_timestamp,
+            trigger_monotonic_ns=pend.command_monotonic_ns,
+            trigger_price=pend.trigger_price,
+            context_event_id=pend.context_event_id,
+            episode_id=pend.episode_id or pos.lifecycle_episode_id,
+            event=pend.event,
+            bbo_domain=bbo_domain,
+        )
+        actions = [exit_act]
+        if pend.flip_to_side in {"LONG", "SHORT"} and pend.event is not None:
+            entry_act = self._enter_position(
+                tf=tf,
+                side=pend.flip_to_side,
+                event_type="CONTEXT_FLIP",
+                context_event_id=pend.context_event_id,
+                event_monotonic_ns=pend.command_monotonic_ns + 1,
+                event_timestamp=pend.trigger_timestamp,
+                context_event_price=pend.trigger_price,
+                episode_id=pend.episode_id,
+                event=pend.event,
+            )
+            if entry_act:
+                actions.append(entry_act)
+        return actions
+
+    def _complete_exit(
+        self,
+        *,
+        pos: OpenPosition,
+        key: str,
+        bbo: Any,
+        age_ms: float | None,
+        trigger_type: str,
+        trigger_event_id: str,
+        trigger_timestamp: str | None,
+        trigger_monotonic_ns: int,
+        trigger_price: Any,
+        context_event_id: str,
+        episode_id: str | None,
+        execution_price_override: float | None = None,
+        market_provenance: dict[str, Any] | None = None,
+        event: dict[str, Any] | None = None,
+        bbo_domain: str | None = None,
+    ) -> dict[str, Any]:
+        fill_px = (
+            float(execution_price_override)
+            if execution_price_override is not None
+            else fill_price_for(side=pos.side, action="EXIT", bbo=bbo)
+        )
+        trigger_u = str(trigger_type).upper()
+        protective_level: float | None = None
+        if trigger_u in {"SL", "STOP", "STOP_LOSS"}:
+            protective_level = float(pos.stop_loss_price)
+        elif trigger_u in {"TP", "TAKE_PROFIT"}:
+            protective_level = float(pos.take_profit_price)
+        protective_slippage = (
+            fill_px - protective_level
+            if protective_level is not None
+            else None
+        )
+        econ = closed_trade_economics(
+            cfg=self.cfg,
+            side=pos.side,
+            entry_price=pos.entry_price,
+            exit_price=fill_px,
+            quantity=pos.quantity,
+            risk_amount_usd=pos.risk_amount_usd,
+            exit_reason=trigger_type,
+        )
+        now = self.execution_clock()
+        execution_ts = now
+        closed_episode = str(pos.lifecycle_episode_id or "").strip() or episode_id
+        event = event or {}
+        occurrence_px = resolve_context_entry_price(event, trigger_price)
+        occurrence_ts = _occurrence_timestamp(event, trigger_timestamp)
+        provenance_snap = {
+            "context_event_price": occurrence_px,
+            "context_occurrence_timestamp": occurrence_ts,
+            "decision_available_at": event.get("decision_available_at"),
+            "materialized_timestamp": event.get("materialized_timestamp") or event.get("ingested_at"),
+            "execution_timestamp": execution_ts,
+            "execution_price": fill_px,
+            "execution_bbo_domain": bbo_domain,
+        }
+        cmd_id = _new_id("cmd")
+        order_id = _new_id("ord")
+        fill_id = _new_id("fill")
+        trade_id = _new_id("trd")
+        command_payload: dict[str, Any] = {
+            "command_id": cmd_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "action": "EXIT",
+            "trigger_type": trigger_type,
+            "trigger_event_id": trigger_event_id,
+            "trigger_timestamp": trigger_timestamp,
+            "trigger_monotonic_ns": trigger_monotonic_ns,
+            "trigger_price": trigger_price,
+            "context_event_id": context_event_id,
+            "command_monotonic_ns": trigger_monotonic_ns,
+            "book_update_id": (bbo.book_update_id if bbo is not None else None),
+            "best_bid": (bbo.best_bid if bbo is not None else None),
+            "best_ask": (bbo.best_ask if bbo is not None else None),
+            "bbo_receive_timestamp": (bbo.receive_timestamp if bbo is not None else None),
+            "bbo_receive_monotonic_ns": (bbo.receive_monotonic_ns if bbo is not None else None),
+            "bbo_age_ms": age_ms,
+            "fill_bid": (bbo.best_bid if bbo is not None else None),
+            "fill_ask": (bbo.best_ask if bbo is not None else None),
+            "paper_fill_price": fill_px,
+            "ts": now,
+            **provenance_snap,
+        }
+        if protective_level is not None:
+            command_payload.update(
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+            )
+        if market_provenance:
+            command_payload.update(market_provenance)
+        command = self.books.append("commands", command_payload)
+        self.books.append(
+            "orders",
+            {
+                "order_id": order_id,
+                "command_id": cmd_id,
+                "timeframe": pos.timeframe,
+                "side": pos.side,
+                "action": "EXIT",
+                "quantity": pos.quantity,
+                "status": "FILLED",
+                "ts": now,
+                "execution_timestamp": execution_ts,
+            },
+        )
+        fill_payload: dict[str, Any] = {
+            "fill_id": fill_id,
+            "order_id": order_id,
+            "command_id": cmd_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "action": "EXIT",
+            "gross_exit_price": fill_px,
+            "paper_fill_price": fill_px,
+            "quantity": pos.quantity,
+            "fill_bid": (bbo.best_bid if bbo is not None else None),
+            "fill_ask": (bbo.best_ask if bbo is not None else None),
+            "trigger_type": trigger_type,
+            "trigger_event_id": trigger_event_id,
+            "trigger_timestamp": trigger_timestamp,
+            "trigger_monotonic_ns": trigger_monotonic_ns,
+            "trigger_price": trigger_price,
+            "ts": now,
+            "fill_monotonic_ns": trigger_monotonic_ns,
+            **provenance_snap,
+        }
+        if protective_level is not None:
+            fill_payload.update(
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+            )
+        if market_provenance:
+            fill_payload.update(market_provenance)
+        fill = self.books.append("fills", fill_payload)
+        trade_payload: dict[str, Any] = {
+            "trade_id": trade_id,
+            "position_id": pos.position_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "quantity": pos.quantity,
+            "entry_price": pos.entry_price,
+            "exit_price": fill_px,
+            "gross_pnl_usd": econ["gross_pnl_usd"],
+            "net_pnl_usd": econ["net_pnl_usd"],
+            "fees_usd": econ["fees_usd"],
+            "slippage_usd": econ["slippage_usd"],
+            "entry_fee_usd": econ["entry_fee_usd"],
+            "exit_fee_usd": econ["exit_fee_usd"],
+            "risk_amount_usd": pos.risk_amount_usd,
+            "exit_reason": trigger_type,
+            "lifecycle_episode_id": closed_episode,
+            "entry_ts": pos.opened_at,
+            "exit_ts": now,
+            "status": "CLOSED",
+            **provenance_snap,
+        }
+        if protective_level is not None:
+            trade_payload.update(
+                trigger_price=float(trigger_price) if trigger_price is not None else None,
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+                stop_loss_price=pos.stop_loss_price,
+                take_profit_price=pos.take_profit_price,
+            )
+        trade = self.books.append("trades", trade_payload)
+        # Mark position closed via append of closed row (open filter uses status)
+        closed_position_payload: dict[str, Any] = {
+            "position_id": pos.position_id,
+            "timeframe": pos.timeframe,
+            "side": pos.side,
+            "status": "CLOSED",
+            "quantity": pos.quantity,
+            "entry_price": pos.entry_price,
+            "exit_price": fill_px,
+            "closed_at": now,
+            "opened_at": pos.opened_at,
+            "exit_reason": trigger_type,
+            "lifecycle_episode_id": closed_episode,
+            **provenance_snap,
+        }
+        if protective_level is not None:
+            closed_position_payload.update(
+                protective_level=protective_level,
+                protective_slippage=protective_slippage,
+                stop_loss_price=pos.stop_loss_price,
+                take_profit_price=pos.take_profit_price,
+            )
+        self.books.append("positions", closed_position_payload)
+        self.pending_exits.pop(pos.timeframe, None)
+        del self.positions[pos.timeframe]
+        if closed_episode and context_episode_is_closed(trigger_type):
+            self.ended_episodes.add(str(closed_episode))
+        if self._uses_sleeves() and self.sleeves is not None:
+            sleeve = self.sleeves.apply_realized_net_pnl(
+                pos.timeframe, float(econ["net_pnl_usd"]), at=now
+            )
+            master = self.sleeves.master_snapshot()
+            self.realized_pnl = float(master["master_realized_net_pnl_usd"])
+            self.equity = float(master["master_current_equity_usd"])
+            sleeve_equity = float(sleeve.current_equity_usd)
+        else:
+            self.realized_pnl += float(econ["net_pnl_usd"])
+            self.equity = float(self.epoch.initial_equity_usd) + self.realized_pnl
+            sleeve_equity = self.equity
+        self.books.append(
+            "equity_snapshots",
+            {
+                "ts": now,
+                "equity_usd": self.equity,
+                "realized_pnl_usd": self.realized_pnl,
+                "unrealized_pnl_usd": 0.0,
+                "trade_id": trade_id,
+                "timeframe": pos.timeframe,
+                "timeframe_equity_usd": sleeve_equity,
+                "timeframe_net_pnl_usd": float(econ["net_pnl_usd"]),
+            },
+        )
+        self.consumer.mark_processed(
+            key=key,
+            context_event_id=context_event_id,
+            event_monotonic_ns=trigger_monotonic_ns,
+        )
+        self.last_command = command
+        self.last_fill = fill
+        return {"status": "EXITED", "trade": trade, "fill": fill}
+
+    def _check_tp_sl_on_market(
+        self,
+        *,
+        trigger_monotonic_ns: int,
+        trigger_event_id: str,
+        trigger_timestamp: str | None,
+        trade_price: float | None,
+        use_local_bbo: bool = False,
+        market_provenance: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Protective TP/SL is triggered by the market trade price only."""
+        actions: list[dict[str, Any]] = []
+        if trade_price is None:
+            return actions
+
+        px = float(trade_price)
+
+        for tf, pos in list(self.positions.items()):
+            # A recovered market print before this position existed cannot
+            # trigger its stop/take. Use the actual persisted fill clock,
+            # never the earlier decision/context clock or the delivery clock.
+            exchange_trade = _as_utc_datetime((market_provenance or {}).get("exchange_trade_timestamp"))
+            opened = _as_utc_datetime(pos.opened_at)
+            if exchange_trade is not None and opened is not None and exchange_trade < opened:
+                continue
+            if pos.side == "LONG":
+                hit_tp = px >= pos.take_profit_price
+                hit_sl = px <= pos.stop_loss_price
+            else:
+                hit_tp = px <= pos.take_profit_price
+                hit_sl = px >= pos.stop_loss_price
+
+            if hit_tp and hit_sl:
+                d_tp = abs(px - pos.take_profit_price)
+                d_sl = abs(px - pos.stop_loss_price)
+                trigger = "TP" if d_tp <= d_sl else "SL"
+            elif hit_tp:
+                trigger = "TP"
+            elif hit_sl:
+                trigger = "SL"
+            else:
+                continue
+
+            act = self._exit_position(
+                tf=tf,
+                trigger_type=trigger,
+                trigger_event_id=trigger_event_id,
+                trigger_timestamp=trigger_timestamp,
+                trigger_monotonic_ns=trigger_monotonic_ns,
+                trigger_price=px,
+                context_event_id=trigger_event_id,
+                use_local_bbo=False,
+                market_provenance=market_provenance,
+            )
+            if act:
+                actions.append(act)
+        return actions
+
+    def _block(
+        self,
+        reason: str,
+        tf: str,
+        context_event_id: str,
+        side: str,
+        *,
+        event: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        self.blocked_commands += 1
+        payload: dict[str, Any] = {
+            "ts": _utc_iso(),
+            "reason": reason,
+            "timeframe": tf,
+            "context_event_id": context_event_id,
+            "side": side,
+        }
+        if extra:
+            payload.update(extra)
+        if event:
+            payload["decision_available_at"] = event.get("decision_available_at")
+            payload["event_timestamp"] = event.get("event_timestamp")
+            payload["ingested_at"] = event.get("ingested_at")
+            payload["evaluation_mode"] = event.get("evaluation_mode")
+            payload["restart_backfill"] = event.get("restart_backfill")
+            payload["materialization_class"] = event.get("materialization_class")
+            payload["lifecycle_episode_id"] = event.get("lifecycle_episode_id")
+        self.books.append("blocked", payload)
+
+    @_serialized
+    def health(self) -> dict[str, Any]:
+        import os
+
+        bbo = self.bbo.latest
+        age = None
+        local = self.bbo._latest_local
+        current_bbo = None
+        if local is not None:
+            age = max(0.0, (time.monotonic_ns() - local.receive_monotonic_ns) / 1_000_000.0)
+            current_bbo = {
+                "best_bid": local.best_bid,
+                "best_ask": local.best_ask,
+                "bbo_receive_timestamp": local.receive_timestamp,
+                "book_update_id": local.book_update_id,
+                "source_event_id": local.source_event_id,
+                "source": "manager_local_book_ticker",
+                "freshness_ms": age,
+            }
+        elif bbo is not None and bbo.receive_timestamp:
+            age = None  # context-domain mono not comparable to wall clock
+        manager_alive = True
+        lanes = {tf: "ACTIVE" for tf in self.cfg.timeframes}
+        consumer_status = "CONNECTED"
+        ck = self.consumer.checkpoint
+        payload: dict[str, Any] = {
+            "service": "intrabar_paper_manager",
+            "pid": os.getpid(),
+            "alive": manager_alive,
+            "paper_epoch_id": self.epoch.paper_epoch_id,
+            "mode": "paper_only",
+            "paper_only": True,
+            "real_execution_enabled": False,
+            "manager_status": "CONNECTED",
+            "context_consumer_status": consumer_status,
+            "execution_lanes": lanes,
+            "last_consumed_context_event_id": ck.last_consumed_context_event_id,
+            "last_event_monotonic_ns": ck.last_event_monotonic_ns,
+            "context_consumer_lag_events": None,
+            "last_command": self.last_command,
+            "last_fill": self.last_fill,
+            "last_context_event": self.last_context_event,
+            "active_positions_by_timeframe": {
+                tf: {"side": p.side, "quantity": p.quantity, "entry_price": p.entry_price}
+                for tf, p in self.positions.items()
+            },
+            "trades_count": self.books.count("trades"),
+            "signals_count": self.books.count("signals"),
+            "orders_count": self.books.count("orders"),
+            "fills_count": self.books.count("fills"),
+            "equity_usd": self.equity,
+            "realized_pnl_usd": self.realized_pnl,
+            "unrealized_pnl_usd": self.unrealized_pnl,
+            "bbo_freshness_ms": age,
+            "current_bbo": current_bbo,
+            "max_bbo_age_ms": self.cfg.max_bbo_age_ms,
+            "blocked_commands": self.blocked_commands,
+            "duplicate_events_prevented": ck.duplicate_events_prevented,
+            "errors": list(self.errors),
+            "entry_fee_bps": self.cfg.entry_fee_bps,
+            "exit_fee_bps": self.cfg.exit_fee_bps,
+            "entry_slippage_bps": self.cfg.entry_slippage_bps,
+            "exit_slippage_bps": self.cfg.exit_slippage_bps,
+            "max_risk_per_trade_usd": self.cfg.max_risk_per_trade_usd,
+            "initial_equity_usd": self.epoch.initial_equity_usd,
+            "capital_model": self.capital_model,
+            "updated_at": _utc_iso(),
+            "health_write_error": self.last_health_write_error,
+            "anti_saw_path_density": {
+                "enabled": bool((self.cfg.raw.get("anti_saw_path_density") or {}).get("enabled")),
+                "mode": str((self.cfg.raw.get("anti_saw_path_density") or {}).get("mode") or "off"),
+                "last_decision": self.last_saw,
+            },
+        }
+        if self.execution_market is not None:
+            payload["execution_market"] = self.execution_market.snapshot()
+        if self._uses_sleeves() and self.sleeves is not None:
+            master = self.sleeves.master_snapshot()
+            payload.update(
+                {
+                    "sleeves": {tf: s.to_dict() for tf, s in self.sleeves.sleeves.items()},
+                    "master_initial_equity_usd": master["master_initial_equity_usd"],
+                    "master_current_equity_usd": master["master_current_equity_usd"],
+                    "master_realized_net_pnl_usd": master["master_realized_net_pnl_usd"],
+                    "master_unrealized_pnl_usd": master["master_unrealized_pnl_usd"],
+                    "master_open_risk_usd": master["master_open_risk_usd"],
+                    "master_risk_capacity_usd": master["master_risk_capacity_usd"],
+                    "master_available_risk_usd": master["master_available_risk_usd"],
+                    "equity_usd": master["master_current_equity_usd"],
+                    "realized_pnl_usd": master["master_realized_net_pnl_usd"],
+                    "initial_equity_usd": master["master_initial_equity_usd"],
+                }
+            )
+        return payload
+
+    @_serialized
+    def write_health(self) -> Path:
+        payload = self.health()
+        encoded = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+        failures: list[str] = []
+        for target in (self.health_path, Path("data/runtime/intrabar_paper_health.json")):
+            tmp = target.with_suffix(".tmp")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp.write_text(encoded, encoding="utf-8")
+                tmp.replace(target)
+            except OSError as exc:
+                failures.append(f"{target}:{type(exc).__name__}:{exc}")
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        self.last_health_write_error = "; ".join(failures) or None
+        return self.health_path

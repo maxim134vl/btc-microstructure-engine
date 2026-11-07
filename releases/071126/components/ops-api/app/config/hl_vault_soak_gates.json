@@ -1,0 +1,20 @@
+{
+  "schema_version": "hl_vault_soak_gates_v1",
+  "network": "testnet",
+  "public_testnet_vault": true,
+  "gates": [
+    "min_soak_days",
+    "min_paired_fills",
+    "zero_liquidations",
+    "min_fill_rate",
+    "median_abs_basis_bps",
+    "kill_switch_tested",
+    "public_testnet_vault"
+  ],
+  "promotion_after_go": "private_mainnet_run",
+  "notes": [
+    "Soak is 4-8 weeks across market regimes, not a calendar checkbox alone.",
+    "Public testnet deposits are mock USDC and exist to rehearse withdrawals.",
+    "Mainnet create stays private_run even after GO until operator flips promotion."
+  ]
+}

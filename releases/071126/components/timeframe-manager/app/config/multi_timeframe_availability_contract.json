@@ -1,0 +1,169 @@
+{
+  "schema_version": "mtf_availability_contract_v1",
+  "generated_for_patch": "PATCH3_2",
+  "status": "RUNTIME_CONTRACT_ACTIVE",
+  "notes": [
+    "Operational availability is distinct from market semantics.",
+    "No event does not mean UNKNOWN/NEUTRAL/BALANCE/OBSERVE/NO_STATE.",
+    "Timestamp labels on live M15 candles are BAR_OPEN_TIME; completed bar close = open + duration.",
+    "pandas resample default left-labels HTF buckets by bar open; close = open + duration.",
+    "Stage-2 live write path covers M15/M30/H1/H4 only; D1 is on-demand/dashboard/research.",
+    "Do not invent synthetic market states when events are sparse.",
+    "Patch 3.2 runtime read-model must not promote research/dashboard D1 state into live availability."
+  ],
+  "live_support": {
+    "M15": "LIVE_SUPPORTED",
+    "M30": "LIVE_SUPPORTED",
+    "H1": "LIVE_SUPPORTED",
+    "H4": "LIVE_SUPPORTED",
+    "D1": "RESEARCH_ONLY_NOT_LIVE"
+  },
+  "availability_statuses": [
+    "FRESH_EVENT",
+    "AVAILABLE_LAST_CONFIRMED",
+    "WAITING_FOR_BAR_CLOSE",
+    "NO_EVENT_STATE_UNCHANGED",
+    "UPSTREAM_STALE",
+    "WRITER_STALE",
+    "WRITER_DEAD",
+    "DATASET_MISSING",
+    "SCHEMA_INVALID",
+    "TIMEFRAME_DEPRECATED",
+    "INSUFFICIENT_HISTORY",
+    "TIMEFRAME_NOT_LIVE",
+    "UNKNOWN"
+  ],
+  "timestamp_contract": {
+    "canonical_state_timestamp": "COMPLETED_BAR_CLOSE_TIME",
+    "source_m15_label": "BAR_OPEN_TIME",
+    "htf_resample_label": "BAR_OPEN_TIME",
+    "timezone": "UTC",
+    "point_in_time_rule": "source_bar_close <= evaluation_timestamp",
+    "forbid_unclosed_bar": true,
+    "forbid_future_join": true
+  },
+  "timeframes": {
+    "M15": {
+      "duration_seconds": 900,
+      "pandas_rule": "15min",
+      "expected_cadence_seconds": 900,
+      "normal_latency_seconds": 120,
+      "warning_latency_seconds": 600,
+      "stale_latency_seconds": 1800,
+      "broken_latency_seconds": 7200,
+      "max_inherited_age_seconds": 86400,
+      "source_dataset": "data/cognition/candle_structure_memory.parquet",
+      "live_stage2_writer": true,
+      "authoritative_persist": true,
+      "event_sparse": false,
+      "operational_class": "ACTIVE_AUTHORITATIVE"
+    },
+    "M30": {
+      "duration_seconds": 1800,
+      "pandas_rule": "30min",
+      "expected_cadence_seconds": 1800,
+      "normal_latency_seconds": 180,
+      "warning_latency_seconds": 900,
+      "stale_latency_seconds": 3600,
+      "broken_latency_seconds": 14400,
+      "max_inherited_age_seconds": 86400,
+      "source_dataset": "data/cognition/candle_structure_memory.parquet",
+      "derived_via": "aggregate_behavioral_timeframe",
+      "live_stage2_writer": true,
+      "authoritative_persist": false,
+      "event_sparse": true,
+      "operational_class": "EVENT_SPARSE_BY_DESIGN"
+    },
+    "H1": {
+      "duration_seconds": 3600,
+      "pandas_rule": "1h",
+      "expected_cadence_seconds": 3600,
+      "normal_latency_seconds": 300,
+      "warning_latency_seconds": 1800,
+      "stale_latency_seconds": 7200,
+      "broken_latency_seconds": 28800,
+      "max_inherited_age_seconds": 172800,
+      "source_dataset": "data/cognition/candle_structure_memory.parquet",
+      "derived_via": "aggregate_behavioral_timeframe",
+      "live_stage2_writer": true,
+      "authoritative_persist": false,
+      "event_sparse": true,
+      "operational_class": "EVENT_SPARSE_BY_DESIGN"
+    },
+    "H4": {
+      "duration_seconds": 14400,
+      "pandas_rule": "4h",
+      "expected_cadence_seconds": 14400,
+      "normal_latency_seconds": 600,
+      "warning_latency_seconds": 3600,
+      "stale_latency_seconds": 28800,
+      "broken_latency_seconds": 86400,
+      "max_inherited_age_seconds": 345600,
+      "source_dataset": "data/cognition/candle_structure_memory.parquet",
+      "derived_via": "aggregate_behavioral_timeframe",
+      "live_stage2_writer": true,
+      "authoritative_persist": false,
+      "event_sparse": true,
+      "operational_class": "EVENT_SPARSE_BY_DESIGN"
+    },
+    "D1": {
+      "duration_seconds": 86400,
+      "pandas_rule": "1D",
+      "expected_cadence_seconds": 86400,
+      "normal_latency_seconds": 1800,
+      "warning_latency_seconds": 21600,
+      "stale_latency_seconds": 172800,
+      "broken_latency_seconds": 604800,
+      "max_inherited_age_seconds": 1209600,
+      "source_dataset": "data/cognition/candle_structure_memory.parquet",
+      "derived_via": "aggregate_behavioral_timeframe",
+      "live_stage2_writer": false,
+      "authoritative_persist": false,
+      "event_sparse": true,
+      "operational_class": "RESEARCH_ONLY",
+      "notes": "D1 exists in aggregator map and dashboard/UI; not written by stage2_cognition_runtime_v1 live path."
+    }
+  },
+  "writer_classes": [
+    "RUNNING",
+    "EVENT_DRIVEN",
+    "WAITING_FOR_BAR_CLOSE",
+    "STALE",
+    "DEAD",
+    "DISCONNECTED",
+    "NOT_IMPLEMENTED",
+    "NOT_IMPLEMENTED_LIVE",
+    "DEPRECATED"
+  ],
+  "hierarchy_semantics": {
+    "principle": "timeframes provide separate observations; higher TF gives context; lower TF gives local dynamics",
+    "forbidden_in_patch3_1": [
+      "H4/D1 always vetoes M15/H1 direction",
+      "manager/trader agents",
+      "per-timeframe positions",
+      "MTF directional veto in paper",
+      "belief-to-paper integration"
+    ]
+  },
+  "synthetic_states_forbidden": [
+    "UNKNOWN",
+    "NEUTRAL",
+    "BALANCE",
+    "OBSERVE",
+    "NO_STATE"
+  ],
+  "candidate_read_model": {
+    "path": "data/research/patch3_1_candidate_mtf_availability.parquet",
+    "production_write_allowed": false
+  },
+  "runtime_read_model": {
+    "history_path": "data/cognition/multi_timeframe_availability_memory.parquet",
+    "latest_path": "data/runtime/multi_timeframe_availability_latest.json",
+    "status_path": "data/runtime/multi_timeframe_availability_status.json",
+    "owner": "PIPELINE_POST_CYCLE_READ_MODEL",
+    "writer": "mtf_availability_runtime_engine_v1.py",
+    "stage_class": "REQUIRED_OPERATIONAL_READ_MODEL",
+    "production_write_allowed": true,
+    "trading_use_forbidden": true
+  }
+}

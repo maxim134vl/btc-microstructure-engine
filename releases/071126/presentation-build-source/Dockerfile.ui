@@ -1,0 +1,5 @@
+FROM btcml-release-base-ui:071126
+RUN rm -rf /usr/share/nginx/html/*
+COPY dashboard/frontend/dist/ /usr/share/nginx/html/
+COPY dashboard/frontend/nginx.conf /etc/nginx/conf.d/default.conf
+LABEL org.btcml.release="071126" org.btcml.component="dashboard-ui-chart"

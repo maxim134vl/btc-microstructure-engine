@@ -1,0 +1,15 @@
+export const enShell = {
+  platform: "BTC-ML Platform",
+  mainNav: "Main navigation",
+  language: "Language",
+  theme: "Theme",
+  development: "Development",
+  production: "Production",
+  developmentEnv: "Development environment",
+  productionEnv: "Production environment",
+  themeLight: "Light",
+  themeDark: "Dark",
+  themeSystem: "System",
+  expandNav: "Expand navigation",
+  collapseNav: "Collapse navigation",
+};

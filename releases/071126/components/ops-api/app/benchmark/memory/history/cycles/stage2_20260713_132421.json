@@ -1,0 +1,65 @@
+{
+  "entry": {
+    "layer": "stage2",
+    "run_id": "20260713_132421",
+    "generated_at": "2026-07-13T13:24:21.783809",
+    "summary": {
+      "event_count": 17,
+      "verdict_distribution": {
+        "CONFIRMED": 6,
+        "PARTIAL": 6,
+        "CONTEXT_FAILURE": 1,
+        "FALSE_NARRATIVE": 2,
+        "CONTRADICTORY": 1,
+        "UNDERCONFIDENT": 1
+      },
+      "reasoning_accuracy": 0.3529,
+      "probabilistic_calibration_quality": 0.0588,
+      "contradiction_frequency": 0.0588,
+      "synthesis_stability": 0.4706,
+      "narrative_coherence": 0.7647,
+      "confidence_drift": 0.0,
+      "regime_interpretation_accuracy": 0.0,
+      "transition_logic_quality": 0.7059,
+      "overconfident_rate": 0.0,
+      "context_failure_rate": 0.0588
+    },
+    "drift": null,
+    "calibration": null,
+    "ontology": null,
+    "cognition_health": null,
+    "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_benchmark_20260713_132421.json",
+    "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage2_forensic_20260713_132421.md",
+    "event_count": 17
+  },
+  "payload": {
+    "run_id": "20260713_132421",
+    "generated_at": "2026-07-13T13:24:21.783809",
+    "report_markdown": "/Users/fontecrypto/btc-ml/benchmark/reports/stage2_forensic_20260713_132421.md",
+    "export_json": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_benchmark_20260713_132421.json",
+    "export_csv": "/Users/fontecrypto/btc-ml/benchmark/exports/stage2_summary_20260713_132421.csv",
+    "visuals": [],
+    "summary": {
+      "event_count": 17,
+      "verdict_distribution": {
+        "CONFIRMED": 6,
+        "PARTIAL": 6,
+        "CONTEXT_FAILURE": 1,
+        "FALSE_NARRATIVE": 2,
+        "CONTRADICTORY": 1,
+        "UNDERCONFIDENT": 1
+      },
+      "reasoning_accuracy": 0.3529,
+      "probabilistic_calibration_quality": 0.0588,
+      "contradiction_frequency": 0.0588,
+      "synthesis_stability": 0.4706,
+      "narrative_coherence": 0.7647,
+      "confidence_drift": 0.0,
+      "regime_interpretation_accuracy": 0.0,
+      "transition_logic_quality": 0.7059,
+      "overconfident_rate": 0.0,
+      "context_failure_rate": 0.0588
+    },
+    "status": "OK"
+  }
+}

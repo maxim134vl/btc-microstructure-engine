@@ -1,0 +1,231 @@
+{
+  "version": "2026.09.22",
+  "channel": "release",
+  "app": "btc-ml-paper",
+  "purpose": "Portable snapshot of the paper stack that this release builds. Trading behavior is still owned by the JSON files under config/. Copy this tree, not a live data/ directory.",
+  "authoritative_files": {
+    "chain_contract": "config/trading/s41_live1b_chain_contract.json",
+    "paper_execution": "config/intrabar_paper_execution.json",
+    "timeframe_risk": "config/timeframe_trader_risk.json",
+    "hybrid_sizing_model": "config/trading/hybrid_sizing/sizing_model.cbm",
+    "hybrid_sizing_features": "config/trading/hybrid_sizing/feature_contract.json",
+    "compose": "deploy/vps/docker-compose.yml",
+    "env_template": "deploy/vps/.env.example",
+    "strength": "src/btc_ml/cognition/living_market_process.py",
+    "path_density_anti_saw": "src/btc_ml/trading/anti_saw_path_density.py",
+    "paper_hang_watchdog": "src/btc_ml/runtime/paper_hang_watchdog.py"
+  },
+  "git": {
+    "remote": "https://gitea.fonte.kaz/skramovskiyin/btc-microstructure-engine.git",
+    "branch": "release",
+    "do_not_clone": [
+      "github.com/maxim134vl",
+      "main",
+      "memory/canonical-system",
+      "feature/*",
+      "safety/*"
+    ]
+  },
+  "safety": {
+    "paper_only": true,
+    "real_execution_enabled": false,
+    "execution_enabled": false,
+    "exchange_enabled": false,
+    "profiles_not_in_this_build": ["shadow", "assurance", "hl-vault-testnet"]
+  },
+  "market": {
+    "symbol": "BTCUSDT",
+    "asset": "BTCUSDT",
+    "timeframes": ["M15", "M30", "H1", "H4"],
+    "unsupported_timeframes": ["D1"],
+    "netting": "forbidden",
+    "accounts": "four independent sleeves, one open position each"
+  },
+  "economics": {
+    "deposit_usd_per_timeframe": 100000.0,
+    "initial_equity_usd": 100000.0,
+    "portfolio_max_risk_usd": 3000.0,
+    "portfolio_max_risk_pct": null,
+    "risk_aggregation": "PER_TIMEFRAME_INDEPENDENT",
+    "auto_reallocation_of_unused_risk": false,
+    "sizing_method": "RISK_BASED_STOP_LOSS_COST_AWARE",
+    "cost_aware_stop_sizing": true,
+    "fixed_notional_used": false,
+    "risk_pct_per_trade": {"M15": 0.5, "M30": 0.5, "H1": 1.0, "H4": 1.0},
+    "weights": {"M15": 0.5, "M30": 0.5, "H1": 1.0, "H4": 1.0},
+    "per_trader_max_risk_usd": {"M15": 500.0, "M30": 500.0, "H1": 1000.0, "H4": 1000.0},
+    "max_open_positions_per_trader": 1,
+    "max_open_positions_portfolio": 4,
+    "max_open_positions_per_timeframe": 1,
+    "stop_loss_bps": 100.0,
+    "take_profit_bps": 150.0,
+    "entry_fee_bps": 2.0,
+    "exit_fee_bps": 5.0,
+    "entry_fee_rate_pct": 0.02,
+    "exit_fee_rate_pct": 0.05,
+    "entry_slippage_bps": 3.0,
+    "exit_slippage_bps": 3.0,
+    "stop_exit_slippage_bps": 5.0,
+    "max_risk_per_trade_pct_paper_file": 1.0,
+    "max_risk_per_trade_usd_paper_file": 1000.0,
+    "note": "S4.1 OPEN gate uses timeframe_trader_risk.json. LIVE1B sizes from the per-TF sleeve times the CatBoost multiplier. TFs do not share one $1000 cap."
+  },
+  "entry": {
+    "contract_id": "S41_LIVE1B_CHAIN_V1",
+    "entry_source": "s41_command_bus",
+    "forbidden_production_entry_source": "context_journal",
+    "journal_role": "OBSERVE_ONLY",
+    "s41_consume_commands_after": "2026-09-11T20:50:00Z",
+    "entry_requires_confirmed_raw_status": true,
+    "entry_requires_min_process_strength": true,
+    "min_active_context_hold_bars": 0,
+    "confirmed_opposite_confirm_bars": 1,
+    "bar_count_anti_saw_enabled": false,
+    "economics_source": "canonical_paper_trade_economics_v1",
+    "hybrid_sizing": {
+      "enabled": true,
+      "artifacts_dir": "config/trading/hybrid_sizing",
+      "missing_cbm_behavior": "fallback multiplier 1.0, trades still open"
+    }
+  },
+  "trend_strength": {
+    "module": "src/btc_ml/cognition/living_market_process.py",
+    "trade_strength_floor_factor": 0.5,
+    "floor_formula": "0.5 * TF_WEIGHT",
+    "tf_weight": {"M15": 1.0, "M30": 1.5, "H1": 2.0, "H4": 4.0},
+    "floor_by_timeframe": {"M15": 0.5, "M30": 0.75, "H1": 1.0, "H4": 2.0},
+    "accept_delta": 1.0,
+    "no_effort_delta": 0.25,
+    "challenge_delta": 0.35,
+    "gate": "flat OPEN and context-flip CLOSE require process_strength >= floor; missing strength fail-open; SL/TP CLOSE is not gated; opposite accept kills only when its hit >= living strength",
+    "do_not_restore": "MIN_ACTIVE_CONTEXT_HOLD_BARS=3. Strength is not a bar delay."
+  },
+  "anti_saw": {
+    "bar_count": {
+      "enabled": false,
+      "status": "archived",
+      "do_not_restore": ["ANTI_SAW_MIN_HOLD", "ANTI_SAW_ENTRY_COOLDOWN", "ANTI_SAW_SUPPRESS_CONTEXT_FLIP_CLOSE"]
+    },
+    "path_density": {
+      "enabled": true,
+      "mode": "enforce",
+      "config": "config/intrabar_paper_execution.json#anti_saw_path_density",
+      "window_bars": {"M15": 8, "M30": 8, "H1": 6, "H4": 4},
+      "balance_support_enter": 0.55,
+      "balance_max_net_disp_ratio": 0.40,
+      "min_path_atr": 2.0,
+      "min_failed_breakouts": 1,
+      "min_bars": 3,
+      "volume_two_sided_enter": 0.55,
+      "auction_balance_share": 0.50,
+      "candle_structure_path": "data/cognition/candle_structure_memory.parquet",
+      "auction_path": "data/cognition/auction_episode_memory.parquet",
+      "gates": "flat OPEN and ATOMIC_FLIP OPEN when the closed-bar window is a saw",
+      "does_not_gate": ["CLOSE", "SL", "TP", "HOLD", "NEAR_TP_MISS"]
+    }
+  },
+  "near_tp_miss": {
+    "enabled": true,
+    "miss_bps": 10.0,
+    "per_timeframe": true,
+    "applies_to": ["M15", "M30", "H1", "H4"],
+    "rule": "Each TF independently closes NEAR_TP_MISS on its own closed bar when the bar extreme is within miss_bps of TP, TP did not print, and the close is still short of TP. The bar must have closed after the position opened. Not an atomic flip, so the same cycle does not OPEN."
+  },
+  "market_data_limits": {
+    "max_bbo_age_ms": 2000.0,
+    "max_agg_trade_age_ms": 5000.0,
+    "max_entry_signal_age_seconds": 900.0,
+    "context_event_max_age_seconds": 300.0
+  },
+  "process": {
+    "paper_poll_ms": 250,
+    "paper_health_every_s": 2.0,
+    "paper_health_max_age_s": 45,
+    "paper_hang_watchdog_poll_s": 5.0,
+    "paper_hang_watchdog_term_grace_s": 5.0,
+    "paper_hang_incident_log": "data/runtime/paper_hang_incidents.jsonl",
+    "cognition_max_age_s": 180,
+    "context_refresh_interval_seconds": 60,
+    "context_refresh_daemon": 1,
+    "visual_refresh_interval_s": 20,
+    "dashboard_poll_interval_s": 2.0
+  },
+  "ports": {
+    "ops_api_host": 18080,
+    "ops_api_container": 8080,
+    "dashboard_ui_host": 15173,
+    "dashboard_ui_container": 80,
+    "trade_chart_host": 18765,
+    "trade_chart_container": 8765,
+    "dashboard_api_base": "/api/v1",
+    "cors_origins": ["http://localhost:15173", "http://127.0.0.1:15173"]
+  },
+  "compose": {
+    "project_name": "btcml-vps",
+    "image_tag": "local",
+    "deployment_tag": "VPS_DEPLOY",
+    "volume_data": "btc_ml_data_vps",
+    "volume_visual": "btc_ml_visual_public_vps",
+    "data_mount": "/app/data",
+    "health_interval": "15s",
+    "health_timeout": "5s",
+    "health_retries": 12,
+    "health_start_period": "60s",
+    "ops_api_health_retries": 20,
+    "ops_api_health_start_period": "180s",
+    "container_user_uid": 10001
+  },
+  "images": {
+    "runtime": "btc-ml-vps-runtime:local",
+    "ops_api": "btc-ml-vps-ops-api:local",
+    "dashboard_ui": "btc-ml-vps-dashboard-ui:local",
+    "bases": ["python:3.11-slim", "node:20-alpine", "nginx:1.27-alpine"],
+    "built_by": "./scripts/deploy/vps_stack.sh build"
+  },
+  "services_in_up": [
+    "collector-watchdog",
+    "canonical-runtime",
+    "cognition-runtime",
+    "context-refresh-daemon",
+    "paper-manager",
+    "timeframe-manager",
+    "intrabar-supervisor",
+    "ops-api",
+    "dashboard-ui",
+    "context-refresher",
+    "trade-chart",
+    "trd-outcome2"
+  ],
+  "dashboard": {
+    "views": ["operational", "trading", "statement", "charts", "diary"],
+    "journal": "trading_operations.performance.trade_journal copied from stored closed trades",
+    "removed_from_nav": ["runtime activity", "validation"],
+    "trade_chart": "kept on host port 18765; it is the trade render, not the dashboard"
+  },
+  "resources": {
+    "host_ram_min_gib": 16,
+    "host_ram_normal_gib": 32,
+    "docker_ram_min_gib": 8,
+    "docker_ram_normal_gib": 12,
+    "cpu_min": "4 cores, not every host core",
+    "cpu_normal": "6 of 8",
+    "disk_min_gib": 80,
+    "disk_normal_gib": 200,
+    "disk_note": "paper WAL grows from hundreds of MB into gigabytes",
+    "os": "Ubuntu 22.04+ x86_64; Apple Silicon only if RAM is enough",
+    "network": "outbound HTTPS and WSS to Binance; gitea.fonte.kaz",
+    "image_size_runtime_approx": "1.7 GB",
+    "image_size_ops_api_approx": "1.8 GB",
+    "image_size_dashboard_ui_approx": "80 MB",
+    "weak_host": "Release 2026.09.22 on a new machine starts all 12 default services. health requires them. An 8 GB host cannot run that set; stopping ops-api or dashboard-ui makes health fail. Do not docker rm containers. Shadow profile stays off."
+  },
+  "do_not_restore": [
+    "MIN_ACTIVE_CONTEXT_HOLD_BARS=3",
+    "bar-count anti-saw",
+    "M15 inheritance onto M30/H1/H4",
+    "LIVE1A journal OPEN/FLIP/END fills",
+    "wait-one-bar OPEN",
+    "shadow profile",
+    "copy of a live Mac data/ directory"
+  ]
+}
