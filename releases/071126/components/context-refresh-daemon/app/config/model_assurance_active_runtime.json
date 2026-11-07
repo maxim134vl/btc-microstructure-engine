@@ -1,0 +1,8 @@
+{
+  "model_id": "BTC_INTRABAR_RULE_BASED",
+  "model_version": "INTRABAR_RULES_V1",
+  "model_role": "ACTIVE",
+  "model_type": "RULE_BASED_INTRABAR",
+  "cognition_version": "LIVE1A_CANONICAL_INTRABAR_CONTEXT",
+  "rule_contract_version": "INTRABAR_RULES_V1"
+}

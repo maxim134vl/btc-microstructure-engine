@@ -1,0 +1,36 @@
+{
+  "schema_version": "model_assurance_drift_monitoring_v1",
+  "monitoring_mode": "LIVE_CURRENT",
+  "runtime_impact": "NON_BLOCKING",
+  "poll_interval_seconds": 5,
+  "minimum_consecutive_windows": 3,
+  "recovery_consecutive_windows": 3,
+  "numeric_drift": {
+    "watch": 0.25,
+    "warning": 0.50,
+    "critical": 1.00
+  },
+  "categorical_drift": {
+    "watch": 0.10,
+    "warning": 0.20,
+    "critical": 0.30
+  },
+  "branches": {
+    "input": {
+      "baseline_min_observations": 5000,
+      "current_window_observations": 1000
+    },
+    "feature": {
+      "baseline_min_observations": 500,
+      "current_window_observations": 200
+    },
+    "context": {
+      "baseline_min_observations": 30,
+      "current_window_observations": 10
+    },
+    "performance": {
+      "baseline_min_observations": 30,
+      "current_window_observations": 10
+    }
+  }
+}

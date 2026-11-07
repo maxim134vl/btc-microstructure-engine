@@ -1,0 +1,70 @@
+{
+  "schema_version": "model_assurance_external_sources_v1",
+  "monitoring_mode": "LIVE_CURRENT",
+  "runtime_impact": "NON_BLOCKING",
+  "check_interval_seconds": 5,
+  "startup_grace_period_seconds": 30,
+  "future_clock_skew_tolerance_ms": 2000,
+  "pipeline": {
+    "max_queue_current_events": 40000,
+    "max_writer_lag_ms": 5000
+  },
+  "sources": [
+    {
+      "source_id": "BINANCE_SPOT_BTCUSDT_AGGTRADE",
+      "provider": "BINANCE",
+      "dataset_name": "spot_aggTrade",
+      "symbol": "BTCUSDT",
+      "transport": "WEBSOCKET",
+      "schema_version": "1.0.0",
+      "required_for": [
+        "LIVE1A_CONTEXT",
+        "CONTEXT_EVENT_PRICE",
+        "TP_SL_MONITORING"
+      ],
+      "expected_frequency": "STREAM",
+      "max_age_seconds": 60,
+      "exchange_timestamp_available": true,
+      "sequence_field": "aggregate_trade_id",
+      "provenance": "data/raw_market_events_v2/agg_trade",
+      "health_stream_key": "aggTrade",
+      "stream_dir": "agg_trade"
+    },
+    {
+      "source_id": "BINANCE_SPOT_BTCUSDT_BOOKTICKER",
+      "provider": "BINANCE",
+      "dataset_name": "spot_bookTicker",
+      "symbol": "BTCUSDT",
+      "transport": "WEBSOCKET",
+      "schema_version": "1.0.0",
+      "required_for": [
+        "LIVE1B_EXECUTION"
+      ],
+      "expected_frequency": "STREAM",
+      "max_age_seconds": 10,
+      "exchange_timestamp_available": false,
+      "sequence_field": "update_id",
+      "provenance": "data/raw_market_events_v2/book_ticker",
+      "health_stream_key": "bookTicker",
+      "stream_dir": "book_ticker"
+    },
+    {
+      "source_id": "BINANCE_SPOT_BTCUSDT_M15_KLINE",
+      "provider": "BINANCE",
+      "dataset_name": "spot_m15_completed_kline",
+      "symbol": "BTCUSDT",
+      "transport": "PARQUET_FEED",
+      "schema_version": "live_market_feed_v1",
+      "required_for": [
+        "COMPLETED_BAR_STRUCTURAL_BACKGROUND"
+      ],
+      "expected_frequency": "M15",
+      "max_age_seconds": 1200,
+      "exchange_timestamp_available": true,
+      "sequence_field": null,
+      "provenance": "data/live/live_market_feed.parquet",
+      "health_stream_key": null,
+      "stream_dir": null
+    }
+  ]
+}

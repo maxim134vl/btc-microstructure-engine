@@ -1,0 +1,69 @@
+{
+  "bounded_io": {
+    "canonical_stage2_publication_metadata.py": "dbf2f14f40cdf3f568d18a1d9f84696536c666a101bfc7dfaf8f85e076736c26",
+    "parquet_utils.py": "24bbc7a0d3ca654375a6b5a67126f3d1b31e9bdc8769adb6681802b660983afb",
+    "publisher_context_stage2_evidence.py": "98504ac758a956364611ec49de551f9a82a6461851c05166bf1c66560501b23b",
+    "publisher_stage2_publication_metadata.py": "8970a0f73d870ef2bb9a0171cc3d2750156f576e3358308f78d11fcab27a0045"
+  },
+  "bounded_io_scope": "Same frame values, complete serialized SHA, entire file decoding and all original timestamp/schema/replacement checks; bounded temporary buffers and incremental conversion, no changed classifier/producer trading formulas or old artifacts.",
+  "canonical_large_validation": {
+    "checks": "evidence/COLUMN_VALIDATION_CHECKS.json:8 PASS",
+    "parquet_utils_sha256": "6715cacc4bf1681582e3fadb2caccb074d253624568d91cc21c318c48588f6cd",
+    "scope": "All columns/pages decoded separately for files over existing 64MiB threshold; same row count/schema/timestamp checks and failure priority. Release only unused Arrow reservations after serialization and per column. No values removed, no budget changes. Stage2 producer remains exact 71ea version. Publisher v6 keeps its frozen previous utility version; no unnecessary Publisher rebuild."
+  },
+  "io_reuse_release": {
+    "checks": "evidence/COGNITION_IO_REUSE_CHECKS.json",
+    "files": {
+      "canonical_context_stage2_evidence.py": "745a42479ff33ab871b9de76ad0508719e588a1716439c78ec36d9c8b3942d81",
+      "canonical_stage2_publication_metadata.py": "4af76866ced64411dcac0fe8dc1ea1114c08e7076f222678799c7b3e3aea423e",
+      "canonical_synthesis.py": "4aefbfef30da0c4b4af8cf29e07e4d26cd1ff25beaae105a59e6ae67d59eeeaa",
+      "ops_owner_projections.py": "5225e28f45ab5d298ac1ddc906f164a4a63aea8f82aa449d43ab1d042d32feb6",
+      "ops_publication_contract.py": "bf19f88cb1cc3dfd74f3339d099e873f388bf6a385cd916f42a21e93e9aa855d",
+      "parquet_utils.py": "72965cb381e400ed699f8dd6b06dffe2b8e43b6a566561dc6ae3d83b61516566",
+      "publisher_context_stage2_evidence.py": "e34909446e8a9c5f685d784cc109c1aa56aad009534ac7974fd21fc87665cf66",
+      "publisher_stage2_publication_metadata.py": "25435da6b519bb87dedff2dfe3fa450a20c4b3718db6b574ea4c4ca014623d8b",
+      "publisher_synthesis.py": "75cec278e0d6b75cf28f89ba96afc8467e4c89520424fa23bb8c9c593f00b3ea",
+      "run_context_refresh_daemon.py": "2f1933a07d94dba968e199c16c70c7dbffa65caf9a901b46df575591d32dc92b",
+      "stage2_cognition_runtime_v1.py": "71ea175d892e7afce12a9ca53e9d22da0e397cc4b120821d2f7a6656c759c02d"
+    },
+    "scope": "Native serializer exact byte SHA captured once, all columns candidate validation and atomic durable replace retained; reuse immediate full-file SHA only for same file identity, full stream fallback on change. No classification/math/admission change. Exact prior producer versions retained."
+  },
+  "publisher_batch_amendment": "Bounded decode batches 16 instead of 1; all rows/columns/dtypes, complete SHA, original source/receipt/qualification checks unchanged.",
+  "publisher_private_decode_reuse": {
+    "checks": "evidence/PRIVATE_STAGE_DECODE_CHECKS.json",
+    "scope": "At most one native M15 decoded frame for one existing private publication stage. All actual raw bytes SHA computed on every use; full receipts, availability/target/TF/source checks unchanged outside decoder. No authority cached. Retained reader behavior unchanged."
+  },
+  "roles": {
+    "Canonical": {
+      "accepted_image": "sha256:0b9ba4e127bfa7480790162596f2e56ffb03536daa9648d4f0d3c58213320c39",
+      "base_tag": "btcml-canonical-observe-direct:20261101",
+      "helper_sha256": "4aefbfef30da0c4b4af8cf29e07e4d26cd1ff25beaae105a59e6ae67d59eeeaa"
+    },
+    "Publisher": {
+      "accepted_image": "sha256:aa42235365de0231b0efa10cd7f1ffb228a86888ca8cccfb49295af76a4de8ec",
+      "base_tag": "btcml-publisher-observe-direct:20261101",
+      "helper_sha256": "75cec278e0d6b75cf28f89ba96afc8467e4c89520424fa23bb8c9c593f00b3ea"
+    }
+  },
+  "scope": "Retain each accepted role-specific implementation; computational views avoid per-row copying of unrelated provenance attrs. Row SHA/value algorithms unchanged. Connect existing Publisher owner projection after native status commit.",
+  "t0_row_identity_amendment": {
+    "canonical_stage2_publication_metadata.py": "a7db9b67923bbd139cc0c0a27b825b788efb1521b8864a9ab03ccede3719a923",
+    "ops_owner_projections.py": "5225e28f45ab5d298ac1ddc906f164a4a63aea8f82aa449d43ab1d042d32feb6",
+    "ops_publication_contract.py": "bf19f88cb1cc3dfd74f3339d099e873f388bf6a385cd916f42a21e93e9aa855d",
+    "publisher_stage2_publication_metadata.py": "187e2245bd53bf5ef154a50d47d9bb37d161bd2215b98f0dd41f62d80156cf5d",
+    "run_context_refresh_daemon.py": "2f1933a07d94dba968e199c16c70c7dbffa65caf9a901b46df575591d32dc92b"
+  },
+  "publisher_private_source_byte_reuse": {
+    "at": "2026-11-05T00:54:29.601508+00:00",
+    "scope": "Existing decoded-reader cache of frozen private own_tf M15/M30/H1/H4 files; first/current-file-change full hash; retained reader and all admission/receipt paths unchanged",
+    "implementation_sha256": "11e6b9f674991261aca99e9f7495f6cb3f72f65ef45e6dc6a143d81aae247123",
+    "parquet_utils_preserved_sha256": "72965cb381e400ed699f8dd6b06dffe2b8e43b6a566561dc6ae3d83b61516566",
+    "validation": "PRIVATE_SOURCE_BYTE_REUSE_CHECKS.json;11PASS;fixture-only"
+  },
+  "canonical_native_row_groups": {
+    "at": "2026-11-05T02:50:56.479216+00:00",
+    "scope": "Only exact-digest native4TF writes bound Parquet row groups16; same rows/values/schema, validation, durability and actual full serialized SHA; legacy/custom paths unchanged",
+    "utility_sha256": "4ec608d1e93bc137826fe5f14bd9004990db0dd961c7c4a809c99797c40d785a",
+    "checks": "NATIVE_ROW_GROUP_CHECKS.json;8PASS;small ISOLATED fixture only"
+  }
+}

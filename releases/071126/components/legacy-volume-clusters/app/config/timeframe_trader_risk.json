@@ -1,0 +1,44 @@
+{
+  "schema_version": "timeframe_trader_risk_v1",
+  "asset": "BTCUSDT",
+  "deposit_usd": 100000.0,
+  "portfolio_max_risk_pct": 1.0,
+  "portfolio_max_risk_usd": 1000.0,
+  "sizing_method": "RISK_BASED_STOP_LOSS_COST_AWARE",
+  "cost_aware_stop_sizing": true,
+  "fixed_notional_used": false,
+  "entry_fee_rate_pct": 0.02,
+  "exit_fee_rate_pct": 0.05,
+  "risk_aggregation": "GROSS_NO_NETTING",
+  "auto_reallocation_of_unused_risk": false,
+  "supported_timeframes": ["M15", "M30", "H1", "H4"],
+  "unsupported_timeframes": ["D1"],
+  "unsupported_reason": {
+    "D1": {
+      "availability_status": "TIMEFRAME_NOT_LIVE",
+      "availability_reason": "NO_LIVE_STAGE2_WRITER"
+    }
+  },
+  "weights": {
+    "M15": 0.25,
+    "M30": 0.25,
+    "H1": 0.25,
+    "H4": 0.25
+  },
+  "per_trader_max_risk_usd": {
+    "M15": 250.0,
+    "M30": 250.0,
+    "H1": 250.0,
+    "H4": 250.0
+  },
+  "max_open_positions_per_trader": 1,
+  "max_open_positions_portfolio": 4,
+  "block_reasons": {
+    "portfolio_limit": "PORTFOLIO_RISK_LIMIT",
+    "trader_limit": "TRADER_RISK_LIMIT",
+    "invalid_stop": "INVALID_STOP_DISTANCE"
+  },
+  "paper_only": true,
+  "execution_enabled": false,
+  "exchange_enabled": false
+}

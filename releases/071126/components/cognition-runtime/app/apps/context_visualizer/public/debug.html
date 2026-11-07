@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BTC-ML Market State Debug</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="ops-surface">
+    <div class="terminal-shell">
+      <aside class="sidebar panel-scroll">
+        <div class="brand">
+          <div class="brand-icon">⌁</div>
+          <div>
+            <strong>BTC-ML Platform</strong>
+            <span>Debug</span>
+          </div>
+        </div>
+        <p style="margin:0.4rem 0.2rem 0.8rem;font-size:11px;color:var(--muted)">
+          <a href="./index.html" style="color:inherit">← Clean View (lifecycle)</a>
+        </p>
+
+        <nav class="nav-list" aria-label="Sandbox navigation">
+          <button>Operations</button>
+          <button>Runtime Activity</button>
+          <button class="active">Market State</button>
+          <button>Validation</button>
+          <button>Research</button>
+          <button>Settings</button>
+        </nav>
+
+        <section class="sidebar-card">
+          <h3>System Health</h3>
+          <div class="kv"><span>Live Feed</span><strong id="sideLiveFeed">—</strong></div>
+          <div class="kv"><span>Contexts</span><strong id="sideContextCounts">—</strong></div>
+          <div class="kv"><span>Last Update</span><strong id="sideLastUpdate">—</strong></div>
+        </section>
+
+        <section class="sidebar-card">
+          <h3>Quick Actions</h3>
+          <button id="fitButton" class="ghost-button">Fit</button>
+          <button id="latestButton" class="ghost-button">Go Latest</button>
+          <button id="resetButton" class="ghost-button">Reset Zoom</button>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="status-header">
+        <div class="topbar">
+          <div>
+            <h1>Market State</h1>
+            <p>Read-only auction regime and context observation · not an execution signal</p>
+          </div>
+          <div class="status-strip">
+            <span id="dataStatus" class="pill live">LIVE</span>
+            <span>Range end: <strong id="lastUpdate">—</strong></span>
+            <button id="themeButton" class="icon-button" title="Toggle theme">◐</button>
+          </div>
+        </div>
+
+        <section class="freshness-strip" id="freshnessStrip" aria-label="Data freshness">
+          <div class="freshness-group">
+            <span class="freshness-label">Latest bar</span>
+            <strong id="freshBarTs">—</strong>
+          </div>
+          <div class="freshness-group">
+            <span class="freshness-label">Market state</span>
+            <strong id="freshMarketTs">—</strong>
+          </div>
+          <div class="freshness-group">
+            <span class="freshness-label">Trading state</span>
+            <strong id="freshTradingTs">—</strong>
+          </div>
+          <div class="freshness-group freshness-current">
+            <span class="freshness-label">Current</span>
+            <strong id="freshCurrentState">—</strong>
+          </div>
+          <div class="freshness-group">
+            <span class="freshness-label">Confidence</span>
+            <strong id="freshConfidence">—</strong>
+          </div>
+          <span id="freshnessWarning" class="freshness-warning hidden" role="status"></span>
+          <p class="context-disclaimer">Context only. Not an execution signal.</p>
+        </section>
+        </header>
+
+        <section class="control-row compact-controls">
+          <div class="control-row-primary">
+            <div class="control-group segmented" id="timeframeControls">
+              <span class="control-label">Timeframe</span>
+              <button data-timeframe="M5">M5</button>
+              <button data-timeframe="M15" class="active">M15</button>
+              <button data-timeframe="M30">M30</button>
+              <button data-timeframe="H1">H1</button>
+              <button data-timeframe="H4">H4</button>
+              <button data-timeframe="D1">D1</button>
+            </div>
+
+            <label class="select-label compact">
+              <span class="control-label">Range</span>
+              <select id="rangeSelect">
+              <option value="latest100">Latest 100 bars</option>
+              <option value="latest500" selected>Last 500 bars</option>
+              <option value="last14d">Last 14 days</option>
+              <option value="latest1000">Latest 1000 bars</option>
+              <option value="last7d">Last 7 days</option>
+              <option value="all">All available</option>
+            </select>
+          </label>
+
+            <label class="select-label compact">
+              <span class="control-label">Display</span>
+              <select id="displaySelect">
+              <option value="clean" selected>Clean Market State</option>
+              <option value="decision">Context View</option>
+              <option value="debug">Debug</option>
+            </select>
+            </label>
+
+            <label class="toggle-label compact-auto-scroll">
+              <input id="autoScrollInput" type="checkbox" checked />
+              Auto-scroll
+            </label>
+          </div>
+
+          <div class="control-group overlay-toggles" id="overlayToggles">
+            <span class="control-label">Overlays</span>
+            <label class="toggle-label inline"><input id="toggleEventMarkers" type="checkbox" checked /> Event markers</label>
+            <label class="toggle-label inline"><input id="toggleEventLabels" type="checkbox" /> Event labels</label>
+            <label class="toggle-label inline"><input id="toggleDirectionalContext" type="checkbox" checked /> Directional context</label>
+            <label class="toggle-label inline"><input id="toggleContextLabels" type="checkbox" /> Context labels</label>
+          </div>
+        </section>
+
+        <div class="content-grid">
+          <section class="main-column">
+            <section class="chart-card">
+              <div class="chart-header">
+                <div>
+                  <h2>BTCUSDT · <span id="chartTimeframe">M15</span> · BINANCE</h2>
+                  <p id="ohlcLine">OHLC —</p>
+                </div>
+                <div class="chart-tools">
+                  <button id="chartFitButton">Fit</button>
+                  <button id="chartLatestButton">Latest</button>
+                  <button id="chartResetButton">Reset</button>
+                </div>
+              </div>
+              <div class="chart-wrap">
+                <canvas id="marketCanvas"></canvas>
+                <div id="chartTooltip" class="chart-tooltip hidden"></div>
+              </div>
+              <div class="chart-lane-legend">
+                <span><i class="lane-swatch context-long"></i>Long context lane · posture, not execution</span>
+                <span><i class="lane-swatch context-short"></i>Short context lane · posture, not execution</span>
+                <span><i class="lane-swatch trading-state"></i>Trading state lane · includes REVERSAL_WATCH</span>
+              </div>
+              <div id="rangeWarning" class="range-warning hidden"></div>
+            </section>
+
+            <section class="regime-card compact-regime">
+              <div class="section-heading regime-heading">
+                <div class="regime-heading-inline">
+                  <h2>Cognitive Regime Timeline</h2>
+                  <span class="regime-heading-sep" aria-hidden="true">·</span>
+                  <p class="regime-note-inline">Market/cognitive auction phases. REVERSAL here is market reversal, not REVERSAL_WATCH.</p>
+                </div>
+                <span id="timelineRangeLabel">Selected range</span>
+              </div>
+              <div id="regimeTimeline" class="regime-timeline"></div>
+              <div class="legend regime-legend">
+                <span><i class="legend-dot distribution"></i>Distribution</span>
+                <span><i class="legend-dot reversal"></i>Reversal</span>
+                <span><i class="legend-dot accumulation"></i>Accumulation</span>
+                <span><i class="legend-dot markup"></i>Markup</span>
+                <span><i class="legend-dot neutral"></i>Neutral</span>
+              </div>
+            </section>
+
+            <section class="bottom-grid">
+              <article class="table-card">
+                <div class="section-heading">
+                  <h2>Directional Context History</h2>
+                  <select id="eventFilter">
+                    <option value="all">All</option>
+                    <option value="long">Long Contexts</option>
+                    <option value="short">Short Contexts</option>
+                    <option value="start">Context Starts</option>
+                    <option value="end">Context Ends</option>
+                    <option value="mode">Regime Shifts</option>
+                    <option value="warning">Warnings</option>
+                  </select>
+                </div>
+                <p id="contextStatusLine" class="context-status-line">—</p>
+                <p class="panel-note">Context started / context ended — not trade opened or closed.</p>
+                <div class="table-wrap panel-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Timestamp</th>
+                        <th>Event</th>
+                        <th>Direction</th>
+                        <th>From</th>
+                        <th>To</th>
+                        <th>Context ID</th>
+                        <th>Duration</th>
+                        <th>Δ Price</th>
+                      </tr>
+                    </thead>
+                    <tbody id="contextHistoryBody"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="metrics-card">
+                <h2>Core Probabilistic Metrics</h2>
+                <div id="probabilityMetrics" class="metric-grid"></div>
+                <h2>Key Runtime Metrics</h2>
+                <div id="runtimeMetrics" class="metric-grid compact"></div>
+              </article>
+            </section>
+          </section>
+
+          <aside class="right-panel panel-scroll diagnostics-column">
+            <section class="panel-card">
+              <h2>Current Market State</h2>
+              <div id="currentStatePanel"></div>
+              <div id="persistenceWarning" class="persistence-warning hidden" role="status"></div>
+            </section>
+
+            <section class="panel-card">
+              <h2>REVERSAL_WATCH Episodes</h2>
+              <p class="panel-note">Lifecycle watch episodes from trading_state · TTL 24h · not a trade signal.</p>
+              <div id="reversalWatchPanel"></div>
+            </section>
+
+            <section class="panel-card">
+              <h2>Probabilistic View</h2>
+              <div id="probabilityPanel"></div>
+            </section>
+
+            <section class="panel-card">
+              <h2>Multi-Timeframe Alignment</h2>
+              <div id="mtfPanel"></div>
+            </section>
+
+            <section class="panel-card">
+              <h2>Location Analysis</h2>
+              <div id="locationPanel"></div>
+            </section>
+
+            <section class="panel-card warning-card">
+              <h2>System Warnings</h2>
+              <ul id="warningsList"></ul>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+
+    <script src="./legacy_app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "schema_version": "execution_market_wal_storage_v1",
+  "mode": "segmented",
+  "segment_max_bytes": 67108864,
+  "archive_batch_rows": 65536,
+  "delete_verified_plaintext": true,
+  "plaintext_retention_hours": 0.0,
+  "warning_size_bytes": 10737418240,
+  "critical_size_bytes": 21474836480
+}

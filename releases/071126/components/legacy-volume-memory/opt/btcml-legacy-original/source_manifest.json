@@ -1,0 +1,52 @@
+[
+  {
+    "commit": "c2bd94c5e16d79d9f3fc93c1a1f05b2102239267",
+    "git_path": "collectors/multi_exchange_collector_v2_backup.py",
+    "isolated_path": "/private/tmp/btcml-legacy-source-isolation-20261003/source/multi_exchange_collector.py",
+    "sha256": "3d9ed919be3a1dc15e1f10270696dc7745db3664d4218fa2578d180f995f4659",
+    "original_sha256": "a6ee67325df1bb8c674fe81a565f63fe942239368d6127cd930ee4781e3119e4",
+    "approved_change": "Collection call list: Binance only; all original calculation functions unchanged."
+  },
+  {
+    "commit": "dbc5260f8e4c265ea15c59ebc3591f4110644d93",
+    "git_path": "engines/volume_cluster_engine.py",
+    "isolated_path": "/private/tmp/btcml-legacy-source-isolation-20261003/source/engines/volume_cluster_engine.py",
+    "sha256": "8f7d592165115516791f4cb607245a3cf2678e187d728b5522d9744857167639",
+    "original_sha256": "8f7d592165115516791f4cb607245a3cf2678e187d728b5522d9744857167639"
+  },
+  {
+    "commit": "dbc5260f8e4c265ea15c59ebc3591f4110644d93",
+    "git_path": "engines/volume_reaction_engine.py",
+    "isolated_path": "/private/tmp/btcml-legacy-source-isolation-20261003/source/engines/volume_reaction_engine.py",
+    "sha256": "54ead2e050a0e33a90743a46ad7881e0e77b1a0afb89d087b32316c6e6886408",
+    "original_sha256": "54ead2e050a0e33a90743a46ad7881e0e77b1a0afb89d087b32316c6e6886408"
+  },
+  {
+    "commit": "dbc5260f8e4c265ea15c59ebc3591f4110644d93",
+    "git_path": "engines/volume_memory_engine.py",
+    "isolated_path": "/private/tmp/btcml-legacy-source-isolation-20261003/source/engines/volume_memory_engine.py",
+    "sha256": "12d4a6e00130b2df187cdcf78da794074135211cd47c849b6ff02ab0e29d375e",
+    "original_sha256": "12d4a6e00130b2df187cdcf78da794074135211cd47c849b6ff02ab0e29d375e"
+  },
+  {
+    "commit": "dbc5260f8e4c265ea15c59ebc3591f4110644d93",
+    "git_path": "engines/inventory_engine.py",
+    "isolated_path": "/private/tmp/btcml-legacy-source-isolation-20261003/source/engines/inventory_engine.py",
+    "sha256": "0f029ac1ae68180c24b65a9ac3a634c2ef23637f79e0162b3b100d41b4ebe615",
+    "original_sha256": "0f029ac1ae68180c24b65a9ac3a634c2ef23637f79e0162b3b100d41b4ebe615"
+  },
+  {
+    "commit": "dbc5260f8e4c265ea15c59ebc3591f4110644d93",
+    "git_path": "engines/acceptance_engine.py",
+    "isolated_path": "/private/tmp/btcml-legacy-source-isolation-20261003/source/engines/acceptance_engine.py",
+    "sha256": "10c73c7f04aabac75da3fac8f94f92811763a2696cb77a13ffbda7aff6ee9374",
+    "original_sha256": "10c73c7f04aabac75da3fac8f94f92811763a2696cb77a13ffbda7aff6ee9374"
+  },
+  {
+    "commit": "dbc5260f8e4c265ea15c59ebc3591f4110644d93",
+    "git_path": "engines/regime_engine.py",
+    "isolated_path": "/private/tmp/btcml-legacy-source-isolation-20261003/source/engines/regime_engine.py",
+    "sha256": "a14e7fffcd940dc53cb141852972be91839721b7893dacccb6f12318bd9029f8",
+    "original_sha256": "a14e7fffcd940dc53cb141852972be91839721b7893dacccb6f12318bd9029f8"
+  }
+]

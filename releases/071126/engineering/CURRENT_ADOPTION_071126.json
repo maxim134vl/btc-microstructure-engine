@@ -1,0 +1,290 @@
+[
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "ops-api",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+    "source": "SOURCES/INSTALLED/ops-api.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+      "source_file_manifest": "SOURCE_SHA256.json",
+      "candidate_source_digest": "af283f402b101ee180f1d41059068ecac0a700fb0dde9b4d2524f265c6befd1e",
+      "working_tree_base_revision": "4167c96cdb33e62be0be2739364c89595976d9f4",
+      "base_image_origin": "retained exact installed API/UI base; algorithm images unchanged"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "dashboard-ui",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+    "source": "SOURCES/presentation-candidate + INSTALLED/dashboard-ui-static",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+      "source_file_manifest": "SOURCE_SHA256.json",
+      "candidate_source_digest": "af283f402b101ee180f1d41059068ecac0a700fb0dde9b4d2524f265c6befd1e",
+      "working_tree_base_revision": "4167c96cdb33e62be0be2739364c89595976d9f4",
+      "base_image_origin": "retained exact installed API/UI base; algorithm images unchanged"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "timeframe-manager",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+    "source": "SOURCES/INSTALLED/timeframe-manager.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+      "origin_labels": {
+        "btcml.base.image": "sha256:2e37bce2841464cc7fe31cf3d70109218f530564d873608c06297f2c312ec0cc",
+        "btcml.performance.scope": "resume-owned-session-incremental-stage-sha256",
+        "btcml.source.manifest": "017ec8ba8a0f6295e747ccd78d00a711ec77819af34741160d8fade0315250f4",
+        "btcml.source_tree_sha256": "ea5f932acfc9a3496bf8c234637647edec4ffbe377185b9f517f105ecabaf905",
+        "org.opencontainers.image.revision": "9bba9c986f3e489db3289fb3234619b36a85ebbe"
+      },
+      "source_revision_status": "PUBLISHED_BASE_REVISION_AND_IMAGE_ID"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "paper-manager",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+    "source": "SOURCES/INSTALLED/paper-manager.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+      "origin_labels": {
+        "btcml.base.image": "sha256:2e37bce2841464cc7fe31cf3d70109218f530564d873608c06297f2c312ec0cc",
+        "btcml.performance.scope": "resume-owned-session-incremental-stage-sha256",
+        "btcml.source.manifest": "017ec8ba8a0f6295e747ccd78d00a711ec77819af34741160d8fade0315250f4",
+        "btcml.source_tree_sha256": "ea5f932acfc9a3496bf8c234637647edec4ffbe377185b9f517f105ecabaf905",
+        "org.opencontainers.image.revision": "9bba9c986f3e489db3289fb3234619b36a85ebbe"
+      },
+      "source_revision_status": "PUBLISHED_BASE_REVISION_AND_IMAGE_ID"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "context-refresh-daemon",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+    "source": "SOURCES/INSTALLED/context-refresh-daemon.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "context-refresher",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+    "source": "SOURCES/INSTALLED/context-refresher.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "legacy-volume-clusters",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+    "source": "SOURCES/INSTALLED/legacy-volume-clusters.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "canonical-runtime",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+    "source": "SOURCES/INSTALLED/canonical-runtime.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "intrabar-supervisor",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+    "source": "SOURCES/INSTALLED/intrabar-supervisor.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+      "origin_labels": {
+        "btcml.base.image": "sha256:2e37bce2841464cc7fe31cf3d70109218f530564d873608c06297f2c312ec0cc",
+        "btcml.performance.scope": "resume-owned-session-incremental-stage-sha256",
+        "btcml.source.manifest": "017ec8ba8a0f6295e747ccd78d00a711ec77819af34741160d8fade0315250f4",
+        "btcml.source_tree_sha256": "ea5f932acfc9a3496bf8c234637647edec4ffbe377185b9f517f105ecabaf905",
+        "org.opencontainers.image.revision": "9bba9c986f3e489db3289fb3234619b36a85ebbe"
+      },
+      "source_revision_status": "PUBLISHED_BASE_REVISION_AND_IMAGE_ID"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "legacy-volume-memory",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+    "source": "SOURCES/INSTALLED/legacy-volume-memory.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "legacy-volume-reactions",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+    "source": "SOURCES/INSTALLED/legacy-volume-reactions.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "legacy-multi-exchange",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+    "source": "SOURCES/INSTALLED/legacy-multi-exchange.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "collector-watchdog",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+    "source": "SOURCES/INSTALLED/collector-watchdog.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07 snapshot; implementation accepted earlier",
+    "component": "cognition-runtime",
+    "status": "INSTALLED",
+    "current_image_id": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+    "source": "SOURCES/INSTALLED/cognition-runtime.tar.gz",
+    "problem": "Preserve exactly the installed accepted component, including role-specific version and overlays",
+    "solution": "Image/source/command/dependency/mount/state preserved without algorithm edits",
+    "validation": "Per-file/OCI SHA, saved-image load/create; full runtime restore NOT_TESTED",
+    "historical_origin": {
+      "installed_image_id": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+      "origin_labels": {},
+      "source_revision_status": "EXACT_IMAGE_ID_PRESERVED; source revision not separately published"
+    },
+    "current_runtime_health_is_separate": true
+  },
+  {
+    "date": "2026-11-07",
+    "component": "Cognition recovery artifact",
+    "status": "ACCEPTED_NOT_INSTALLED",
+    "problem": "Original image object unavailable in Docker store",
+    "solution": "Actual read-only container rootfs + effective startup metadata reconstructed into a separate image",
+    "validation": "Saved artifact load, UID10001 /app import-only probe, 846 exact source hashes",
+    "image_id": "sha256:348073d3a7300d3a402bea47f770505486ce4b4f6112f1c2f1b59e57e62540e8",
+    "installed_replacement": false
+  },
+  {
+    "date": "2026-11-03 research",
+    "component": "Window/EWMA official Spot baseline comparison",
+    "status": "RESEARCH_ONLY",
+    "problem": "Estimate reference-rate methods on preserved exchange-time data",
+    "solution": "Research comparison only; current provider uses approved 300s/Q-T-span, not EWMA or Q/300",
+    "validation": "Historical experiment report scope, no new calculation in preservation task"
+  },
+  {
+    "date": "2026-11-07 stopped experiment",
+    "component": "Interval-based A/B runtime schedule proposal",
+    "status": "RESEARCH_ONLY",
+    "problem": "Owner stopped the experiment",
+    "solution": "No proposed schedule installed by this preservation task",
+    "validation": "Installed exact configs/images preserved; no new schedule inference"
+  },
+  {
+    "date": "2026-11 historical owner direction",
+    "component": "Native Mac R08 execution direction",
+    "status": "REJECTED",
+    "problem": "Owner cancelled the native-runner direction",
+    "solution": "R08 remains the existing Paper child; no extra service or Mac execution",
+    "validation": "Current Paper source/command/descriptor configuration preserved"
+  },
+  {
+    "date": "2026-11-04..06 versions",
+    "component": "Superseded execution package tags before current V34",
+    "status": "SUPERSEDED",
+    "problem": "Old tags retained after fixes already incorporated in accepted current versions",
+    "solution": "Only unreferenced superseded tags cleaned after P2; current images, base dependencies and original Nov2 candidate kept",
+    "validation": "BTCML_STORAGE_MANIFEST/P3_IMAGE_CLEANUP_PLAN.json + RESULT.json; no global prune"
+  }
+]
