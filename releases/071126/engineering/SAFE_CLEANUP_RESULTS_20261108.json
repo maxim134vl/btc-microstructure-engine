@@ -1,0 +1,95 @@
+{
+  "classified_backup_removals": {
+    "status": "PASS",
+    "files_removed": 641140,
+    "logical_bytes_removed": 6739365366,
+    "roots": {
+      "BTC-ML-BACKUP-2026-08-13": {
+        "files": 35061,
+        "logical_bytes": 394620587
+      },
+      "BTCML-RECOVERY-BACKUPS": {
+        "files": 606079,
+        "logical_bytes": 6344744779
+      }
+    },
+    "operation_local_free_delta_bytes": 7690158080,
+    "restore_map": "/Volumes/MaksTiger/BTCML_STORAGE_MANIFEST/CLEANUP_20261108/INACTIVE_BACKUP_PAYLOAD_RESTORE_MAP.private.jsonl.gz",
+    "restore_map_sha256": "b3a235d07387650a1d96d922c0e449877ecc16870c94def43231ecea760d36e4",
+    "wall_s": 858.5538633330725,
+    "broad_rejected_plan_executed": false,
+    "new_scope": "Generated old backup deps with direct keeper + regular Parquet/NumPy/CSV sealed payloads only; no source/config/RAW/ACK/financial/current projects",
+    "reused_prior_full_SHA_only_with_unchanged_file_identity_size_mtime_ctime": true,
+    "at_UTC": "2026-11-08T02:31:13.750222+00:00"
+  },
+  "direct_backup_removals": {
+    "status": "PASS",
+    "removed_files": 2326,
+    "logical_bytes": 1110416366,
+    "operation_local_free_delta_bytes": 1114599424,
+    "wall_s": 5.978907625190914,
+    "restore_map": "/Volumes/MaksTiger/BTCML_STORAGE_MANIFEST/CLEANUP_20261108/SAFE_BACKUP_DATA_RESTORE_MAP.private.jsonl.gz",
+    "restore_map_sha256": "0e762dc8caa8cc843b340d82dc8444e04576b6a7effd3b11367dd8586ab180cb",
+    "removed_log": "/Volumes/MaksTiger/BTCML_STORAGE_MANIFEST/CLEANUP_20261108/SAFE_BACKUP_DATA_REMOVED.private.jsonl.gz",
+    "scope": "2326 individually classified inactive backup data copies only; both btc-ml trees and all code/config/RAW/ACK/financial data untouched",
+    "broad_rejected_plan_executed": false,
+    "at_UTC": "2026-11-08T01:43:47.177466+00:00"
+  },
+  "inactive_development_environments": {
+    "status": "PASS_PRESERVED_AND_REMOVED",
+    "files_links": 74147,
+    "logical_bytes": 2217507287,
+    "allocated_bytes": 2399264768,
+    "archive": "/Volumes/MaksTiger/BTCML_ENGINEERING_JOURNAL/WORKING_TREES/20261108/inactive-host-development-environments.tar.zst",
+    "archive_bytes": 556794646,
+    "archive_sha256": "e367ff7ec7fed1ec15b5ac6822565f47dc6c65556b82344560852ecdd7dfe35f",
+    "index": "/Volumes/MaksTiger/BTCML_ENGINEERING_JOURNAL/WORKING_TREES/20261108/inactive-host-development-environments.files.private.jsonl.gz",
+    "semantic_class": "Inactive host dev virtualenvs and generated npm dependencies; no container mount or open native process; every byte preserved and compared after decompression",
+    "source_package_and_lockfiles_preserved": true,
+    "internal_free_delta_bytes": 3536941056,
+    "wall_s": 133.96517133293673
+  },
+  "clean_old_worktree": {
+    "path": "/Users/fontecrypto/btc-ml-bug-repair-smoke-20261003",
+    "branch": "repair/smoke-close-ownership-20261003",
+    "commit": "08a720e2938fce07acb4879281f835fdff8f2d8d",
+    "bundled_ref": "08a720e2938fce07acb4879281f835fdff8f2d8d refs/heads/repair/smoke-close-ownership-20261003",
+    "files": 9072,
+    "logical_bytes": 288949985,
+    "allocated_bytes_shared_included": 313135104,
+    "status_clean": true,
+    "ignored_and_untracked": 0,
+    "native_open_refs": 0,
+    "active_container_mounts": 0,
+    "preservation": "/Volumes/MaksTiger/BTCML_BACKUP_071126/SOURCES/local-git-history.bundle",
+    "restore_command": "git worktree add /Users/fontecrypto/btc-ml-bug-repair-smoke-20261003 repair/smoke-close-ownership-20261003",
+    "other_dirty_worktree": "KEEP unchanged",
+    "status": "REMOVED_NORMAL_GIT_BRANCH_PRESERVED",
+    "internal_free_delta_bytes": 318906368,
+    "at_UTC": "2026-11-08T02:39:39.526526+00:00"
+  },
+  "registry": {
+    "status": "FINAL_UPDATED",
+    "registry_rows": 514,
+    "collections_with_locator_overrides": 35,
+    "removed_alias_paths": 643466,
+    "removed_logical_payload_bytes": 7849781732,
+    "roots_files": {
+      "BTC-ML-BACKUP-2026-08-13": 35758,
+      "BTCML-R09-TEST_ONLY-20261019": 1081,
+      "BTCML-INTEGRATION-20261013-EVIDENCE": 348,
+      "BTCML-RECOVERY-BACKUPS": 606279
+    },
+    "overlay": "/Volumes/MaksTiger/BTCML_STORAGE_MANIFEST/CLEANUP_20261108/CURRENT_LOCATOR_INDEX_20261108.private.jsonl.gz",
+    "overlay_sha256": "a8848bd25d86b920c9d861a8e3d33d339d6c5073245978dbb6e6591958731169",
+    "original_4585211_entry_index_unchanged": true,
+    "no_new_samples_or_joins": true
+  },
+  "release": "071126",
+  "documentation_revision": "20261108",
+  "source_code_unchanged": true,
+  "REAL_EXECUTION": "DISABLED",
+  "no_new_capture_replay_or_qualification": true,
+  "broad_action": "Rejected original1.77m-file action never ran; only separate classified subsets applied",
+  "limits": "Remaining source-bound/financial/primary research and unproven families retained; no ALL_CLEAN claim"
+}

@@ -32,3 +32,7 @@ Each index entry below is counted in one path-based locator category. Historical
 | 4_DECISION_EXECUTION | 974699 | 72919864070 |
 | 5_LEARNING_CALIBRATION | 326441 | 15923387830 |
 | 6_SYSTEM_EVIDENCE | 553150 | 18201467246 |
+
+## Current locators after cleanup20261108
+
+The single authoritative collection registry remains BTCML_STORAGE_MANIFEST/DATASET_REGISTRY.csv (514 collections). It now links the current exact-byte locator overlay for643466 removed redundant inactive copies. Original payload, schema/world/label/availability metadata and the immutable pre-cleanup full-file index are not rewritten. Original tick/bar sources, all Master/training versions, useful negative/shadow cases and the primary research tree remain. A metadata alias does not merge sample identity or create training labels.
