@@ -961,3 +961,10 @@
 **DEPENDENCIES**: __future__, active_epoch_trade_filter, apps.context_visualizer.trading_truth, pathlib, runtime_dataset_metadata, timeframe_chart_truth, trading_truth, typing
 
 **ENTRY_SYMBOLS**: _directional, _direction_word, _find_live_feed, _to_utc_ts, _iso, _clean_text, _safe_float, _safe_int, _safe_bool, load_candles, load_volume_events, build_candle_rows, _classify_uncertainty, _segment_label, _segment_from_run, _marker_from_row, build_uncertainty_segments, build_episode_rows, build_status_line, build_latest, write_json, emit_timeframe_chart_truth_if_enabled, _closed_visual_key, main, flush
+<!-- CLEANUP_REVISION_20261108 -->
+
+## Связь с графическими схемами — 08.11.2026
+
+[Единый индекс](../ARCHITECTURE_DIAGRAM_INDEX.md) содержит схемы01–08 и компактный C4 L2 обзор02A. [Индекс блоков/стрелок](../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.md) даёт owner, input → processing → output, consumer и точные source SHA/anchors. Для Canonical порядок28 engines приведён выше и на Stage1 DFD; группы схемы не исключают промежуточных расчётов.
+
+Publisher source snapshot/native pass — подготовка данных в одном проходе; native Auction/Cognitive/Final, M15 private boundary, Lifecycle/Stage2 consumption и Context Phase имеют отдельные роли. Intrabar Cognition — параллельная ветвь. Слово `candidate` в фактически установленном entrypoint не является основанием удалить его. Исторические альтернативы не заменяют installed per-role bytes.

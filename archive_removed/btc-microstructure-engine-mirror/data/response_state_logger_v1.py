@@ -1,1 +1,0 @@
-/app/response_state_logger_v1.py

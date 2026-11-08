@@ -1,1 +1,0 @@
-/app/healthy_bullish_structure_v1.py

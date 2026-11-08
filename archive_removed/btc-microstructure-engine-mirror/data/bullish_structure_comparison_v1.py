@@ -1,1 +1,0 @@
-/app/bullish_structure_comparison_v1.py

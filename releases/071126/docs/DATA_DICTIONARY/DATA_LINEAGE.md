@@ -27,3 +27,14 @@ Decision/candidate/outcome relations must use existing run/world/candidate/obser
 The original canonical reconstruction tree, all available training/calibration versions, manifests and field dictionaries remain on MaksTiger. The organized Master Book is an independent APFS clone of the original 17,409-row candidate table, verified by SHA. Its `BASELINE_DECISION` and `CAUSAL_COUNTERFACTUAL` worlds must remain separated. The 39,035-row multi-world outcome table is not a one-to-one trade ledger. Bar/state tables have 165,474 physical rows each; overlapping versions are not added as unique market observations.
 
 The group registry is a locator, not a newly certified training set. Per-file SHA and stored schema/statistics are in the compressed index. A physical row count is not semantic sample identity. No training, joins, labels, synthetic market events, model inference or trading replay were run.
+<!-- CLEANUP_REVISION_20261108 -->
+
+## Source-indexed lineage clarification — 08 November 2026
+
+[Stage1](../ARCHITECTURE_DIAGRAMS/03_STAGE1_SOURCE_AND_DERIVATION_DFD.svg), [Stage2](../ARCHITECTURE_DIAGRAMS/04_STAGE2_CONTEXT_R08_ADMISSION.svg), [persistence and training](../ARCHITECTURE_DIAGRAMS/07_PERSISTENCE_HISTORY_TRAINING.svg).
+
+Legacy Futures snapshots and Spot OHLCV have independent owners; intrabar Cognition is a parallel Spot observer. ClosedBarContextEventBridge consumes Publisher's admitted closed contexts. S4.1 Manager entry uses each TF's closed-bar Final/Lifecycle Parquet, not the provisional CTX journal. CommandBus is Parquet; Paper commits financial effects and its consumer checkpoint. Intrabar observes the processes rather than writing a second outcome ledger.
+
+Current Paper outcomes and historical reconstruction worlds have no demonstrated automatic identity-preserving bridge. The historical Master candidate identity is checked by exact candidate_id/TF/side/close against the original training build; causal X and labels come from their separately admitted original sources. No approximate price/time join, new training build or synthetic corpus is asserted.
+
+The original dataset index remains an immutable observation of pre-cleanup paths. Current locators are overlaid by `BTCML_STORAGE_MANIFEST/CLEANUP_20261108/SAFE_BACKUP_DATA_RESTORE_MAP.private.jsonl.gz` for 2326 removed identical inactive backup payloads and by the Cursor preservation descriptors. Their remaining originals/corpus keepers preserve exact bytes. Repackaging does not create earlier local availability. All other historical RAW/ACK and source-bound capture inventories remain untouched.

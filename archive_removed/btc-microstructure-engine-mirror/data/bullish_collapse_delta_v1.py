@@ -1,1 +1,0 @@
-/app/bullish_collapse_delta_v1.py

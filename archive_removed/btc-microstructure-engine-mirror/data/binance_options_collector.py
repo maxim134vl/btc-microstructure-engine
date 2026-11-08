@@ -1,1 +1,0 @@
-/app/binance_options_collector.py

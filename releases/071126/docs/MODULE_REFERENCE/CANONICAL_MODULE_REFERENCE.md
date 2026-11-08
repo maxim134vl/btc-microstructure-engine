@@ -1181,3 +1181,10 @@ Resolved through native globals/dependencies in the saved full source; not infer
 **OUTPUTS**:
 
 Resolved through native globals/dependencies in the saved full source; not inferred as empty.
+<!-- CLEANUP_REVISION_20261108 -->
+
+## Связь с графическими схемами — 08.11.2026
+
+[Единый индекс](../ARCHITECTURE_DIAGRAM_INDEX.md) содержит схемы01–08 и компактный C4 L2 обзор02A. [Индекс блоков/стрелок](../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.md) даёт owner, input → processing → output, consumer и точные source SHA/anchors. Для Canonical порядок28 engines приведён выше и на Stage1 DFD; группы схемы не исключают промежуточных расчётов.
+
+Publisher source snapshot/native pass — подготовка данных в одном проходе; native Auction/Cognitive/Final, M15 private boundary, Lifecycle/Stage2 consumption и Context Phase имеют отдельные роли. Intrabar Cognition — параллельная ветвь. Слово `candidate` в фактически установленном entrypoint не является основанием удалить его. Исторические альтернативы не заменяют installed per-role bytes.

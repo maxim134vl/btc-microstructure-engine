@@ -1,1 +1,0 @@
-/app/unfinished_without_participation_v1.py

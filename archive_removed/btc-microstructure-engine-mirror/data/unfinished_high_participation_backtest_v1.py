@@ -1,1 +1,0 @@
-/app/unfinished_high_participation_backtest_v1.py
