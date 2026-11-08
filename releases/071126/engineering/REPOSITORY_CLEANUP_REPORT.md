@@ -23,6 +23,10 @@ The complete private working-tree map and conservative runtime-reference closure
 
 This commit changes no application Python/TypeScript source, trading formula, R08 implementation, Docker config, permissions, WAL, books, cursor or service. It does not rebuild or restart services. Public release/canonical HEAD cleanup is recorded separately, with normal ancestry-preserving commits. Full runtime restore remains NOT_TESTED; REAL remains DISABLED.
 
+## Root training matrices
+
+Eight historical root NumPy arrays were removed from HEAD only and remain physically unchanged as local training originals. They are already excluded by Docker build contexts. Exact bytes remain in original Git commit4167c96cdb33e62be0be2739364c89595976d9f4 and the preserved private history bundle. Added only root-scoped `/*.npy` ignore; test fixture arrays are not hidden. No physical space is claimed for this index-only action. Tracked total after this final source hygiene step:2818.
+
 ## Public HEAD cleanup
 
 This `memory/canonical-system` branch contains the accepted analytical Canonical/Publisher/Cognition/Legacy subset. CANONICAL_SOURCE_FILES.json is its exact code manifest. Execution/API/UI sources remain in the `release` branch; architecture documentation may describe those external-to-this-branch consumers without copying their code here.

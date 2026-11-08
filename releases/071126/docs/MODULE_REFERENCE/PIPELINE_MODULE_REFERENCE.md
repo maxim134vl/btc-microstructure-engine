@@ -8,7 +8,7 @@
 
 **INPUTS**: Frozen source inputs, native bar frames, принятые fingerprints/pins
 
-**OUTPUTS**: Auction, Stage2, Final/Lifecycle и decision generations
+**OUTPUTS**: Own Auction/Cognitive/Final/Lifecycle/Context Phase publications with source-bound evidence
 
 **SOURCE**: context-refresh-daemon:app/scripts/live/run_causal_context_chain_candidate.py
 
@@ -16,17 +16,17 @@
 
 **OWNER**: context-refresh-daemon
 
-**DATA**: Frozen source inputs, native bar frames, принятые fingerprints/pins → Auction, Stage2, Final/Lifecycle и decision generations
+**DATA**: Frozen source inputs, native bar frames, принятые fingerprints/pins → Own Auction/Cognitive/Final/Lifecycle/Context Phase publications with source-bound evidence
 
 **TRIGGER**: Один child штатного daemon; повтор пропущенных слотов не порождает параллельные full cycles
 
-**METHOD**: Auction → Stage2 evidence → Final → Lifecycle → Context Phase; порядок берётся из вызовов этого файла
+**METHOD**: Frozen INPUTS/native frames → native Auction/own context → M15 private boundary → Lifecycle consuming admitted Stage2 evidence → Context Phase; higher TFs use own callbacks
 
-**TRANSITIONS**: Auction → Stage2 evidence → Final → Lifecycle → Context Phase; порядок берётся из вызовов этого файла
+**TRANSITIONS**: Frozen INPUTS/native frames → native Auction/own context → M15 private boundary → Lifecycle consuming admitted Stage2 evidence → Context Phase; higher TFs use own callbacks
 
 **FAILURE_BEHAVIOR**: Publication failure оставляет последнюю принятую generation; отсутствие новой строки не заменяется фиктивным результатом
 
-**CONSUMERS**: Auction, Stage2, Final/Lifecycle и decision generations
+**LEGACY_OUTPUT_ROUTE_LABEL**: Own Auction/Cognitive/Final/Lifecycle/Context Phase publications with source-bound evidence
 
 **DEPENDENCIES**: btc_ml.external_traders, btc_ml.external_traders.context_phase_publication, btc_ml.external_traders.context_stage2_evidence, btc_ml.external_traders.independent_context_publication, btc_ml.external_traders.m15_september_boundary, btc_ml.external_traders.stage2_predecision_evidence, datetime, pathlib, sitecustomize
 
@@ -56,7 +56,7 @@
 
 **FAILURE_BEHAVIOR**: Неполные evidence/own-TF history не считаются готовым допуском
 
-**CONSUMERS**: Source-bound phase publication для потребителей R08/Manager
+**LEGACY_OUTPUT_ROUTE_LABEL**: Source-bound phase publication для потребителей R08/Manager
 
 **DEPENDENCIES**: __future__, btc_ml.external_traders.stage2_predecision_evidence, btc_ml.runtime.cognitive_cycle, btc_ml.trend.context_phase_qualification, btc_ml.trend.legacy_m15_phase_owner, copy, datetime, hashlib, io, pathlib, stage2_publication_metadata
 
@@ -86,7 +86,7 @@
 
 **FAILURE_BEHAVIOR**: Отсутствующий компонент и stale generation обозначаются по действующему contract
 
-**CONSUMERS**: Final Market Context memory
+**LEGACY_OUTPUT_ROUTE_LABEL**: Final Market Context memory
 
 **DEPENDENCIES**: __future__, btc_ml.cognition.living_market_process, pathlib, typing
 
@@ -116,7 +116,7 @@
 
 **FAILURE_BEHAVIOR**: Нет подстановки закрытия другого TF или скрытого backfill
 
-**CONSUMERS**: Lifecycle memory и переходы процесса
+**LEGACY_OUTPUT_ROUTE_LABEL**: Lifecycle memory и переходы процесса
 
 **DEPENDENCIES**: __future__, btc_ml.external_traders.stage2_predecision_evidence, pathlib, typing
 
@@ -146,7 +146,7 @@
 
 **FAILURE_BEHAVIOR**: Отказ/stop вызывает предусмотренный flush; stale heartbeat не означает живой процесс
 
-**CONSUMERS**: Cognition runtime health, provisional observations, closed-bar bridge
+**LEGACY_OUTPUT_ROUTE_LABEL**: Cognition runtime health, provisional observations, closed-bar bridge
 
 **DEPENDENCIES**: __future__, btc_ml.feeds.raw_event_journal.archival_writer, btc_ml.feeds.raw_event_journal.normalize, btc_ml.feeds.raw_event_journal.queue, btc_ml.feeds.raw_event_journal.schemas, btc_ml.feeds.raw_event_journal.session, btc_ml.feeds.raw_event_journal.timestamps, btc_ml.live.intrabar.atomic_json, btc_ml.live.intrabar.closed_bar_event_bridge, btc_ml.live.intrabar.cognition_pipeline, btc_ml.live.intrabar.context_event_journal, pathlib, typing
 
@@ -176,7 +176,7 @@
 
 **FAILURE_BEHAVIOR**: Не готовые источники сохраняют предусмотренное состояние неполноты
 
-**CONSUMERS**: Provisional cognition state
+**LEGACY_OUTPUT_ROUTE_LABEL**: Provisional cognition state
 
 **DEPENDENCIES**: __future__, btc_ml.cognition.volume_localization_engine_v1, btc_ml.cognition.volume_response_evaluate, btc_ml.live.intrabar.context_event_journal, btc_ml.live.intrabar.event_time_lifecycle, btc_ml.live.intrabar.partial_bar_state, btc_ml.live.intrabar.provisional_synthesis, btc_ml.live.intrabar.structure_geometry, btc_ml.trading.timeframe_state_adapter, typing
 
@@ -206,7 +206,7 @@
 
 **FAILURE_BEHAVIOR**: Нельзя смешивать exchange time и host monotonic как одни часы
 
-**CONSUMERS**: Event-time lifecycle state
+**LEGACY_OUTPUT_ROUTE_LABEL**: Event-time lifecycle state
 
 **DEPENDENCIES**: __future__, build_market_context_lifecycle_memory, partial_bar_state, pathlib, typing
 
@@ -236,7 +236,7 @@
 
 **FAILURE_BEHAVIOR**: Неполное наблюдение не превращается в полноценное coverage
 
-**CONSUMERS**: Закрытые события для downstream owners
+**LEGACY_OUTPUT_ROUTE_LABEL**: Закрытые события для downstream owners
 
 **DEPENDENCIES**: __future__, btc_ml.live.intrabar.context_event_freshness, btc_ml.live.intrabar.context_event_journal, dataclasses, datetime, pathlib, typing
 
@@ -266,7 +266,7 @@
 
 **FAILURE_BEHAVIOR**: Отсутствующий input не становится нулевым потоком
 
-**CONSUMERS**: Provisional synthesis
+**LEGACY_OUTPUT_ROUTE_LABEL**: Provisional synthesis
 
 **DEPENDENCIES**: __future__, build_auction_episode_memory, build_cognitive_market_state_memory, build_final_market_context_memory, pathlib, typing
 
@@ -296,7 +296,7 @@
 
 **FAILURE_BEHAVIOR**: Не выдумывает S0/S1, разрешение OPEN или durable ACK
 
-**CONSUMERS**: Child lifecycle, descriptor/bindings, штатные observer outputs
+**LEGACY_OUTPUT_ROUTE_LABEL**: Child lifecycle, descriptor/bindings, штатные observer outputs
 
 **DEPENDENCIES**: btc_ml.external_traders.context_phase_publication, btc_ml.runtime.r08_service, btc_ml.trend.live_direct_source, btc_ml.trend.recorder_live_adapter, btc_ml.trend.trend_event, btc_ml.trend.trend_evidence, btc_ml.trend.trend_journal, btc_ml.trend.trend_research_system, datetime, live_processing, pathlib, r08_spot, receive_worker, types
 
@@ -326,7 +326,7 @@
 
 **FAILURE_BEHAVIOR**: Полная очередь означает явную неполноту, не молчаливую потерю
 
-**CONSUMERS**: Native packets с clock-domain метками; transport termination reason
+**LEGACY_OUTPUT_ROUTE_LABEL**: Native packets с clock-domain метками; transport termination reason
 
 **DEPENDENCIES**: common, ws_connection
 
@@ -356,7 +356,7 @@
 
 **FAILURE_BEHAVIOR**: Quota/RSS/sequence/transport failures сохраняют фактический статус и необработанный хвост
 
-**CONSUMERS**: RAW, manifests, coverage, delivery receipts и durable ACK
+**LEGACY_OUTPUT_ROUTE_LABEL**: RAW, manifests, coverage, delivery receipts и durable ACK
 
 **DEPENDENCIES**: collections, common, decimal, pathlib, storage
 
@@ -386,7 +386,7 @@
 
 **FAILURE_BEHAVIOR**: fsync/atomic publication и порядок ACK сохранены; каталог будущего архива не нужен live-path
 
-**CONSUMERS**: Durable files, links и ACK
+**LEGACY_OUTPUT_ROUTE_LABEL**: Durable files, links и ACK
 
 **DEPENDENCIES**: common, pathlib
 
@@ -416,7 +416,7 @@
 
 **FAILURE_BEHAVIOR**: FUTURE_BASELINE/RAW_AVAILABILITY не обходятся; kline volume не добавляется в q
 
-**CONSUMERS**: Sequential ingest, baseline fixation, bar seals, R08 decisions
+**LEGACY_OUTPUT_ROUTE_LABEL**: Sequential ingest, baseline fixation, bar seals, R08 decisions
 
 **DEPENDENCIES**: context_trend_integration, dataclasses, datetime, entry_kill_switch, live_direct_source, pathlib, r08_baseline_provider, trend_event, trend_evidence, trend_journal
 
@@ -446,7 +446,7 @@
 
 **FAILURE_BEHAVIOR**: Неполный период/неподтверждённый gap/нулевой span дают неготовность, без epsilon
 
-**CONSUMERS**: Frozen baseline/config в текущем формате ResearchSystem
+**LEGACY_OUTPUT_ROUTE_LABEL**: Frozen baseline/config в текущем формате ResearchSystem
 
 **DEPENDENCIES**: copy, dataclasses, datetime, trend_event, trend_evidence, trend_journal, trend_research_system
 
@@ -476,7 +476,7 @@
 
 **FAILURE_BEHAVIOR**: Неуспешная запись не объявляется committed state
 
-**CONSUMERS**: Committed state/измерения и native status по TF
+**LEGACY_OUTPUT_ROUTE_LABEL**: Committed state/измерения и native status по TF
 
 **DEPENDENCIES**: copy, dataclasses, datetime, decimal, pathlib, real_scope_proof, trend_evidence, trend_fixture_context_authority, trend_handoff, trend_journal, trend_scope_sessions
 
@@ -506,7 +506,7 @@
 
 **FAILURE_BEHAVIOR**: Недоступное на заданный прошлый срез событие не включается ретроактивно
 
-**CONSUMERS**: Нативные Observation measurements и validation outcome
+**LEGACY_OUTPUT_ROUTE_LABEL**: Нативные Observation measurements и validation outcome
 
 **DEPENDENCIES**: dataclasses, decimal, pathlib, trend_journal, trend_r2_contract, trend_r2_machine
 
@@ -536,7 +536,7 @@
 
 **FAILURE_BEHAVIOR**: При append failure прежний committed state остаётся прежним; повтор event не даёт повторного эффекта
 
-**CONSUMERS**: V3 records и восстановимое committed state; чтение V1/V2
+**LEGACY_OUTPUT_ROUTE_LABEL**: V3 records и восстановимое committed state; чтение V1/V2
 
 **DEPENDENCIES**: copy, datetime, functools, pathlib, trend_handoff, trend_scope_sessions
 
@@ -566,7 +566,7 @@
 
 **FAILURE_BEHAVIOR**: Не делает archived evidence своевременно доступным live источником
 
-**CONSUMERS**: Существующие phase/strength-dependent решения
+**LEGACY_OUTPUT_ROUTE_LABEL**: Существующие phase/strength-dependent решения
 
 **DEPENDENCIES**: __future__, btc_ml.external_traders.context_phase_publication, btc_ml.runtime.financial_trend_environment, btc_ml.trading.intrabar_paper, btc_ml.trading.timeframe_state_adapter, context_phase_qualification, copy, dataclasses, datetime, entry_kill_switch, pathlib, real_scope_proof, trend_evidence, trend_journal, trend_research_system, trend_scope_sessions, typing
 
@@ -596,7 +596,7 @@
 
 **FAILURE_BEHAVIOR**: Подмена source/config и неподтверждённый packet не получают permission
 
-**CONSUMERS**: Контекст и source checks для прямого live ingest
+**LEGACY_OUTPUT_ROUTE_LABEL**: Контекст и source checks для прямого live ingest
 
 **DEPENDENCIES**: btc_ml.external_traders.context_phase_publication, pathlib, trend_event, trend_evidence, trend_journal
 
@@ -626,7 +626,7 @@
 
 **FAILURE_BEHAVIOR**: Stale/missing technical bindings не маскируются ожиданием инициативы
 
-**CONSUMERS**: Нативные OPEN/HOLD/CLOSE/NO_ACTION команды
+**LEGACY_OUTPUT_ROUTE_LABEL**: Нативные OPEN/HOLD/CLOSE/NO_ACTION команды
 
 **DEPENDENCIES**: __future__, anti_saw_path_density, btc_ml.cognition.living_market_process, btc_ml.trend.context_trend_integration, btc_ml.trend.entry_kill_switch, command_bus, intrabar_paper.config, live1b_position_views, near_tp_miss, paper_core, paper_trader_engine, pathlib, portfolio_risk, timeframe_state_adapter, trader_book, typing
 
@@ -656,7 +656,7 @@
 
 **FAILURE_BEHAVIOR**: Пропуск входа/исключение обозначается фактическим failure, не готовностью
 
-**CONSUMERS**: Cycle state, команды и logs
+**LEGACY_OUTPUT_ROUTE_LABEL**: Cycle state, команды и logs
 
 **DEPENDENCIES**: __future__, btc_ml.runtime.financial_trend_environment, btc_ml.runtime.trading_application, btc_ml.trading, btc_ml.trading.timeframe_manager, datetime, ops_owner_projections, pathlib, typing
 
@@ -686,7 +686,7 @@
 
 **FAILURE_BEHAVIOR**: Повторное содержание с тем же ключом не произвольно одобряется
 
-**CONSUMERS**: Команды и ACK для Paper/consumers
+**LEGACY_OUTPUT_ROUTE_LABEL**: Команды и ACK для Paper/consumers
 
 **DEPENDENCIES**: __future__, dataclasses, datetime, pathlib, trader_book, typing
 
@@ -716,7 +716,7 @@
 
 **FAILURE_BEHAVIOR**: Техническая неготовность не заменяется фиктивным PAPER READY
 
-**CONSUMERS**: Positions/books/outcomes и состояния сопровождения
+**LEGACY_OUTPUT_ROUTE_LABEL**: Positions/books/outcomes и состояния сопровождения
 
 **DEPENDENCIES**: __future__, bbo, books, btc_ml.live.intrabar.context_event_freshness, btc_ml.trading.anti_saw_path_density, btc_ml.trading.portfolio_risk, btc_ml.trading.timeframe_state_adapter, config, consumer, dataclasses, datetime, economics, entry_eligibility, epoch, execution_commit, functools, pathlib, performance_eligibility, s41_command_consumer, sleeve_risk_contract, sleeves, typing
 
@@ -746,7 +746,7 @@
 
 **FAILURE_BEHAVIOR**: Не меняет арифметику ради допуска/частоты сделок
 
-**CONSUMERS**: Sizing/economic effects
+**LEGACY_OUTPUT_ROUTE_LABEL**: Sizing/economic effects
 
 **DEPENDENCIES**: __future__, config, dataclasses, typing
 
@@ -776,7 +776,7 @@
 
 **FAILURE_BEHAVIOR**: Старые approvals не приписывают принятие новых байтов кода
 
-**CONSUMERS**: Действительные финансовые generations/receipts
+**LEGACY_OUTPUT_ROUTE_LABEL**: Действительные финансовые generations/receipts
 
 **DEPENDENCIES**: cursor_ack, financial_history, pathlib, publication_witness, quarantine_barrier, verified_continuation, working_admission
 
@@ -806,7 +806,7 @@
 
 **FAILURE_BEHAVIOR**: Реальный implementation drift остаётся отказом; guard не отключён
 
-**CONSUMERS**: Штатный startup implementation-check
+**LEGACY_OUTPUT_ROUTE_LABEL**: Штатный startup implementation-check
 
 **DEPENDENCIES**: pathlib
 
@@ -836,7 +836,7 @@
 
 **FAILURE_BEHAVIOR**: Не перескакивает через необработанные события; shutdown flush не заменяет фактический cursor
 
-**CONSUMERS**: WAL segments/head/checkpoints
+**LEGACY_OUTPUT_ROUTE_LABEL**: WAL segments/head/checkpoints
 
 **DEPENDENCIES**: __future__, contextlib, contextvars, dataclasses, datetime, execution_market_wal_archive, pathlib, typing
 
@@ -866,7 +866,7 @@
 
 **FAILURE_BEHAVIOR**: Старый heartbeat не выдаётся за свежий checkpoint
 
-**CONSUMERS**: Связанный checkpoint
+**LEGACY_OUTPUT_ROUTE_LABEL**: Связанный checkpoint
 
 **DEPENDENCIES**: __future__, dataclasses, pathlib, typing
 
@@ -896,7 +896,7 @@
 
 **FAILURE_BEHAVIOR**: Нет искусственного LIVE_QUALIFIED, S0/S1 или принудительного OPEN
 
-**CONSUMERS**: ENTRY allowed/blocked и причина
+**LEGACY_OUTPUT_ROUTE_LABEL**: ENTRY allowed/blocked и причина
 
 **DEPENDENCIES**: __future__, btc_ml.live.intrabar.context_event_freshness, datetime, typing
 
@@ -926,7 +926,7 @@
 
 **FAILURE_BEHAVIOR**: Missing services и stale state выделяются как technical condition
 
-**CONSUMERS**: Штатные supervision outputs
+**LEGACY_OUTPUT_ROUTE_LABEL**: Штатные supervision outputs
 
 **DEPENDENCIES**: __future__, dataclasses, datetime, enum, pathlib, typing
 
@@ -956,7 +956,7 @@
 
 **FAILURE_BEHAVIOR**: Нет подмены отсутствующего свежего input фиктивным Final
 
-**CONSUMERS**: Visual public JSON и chart projections
+**LEGACY_OUTPUT_ROUTE_LABEL**: Visual public JSON и chart projections
 
 **DEPENDENCIES**: __future__, active_epoch_trade_filter, apps.context_visualizer.trading_truth, pathlib, runtime_dataset_metadata, timeframe_chart_truth, trading_truth, typing
 
@@ -968,3 +968,7 @@
 [Единый индекс](../ARCHITECTURE_DIAGRAM_INDEX.md) содержит схемы01–08 и компактный C4 L2 обзор02A. [Индекс блоков/стрелок](../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.md) даёт owner, input → processing → output, consumer и точные source SHA/anchors. Для Canonical порядок28 engines приведён выше и на Stage1 DFD; группы схемы не исключают промежуточных расчётов.
 
 Publisher source snapshot/native pass — подготовка данных в одном проходе; native Auction/Cognitive/Final, M15 private boundary, Lifecycle/Stage2 consumption и Context Phase имеют отдельные роли. Intrabar Cognition — параллельная ветвь. Слово `candidate` в фактически установленном entrypoint не является основанием удалить его. Исторические альтернативы не заменяют installed per-role bytes.
+
+## Чтение consumer-полей
+
+Прежнее агрегированное поле CONSUMERS повторяло название выходного dataset; оно переименовано в LEGACY_OUTPUT_ROUTE_LABEL. Фактические потребители теперь заданы в DIAGRAM_BLOCK_REFERENCES машинного module index и в единой таблице блоков/стрелок ARCHITECTURE_SOURCE_INDEX. Это связь модуля с подтверждённым processing block, не утверждение, что один файл единолично выполняет весь блок или что диаграмма перечисляет каждый Python call. SOURCE/SOURCE_SHA256 не менялись.

@@ -3,7 +3,7 @@
     "NAME": "Publisher",
     "PURPOSE": "Согласованная публикация закрытого контекста четырёх независимых TF",
     "INPUTS": "Frozen source inputs, native bar frames, принятые fingerprints/pins",
-    "OUTPUTS": "Auction, Stage2, Final/Lifecycle и decision generations",
+    "OUTPUTS": "Own Auction/Cognitive/Final/Lifecycle/Context Phase publications with source-bound evidence",
     "SOURCE": "context-refresh-daemon:app/scripts/live/run_causal_context_chain_candidate.py",
     "SOURCE_SHA256": "7755359e9e71cd5fd9fde30e3390d47649793b328fd8b31e46f7fc428d95f890",
     "OWNER": "context-refresh-daemon",
@@ -20,10 +20,9 @@
       "pathlib",
       "sitecustomize"
     ],
-    "METHOD": "Auction → Stage2 evidence → Final → Lifecycle → Context Phase; порядок берётся из вызовов этого файла",
-    "TRANSITIONS": "Auction → Stage2 evidence → Final → Lifecycle → Context Phase; порядок берётся из вызовов этого файла",
+    "METHOD": "Freeze/pin seven INPUTS and native source frames; native Auction and own context build; M15 private September boundary; Lifecycle consumes admitted Stage2 evidence; Context Phase; independent higher-TF callbacks",
+    "TRANSITIONS": "Freeze/pin seven INPUTS and native source frames; native Auction and own context build; M15 private September boundary; Lifecycle consumes admitted Stage2 evidence; Context Phase; independent higher-TF callbacks",
     "FAILURE_BEHAVIOR": "Publication failure оставляет последнюю принятую generation; отсутствие новой строки не заменяется фиктивным результатом",
-    "CONSUMERS": "Auction, Stage2, Final/Lifecycle и decision generations",
     "ENTRY_SYMBOLS": [
       "_report_json_default",
       "atomic",
@@ -32,7 +31,120 @@
       "run_native_auction",
       "main",
       "completed"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "system",
+        "owner": "14 Docker services",
+        "consumers_of_block": [
+          "existing owners",
+          "dashboard-ui + ops-api",
+          "paper-manager",
+          "existing execution guard"
+        ]
+      },
+      {
+        "diagram": 2,
+        "block": "context-refresh-daemon",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "cognition-runtime",
+          "timeframe-manager",
+          "context-refresher"
+        ]
+      },
+      {
+        "diagram": 4,
+        "block": "freeze",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 4,
+        "block": "auction",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "context-refresh-daemon",
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 4,
+        "block": "phase",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "cognition-runtime",
+          "Paper child / existing reducers",
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "market",
+        "owner": "existing owners",
+        "consumers_of_block": [
+          "M15 classifier owner",
+          "M30 classifier owner",
+          "H1 classifier owner",
+          "H4 classifier owner"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m15bar",
+        "owner": "M15 classifier owner",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m30bar",
+        "owner": "M30 classifier owner",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h1bar",
+        "owner": "H1 classifier owner",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h4bar",
+        "owner": "H4 classifier owner",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 7,
+        "block": "contexts",
+        "owner": "Publisher / Cognition",
+        "consumers_of_block": [
+          "Manager / CommandBus"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "publisher",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "Paper child",
+          "timeframe-manager",
+          "read-only owners"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Auction, Stage2, Final/Lifecycle и decision generations",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Context Phase",
@@ -60,7 +172,6 @@
     "METHOD": "Фаза не подменяется направлением последней цены и не наследуется из M15 для H4",
     "TRANSITIONS": "Фаза не подменяется направлением последней цены и не наследуется из M15 для H4",
     "FAILURE_BEHAVIOR": "Неполные evidence/own-TF history не считаются готовым допуском",
-    "CONSUMERS": "Source-bound phase publication для потребителей R08/Manager",
     "ENTRY_SYMBOLS": [
       "_now",
       "_bytes",
@@ -92,7 +203,63 @@
       "abort_failed_m15_to_parent",
       "__init__",
       "read"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "phase",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "cognition-runtime",
+          "Paper child / existing reducers",
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m15phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m30phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h1phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h4phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "publisher",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "Paper child",
+          "timeframe-manager",
+          "read-only owners"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Source-bound phase publication для потребителей R08/Manager",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Final Context",
@@ -113,7 +280,6 @@
     "METHOD": "Объединение существующих component records; это контекст, а не приказ открыть позицию",
     "TRANSITIONS": "Объединение существующих component records; это контекст, а не приказ открыть позицию",
     "FAILURE_BEHAVIOR": "Отсутствующий компонент и stale generation обозначаются по действующему contract",
-    "CONSUMERS": "Final Market Context memory",
     "ENTRY_SYMBOLS": [
       "_clean_text",
       "_safe_float",
@@ -123,7 +289,43 @@
       "build_final_market_context_rows",
       "write_atomic_parquet",
       "main"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 5,
+        "block": "m15final",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m30final",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h1final",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h4final",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Final Market Context memory",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Lifecycle",
@@ -144,7 +346,6 @@
     "METHOD": "Сохраняются continuity, episode и переходы; четыре TF не объединяются в один mutable process",
     "TRANSITIONS": "Сохраняются continuity, episode и переходы; четыре TF не объединяются в один mutable process",
     "FAILURE_BEHAVIOR": "Нет подстановки закрытия другого TF или скрытого backfill",
-    "CONSUMERS": "Lifecycle memory и переходы процесса",
     "ENTRY_SYMBOLS": [
       "_clean_text",
       "_safe_float",
@@ -172,7 +373,51 @@
       "write_atomic_parquet",
       "parse_args",
       "main"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "life",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "context-refresh-daemon"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m15life",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "own publication / integration"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m30life",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "own publication / integration"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h1life",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "own publication / integration"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h4life",
+        "owner": "context-refresh-daemon",
+        "consumers_of_block": [
+          "own publication / integration"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Lifecycle memory и переходы процесса",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Intrabar Cognition",
@@ -202,7 +447,6 @@
     "METHOD": "Управляет единым lifecycle владельцем состояния",
     "TRANSITIONS": "Управляет единым lifecycle владельцем состояния",
     "FAILURE_BEHAVIOR": "Отказ/stop вызывает предусмотренный flush; stale heartbeat не означает живой процесс",
-    "CONSUMERS": "Cognition runtime health, provisional observations, closed-bar bridge",
     "ENTRY_SYMBOLS": [
       "main",
       "__init__",
@@ -221,7 +465,69 @@
       "_on_open",
       "_on_error",
       "_on_close"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "spot",
+        "owner": "external exchange",
+        "consumers_of_block": [
+          "14 Docker services"
+        ]
+      },
+      {
+        "diagram": 2,
+        "block": "spot",
+        "owner": "external exchange",
+        "consumers_of_block": [
+          "collector-watchdog",
+          "cognition-runtime",
+          "paper-manager (one child)"
+        ]
+      },
+      {
+        "diagram": 2,
+        "block": "cognition-runtime",
+        "owner": "cognition-runtime",
+        "consumers_of_block": [
+          "context-refresher",
+          "ops-api"
+        ]
+      },
+      {
+        "diagram": 3,
+        "block": "spot",
+        "owner": "external exchange",
+        "consumers_of_block": [
+          "collector-watchdog"
+        ]
+      },
+      {
+        "diagram": 4,
+        "block": "intrabar",
+        "owner": "cognition-runtime",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 7,
+        "block": "contexts",
+        "owner": "Publisher / Cognition",
+        "consumers_of_block": [
+          "Manager / CommandBus"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "ingress",
+        "owner": "Watchdog + Legacy collector + Cognition",
+        "consumers_of_block": [
+          "native Legacy + Canonical",
+          "read-only owners"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Cognition runtime health, provisional observations, closed-bar bridge",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Cognition Pipeline",
@@ -248,14 +554,23 @@
     "METHOD": "Provisional generation не объявляется финальной закрытой свечой",
     "TRANSITIONS": "Provisional generation не объявляется финальной закрытой свечой",
     "FAILURE_BEHAVIOR": "Не готовые источники сохраняют предусмотренное состояние неполноты",
-    "CONSUMERS": "Provisional cognition state",
     "ENTRY_SYMBOLS": [
       "__init__",
       "_append_closed_bars",
       "on_book_ticker",
       "on_agg_trade",
       "_evaluate_timeframe"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "intrabar",
+        "owner": "cognition-runtime",
+        "consumers_of_block": []
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Provisional cognition state",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Intrabar lifecycle",
@@ -277,12 +592,14 @@
     "METHOD": "Собственная последовательность конкретного timeframe",
     "TRANSITIONS": "Собственная последовательность конкретного timeframe",
     "FAILURE_BEHAVIOR": "Нельзя смешивать exchange time и host monotonic как одни часы",
-    "CONSUMERS": "Event-time lifecycle state",
     "ENTRY_SYMBOLS": [
       "age_bars_from_elapsed",
       "step_event_time_lifecycle",
       "detect_context_transition"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Event-time lifecycle state",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Closed-bar bridge",
@@ -306,7 +623,6 @@
     "METHOD": "Не достраивает отсутствовавшие локальные trades синтетическими данными",
     "TRANSITIONS": "Не достраивает отсутствовавшие локальные trades синтетическими данными",
     "FAILURE_BEHAVIOR": "Неполное наблюдение не превращается в полноценное coverage",
-    "CONSUMERS": "Закрытые события для downstream owners",
     "ENTRY_SYMBOLS": [
       "utc_now_iso",
       "_load_context_event_max_age_seconds",
@@ -349,7 +665,26 @@
       "_jsonl_rows",
       "_open_timeframes_and_traded_episodes",
       "maybe_materialize"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 2,
+        "block": "cognition-runtime",
+        "owner": "cognition-runtime",
+        "consumers_of_block": [
+          "context-refresher",
+          "ops-api"
+        ]
+      },
+      {
+        "diagram": 4,
+        "block": "intrabar",
+        "owner": "cognition-runtime",
+        "consumers_of_block": []
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Закрытые события для downstream owners",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Provisional synthesis",
@@ -372,10 +707,12 @@
     "METHOD": "Условия признания provisional и Final остаются раздельными",
     "TRANSITIONS": "Условия признания provisional и Final остаются раздельными",
     "FAILURE_BEHAVIOR": "Отсутствующий input не становится нулевым потоком",
-    "CONSUMERS": "Provisional synthesis",
     "ENTRY_SYMBOLS": [
       "synthesize_provisional_state"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Provisional synthesis",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "R08 child owner",
@@ -406,7 +743,6 @@
     "METHOD": "Observer-only collection не приравнивает RESEARCH_OBSERVED к LIVE_QUALIFIED",
     "TRANSITIONS": "Observer-only collection не приравнивает RESEARCH_OBSERVED к LIVE_QUALIFIED",
     "FAILURE_BEHAVIOR": "Не выдумывает S0/S1, разрешение OPEN или durable ACK",
-    "CONSUMERS": "Child lifecycle, descriptor/bindings, штатные observer outputs",
     "ENTRY_SYMBOLS": [
       "current_contexts",
       "await_contexts",
@@ -418,7 +754,27 @@
       "report",
       "process",
       "stop"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 2,
+        "block": "r08",
+        "owner": "paper-manager (one child)",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "r08",
+        "owner": "Paper child",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Child lifecycle, descriptor/bindings, штатные observer outputs",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Spot transport",
@@ -437,11 +793,48 @@
     "METHOD": "Callback возвращает управление без ожидания тяжёлого ingest; ограниченная очередь",
     "TRANSITIONS": "Callback возвращает управление без ожидания тяжёлого ingest; ограниченная очередь",
     "FAILURE_BEHAVIOR": "Полная очередь означает явную неполноту, не молчаливую потерю",
-    "CONSUMERS": "Native packets с clock-domain метками; transport termination reason",
     "ENTRY_SYMBOLS": [
       "__init__",
       "start"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "spot",
+        "owner": "external exchange",
+        "consumers_of_block": [
+          "14 Docker services"
+        ]
+      },
+      {
+        "diagram": 2,
+        "block": "spot",
+        "owner": "external exchange",
+        "consumers_of_block": [
+          "collector-watchdog",
+          "cognition-runtime",
+          "paper-manager (one child)"
+        ]
+      },
+      {
+        "diagram": 3,
+        "block": "spot",
+        "owner": "external exchange",
+        "consumers_of_block": [
+          "collector-watchdog"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "close",
+        "owner": "Binance Spot / Paper transport",
+        "consumers_of_block": [
+          "Paper adapter / ResearchSystem"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Native packets с clock-domain метками; transport termination reason",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Recorder",
@@ -463,7 +856,6 @@
     "METHOD": "Commit-before-ACK; ACK не создаётся при одной постановке в очередь",
     "TRANSITIONS": "Commit-before-ACK; ACK не создаётся при одной постановке в очередь",
     "FAILURE_BEHAVIOR": "Quota/RSS/sequence/transport failures сохраняют фактический статус и необработанный хвост",
-    "CONSUMERS": "RAW, manifests, coverage, delivery receipts и durable ACK",
     "ENTRY_SYMBOLS": [
       "parse_message",
       "mapping",
@@ -483,7 +875,19 @@
       "dequeue",
       "reconnect",
       "end"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 2,
+        "block": "r08",
+        "owner": "paper-manager (one child)",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "RAW, manifests, coverage, delivery receipts и durable ACK",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Recorder storage",
@@ -502,7 +906,6 @@
     "METHOD": "Это отдельный storage.Journal, а не торговый R08 trend_journal",
     "TRANSITIONS": "Это отдельный storage.Journal, а не торговый R08 trend_journal",
     "FAILURE_BEHAVIOR": "fsync/atomic publication и порядок ACK сохранены; каталог будущего архива не нужен live-path",
-    "CONSUMERS": "Durable files, links и ACK",
     "ENTRY_SYMBOLS": [
       "__init__",
       "close",
@@ -523,7 +926,25 @@
       "_commit_locked",
       "hook",
       "read_ref"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "state",
+        "owner": "existing owners",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 7,
+        "block": "raw",
+        "owner": "Recorder / feed / Paper WAL",
+        "consumers_of_block": [
+          "Canonical / native Legacy"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Durable files, links и ACK",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "R08 adapter/handoff",
@@ -550,7 +971,6 @@
     "METHOD": "Первый кандидат после фактической готовности INIT; ранние queued RAW учитываются до активации, не включаются задним числом",
     "TRANSITIONS": "Первый кандидат после фактической готовности INIT; ранние queued RAW учитываются до активации, не включаются задним числом",
     "FAILURE_BEHAVIOR": "FUTURE_BASELINE/RAW_AVAILABILITY не обходятся; kline volume не добавляется в q",
-    "CONSUMERS": "Sequential ingest, baseline fixation, bar seals, R08 decisions",
     "ENTRY_SYMBOLS": [
       "now",
       "__init__",
@@ -566,7 +986,43 @@
       "accept_kline",
       "_coverage_ready",
       "drain_live"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 2,
+        "block": "r08",
+        "owner": "paper-manager (one child)",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "close",
+        "owner": "Binance Spot / Paper transport",
+        "consumers_of_block": [
+          "Paper adapter / ResearchSystem"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "seal",
+        "owner": "Paper adapter / ResearchSystem",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "r08",
+        "owner": "Paper child",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Sequential ingest, baseline fixation, bar seals, R08 decisions",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Baseline provider",
@@ -590,14 +1046,33 @@
     "METHOD": "Literal unsigned Spot q; reference=sum(q)/(last T−first T), знаменатель в секундах; Q/300 и EWMA не подставляются",
     "TRANSITIONS": "Literal unsigned Spot q; reference=sum(q)/(last T−first T), знаменатель в секундах; Q/300 и EWMA не подставляются",
     "FAILURE_BEHAVIOR": "Неполный период/неподтверждённый gap/нулевой span дают неготовность, без epsilon",
-    "CONSUMERS": "Frozen baseline/config в текущем формате ResearchSystem",
     "ENTRY_SYMBOLS": [
       "utc_now",
       "prepare_baseline_inputs",
       "prepare_research_system",
       "config",
       "not_ready"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 2,
+        "block": "r08",
+        "owner": "paper-manager (one child)",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "r08",
+        "owner": "Paper child",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Frozen baseline/config в текущем формате ResearchSystem",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "R08 ResearchSystem",
@@ -625,7 +1100,6 @@
     "METHOD": "Все промежуточные переходы сохраняются; результаты не меняются ради экономии RAM",
     "TRANSITIONS": "Все промежуточные переходы сохраняются; результаты не меняются ради экономии RAM",
     "FAILURE_BEHAVIOR": "Неуспешная запись не объявляется committed state",
-    "CONSUMERS": "Committed state/измерения и native status по TF",
     "ENTRY_SYMBOLS": [
       "implementation_hashes",
       "stamp",
@@ -659,7 +1133,27 @@
       "edge",
       "loss",
       "outside"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "r08",
+        "owner": "Paper child / existing reducers",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "seal",
+        "owner": "Paper adapter / ResearchSystem",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Committed state/измерения и native status по TF",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "R08 evidence",
@@ -682,7 +1176,6 @@
     "METHOD": "Participation использует действующий baseline rate; независимые часы не сравниваются как один домен",
     "TRANSITIONS": "Participation использует действующий baseline rate; независимые часы не сравниваются как один домен",
     "FAILURE_BEHAVIOR": "Недоступное на заданный прошлый срез событие не включается ретроактивно",
-    "CONSUMERS": "Нативные Observation measurements и validation outcome",
     "ENTRY_SYMBOLS": [
       "obs_dict",
       "obs_restore",
@@ -695,7 +1188,19 @@
       "permits",
       "__post_init__",
       "to_dict"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "r08",
+        "owner": "Paper child / existing reducers",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Нативные Observation measurements и validation outcome",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Journal V3",
@@ -718,7 +1223,6 @@
     "METHOD": "V3 identity относится к записи; не выдаётся за SHA полного растущего state. Полный digest не возвращается в per-event hot path",
     "TRANSITIONS": "V3 identity относится к записи; не выдаётся за SHA полного растущего state. Полный digest не возвращается в per-event hot path",
     "FAILURE_BEHAVIOR": "При append failure прежний committed state остаётся прежним; повтор event не даёт повторного эффекта",
-    "CONSUMERS": "V3 records и восстановимое committed state; чтение V1/V2",
     "ENTRY_SYMBOLS": [
       "canonical",
       "digest",
@@ -770,7 +1274,25 @@
       "__init__",
       "__enter__",
       "__exit__"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "state",
+        "owner": "existing owners",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 4,
+        "block": "r08",
+        "owner": "Paper child / existing reducers",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "V3 records и восстановимое committed state; чтение V1/V2",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Trend Strength integration",
@@ -804,7 +1326,6 @@
     "METHOD": "Сила процесса и фаза не заменяются произвольным численным score",
     "TRANSITIONS": "Сила процесса и фаза не заменяются произвольным численным score",
     "FAILURE_BEHAVIOR": "Не делает archived evidence своевременно доступным live источником",
-    "CONSUMERS": "Существующие phase/strength-dependent решения",
     "ENTRY_SYMBOLS": [
       "_utc",
       "__init__",
@@ -823,7 +1344,51 @@
       "paper_command_reason",
       "reserve_paper_command",
       "reconcile_paper_execution"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "trend",
+        "owner": "timeframe-manager",
+        "consumers_of_block": [
+          "Timeframe Manager + Paper"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m15phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "m30phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h1phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 5,
+        "block": "h4phase",
+        "owner": "own publication / integration",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Существующие phase/strength-dependent решения",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "R08 direct source",
@@ -845,7 +1410,6 @@
     "METHOD": "Переиспользуется только действительный неизменный prefix; archive-reader остаётся строгим",
     "TRANSITIONS": "Переиспользуется только действительный неизменный prefix; archive-reader остаётся строгим",
     "FAILURE_BEHAVIOR": "Подмена source/config и неподтверждённый packet не получают permission",
-    "CONSUMERS": "Контекст и source checks для прямого live ingest",
     "ENTRY_SYMBOLS": [
       "_signature",
       "cached_context_baseline",
@@ -853,7 +1417,10 @@
       "fixed_baseline",
       "paper_source",
       "context_baseline"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Контекст и source checks для прямого live ingest",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Timeframe Manager",
@@ -886,7 +1453,6 @@
     "METHOD": "Нет принудительного OPEN при технически отсутствующем descriptor; рыночный NO_ACTION отдельно",
     "TRANSITIONS": "Нет принудительного OPEN при технически отсутствующем descriptor; рыночный NO_ACTION отдельно",
     "FAILURE_BEHAVIOR": "Stale/missing technical bindings не маскируются ожиданием инициативы",
-    "CONSUMERS": "Нативные OPEN/HOLD/CLOSE/NO_ACTION команды",
     "ENTRY_SYMBOLS": [
       "_entry_requires_confirmed_raw_status",
       "_entry_requires_min_process_strength",
@@ -938,7 +1504,39 @@
       "_saw_blocks_open",
       "_position_meta",
       "portfolio_summary"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "gate",
+        "owner": "Timeframe Manager + Paper",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 5,
+        "block": "manager",
+        "owner": "timeframe-manager",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 6,
+        "block": "manager",
+        "owner": "timeframe-manager",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 7,
+        "block": "decisions",
+        "owner": "Manager / CommandBus",
+        "consumers_of_block": [
+          "Paper financial authority"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Нативные OPEN/HOLD/CLOSE/NO_ACTION команды",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Manager daemon",
@@ -964,7 +1562,6 @@
     "METHOD": "Сохраняются существующие ускорения и независимость TF",
     "TRANSITIONS": "Сохраняются существующие ускорения и независимость TF",
     "FAILURE_BEHAVIOR": "Пропуск входа/исключение обозначается фактическим failure, не готовностью",
-    "CONSUMERS": "Cycle state, команды и logs",
     "ENTRY_SYMBOLS": [
       "_handle_signal",
       "latest_evaluation_timestamp",
@@ -974,7 +1571,35 @@
       "attach_available_context_phase",
       "run_cycle",
       "main"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 2,
+        "block": "timeframe-manager",
+        "owner": "timeframe-manager",
+        "consumers_of_block": [
+          "paper-manager"
+        ]
+      },
+      {
+        "diagram": 6,
+        "block": "manager",
+        "owner": "timeframe-manager",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "manager",
+        "owner": "timeframe-manager",
+        "consumers_of_block": [
+          "read-only owners"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Cycle state, команды и logs",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "CommandBus",
@@ -997,7 +1622,6 @@
     "METHOD": "Один event/command не превращается в несколько экономических эффектов",
     "TRANSITIONS": "Один event/command не превращается в несколько экономических эффектов",
     "FAILURE_BEHAVIOR": "Повторное содержание с тем же ключом не произвольно одобряется",
-    "CONSUMERS": "Команды и ACK для Paper/consumers",
     "ENTRY_SYMBOLS": [
       "utc_now",
       "classify_command_lineage",
@@ -1014,7 +1638,27 @@
       "load_manager_state",
       "save_manager_state",
       "write_portfolio_summary"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 6,
+        "block": "bus",
+        "owner": "timeframe-manager",
+        "consumers_of_block": [
+          "Paper child / single writer"
+        ]
+      },
+      {
+        "diagram": 7,
+        "block": "decisions",
+        "owner": "Manager / CommandBus",
+        "consumers_of_block": [
+          "Paper financial authority"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Команды и ACK для Paper/consumers",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Paper engine",
@@ -1053,7 +1697,6 @@
     "METHOD": "Риск, SL/TP, costs, позиционные ограничения и guards сохраняются; REAL off",
     "TRANSITIONS": "Риск, SL/TP, costs, позиционные ограничения и guards сохраняются; REAL off",
     "FAILURE_BEHAVIOR": "Техническая неготовность не заменяется фиктивным PAPER READY",
-    "CONSUMERS": "Positions/books/outcomes и состояния сопровождения",
     "ENTRY_SYMBOLS": [
       "_serialized",
       "_utc_iso",
@@ -1094,7 +1737,66 @@
       "_block",
       "health",
       "write_health"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "system",
+        "owner": "14 Docker services",
+        "consumers_of_block": [
+          "existing owners",
+          "dashboard-ui + ops-api",
+          "paper-manager",
+          "existing execution guard"
+        ]
+      },
+      {
+        "diagram": 1,
+        "block": "paper",
+        "owner": "paper-manager",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 2,
+        "block": "paper-manager",
+        "owner": "paper-manager",
+        "consumers_of_block": [
+          "ops-api",
+          "paper-manager (one child)"
+        ]
+      },
+      {
+        "diagram": 4,
+        "block": "gate",
+        "owner": "Timeframe Manager + Paper",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 6,
+        "block": "consume",
+        "owner": "Paper child / single writer",
+        "consumers_of_block": [
+          "paper-manager"
+        ]
+      },
+      {
+        "diagram": 6,
+        "block": "paper",
+        "owner": "paper-manager",
+        "consumers_of_block": [
+          "existing financial authority",
+          "intrabar-supervisor + OPS/UI"
+        ]
+      },
+      {
+        "diagram": 7,
+        "block": "outcomes",
+        "owner": "Paper financial authority",
+        "consumers_of_block": []
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Positions/books/outcomes и состояния сопровождения",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Risk/economics",
@@ -1115,14 +1817,32 @@
     "METHOD": "qty=risk_amount/(stop_distance+entry*entry_fee_rate+stop*exit_fee_rate+entry*entry_slippage_rate+stop*stop_exit_slippage_rate); native validation и caps остаются в исходнике",
     "TRANSITIONS": "qty=risk_amount/(stop_distance+entry*entry_fee_rate+stop*exit_fee_rate+entry*entry_slippage_rate+stop*stop_exit_slippage_rate); native validation и caps остаются в исходнике",
     "FAILURE_BEHAVIOR": "Не меняет арифметику ради допуска/частоты сделок",
-    "CONSUMERS": "Sizing/economic effects",
     "ENTRY_SYMBOLS": [
       "bps_to_rate",
       "stop_take_prices",
       "stop_distance",
       "resolve_risk_sizing",
       "closed_trade_economics"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "paper",
+        "owner": "paper-manager",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 6,
+        "block": "paper",
+        "owner": "paper-manager",
+        "consumers_of_block": [
+          "existing financial authority",
+          "intrabar-supervisor + OPS/UI"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Sizing/economic effects",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Financial authority",
@@ -1146,7 +1866,6 @@
     "METHOD": "Принятые TASK5A и прочие ускорения сохранены; экономические величины не пересчитывались этой задачей",
     "TRANSITIONS": "Принятые TASK5A и прочие ускорения сохранены; экономические величины не пересчитывались этой задачей",
     "FAILURE_BEHAVIOR": "Старые approvals не приписывают принятие новых байтов кода",
-    "CONSUMERS": "Действительные финансовые generations/receipts",
     "ENTRY_SYMBOLS": [
       "roots",
       "binding",
@@ -1161,7 +1880,48 @@
       "confirm_consumer",
       "already_processed",
       "save_observation_checkpoint"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 1,
+        "block": "state",
+        "owner": "existing owners",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 1,
+        "block": "paper",
+        "owner": "paper-manager",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 6,
+        "block": "paper",
+        "owner": "paper-manager",
+        "consumers_of_block": [
+          "existing financial authority",
+          "intrabar-supervisor + OPS/UI"
+        ]
+      },
+      {
+        "diagram": 6,
+        "block": "financial",
+        "owner": "existing financial authority",
+        "consumers_of_block": [
+          "S41CommandConsumer",
+          "timeframe-manager",
+          "intrabar-supervisor + OPS/UI"
+        ]
+      },
+      {
+        "diagram": 7,
+        "block": "outcomes",
+        "owner": "Paper financial authority",
+        "consumers_of_block": []
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Действительные финансовые generations/receipts",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Admission release/provenance",
@@ -1179,7 +1939,6 @@
     "METHOD": "Исторические SHA и receipts неизменны; текущие pins из документированного release, не произвольных running hashes",
     "TRANSITIONS": "Исторические SHA и receipts неизменны; текущие pins из документированного release, не произвольных running hashes",
     "FAILURE_BEHAVIOR": "Реальный implementation drift остаётся отказом; guard не отключён",
-    "CONSUMERS": "Штатный startup implementation-check",
     "ENTRY_SYMBOLS": [
       "need",
       "sha",
@@ -1192,7 +1951,38 @@
       "verify",
       "verify_initial",
       "provenance"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 6,
+        "block": "gate",
+        "owner": "existing guards",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "base",
+        "owner": "operator / existing restore tooling",
+        "consumers_of_block": [
+          "Watchdog + Legacy collector + Cognition",
+          "paper-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "paper",
+        "owner": "paper-manager",
+        "consumers_of_block": [
+          "Paper child",
+          "timeframe-manager",
+          "read-only owners"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Штатный startup implementation-check",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Execution WAL",
@@ -1217,7 +2007,6 @@
     "METHOD": "Текущий post-T0 domain и сегменты сохранены, старый WAL не сбрасывается",
     "TRANSITIONS": "Текущий post-T0 domain и сегменты сохранены, старый WAL не сбрасывается",
     "FAILURE_BEHAVIOR": "Не перескакивает через необработанные события; shutdown flush не заменяет фактический cursor",
-    "CONSUMERS": "WAL segments/head/checkpoints",
     "ENTRY_SYMBOLS": [
       "_utc_iso",
       "__init__",
@@ -1253,7 +2042,27 @@
       "append",
       "iter_from_offset",
       "rows"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 6,
+        "block": "market",
+        "owner": "Paper transport/WAL",
+        "consumers_of_block": [
+          "paper-manager"
+        ]
+      },
+      {
+        "diagram": 7,
+        "block": "raw",
+        "owner": "Recorder / feed / Paper WAL",
+        "consumers_of_block": [
+          "Canonical / native Legacy"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "WAL segments/head/checkpoints",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Execution checkpoint",
@@ -1274,7 +2083,6 @@
     "METHOD": "Cursor означает сохранённую обработку, не просто получение REST-пакета",
     "TRANSITIONS": "Cursor означает сохранённую обработку, не просто получение REST-пакета",
     "FAILURE_BEHAVIOR": "Старый heartbeat не выдаётся за свежий checkpoint",
-    "CONSUMERS": "Связанный checkpoint",
     "ENTRY_SYMBOLS": [
       "to_dict",
       "__post_init__",
@@ -1282,7 +2090,19 @@
       "from_dict",
       "save",
       "load"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 6,
+        "block": "market",
+        "owner": "Paper transport/WAL",
+        "consumers_of_block": [
+          "paper-manager"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Связанный checkpoint",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Entry conditions",
@@ -1303,7 +2123,6 @@
     "METHOD": "Observer-only сбор данных не снимает условия LIVE qualification/S0/S1, если они требуются текущей policy",
     "TRANSITIONS": "Observer-only сбор данных не снимает условия LIVE qualification/S0/S1, если они требуются текущей policy",
     "FAILURE_BEHAVIOR": "Нет искусственного LIVE_QUALIFIED, S0/S1 или принудительного OPEN",
-    "CONSUMERS": "ENTRY allowed/blocked и причина",
     "ENTRY_SYMBOLS": [
       "_to_utc_ts",
       "decision_timestamp",
@@ -1314,7 +2133,33 @@
       "replay_entry_block_reason",
       "is_stale_entry_signal",
       "stale_entry_block_reason"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 4,
+        "block": "gate",
+        "owner": "Timeframe Manager + Paper",
+        "consumers_of_block": []
+      },
+      {
+        "diagram": 6,
+        "block": "gate",
+        "owner": "existing guards",
+        "consumers_of_block": [
+          "timeframe-manager"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "manager",
+        "owner": "timeframe-manager",
+        "consumers_of_block": [
+          "read-only owners"
+        ]
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "ENTRY allowed/blocked и причина",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Intrabar supervision",
@@ -1337,7 +2182,6 @@
     "METHOD": "Работа наблюдателя не равна разрешению новой сделки",
     "TRANSITIONS": "Работа наблюдателя не равна разрешению новой сделки",
     "FAILURE_BEHAVIOR": "Missing services и stale state выделяются как technical condition",
-    "CONSUMERS": "Штатные supervision outputs",
     "ENTRY_SYMBOLS": [
       "utc_now_iso",
       "_parse_iso_age_seconds",
@@ -1379,7 +2223,10 @@
       "evaluate_all",
       "restart_service",
       "supervise_once"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Штатные supervision outputs",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   },
   {
     "NAME": "Visual projection",
@@ -1404,7 +2251,6 @@
     "METHOD": "Проекция не становится новым владельцем context/financial state",
     "TRANSITIONS": "Проекция не становится новым владельцем context/financial state",
     "FAILURE_BEHAVIOR": "Нет подмены отсутствующего свежего input фиктивным Final",
-    "CONSUMERS": "Visual public JSON и chart projections",
     "ENTRY_SYMBOLS": [
       "_directional",
       "_direction_word",
@@ -1431,6 +2277,24 @@
       "_closed_visual_key",
       "main",
       "flush"
-    ]
+    ],
+    "DIAGRAM_BLOCK_REFERENCES": [
+      {
+        "diagram": 2,
+        "block": "context-refresher",
+        "owner": "context-refresher",
+        "consumers_of_block": [
+          "dashboard-ui"
+        ]
+      },
+      {
+        "diagram": 8,
+        "block": "monitor",
+        "owner": "read-only owners",
+        "consumers_of_block": []
+      }
+    ],
+    "LEGACY_OUTPUT_ROUTE_LABEL": "Visual public JSON и chart projections",
+    "CONSUMER_REFERENCE": "ARCHITECTURE_SOURCE_INDEX: exact block/edge consumers; block references do not imply an exclusive one-module owner or exhaustive Python callgraph"
   }
 ]
