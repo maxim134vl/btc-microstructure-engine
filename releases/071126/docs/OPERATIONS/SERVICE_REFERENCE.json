@@ -21,7 +21,9 @@
     "inputs": "Watchdog feed и native Legacy outputs; после входной проверки dependency guard",
     "outputs": "cognition/*.parquet, runtime_engine_state, availability/metadata",
     "trigger": "Полный проход затем RUNTIME_LOOP_DELAY=5 s. ENGINE_TIMEOUT_SECONDS по env, default 120 s; это deadline отдельного engine, не всего pipeline.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/canonical-runtime",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "context-refresh-daemon",
@@ -45,7 +47,9 @@
     "inputs": "Пригодные собственные native frames и Stage2 evidence; admission и source pins",
     "outputs": "live/primary_context_publication.json, live/context_refresh_daemon_status.json; own-TF Final/Lifecycle, phase generations",
     "trigger": "Monotonic interval 900 s. Пропущенные slots пропускаются, не ставятся в очередь полных циклов.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/context-refresh-daemon",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "context-refresher",
@@ -69,7 +73,9 @@
     "inputs": "Опубликованные Final/Lifecycle/trade/phase источники; /profile — диагностика",
     "outputs": "visual public volume; /profile diagnostics",
     "trigger": "Штатный loop из entrypoint. Установленная проверка versions пропускает полный пересчёт неизменённых входов; точный период см. сохранённый command/env.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/context-refresher",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "legacy-volume-memory",
@@ -93,10 +99,12 @@
     "measured_cpu_cores": 0.2317411481687559,
     "measured_memory_bytes": 198623232,
     "purpose": "Native Memory/Regime pair под IO wrapper",
-    "inputs": "Текущий multi_exchange_flow snapshot из /legacy",
+    "inputs": "multi_exchange_flow.parquet + volume_clusters.parquet; own native history",
     "outputs": "/legacy native Memory/Regime parquet и /legacy/ops provenance",
     "trigger": "Родной цикл pair. Входной snapshot переиспользуется внутри прохода; формулы native unchanged.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/legacy-volume-memory",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "legacy-volume-reactions",
@@ -123,7 +131,9 @@
     "inputs": "Текущий multi_exchange_flow snapshot из /legacy",
     "outputs": "/legacy native Reactions/Acceptance и /legacy/ops",
     "trigger": "Родной цикл pair; расчёты/AST admission сохранены.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/legacy-volume-reactions",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "legacy-volume-clusters",
@@ -150,7 +160,9 @@
     "inputs": "/legacy multi_exchange_flow + проверенные native source pins",
     "outputs": "/legacy native Clusters/Inventory + ops capture/published metadata",
     "trigger": "Родной dispatch; один неизменный входной snapshot делится только внутри pair.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/legacy-volume-clusters",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "legacy-multi-exchange",
@@ -177,7 +189,9 @@
     "inputs": "Реальные соединения сборщика; точные endpoints в сохранённом source",
     "outputs": "/legacy multi_exchange_flow parquet, ops source evidence",
     "trigger": "Непрерывное получение, штатный flush/публикация исходного collector.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/legacy-multi-exchange",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "dashboard-ui",
@@ -201,7 +215,9 @@
     "inputs": "Статика image, /visual-data RO, /release/manifest.json RO, внутренний ops-api",
     "outputs": "127.0.0.1:15173; :18765 только Chart static/GET projection",
     "trigger": "GET/static и запросы UI; модель не вычисляется.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/dashboard-ui",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "ops-api",
@@ -225,7 +241,9 @@
     "inputs": "Data/visual RO, release manifest RO, Docker socket RO и действующий socket GID",
     "outputs": "127.0.0.1:18080; health/runtime/chart projections",
     "trigger": "Данные читаются по запросам/ограниченному transport cache. Docker counters требуют двух сопоставимых samples.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/ops-api",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "collector-watchdog",
@@ -249,7 +267,9 @@
     "inputs": "Сохранённая конфигурация collectors; в P0 фактически работал live_binance_feed_v2 child",
     "outputs": "Feed parquet, collector heartbeats и штатные logs",
     "trigger": "Существующий supervision loop, не отдельный новый collector.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/collector-watchdog",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "cognition-runtime",
@@ -273,7 +293,9 @@
     "inputs": "Spot BTCUSDT aggTrade/bookTicker; нормализация source/session/receive metadata",
     "outputs": "raw_market_events_v2; cognition/intrabar_context_events; runtime/intrabar_cognition_health.json",
     "trigger": "Receive непрерывен; архивный writer bounded, chunk policy в source: 50k events / 60 s, ZSTD.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/cognition-runtime",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "paper-manager",
@@ -301,7 +323,9 @@
     "inputs": "Native books/epoch, историческая provenance + выбранный release pins, действительные bindings, свежие Futures и BBO",
     "outputs": "Paper WAL/checkpoints/books/financial heads, health и owner projections; /r08 producer outputs",
     "trigger": "Receive/ACK/SLTP непрерывны; один последовательный market worker; существующий poll/health loop.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/paper-manager",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "timeframe-manager",
@@ -326,7 +350,9 @@
     "inputs": "Собственные M15/M30/H1/H4 контексты, phase/strength, Paper state и genuine source bindings",
     "outputs": "trading/manager/*, timeframe_command_memory, timeframe_manager_latest/health",
     "trigger": "Текущий daemon interval/poll; одинаковые evaluation/intent keys дедуплицируются.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/timeframe-manager",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   },
   {
     "service": "intrabar-supervisor",
@@ -350,6 +376,8 @@
     "inputs": "Paper/Timeframe owner health, control/config и shared runtime state",
     "outputs": "runtime/intrabar_supervision_state.json и штатные журналы",
     "trigger": "Штатный supervision loop из сохранённой команды.",
-    "unknown_norms": "NOT_ESTABLISHED"
+    "unknown_norms": "NOT_ESTABLISHED",
+    "architecture_node": "02/intrabar-supervisor",
+    "architecture_index": "../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.json"
   }
 ]

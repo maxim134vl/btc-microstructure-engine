@@ -1,1 +1,0 @@
-/app/high_participation_only_backtest_v1.py

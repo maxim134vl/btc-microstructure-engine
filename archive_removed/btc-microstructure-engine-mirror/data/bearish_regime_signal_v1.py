@@ -1,1 +1,0 @@
-/app/bearish_regime_signal_v1.py

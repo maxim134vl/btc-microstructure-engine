@@ -2,7 +2,7 @@
 
 Руководство по фактической установке 14 служб. R08 — дочерний процесс Paper, не контейнер №15. Источник истины: приватный `INVENTORY/containers.private.json`, exact image IDs, `SOURCES/INSTALLED` и сохранённые bind overlays. Старое рабочее дерево и старые Compose не заменяют эту конфигурацию. Торговые алгоритмы, fsync/ACK, лимиты и REAL этой работой не менялись.
 
-Backup root далее обозначен `B`; это каталог `BTCML_BACKUP_071126` на подключённом накопителе. Абсолютное положение накопителя может измениться. Runtime Compose находится в `RESTORE/compose.restore.private.json`; он использует `BTCML_BACKUP_ROOT` и имена восстановленных volumes, а не `${ORIGINAL_HOME}`. Исторические абсолютные пути в receipts остаются provenance, не переписываются.
+Backup root далее обозначен `B`; это каталог `BTCML_BACKUP_071126` на подключённом накопителе. Абсолютное положение накопителя может измениться. Runtime Compose находится в `RESTORE/compose.restore.private.json`; он использует `BTCML_BACKUP_ROOT` и имена восстановленных volumes, а не `/Users/fontecrypto`. Исторические абсолютные пути в receipts остаются provenance, не переписываются.
 
 ## Значение показателей
 
@@ -367,3 +367,14 @@ docker compose -p btcml-vps-smoke -f "$B/RESTORE/compose.restore.private.json" u
 - Broken image metadata: не подменять старым похожим tag. Для Cognition сохранён фактический rootfs + metadata и отдельно проверенный reconstructed image. Смена restore identity отражена явно.
 
 Восстановление не должно быть зависимо от старого GitHub/Gitea доступа или рабочего checkout. Backup содержит images, code, private configs и state. GitHub — публичная кодовая/документационная часть; private backup, WAL и книги туда не публикуются. После обслуживания подтвердить 14 actual services, свежие timestamps, version 071126 и REAL DISABLED; market entry readiness сообщать отдельно.
+<!-- CLEANUP_REVISION_20261108 -->
+
+## Схемы зависимостей и восстановления — 08.11.2026
+
+[Все14 контейнеров](../ARCHITECTURE_DIAGRAMS/02A_FOURTEEN_CONTAINERS_OVERVIEW.svg) · [подробные IO](../ARCHITECTURE_DIAGRAMS/02_ALL_14_CONTAINERS_C4_L2.svg) · [startup/readiness/failure graph](../ARCHITECTURE_DIAGRAMS/08_STARTUP_READINESS_FAILURE_DEPENDENCIES.svg).
+
+Это порядок готовности данных, не отсутствующие Compose depends_on. Market owners независимы; сначала нужны их действительные source generations, затем admitted native/Canonical inputs, Publisher own contexts и readers. Paper проверяет историческую financial provenance отдельно от current release implementation pins до writer. R08 запускается только существующим Paper child launcher при штатных bootstrap gates; baseline/INIT/descriptor заранее не выдумываются. Manager читает фактически опубликованные bindings. Политика и descriptor — технические входы: их отсутствие означает BLOCKED, не ожидание рынка.
+
+OBSERVE/NO_ACTION допустимы только при действительных необходимых технических входах и неудовлетворённых рыночных условиях. STALE — просроченный owner output; RUNNING/healthy не превращает его в свежий. Недостающий seal первого неполного бара остаётся WAITING_FOR_COVERAGE. Не запускать дополнительный R08 collector, второй writer или восстановление до T0.
+
+Эта cleanup-ревизия не выполняла restart, новый capture, replay, финансовую квалификацию или новую проверку торгового допуска. Приведённые выше historical CPU/RAM и configured periods не являются нормативами или свежим рабочим срезом. Актуальные 14 identities и REAL flags проверены отдельно в cleanup report.

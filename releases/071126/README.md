@@ -8,4 +8,4 @@ Architecture, all14-service operations, module references, data lineage and reco
 
 Private env/secrets, histories, WAL/books/positions, original captures, training payloads, image tar archives and full file-level data inventories are omitted from Git. The complete portable preservation package on owner storage is `BTCML_BACKUP_071126`; corpus/training originals remain under the documented MaksTiger logical roots. The config structure here is illustrative; use exact private restore config for restoration.
 
-The parent branch's prior history and files are retained. This accepted snapshot is explicitly located under `releases/071126` so old root working-tree material is not silently presented as the running release.
+The parent branch's prior history is retained; obsolete root files were removed from current HEAD by the cleanup commit. This accepted snapshot is explicitly located under `releases/071126` so old root working-tree material is not silently presented as the running release.

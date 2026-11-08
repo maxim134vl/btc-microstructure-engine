@@ -1,1 +1,0 @@
-/app/deterioration_acceleration_v1.py

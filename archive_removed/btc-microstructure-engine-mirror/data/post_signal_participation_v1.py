@@ -1,1 +1,0 @@
-/app/post_signal_participation_v1.py

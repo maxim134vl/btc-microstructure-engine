@@ -1,6 +1,6 @@
 # Restore release 071126 on another compatible computer
 
-Use the single `BTCML_BACKUP_071126` directory, plus the retained training/corpus roots on MaksTiger. The runtime backup contains its own images, current sources, immutable config, every live volume and every required host binding. It does not depend on `${ORIGINAL_HOME}`, the old Mac Git checkout or a remote registry. Historical source paths inside receipts remain provenance only.
+Use the single `BTCML_BACKUP_071126` directory, plus the retained training/corpus roots on MaksTiger. The runtime backup contains its own images, current sources, immutable config, every live volume and every required host binding. It does not depend on `/Users/fontecrypto`, the old Mac Git checkout or a remote registry. Historical source paths inside receipts remain provenance only.
 
 ## What has actually been checked
 
@@ -40,3 +40,16 @@ Keep REAL disabled through the saved config and actual application guards. Do no
 Volumes are standard `tar.zst` with a terminal gzip JSONL index. Exact duplicate file content may be stored as a tar content link, explicitly distinct from an original filesystem hardlink. The supplied `restore_component.py` materializes independently mutable copies for content-dedup aliases, preserves genuine hardlinks, restores symlink text and normalizes original saved ownership/metadata. Do not substitute a plain tar extraction that would incorrectly couple independent files. V1/V2/V3 journals themselves are unchanged.
 
 The root `SHA256SUMS` covers regular saved files; link text hashes are in the corresponding indexes. Manifest and checksum-list digests are recorded outside their own hash cycle in the storage seal. A matching saved artifact is not proof of post-cut live state or a historical durable ACK that never existed.
+<!-- CLEANUP_REVISION_20261108 -->
+
+## Cleanup supplement and historical path recovery — 8 November 2026
+
+Follow [the actual dependency/readiness graph](../ARCHITECTURE_DIAGRAMS/08_STARTUP_READINESS_FAILURE_DEPENDENCIES.svg) and [fourteen-container IO](../ARCHITECTURE_DIAGRAMS/02_ALL_14_CONTAINERS_C4_L2.svg). This graph does not add Compose dependencies or guarantee current source readiness. The original sealed backup is unchanged; these updated documents are a separately checksummed supplement, not part of its original seal.
+
+Two inactive Cursor `state.vscdb` databases are preserved as complete byte-verified `.zst` streams in `BTCML_ENGINEERING_JOURNAL/ORIGINAL_JOURNAL/CURSOR_HISTORY/`. Their sidecar descriptors retain original full SHA, size, timestamps and metadata. Decompress to a new offline file, check the descriptor SHA before use; do not overwrite an active editor database. Compression does not vacuum or migrate SQLite.
+
+2326 redundant historical table/array/CSV copies have a private exact restore map in `BTCML_STORAGE_MANIFEST/CLEANUP_20261108/SAFE_BACKUP_DATA_RESTORE_MAP.private.jsonl.gz`. `TOOLS/btcml_restore_cleanup_path.py` defaults to dry-run; `--write` requires an explicit new destination root and refuses an existing file. It copies from a separately retained exact-SHA keeper, checks complete bytes, and never starts an application. A source-bound retained capture would additionally require its complete original inventory and original canonical absolute root; copying one file or preserving mtime is not admission. This revision did not remove RAW/ACK/capture inventories.
+
+Inactive host-only venvs and generated npm dependencies are preserved in `BTCML_ENGINEERING_JOURNAL/WORKING_TREES/20261108/inactive-host-development-environments.tar.zst` with a byte-verified per-file index. They are optional Mac development environments, not dependencies for loading the saved Docker images. Original WIP is separately archived; private Git history is in the original backup bundle. These archives are not a newer coherent financial/runtime cut.
+
+Never point restoration at existing books/positions/WAL, skip a cursor, rewrite receipts, or infer a current permission from an archived descriptor. Full-runtime restore remains NOT_TESTED.

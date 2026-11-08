@@ -1,1 +1,0 @@
-/app/intraday_rest_collector.py

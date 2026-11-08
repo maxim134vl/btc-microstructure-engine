@@ -6,30 +6,9 @@
 
 ## Путь данных и независимые ветви
 
-```mermaid
-flowchart TD
-  EX[Реальные биржевые сообщения] --> FEED[Required feed watchdog и Legacy collector]
-  FEED --> CAN[Canonical Stage1 и Stage2]
-  EX --> COG[Cognition Spot receive и archival writer]
-  COG --> RAW[RAW journal и context events]
-  CAN --> PUB[Существующий Publisher / causal chain]
-  PUB --> TF[Own Final / Lifecycle / Context Phase M15 M30 H1 H4]
-  EX --> REC[Spot Recorder внутри Paper-owned R08]
-  REC --> ACK[Durable commit / ACK]
-  ACK --> R08[Provider 300s / INIT / R08 / DRA R2]
-  TF --> R08
-  TF --> MAN[Timeframe Manager]
-  R08 --> MAN
-  MAN --> BUS[Дедуплицированный CommandBus]
-  BUS --> PAPER[Единственный Paper writer / Risk / SL TP]
-  EX --> FUT[Futures aggTrade и BBO / WAL]
-  FUT --> PAPER
-  PAPER --> LEDGER[Financial generations / native books / outcomes]
-  PAPER --> INTRA[Intrabar supervision]
-  LEDGER --> API[Read-only OPS API]
-  TF --> API
-  API --> UI[Один Dashboard nginx + Chart]
-```
+![System context](../ARCHITECTURE_DIAGRAMS/01_SYSTEM_CONTEXT_C4_L1.svg)
+
+Полный набор: [8 подробных схем + обзор14контейнеров](../ARCHITECTURE_DIAGRAM_INDEX.md).
 
 Стрелки обозначают ownership/consumption, не один синхронный callback. Feed, Cognition, native Legacy, Publisher и execution имеют независимые циклы. Spot Recorder не является Futures execution feed. Синхронизация проходит через собственные versions, source references, availability/receive metadata, committed generations и команды. Один более новый файл или heartbeat не подтверждает готовность всей цепи.
 
@@ -197,3 +176,16 @@ Master Book находится в canonical reconstruction corpus; ранее п
 Такой candle-derived split нельзя выдавать за literal unsigned Spot q или за настоящую последовательность aggressor executions. R08 baseline читает собственные genuine Spot contributors и остаётся sum(q)/(last contributor T−first contributor T), BTC/с; его нулевой T-span не исправляется epsilon. Существующий epsilon в другом Stage1 candle-derived признаке не переносится в baseline. Market/source identity определяется конкретным source record/config, а не одним символом BTCUSDT.
 
 Filesystem copy/restore/COW timestamps, даже сохранённый mtime, не доказывают историческую доступность признака. Её подтверждают исходные receive/ACK/owner publications и предусмотренные clock domains; exchange time архива сам по себе не является локальным ACK.
+<!-- CLEANUP_REVISION_20261108 -->
+
+## Уточнение фактических маршрутов — 08.11.2026
+
+[C4 L2](../ARCHITECTURE_DIAGRAMS/02A_FOURTEEN_CONTAINERS_OVERVIEW.svg), [Stage1 DFD](../ARCHITECTURE_DIAGRAMS/03_STAGE1_SOURCE_AND_DERIVATION_DFD.svg), [Stage2 DFD](../ARCHITECTURE_DIAGRAMS/04_STAGE2_CONTEXT_R08_ADMISSION.svg), [четыре TF](../ARCHITECTURE_DIAGRAMS/05_FOUR_INDEPENDENT_TIMEFRAME_CONTEXTS.svg), [execution](../ARCHITECTURE_DIAGRAMS/06_TRADING_DECISION_COMMAND_PAPER_EXECUTION.svg).
+
+Watchdog принимает Spot kline15m. Native Legacy collector использует Futures REST trades; Clusters/Inventory, Memory/Regime и Reactions/Acceptance — параллельные пары, а не одна последовательная цепь. Memory читает flow и clusters; его история не объявляется прямым входом Canonical. Regime и предусмотренные native publications поступают через существующие source adapters. Candle-derived Spot flow/liquidity не является переименованным native Futures flow.
+
+Publisher читает семь frozen INPUTS и native snapshots, выполняет собственные Auction/Cognitive/Final, Lifecycle с admitted Stage2 evidence, Context Phase и owner publication. M15 private September boundary и независимые higher-TF callbacks показаны отдельно. Он не запускает все Stage2 engines вторым полным Canonical pass. Параллельный Cognition получает собственный Spot aggTrade/BBO; ClosedBarContextEventBridge читает новые admitted closed contexts. Его provisional CTX journal не подставляется в действующий S4.1 entry input: state_adapter выбирает closed-bar Parquet.
+
+CommandBus — `timeframe_command_memory.parquet`, не JSONL. S41CommandConsumer хранит собственный cursor и применяет команду через Paper. Intrabar Supervisor наблюдает Compose-owned службы; риск, fill, SL/TP и books принадлежат Paper. Из source routes не следует свежесть текущего потока или разрешение OPEN.
+
+Все стрелки имеют source keys и SHA/line anchors в [едином индексе](../ARCHITECTURE_DIAGRAMS/ARCHITECTURE_SOURCE_INDEX.md). Полный digest V3/торговые формулы/лимиты этой ревизией не изменялись.
