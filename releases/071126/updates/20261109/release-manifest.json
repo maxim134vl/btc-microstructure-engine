@@ -641,12 +641,14 @@
   "provisional_artifacts_authoritative": false,
   "validation_source_sha256": {
     "tests/probe_delta_image.py": "544fcca6551912c55f29ec3f551d1df7971e94983b59077a6107806f192d4912",
-    "tests/check_publisher_saved_regressions.py": "10007038ae1cf79bf2ce9e32ef26f58b97587a1b6dfa2cbc70872c0359d4b971",
+    "tests/check_publisher_saved_regressions.py": "789439b0598836328183cf617ce811c7a14c7c875507d43722bb35873992f7bb",
     "tests/canonical/check_native_exit.py": "3a2005f322e8d122a2eee8270e7c9b46ee0804163ca87293468d6953cf381f75",
     "tests/canonical/check_decoupling.py": "c73b3313b946975563a47c0346428038cea107afb6ede3e45368809b0aacc321",
     "tests/canonical/baseline/auction_synthesis_engine_v1.py": "3dd231562a3ac3612b4533b7de5fc47d5f96bf33249dc3385204b9cce087a5e8",
     "tests/feed/harness.py": "2a9b2b66c6401f3c96291ba461517f3dcc40555ef0b2618f2252a1e6f8be9806",
-    "tests/feed/test_feed_recovery.py": "308f5c66e93d62ea2ba275291f3e72fad8189e118d9f48b025f24f15e4b0e110"
+    "tests/feed/test_feed_recovery.py": "308f5c66e93d62ea2ba275291f3e72fad8189e118d9f48b025f24f15e4b0e110",
+    "tests/publisher/check.py": "3f9d8ed4cd3984a237266d54f44d89db439134574cc8abeb9b0ac1d2e509dad6",
+    "tests/provenance.json": "33e3cb8fcb0b70e463b21efc9a7c0009230cf15886590b7ea4da9998f11109bf"
   },
   "platform_contract": "PLATFORM_COMPATIBILITY.md"
 }

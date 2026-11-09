@@ -22,5 +22,72 @@
     "original_sha256": "3a2005f322e8d122a2eee8270e7c9b46ee0804163ca87293468d6953cf381f75",
     "candidate_sha256": "3a2005f322e8d122a2eee8270e7c9b46ee0804163ca87293468d6953cf381f75",
     "change": "NONE"
+  },
+  {
+    "test": "tests/publisher/check.py",
+    "original_sha256": "3f9d8ed4cd3984a237266d54f44d89db439134574cc8abeb9b0ac1d2e509dad6",
+    "candidate_sha256": "3f9d8ed4cd3984a237266d54f44d89db439134574cc8abeb9b0ac1d2e509dad6",
+    "change": "NONE; original checker copied byte-for-byte from the accepted Publisher 9-PASS evidence bundle",
+    "wrapper": {
+      "path": "tests/check_publisher_saved_regressions.py",
+      "sha256": "789439b0598836328183cf617ce811c7a14c7c875507d43722bb35873992f7bb",
+      "change": "Resolve the included checker relative to __file__; retain saved_regression_definitions and call only regressions()"
+    },
+    "execution": {
+      "command_shell": "docker run --rm --network none --read-only --log-driver none --memory 512m --memory-swap 512m --cpus 1 --pids-limit 128 --tmpfs /tmp:rw,size=64m,mode=1777 --mount \"type=bind,src=${BTCML_RELEASE_ROOT:?Set absolute release checkout root},dst=/candidate,readonly\" --entrypoint python sha256:1d1393564c5c1cdaee5c5b7c65bac1a043fe35adaf4c26a9a079d6b70036adaa -B /candidate/releases/071126/updates/20261109/tests/check_publisher_saved_regressions.py",
+      "required_environment": {
+        "BTCML_RELEASE_ROOT": "Absolute path to this Git checkout; no original Mac path is required"
+      },
+      "working_directory": "Any host directory after setting BTCML_RELEASE_ROOT",
+      "read_only_mounts": [
+        {
+          "source": "${BTCML_RELEASE_ROOT}",
+          "target": "/candidate"
+        }
+      ],
+      "image_id": "sha256:1d1393564c5c1cdaee5c5b7c65bac1a043fe35adaf4c26a9a079d6b70036adaa",
+      "platform": "linux/arm64; no native AMD64 equivalence is claimed",
+      "process_user": "Unchanged default user from the saved image; no root override",
+      "writable_scratch": "Container /tmp only, tmpfs limited to 64 MiB; no persistent or production volumes",
+      "network": "none",
+      "external_inputs": "No saved market-data fixture or external /checks directory is required by these nine regressions. The unchanged checker creates its existing small fixtures in /tmp. Load the saved immutable Publisher image from the release image archive before running.",
+      "scope": "Only regressions(); the checker __main__ four-TF benchmark and worker paths are not invoked",
+      "dependencies": [
+        {
+          "path": "dependencies/context-refresh-daemon.json",
+          "sha256": "3b0eaa0baa8281b48fd1fb4b44022dee63fa040d23c687b0dfaf033023fbe441"
+        },
+        {
+          "path": "dependencies/context-refresh-daemon.native-os.lock",
+          "sha256": "265ac9f25fc4483c4fdf8571c865639d567c160f93d151f66eff8a7e8b895518"
+        }
+      ],
+      "baseline_source": {
+        "path": "releases/071126/components/context-refresh-daemon/app/src/btc_ml/external_traders/context_stage2_evidence.py",
+        "sha256": "bbaa2a2a6651cc416fc6ec0ed68ad30a7de13194ae75103460ca855fe1ac9d9e"
+      },
+      "current_source": {
+        "runtime_path": "/app/src/btc_ml/external_traders/context_stage2_evidence.py",
+        "sha256": "1c81b8b590aab23262467c94bb6c43b4aa9d53cf43e24e19c7d1d95eab160544"
+      }
+    },
+    "saved_result": {
+      "release_evidence": "evidence/regression-summary.json",
+      "case": "publisher-current-code-regression",
+      "original_record_sha256": "2586ed6fd4e831888ddc75625de4b22256f2ac44e19543dce50ec4f70d4ae9b8",
+      "original_command_sha256": "9c8d3f042562eeca6700a0d596a623b8c739c1aa83234840e5bfb64c26439fde",
+      "original_stdout_sha256": "4d4068b3fbe3a48c58be642b0e43cf3fb17102a53364b429819c27b5bc97a0ad",
+      "original_stderr_sha256": "540bceba9c6d4ae78645b55257e6bd2b0a0927d858d2dbc07f1a4d9ae869e136",
+      "record": {
+        "exit_code": 0,
+        "wall_s": 23.11006683300002,
+        "image_id": "sha256:1d1393564c5c1cdaee5c5b7c65bac1a043fe35adaf4c26a9a079d6b70036adaa",
+        "checker_sha256": "3f9d8ed4cd3984a237266d54f44d89db439134574cc8abeb9b0ac1d2e509dad6",
+        "stdout": "REGRESSION_RESULT {\"PASS\": 9, \"FAIL\": 0, \"cases\": [\"small_frozen_input_all_values_schema_timestamps_ID_precision\", \"handoff_transfer_unchanged\", \"next_decode_has_no_mutable_frame_alias\", \"changed_frozen_generation_rehashes_and_matches_original\", \"default_reader_stays_strict\", \"changed_during_file_decode_falls_back_to_consistent_byte_snapshot\", \"invalid_timestamp_same_rejection\", \"corrupt_parquet_same_rejection\", \"corrupt_pinned_private_file_preserves_exact_original_error_reason\"]}\n",
+        "stderr": "/candidate/releases/071126/components/context-refresh-daemon/app/src/btc_ml/external_traders/context_stage2_evidence.py:330: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  frame[\"_source_timestamp\"] = pd.to_datetime(frame.timestamp, utc=True, errors=\"coerce\")\n/app/src/btc_ml/external_traders/context_stage2_evidence.py:348: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  frame[\"_source_timestamp\"] = pd.to_datetime(frame.timestamp, utc=True, errors=\"coerce\")\n"
+      },
+      "historical_logs": "Original result, command, stdout and stderr are unchanged. Their paths are not execution dependencies.",
+      "execution_during_artifact_closure": "NOT_RERUN; this is preservation of the accepted 9-PASS result, not new regression evidence"
+    }
   }
 ]
