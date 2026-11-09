@@ -1,0 +1,22 @@
+{
+  "original_image_id": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+  "source_container_id": "d8002649cfd34835791efc0c7d27d7df3631a89711d4b6ffcdbdca579a473ee1",
+  "source_rootfs_readonly": true,
+  "original_image_byte_identity_claimed": false,
+  "started_at_UTC": "2026-11-07T13:14:35.114090+00:00",
+  "export_wall_s": 129.79426854196936,
+  "rootfs_archive_bytes": 201756563,
+  "rootfs_archive_sha256": "f1f132d30b52eb5e32e6ca08cac54a0ae6a65220503eb96a610899bf1c3ef4af",
+  "tar_members": 17361,
+  "rootfs_payload_bytes": 612839307,
+  "reconstructed_image_id": "sha256:348073d3a7300d3a402bea47f770505486ce4b4f6112f1c2f1b59e57e62540e8",
+  "reconstructed_tag": "btcml-preserved-cognition:071126-rootfs",
+  "effective_startup_metadata_match": true,
+  "image_archive_bytes": 200314642,
+  "image_archive_sha256": "bfc0e2e923bc5ebf90c309075239baabe1fedb7bec58e064cb313c53b14254d8",
+  "save_wall_s": 62.4817475839518,
+  "status": "RECONSTRUCTED_FROM_ACTUAL_ROOTFS; ARTIFACT_LOAD_CREATE_IMPORT_PASS",
+  "healthcheck": "Preserved in container inventory and restore Compose, not asserted as original image metadata",
+  "installed_replacement": false,
+  "verification": "RESTORE_VERIFICATION/COGNITION_ARTIFACT_PROBE.json"
+}

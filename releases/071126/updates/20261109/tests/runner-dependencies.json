@@ -1,0 +1,18 @@
+[
+  {
+    "distribution": "pytest",
+    "version": "9.0.3"
+  },
+  {
+    "distribution": "pluggy",
+    "version": "1.6.0"
+  },
+  {
+    "distribution": "iniconfig",
+    "version": "2.3.0"
+  },
+  {
+    "distribution": "pygments",
+    "version": "2.20.0"
+  }
+]
