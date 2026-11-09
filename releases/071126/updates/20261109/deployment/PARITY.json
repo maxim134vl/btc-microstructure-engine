@@ -1,0 +1,86 @@
+[
+  {
+    "service": "collector-watchdog",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "canonical-runtime",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "context-refresh-daemon",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "ops-api",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "dashboard-ui",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "timeframe-manager",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "paper-manager",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "context-refresher",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "legacy-volume-clusters",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "intrabar-supervisor",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "legacy-volume-memory",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "legacy-volume-reactions",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "legacy-multi-exchange",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  },
+  {
+    "service": "cognition-runtime",
+    "PASS": true,
+    "commands_users_RO_mount_targets_subpaths_limits_network_preserved": true,
+    "state_payload_copied": false
+  }
+]

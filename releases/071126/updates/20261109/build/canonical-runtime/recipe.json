@@ -1,0 +1,6 @@
+{
+  "accepted071126_base": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+  "platform": "linux/arm64",
+  "installed_target": "sha256:1ba14bd049320df03b4945ef1dfe625359dfb4c864a9246d7280950a9d4974f4",
+  "scope": "Only proven owner delta; existing071126 sources/recipes/artifacts retained"
+}

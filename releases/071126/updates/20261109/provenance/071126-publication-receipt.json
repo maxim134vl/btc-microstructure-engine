@@ -1,0 +1,26 @@
+{
+  "status": "PUSHED_AND_REMOTE_HEADS_VERIFIED",
+  "remote": "https://github.com/maxim134vl/btc-microstructure-engine.git",
+  "parent": "3fdc260302f878a23e809248c4b0e4640ee7b30b",
+  "main_untouched": "2f7b02ea925f517ab97f4bd25f8da008b784b795",
+  "canonical_prior_commits_ahead_of_main": 185,
+  "release_commit": "8f45e0260929ba87ccaca1d8fe6e08949cc1d94a",
+  "canonical_commit": "45efea614eaf74934ff419f752103beea6e12b16",
+  "release_tree": "c7746dad8416fc56c01ce7e5d99b7005b280d7a3",
+  "canonical_tree": "40e6ec83f3a009bae4fe22f69e345c3209fa6bdf",
+  "source_files_verified": 12382,
+  "all_release_files": 12415,
+  "source_bytes_match_installed": true,
+  "secret_scan": "PASS, zero unreviewed findings;8 exact ENV variable-name literals reviewed",
+  "added_only_no_ancestor_deletions": true,
+  "owner_dirty_Gitea_worktree": "Unchanged",
+  "at_UTC": "2026-11-07T19:31:56.425581+00:00",
+  "push_returncode": 0,
+  "push_stdout": "",
+  "push_stderr": "To https://github.com/maxim134vl/btc-microstructure-engine.git\n   3fdc260..45efea6  memory/canonical-system -> memory/canonical-system\n * [new branch]      release -> release\n",
+  "remote_heads": {
+    "refs/heads/main": "2f7b02ea925f517ab97f4bd25f8da008b784b795",
+    "refs/heads/memory/canonical-system": "45efea614eaf74934ff419f752103beea6e12b16",
+    "refs/heads/release": "8f45e0260929ba87ccaca1d8fe6e08949cc1d94a"
+  }
+}

@@ -1,0 +1,1453 @@
+{
+  "name": "btcml-migration-candidate",
+  "services": {
+    "collector-watchdog": {
+      "image": "sha256:474b09f83c1752805996a8298e27ec60f53c3f2fab5b9116ed7fe82cfe688756",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/collector_watchdog.sh"
+      ],
+      "environment": {
+        "EXECUTION_ENABLED": "false",
+        "REAL_EXECUTION_ENABLED": "false",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "PAPER_ONLY": "true",
+        "PYTHONPATH": "/app:/app/src",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1",
+        "BTC_ML_REPO_ROOT": "/app",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "collector-watchdog",
+          "--pid-file",
+          "run/collector_watchdog.pid",
+          "--allow-missing-health"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "canonical-runtime": {
+      "image": "sha256:99908a60f82c0972ce8c1fa9ec6ee8c4b746883b65633d359419eccbc30d645c",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/canonical_runtime.sh"
+      ],
+      "environment": {
+        "BTC_ML_COGNITION_MEMORY_ONLY": "0",
+        "PYTHONPATH": "/app:/app/src",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BTC_ML_COGNITION_INITIALIZE_EMPTY": "0",
+        "PYTHONUNBUFFERED": "1",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "BTC_ML_COGNITIVE_CHAIN_LIVE": "1",
+        "BTC_ML_LEGACY_SOURCE_ROOT": "/app/data/legacy_sources",
+        "EXECUTION_ENABLED": "false",
+        "PAPER_ONLY": "true",
+        "BTC_ML_CANONICAL_CANDLE_LANE": "1",
+        "REAL_EXECUTION_ENABLED": "false",
+        "BTC_ML_REPO_ROOT": "/app",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "BTC_ML_COGNITION_EXTENSION_V1": "1",
+        "BTC_ML_COGNITION_GENERATION": "BTCML_COGNITIVE_MEMORY_V1_20261016",
+        "BTC_ML_STAGE2_SYNTHESIS_INPUTS_LIVE": "1",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1",
+        "PYTHONFAULTHANDLER": "1"
+      },
+      "read_only": true,
+      "restart": "no",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {
+            "nocopy": true
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_2",
+          "target": "/app/data/legacy_sources",
+          "read_only": true,
+          "volume": {
+            "nocopy": true
+          }
+        }
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "canonical-runtime",
+          "--pid-file",
+          "run/canonical_runtime.pid",
+          "--allow-missing-health"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "context-refresh-daemon": {
+      "image": "sha256:1d1393564c5c1cdaee5c5b7c65bac1a043fe35adaf4c26a9a079d6b70036adaa",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/context_refresh_daemon.sh"
+      ],
+      "environment": {
+        "MARKET_SYMBOL": "BTCUSDT",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "ARROW_DEFAULT_MEMORY_POOL": "system",
+        "EXECUTION_ENABLED": "false",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "PYTHONPATH": "/app:/app/src",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "REAL_EXECUTION_ENABLED": "false",
+        "BTC_ML_REPO_ROOT": "/app",
+        "PAPER_ONLY": "true",
+        "PYTHONUNBUFFERED": "1",
+        "CONTEXT_REFRESH_INTERVAL_SECONDS": "900",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1"
+      },
+      "read_only": true,
+      "restart": "no",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {
+            "nocopy": true
+          }
+        }
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "context-refresh-daemon",
+          "--pid-file",
+          "data/runtime/context_refresher.pid",
+          "--allow-missing-health"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "ops-api": {
+      "image": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app/dashboard/backend",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "run_api.py"
+      ],
+      "environment": {
+        "MARKET_SYMBOL": "BTCUSDT",
+        "LANG": "C.UTF-8",
+        "DASHBOARD_POLL_INTERVAL": "2.0",
+        "DASHBOARD_HOST": "0.0.0.0",
+        "DASHBOARD_PORT": "8080",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PAPER_ONLY": "true",
+        "EXECUTION_ENABLED": "false",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BTCML_RELEASE_MANIFEST": "/release/manifest.json",
+        "PIP_NO_CACHE_DIR": "1",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "BTC_ML_REPO_ROOT": "/app",
+        "BTCML_DOCKER_API_VERSION": "1.54",
+        "DASHBOARD_CORS_ORIGINS": "http://localhost:15173,http://127.0.0.1:15173",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "REAL_EXECUTION_ENABLED": "false",
+        "PYTHONPATH": "/app:/app/src:/app/dashboard/backend"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_1:?Supply preserved external binding}",
+          "target": "/release/manifest.json",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_2:?Supply preserved external binding}",
+          "target": "/var/run/docker.sock",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": true,
+          "volume": {}
+        },
+        {
+          "type": "volume",
+          "source": "preserved_3",
+          "target": "/app/apps/context_visualizer/public/data",
+          "read_only": true,
+          "volume": {}
+        }
+      ],
+      "mem_limit": 1610612736,
+      "memswap_limit": 3221225472,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "curl",
+          "-fsS",
+          "http://127.0.0.1:8080/health"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "ports": [
+        {
+          "target": 8080,
+          "published": "18080",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        }
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s",
+      "group_add": [
+        "0"
+      ]
+    },
+    "dashboard-ui": {
+      "image": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+      "platform": "linux/arm64",
+      "user": "",
+      "working_dir": "/",
+      "entrypoint": [
+        "/docker-entrypoint.sh"
+      ],
+      "command": [
+        "nginx",
+        "-g",
+        "daemon off;"
+      ],
+      "environment": {
+        "DYNPKG_RELEASE": "1",
+        "NJS_VERSION": "0.8.10",
+        "NJS_RELEASE": "1",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "NGINX_VERSION": "1.27.5",
+        "PKG_RELEASE": "1"
+      },
+      "read_only": false,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_1:?Supply preserved external binding}",
+          "target": "/release/manifest.json",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_3",
+          "target": "/visual-data",
+          "read_only": true,
+          "volume": {}
+        }
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/tmp:size=16M,mode=1777",
+        "/var/cache/nginx:size=32M,mode=1777",
+        "/var/run:size=8M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1/"
+        ],
+        "interval": "15000000000ns",
+        "timeout": "5000000000ns",
+        "retries": 8,
+        "start_period": "20000000000ns"
+      },
+      "ports": [
+        {
+          "target": 80,
+          "published": "15173",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        },
+        {
+          "target": 8765,
+          "published": "18765",
+          "host_ip": "0.0.0.0",
+          "protocol": "tcp"
+        }
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "timeframe-manager": {
+      "image": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/financial_trend_service.sh",
+        "timeframe-manager"
+      ],
+      "environment": {
+        "BTC_ML_FINANCIAL_ANCHOR": "/control/derived-seal.json",
+        "PYTHON_VERSION": "3.11.16",
+        "PIP_NO_CACHE_DIR": "1",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "BTC_ML_TREND_DESCRIPTOR": "/r08/runtime/trend-descriptor.json",
+        "BTC_ML_FINANCIAL_ROOT": "/app/data/trading/intrabar_paper/PER_TF_EQUITY_1PCT_V1_VPS_20260826_112613",
+        "BTC_ML_REPO_ROOT": "/app",
+        "PYTHONUNBUFFERED": "1",
+        "LANG": "C.UTF-8",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "BTC_ML_FINANCIAL_DESCRIPTOR": "/run/btcml-financial-admission/runtime-descriptor.json",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "EXECUTION_ENABLED": "false",
+        "BTC_ML_R08_OWNER": "reader",
+        "PYTHONPATH": "/app:/app/src",
+        "BTC_ML_IMPLEMENTATION_ROLE": "timeframe-manager",
+        "BTC_ML_IMPLEMENTATION_RELEASE_SHA256": "2e3d0e4af03b1766e4ca89b13b59dd8bd2c8181a231bc3dc902ab498fb22e224",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "BTC_ML_IMPLEMENTATION_RELEASE": "/app/config/accepted-current-release.json",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "BTC_ML_PAPER_FINANCIAL_POLICY": "/paper-policy/paper-policy.json",
+        "TF_MANAGER_INTERVAL_S": "60",
+        "BTC_ML_START_T0": "2026-11-04T18:24:35.646615+00:00",
+        "BTC_ML_PAPER_FINANCIAL_POLICY_SHA256": "2aaeeb19bdeecaccf5dedf525b9745f9a4e6a68933454db2658032d248065a2d",
+        "BTC_ML_FINANCIAL_DESCRIPTOR_SHA256": "f4200b502500bce9631174b1817daf33349226bf83b7c3d1a14907a0bb738850",
+        "REAL_EXECUTION_ENABLED": "false",
+        "BTC_ML_R08_RUNTIME_MOUNT": "/r08",
+        "PAPER_ONLY": "true"
+      },
+      "read_only": true,
+      "restart": "no",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BTCML_RELEASE_ROOT:?Set accepted release candidate root}/releases/071126/components/timeframe-manager/app/config/qualified_paper_launcher.py",
+          "target": "/app/config/qualified_paper_launcher.py",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_3:?Supply preserved external binding}",
+          "target": "/control",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_4:?Supply preserved external binding}",
+          "target": "/app/config/intrabar_paper_execution.qualified-anti-saw.json",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_5:?Supply preserved external binding}",
+          "target": "/r08",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data/live",
+          "read_only": true,
+          "volume": {
+            "nocopy": true,
+            "subpath": "live"
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {
+            "nocopy": true
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_6:?Supply preserved external binding}",
+          "target": "/paper-policy",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_7:?Supply preserved external binding}",
+          "target": "/run/btcml-financial-admission",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data/cognition",
+          "read_only": true,
+          "volume": {
+            "nocopy": true,
+            "subpath": "cognition"
+          }
+        }
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "timeframe-manager",
+          "--pid-file",
+          "run/timeframe_manager.pid",
+          "--health-file",
+          "data/runtime/timeframe_manager_health.json",
+          "--allow-missing-health"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "paper-manager": {
+      "image": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+      "platform": "linux/arm64",
+      "user": "10001:10001",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/financial_candidate_paper.sh",
+        "--continuity-mode",
+        "FLAT_START",
+        "--fresh-live-domain",
+        "paper-t0-20261104T182435Z"
+      ],
+      "environment": {
+        "BTC_ML_PAPER_FINANCIAL_POLICY_SHA256": "2aaeeb19bdeecaccf5dedf525b9745f9a4e6a68933454db2658032d248065a2d",
+        "REAL_EXECUTION_ENABLED": "false",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BTC_ML_IMPLEMENTATION_RELEASE": "/app/config/accepted-current-release.json",
+        "PYTHONPATH": "/app:/app/src",
+        "BTC_ML_R08_RUNTIME_MOUNT": "/r08",
+        "OMP_NUM_THREADS": "1",
+        "PAPER_ONLY": "true",
+        "BTC_ML_IMPLEMENTATION_ROLE": "paper-manager",
+        "BTC_ML_R08_OWNER": "paper-manager",
+        "BTC_ML_REPO_ROOT": "/app",
+        "BTC_ML_FINANCIAL_ROOT": "/app/data/trading/intrabar_paper/PER_TF_EQUITY_1PCT_V1_VPS_20260826_112613",
+        "BTC_ML_TREND_DESCRIPTOR": "/r08/runtime/trend-descriptor.json",
+        "BTC_ML_PAPER_FINANCIAL_POLICY": "/paper-policy/paper-policy.json",
+        "BTC_ML_IMPLEMENTATION_RELEASE_SHA256": "2e3d0e4af03b1766e4ca89b13b59dd8bd2c8181a231bc3dc902ab498fb22e224",
+        "BTC_ML_FINANCIAL_DESCRIPTOR": "/run/btcml-financial-admission/runtime-descriptor.json",
+        "EXECUTION_ENABLED": "false",
+        "BTC_ML_FINANCIAL_DESCRIPTOR_SHA256": "f4200b502500bce9631174b1817daf33349226bf83b7c3d1a14907a0bb738850",
+        "BTC_ML_FINANCIAL_ANCHOR": "/control/derived-seal.json",
+        "OPENBLAS_NUM_THREADS": "1",
+        "BTC_ML_START_T0": "2026-11-04T18:24:35.646615+00:00",
+        "BTC_ML_R08_OBSERVER_ONLY": "1",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "read_only": true,
+      "restart": "no",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {
+            "nocopy": true
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_4:?Supply preserved external binding}",
+          "target": "/app/config/intrabar_paper_execution.qualified-anti-saw.json",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data/live",
+          "read_only": true,
+          "volume": {
+            "nocopy": true,
+            "subpath": "live"
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_7:?Supply preserved external binding}",
+          "target": "/run/btcml-financial-admission",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_3:?Supply preserved external binding}",
+          "target": "/control",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_RELEASE_ROOT:?Set accepted release candidate root}/releases/071126/components/paper-manager/app/config/qualified_paper_launcher.py",
+          "target": "/app/config/qualified_paper_launcher.py",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_6:?Supply preserved external binding}",
+          "target": "/paper-policy",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_5:?Supply preserved external binding}",
+          "target": "/r08",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data/cognition",
+          "read_only": true,
+          "volume": {
+            "nocopy": true,
+            "subpath": "cognition"
+          }
+        }
+      ],
+      "mem_limit": 1610612736,
+      "memswap_limit": 1610612736,
+      "pids_limit": 256,
+      "cpus": 2.0,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_paper_manager.py"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "context-refresher": {
+      "image": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/context_refresher.sh"
+      ],
+      "environment": {
+        "BTCML_PERF_PROFILE": "0",
+        "PYTHONUNBUFFERED": "1",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "REAL_EXECUTION_ENABLED": "false",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BTCML_PERF_WRAPPER_REVISION": "PROFILING_COMPLETE_NATIVE_COMMAND",
+        "PYTHON_VERSION": "3.11.16",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "PIP_NO_CACHE_DIR": "1",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "BTCML_PERF_ROLE": "context-refresher",
+        "CONTEXT_REFRESHER_PID_PATH": "/app/data/runtime/visual_refresher.pid",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "CONTEXT_REFRESHER_LOCK_PATH": "/app/run/context_visual_refresher.lock",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "VISUAL_REFRESH_INTERVAL_S": "20",
+        "EXECUTION_ENABLED": "false",
+        "ENABLE_TIMEFRAME_CHART_TRUTH": "1",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PYTHONPATH": "/app:/app/src",
+        "BTC_ML_REPO_ROOT": "/app",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "BTCML_PERF_OUTPUT": "/profile/output/context-refresher",
+        "PAPER_ONLY": "true"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BTCML_BIND_8:?Supply preserved external binding}",
+          "target": "/profile",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {}
+        },
+        {
+          "type": "volume",
+          "source": "preserved_3",
+          "target": "/app/apps/context_visualizer/public/data",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "mem_limit": 805306368,
+      "memswap_limit": 1610612736,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "context-refresher",
+          "--pid-file",
+          "data/runtime/visual_refresher.pid",
+          "--health-file",
+          "apps/context_visualizer/public/data/visual_status.json",
+          "--allow-missing-health"
+        ],
+        "interval": "15000000000ns",
+        "timeout": "5000000000ns",
+        "retries": 12,
+        "start_period": "60000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {}
+      },
+      "stop_grace_period": "1s"
+    },
+    "legacy-volume-clusters": {
+      "image": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+      "platform": "linux/arm64",
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-pair/legacy_pair_runtime.py",
+        "--root",
+        "/legacy"
+      ],
+      "environment": {
+        "PYTHONUNBUFFERED": "1",
+        "TZ": "UTC",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "/app:/app/src",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "BTC_ML_REPO_ROOT": "/app",
+        "EXECUTION_ENABLED": "false",
+        "PAPER_ONLY": "true",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "REAL_EXECUTION_ENABLED": "false",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BTCML_RELEASE_ROOT:?Set accepted release candidate root}/releases/071126/components/legacy-volume-clusters/opt/btcml-legacy-pair",
+          "target": "/opt/btcml-legacy-pair",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_2",
+          "target": "/legacy",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "mem_limit": 1073741824,
+      "memswap_limit": 2147483648,
+      "pids_limit": 128,
+      "cpus": 1.0,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "NONE"
+        ],
+        "interval": "30000000000ns",
+        "timeout": "120000000000ns",
+        "retries": 3,
+        "start_period": "180000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s",
+      "network_mode": "none"
+    },
+    "intrabar-supervisor": {
+      "image": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/intrabar_supervisor.sh"
+      ],
+      "environment": {
+        "REAL_EXECUTION_ENABLED": "false",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "PYTHONPATH": "/app:/app/src",
+        "PYTHONUNBUFFERED": "1",
+        "EXECUTION_ENABLED": "false",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "BTC_ML_REPO_ROOT": "/app",
+        "PAPER_ONLY": "true",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      },
+      "read_only": true,
+      "restart": "no",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_process_pid.py",
+          "--name",
+          "intrabar-supervisor",
+          "--pid-file",
+          "run/intrabar_process_supervisor.pid",
+          "--health-file",
+          "data/runtime/intrabar_operational_status.json",
+          "--allow-missing-health"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "legacy-volume-memory": {
+      "image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "platform": "linux/arm64",
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-memory-regime/legacy_pair_runtime.py",
+        "--root",
+        "/legacy"
+      ],
+      "environment": {
+        "OPENBLAS_NUM_THREADS": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONPATH": "/app:/app/src",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "BTC_ML_REPO_ROOT": "/app",
+        "EXECUTION_ENABLED": "false",
+        "PAPER_ONLY": "true",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "REAL_EXECUTION_ENABLED": "false",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BTCML_RELEASE_ROOT:?Set accepted release candidate root}/releases/071126/components/legacy-volume-memory/opt/btcml-legacy-memory-regime",
+          "target": "/opt/btcml-legacy-memory-regime",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_2",
+          "target": "/legacy",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "mem_limit": 1073741824,
+      "memswap_limit": 2147483648,
+      "pids_limit": 128,
+      "cpus": 1.0,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "NONE"
+        ],
+        "timeout": "60000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s",
+      "network_mode": "none"
+    },
+    "legacy-volume-reactions": {
+      "image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "platform": "linux/arm64",
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-reactions-acceptance/legacy_pair_runtime.py",
+        "--root",
+        "/legacy"
+      ],
+      "environment": {
+        "PYTHONUNBUFFERED": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "TZ": "UTC",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "/app:/app/src",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "BTC_ML_REPO_ROOT": "/app",
+        "EXECUTION_ENABLED": "false",
+        "PAPER_ONLY": "true",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "REAL_EXECUTION_ENABLED": "false",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${BTCML_RELEASE_ROOT:?Set accepted release candidate root}/releases/071126/components/legacy-volume-reactions/opt/btcml-legacy-reactions-acceptance",
+          "target": "/opt/btcml-legacy-reactions-acceptance",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "volume",
+          "source": "preserved_2",
+          "target": "/legacy",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "mem_limit": 1073741824,
+      "memswap_limit": 2147483648,
+      "pids_limit": 128,
+      "cpus": 1.0,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "NONE"
+        ],
+        "timeout": "60000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s",
+      "network_mode": "none"
+    },
+    "legacy-multi-exchange": {
+      "image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "platform": "linux/arm64",
+      "user": "10001:10001",
+      "working_dir": "/legacy",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "python",
+        "-u",
+        "/opt/btcml-legacy-original/io_runtime.py",
+        "/opt/btcml-legacy-original/multi_exchange_collector.py",
+        "multi_exchange_flow.parquet"
+      ],
+      "environment": {
+        "PYTHONUNBUFFERED": "1",
+        "TZ": "UTC",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "/app:/app/src",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "BTC_ML_REPO_ROOT": "/app",
+        "EXECUTION_ENABLED": "false",
+        "PAPER_ONLY": "true",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "REAL_EXECUTION_ENABLED": "false",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "preserved_2",
+          "target": "/legacy",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "mem_limit": 536870912,
+      "memswap_limit": 1073741824,
+      "pids_limit": 64,
+      "cpus": 0.5,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/tmp:size=64M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "NONE"
+        ],
+        "timeout": "60000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "stop_grace_period": "1s"
+    },
+    "cognition-runtime": {
+      "image": "sha256:348073d3a7300d3a402bea47f770505486ce4b4f6112f1c2f1b59e57e62540e8",
+      "platform": "linux/arm64",
+      "user": "btcml",
+      "working_dir": "/app",
+      "entrypoint": [
+        "/usr/bin/tini",
+        "--"
+      ],
+      "command": [
+        "/bin/sh",
+        "/app/deploy/vps/entrypoints/cognition_runtime.sh"
+      ],
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "BTC_ML_CONTEXT_REFRESH_DAEMON": "1",
+        "BTC_ML_REPO_ROOT": "/app",
+        "VPS_DEPLOYMENT_TAG": "VPS_DEPLOY",
+        "PAPER_ONLY": "true",
+        "PYTHONUNBUFFERED": "1",
+        "MARKET_SYMBOL": "BTCUSDT",
+        "EXECUTION_ENABLED": "false",
+        "REAL_EXECUTION_ENABLED": "false",
+        "VPS_COGNITION_MAX_AGE_S": "180",
+        "PYTHONPATH": "/app:/app/src",
+        "PATH": "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "GPG_KEY": "A035C8C19219BA821ECEA86B64E628F8D684696D",
+        "PYTHON_VERSION": "3.11.16",
+        "PYTHON_SHA256": "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1"
+      },
+      "read_only": true,
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "preserved_1",
+          "target": "/app/data",
+          "read_only": false,
+          "volume": {}
+        }
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "shm_size": 67108864,
+      "tmpfs": [
+        "/app/artifacts:size=64M,mode=1777",
+        "/app/logs:size=128M,mode=1777",
+        "/app/output:size=256M,mode=1777",
+        "/app/replays:size=64M,mode=1777",
+        "/app/reports:size=128M,mode=1777",
+        "/app/run:size=64M,mode=1777",
+        "/tmp:size=256M,mode=1777"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "/app/deploy/vps/healthchecks/check_cognition.py"
+        ],
+        "interval": "20000000000ns",
+        "timeout": "15000000000ns",
+        "retries": 30,
+        "start_period": "300000000000ns"
+      },
+      "logging": {
+        "driver": "json-file",
+        "options": {}
+      },
+      "stop_grace_period": "1s"
+    }
+  },
+  "volumes": {
+    "preserved_1": {
+      "external": true,
+      "name": "${BTCML_VOLUME_1:?Supply independently restored volume}"
+    },
+    "preserved_2": {
+      "external": true,
+      "name": "${BTCML_VOLUME_2:?Supply independently restored volume}"
+    },
+    "preserved_3": {
+      "external": true,
+      "name": "${BTCML_VOLUME_3:?Supply independently restored volume}"
+    }
+  }
+}

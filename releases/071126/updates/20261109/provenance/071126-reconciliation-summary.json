@@ -1,0 +1,167 @@
+{
+  "published_receipt": {
+    "status": "PUSHED_AND_REMOTE_HEADS_VERIFIED",
+    "remote": "https://github.com/maxim134vl/btc-microstructure-engine.git",
+    "parent": "3fdc260302f878a23e809248c4b0e4640ee7b30b",
+    "main_untouched": "2f7b02ea925f517ab97f4bd25f8da008b784b795",
+    "canonical_prior_commits_ahead_of_main": 185,
+    "release_commit": "8f45e0260929ba87ccaca1d8fe6e08949cc1d94a",
+    "canonical_commit": "45efea614eaf74934ff419f752103beea6e12b16",
+    "release_tree": "c7746dad8416fc56c01ce7e5d99b7005b280d7a3",
+    "canonical_tree": "40e6ec83f3a009bae4fe22f69e345c3209fa6bdf",
+    "source_files_verified": 12382,
+    "all_release_files": 12415,
+    "source_bytes_match_installed": true,
+    "secret_scan": "PASS, zero unreviewed findings;8 exact ENV variable-name literals reviewed",
+    "added_only_no_ancestor_deletions": true,
+    "owner_dirty_Gitea_worktree": "Unchanged",
+    "at_UTC": "2026-11-07T19:31:56.425581+00:00",
+    "push_returncode": 0,
+    "push_stdout": "",
+    "push_stderr": "To https://github.com/maxim134vl/btc-microstructure-engine.git\n   3fdc260..45efea6  memory/canonical-system -> memory/canonical-system\n * [new branch]      release -> release\n",
+    "remote_heads": {
+      "refs/heads/main": "2f7b02ea925f517ab97f4bd25f8da008b784b795",
+      "refs/heads/memory/canonical-system": "45efea614eaf74934ff419f752103beea6e12b16",
+      "refs/heads/release": "8f45e0260929ba87ccaca1d8fe6e08949cc1d94a"
+    }
+  },
+  "publication_checkout_HEAD": "3e5c07fcd8099bb3ec87b8c65ab9486146a69a45",
+  "image_comparison": [
+    {
+      "service": "collector-watchdog",
+      "baseline_image": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+      "current_image": "sha256:e08a62c3f50cfd1aad2910b52f35f5ad7def5a22cb13324c7334bab486520e00",
+      "changed": true
+    },
+    {
+      "service": "canonical-runtime",
+      "baseline_image": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+      "current_image": "sha256:1ba14bd049320df03b4945ef1dfe625359dfb4c864a9246d7280950a9d4974f4",
+      "changed": true
+    },
+    {
+      "service": "context-refresh-daemon",
+      "baseline_image": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+      "current_image": "sha256:24650abb4bb2203dfa2d56b3dc05347439b1974016c13efc949a5c0bad4f03cf",
+      "changed": true
+    },
+    {
+      "service": "ops-api",
+      "baseline_image": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+      "current_image": "sha256:45e4d228183d53e6470a4ded6196f310c6bdcb408c647983647d14afea40e53c",
+      "changed": false
+    },
+    {
+      "service": "dashboard-ui",
+      "baseline_image": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+      "current_image": "sha256:326c04bea295e7676b7b226745d7ccfb22398626e3b4c6b315c6e2a52afcd391",
+      "changed": false
+    },
+    {
+      "service": "timeframe-manager",
+      "baseline_image": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+      "current_image": "sha256:0d3dbee8c6043e054cec84335daa2e0eef233987f48ccbfeedad7fed4211a18b",
+      "changed": false
+    },
+    {
+      "service": "paper-manager",
+      "baseline_image": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+      "current_image": "sha256:b14405387e6a500cbfbfa33b41176aa11f242509cce5ea2b5f14ad3cbac11848",
+      "changed": false
+    },
+    {
+      "service": "context-refresher",
+      "baseline_image": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+      "current_image": "sha256:6ffcfeecb30c1795cd68e42d4bba69b757c87dae9f1321832da2395b510dd96f",
+      "changed": false
+    },
+    {
+      "service": "legacy-volume-clusters",
+      "baseline_image": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+      "current_image": "sha256:fd9540ab0d5bd8205912818f3be5e0961ee6ebed0c747945cd239c3fa8acb98c",
+      "changed": false
+    },
+    {
+      "service": "intrabar-supervisor",
+      "baseline_image": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+      "current_image": "sha256:e0a531a874e4188d1c3f4a3c800e30e1c125e029ef421d098aad12b7acc737f1",
+      "changed": false
+    },
+    {
+      "service": "legacy-volume-memory",
+      "baseline_image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "current_image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "changed": false
+    },
+    {
+      "service": "legacy-volume-reactions",
+      "baseline_image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "current_image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "changed": false
+    },
+    {
+      "service": "legacy-multi-exchange",
+      "baseline_image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "current_image": "sha256:6b39b550576d4490f623b03f4c4f8205762c41bf9c9497ccf6e5f8a15d3954d1",
+      "changed": false
+    },
+    {
+      "service": "cognition-runtime",
+      "baseline_image": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+      "current_image": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+      "changed": false
+    }
+  ],
+  "counts": {
+    "UNCHANGED": 8104,
+    "ADDED": 3,
+    "MODIFIED": 9
+  },
+  "git_071126_tree_blob_checks": 8113,
+  "backup_readonly_control_fingerprints": {
+    "BACKUP_MANIFEST.json": {
+      "bytes": 14403,
+      "sha256": "6f603ed5e9f68c8e9033a01e773509e684a884828577b1abf7443aa4587ec93f"
+    },
+    "GIT/PUBLICATION/RESULT.json": {
+      "bytes": 1377,
+      "sha256": "22300dcbc485b9d001f2328def10489d8553c22f8583ca4713b3616d00f3d02e"
+    },
+    "GIT/PUBLICATION/071126.incremental.bundle": {
+      "bytes": 5219882,
+      "sha256": "881060d355c39422748f96011f8f2528a687b3d75483218a65175c7771e47035"
+    },
+    "DOCKER_IMAGES/COGNITION_RECONSTRUCTION.json": {
+      "bytes": 1245,
+      "sha256": "e2e6f6d6c164d3959ebe84dcf735f0b4863d331cc3b3fba6414c5040c7af11a0"
+    },
+    "RESTORE_VERIFICATION/COGNITION_ARTIFACT_PROBE.json": {
+      "bytes": 439,
+      "sha256": "f3f39033894fce3635655673f3d592e99f5f6b1a9a738655cf3bf820be1e4581"
+    }
+  },
+  "existing_cognition_recovery_reused": {
+    "original_image_id": "sha256:093f628a4c8e24245ff0a1de5e8c9fc527beeb14c6cefe74bc1255b094e69f21",
+    "source_container_id": "d8002649cfd34835791efc0c7d27d7df3631a89711d4b6ffcdbdca579a473ee1",
+    "source_rootfs_readonly": true,
+    "original_image_byte_identity_claimed": false,
+    "started_at_UTC": "2026-11-07T13:14:35.114090+00:00",
+    "export_wall_s": 129.79426854196936,
+    "rootfs_archive_bytes": 201756563,
+    "rootfs_archive_sha256": "f1f132d30b52eb5e32e6ca08cac54a0ae6a65220503eb96a610899bf1c3ef4af",
+    "tar_members": 17361,
+    "rootfs_payload_bytes": 612839307,
+    "reconstructed_image_id": "sha256:348073d3a7300d3a402bea47f770505486ce4b4f6112f1c2f1b59e57e62540e8",
+    "reconstructed_tag": "btcml-preserved-cognition:071126-rootfs",
+    "effective_startup_metadata_match": true,
+    "image_archive_bytes": 200314642,
+    "image_archive_sha256": "bfc0e2e923bc5ebf90c309075239baabe1fedb7bec58e064cb313c53b14254d8",
+    "save_wall_s": 62.4817475839518,
+    "status": "RECONSTRUCTED_FROM_ACTUAL_ROOTFS; ARTIFACT_LOAD_CREATE_IMPORT_PASS",
+    "healthcheck": "Preserved in container inventory and restore Compose, not asserted as original image metadata",
+    "installed_replacement": false,
+    "verification": "RESTORE_VERIFICATION/COGNITION_ARTIFACT_PROBE.json"
+  },
+  "backup_source_index_checks": 8102,
+  "delta_status": "CONFIRMED: 12 code files in 3 owners; other 11 installed image IDs unchanged; reuse saved071126 Cog348"
+}

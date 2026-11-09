@@ -1,0 +1,84 @@
+[
+  {
+    "case": "feed-gap-recovery",
+    "PASS": true,
+    "checks": 16,
+    "wall_seconds": 88.40943108300053,
+    "source_scope": "Same exact accepted application bytes and frozen native dependencies as final delta; pre-reconciliation packaging is evidence only, never deployment authority",
+    "stdout_sha256": "5d508dd6bdebfd6c1750ea01101cd26cac0fb9eba95da3a174e72acdbd942a04"
+  },
+  {
+    "case": "canonical-ordering-restart",
+    "PASS": true,
+    "checks": 24,
+    "wall_seconds": 149.95919695799967,
+    "source_scope": "Same exact accepted application bytes and frozen native dependencies as final delta; pre-reconciliation packaging is evidence only, never deployment authority",
+    "stdout_sha256": "b7c14c7e518aa878e8760814ccc84734c76a8f7083a04e9958a7cb8c71a00bc4"
+  },
+  {
+    "case": "canonical-arrow-native-exit",
+    "PASS": true,
+    "checks": 69,
+    "wall_seconds": 160.25478116699742,
+    "source_scope": "Same exact accepted application bytes and frozen native dependencies as final delta; pre-reconciliation packaging is evidence only, never deployment authority",
+    "stdout_sha256": "00819d39458ba676bbd21fc5b529ce36c68044e350c7e6a5c6e4dc782f972b0d"
+  },
+  {
+    "case": "guards-paper-manager",
+    "PASS": true,
+    "checks": 29,
+    "wall_seconds": 19.707227374998183,
+    "source_scope": "Same exact accepted application bytes and frozen native dependencies as final delta; pre-reconciliation packaging is evidence only, never deployment authority",
+    "stdout_sha256": "07b7c7fb59a9d58cfc7246334295511bd3431d148aeb4f8405d96bc12a2f7bfb"
+  },
+  {
+    "case": "guards-timeframe-manager",
+    "PASS": true,
+    "checks": 29,
+    "wall_seconds": 7.409321374998399,
+    "source_scope": "Same exact accepted application bytes and frozen native dependencies as final delta; pre-reconciliation packaging is evidence only, never deployment authority",
+    "stdout_sha256": "07b7c7fb59a9d58cfc7246334295511bd3431d148aeb4f8405d96bc12a2f7bfb"
+  },
+  {
+    "case": "publisher-current-code-regression",
+    "PASS": true,
+    "checks": 9,
+    "wall_seconds": 23.11006683300002,
+    "image_id": "sha256:1d1393564c5c1cdaee5c5b7c65bac1a043fe35adaf4c26a9a079d6b70036adaa",
+    "scope": "Existing small codec regressions; no benchmark or market run"
+  },
+  {
+    "case": "final-three-image-source-owner-mode-dependencies",
+    "PASS": true,
+    "images": 3,
+    "details": [
+      {
+        "service": "canonical-runtime",
+        "source_SHA_owner_mode_PASS": 825,
+        "changed_source_compile_PASS": 9,
+        "dependency_pins_PASS": 50,
+        "production_volumes": false
+      },
+      {
+        "service": "collector-watchdog",
+        "source_SHA_owner_mode_PASS": 811,
+        "changed_source_compile_PASS": 2,
+        "dependency_pins_PASS": 50,
+        "production_volumes": false
+      },
+      {
+        "service": "context-refresh-daemon",
+        "source_SHA_owner_mode_PASS": 847,
+        "changed_source_compile_PASS": 1,
+        "dependency_pins_PASS": 50,
+        "production_volumes": false
+      }
+    ]
+  },
+  {
+    "case": "changed-code-compilation",
+    "PASS": true,
+    "checks": 12,
+    "scope": "Actual changed/new files only; broader provisional bundle compilation found existing SyntaxError in initiative_memory_engine.py:78"
+  }
+]

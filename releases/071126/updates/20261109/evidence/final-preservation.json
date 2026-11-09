@@ -1,0 +1,106 @@
+{
+  "at_UTC": "2026-11-09T11:19:53.527066+00:00",
+  "containers": [
+    {
+      "service": "collector-watchdog",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "canonical-runtime",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "context-refresh-daemon",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "ops-api",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "dashboard-ui",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": null
+    },
+    {
+      "service": "timeframe-manager",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "paper-manager",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "context-refresher",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "legacy-volume-clusters",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": null,
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "intrabar-supervisor",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "legacy-volume-memory",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": null,
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "legacy-volume-reactions",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": null,
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "legacy-multi-exchange",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": null,
+      "REAL_EXECUTION_ENABLED": "false"
+    },
+    {
+      "service": "cognition-runtime",
+      "container_identity_image_started_at_restart_count_unchanged": true,
+      "state": "running",
+      "health": "healthy",
+      "REAL_EXECUTION_ENABLED": "false"
+    }
+  ],
+  "backup_control_hashes_unchanged": true,
+  "Gitea_release_HEAD_index_status_unchanged": true,
+  "publication_release_HEAD_status_unchanged": true
+}
