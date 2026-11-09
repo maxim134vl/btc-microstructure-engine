@@ -1,0 +1,38 @@
+[
+  {
+    "priority": "P0 (Linux/AMD64 target)",
+    "issue": "No native AMD64 bases/ABI/output regression evidence; ARM64 artifacts cannot be silently substituted.",
+    "status": "NOT_VERIFIED; builder refuses AMD64",
+    "action": "Explicit AMD64 bases and platform locks, then same bounded regressions on native target."
+  },
+  {
+    "priority": "P0 (actual state migration)",
+    "issue": "Current writers advanced after the verified Nov7 backup cut. No fresh consistent Nov9 full-state handoff was made under the no-runtime-change restriction.",
+    "status": "Prerequisite; no rollback/reset is performed",
+    "action": "Separately controlled current state handoff; preserve books/WAL/cursors/active and pending generations."
+  },
+  {
+    "priority": "P1",
+    "issue": "Feed safe_append_candle ignores metadata ok:false and suppresses exceptions; isolated16-case harness stubs metadata success.",
+    "status": "Accepted behavior preserved; not changed by source consolidation",
+    "action": "Separate narrow failure/retry change with a boundary test, retaining owner truth."
+  },
+  {
+    "priority": "P1",
+    "issue": "Fresh dependency-from-scratch/AMD64 build is not equivalent to the verified frozen ARM64 artifact path. Generic historical recipes contain ranges.",
+    "status": "Frozen-base reproduction is pinned and verified; no range resolver used",
+    "action": "Platform-specific clean base recipe/locks when preparing the native AMD64 target."
+  },
+  {
+    "priority": "P2 / applicability unproven",
+    "issue": "Bundled initiative_memory_engine.py:78 contains a pre-existing SyntaxError. Nine broad provisional image compilation checks stopped there.",
+    "status": "Same saved071126 bytes; no reference found in checked entrypoints/pipeline, but exhaustive non-use is not claimed. Not rewritten or deleted. Actual12 changed files compile and targeted runtime paths pass.",
+    "action": "Separate scoped ownership/use review before any repair or removal."
+  },
+  {
+    "priority": "P2",
+    "issue": "Local dirty Gitea root is distinct from the already published accepted071126 source authority. Inherited labels alone are incomplete provenance.",
+    "status": "Corrected by explicit published-base reconciliation; existing publication and backup reused",
+    "action": "Use accepted071126 plus this additive delta; do not promote the provisional flat candidate."
+  }
+]

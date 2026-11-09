@@ -1,0 +1,35 @@
+[
+  {
+    "service": "canonical-runtime",
+    "image_id": "sha256:99908a60f82c0972ce8c1fa9ec6ee8c4b746883b65633d359419eccbc30d645c",
+    "tag": "btcml-071126-delta/canonical-runtime:20261109-a317773dcb32",
+    "base_image_id": "sha256:10b2575b15a71d3a7f1e0ea968613a65b6cc883fa743119533db9af86f783697",
+    "installed_target_id": "sha256:1ba14bd049320df03b4945ef1dfe625359dfb4c864a9246d7280950a9d4974f4",
+    "platform": "linux/arm64",
+    "source_revision": "3f29967c295290aebb9ea0e8722213bc128452f2",
+    "delta_sha256": "a317773dcb32107079258de7f9bbdd75179e656ad3f32e095372da7c780e2004",
+    "source_changes": 9
+  },
+  {
+    "service": "collector-watchdog",
+    "image_id": "sha256:474b09f83c1752805996a8298e27ec60f53c3f2fab5b9116ed7fe82cfe688756",
+    "tag": "btcml-071126-delta/collector-watchdog:20261109-a317773dcb32",
+    "base_image_id": "sha256:ad31054879010c097ffeba7c2494788bfbfc42d48c0df07d3b577f6ad1d72b81",
+    "installed_target_id": "sha256:e08a62c3f50cfd1aad2910b52f35f5ad7def5a22cb13324c7334bab486520e00",
+    "platform": "linux/arm64",
+    "source_revision": "3f29967c295290aebb9ea0e8722213bc128452f2",
+    "delta_sha256": "a317773dcb32107079258de7f9bbdd75179e656ad3f32e095372da7c780e2004",
+    "source_changes": 2
+  },
+  {
+    "service": "context-refresh-daemon",
+    "image_id": "sha256:1d1393564c5c1cdaee5c5b7c65bac1a043fe35adaf4c26a9a079d6b70036adaa",
+    "tag": "btcml-071126-delta/context-refresh-daemon:20261109-a317773dcb32",
+    "base_image_id": "sha256:8f5985fccb854353ed5953c1afde718431f7d3a54a3f60709bba24d5ffd6c9d6",
+    "installed_target_id": "sha256:24650abb4bb2203dfa2d56b3dc05347439b1974016c13efc949a5c0bad4f03cf",
+    "platform": "linux/arm64",
+    "source_revision": "3f29967c295290aebb9ea0e8722213bc128452f2",
+    "delta_sha256": "a317773dcb32107079258de7f9bbdd75179e656ad3f32e095372da7c780e2004",
+    "source_changes": 1
+  }
+]

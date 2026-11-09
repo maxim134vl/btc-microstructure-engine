@@ -2,7 +2,7 @@
   "name": "btcml-migration-candidate",
   "services": {
     "collector-watchdog": {
-      "image": "sha256:e08a62c3f50cfd1aad2910b52f35f5ad7def5a22cb13324c7334bab486520e00",
+      "image": "sha256:474b09f83c1752805996a8298e27ec60f53c3f2fab5b9116ed7fe82cfe688756",
       "platform": "linux/arm64",
       "user": "btcml",
       "working_dir": "/app",
@@ -86,7 +86,7 @@
       "stop_grace_period": "1s"
     },
     "canonical-runtime": {
-      "image": "sha256:1ba14bd049320df03b4945ef1dfe625359dfb4c864a9246d7280950a9d4974f4",
+      "image": "sha256:99908a60f82c0972ce8c1fa9ec6ee8c4b746883b65633d359419eccbc30d645c",
       "platform": "linux/arm64",
       "user": "btcml",
       "working_dir": "/app",
@@ -190,7 +190,7 @@
       "stop_grace_period": "1s"
     },
     "context-refresh-daemon": {
-      "image": "sha256:24650abb4bb2203dfa2d56b3dc05347439b1974016c13efc949a5c0bad4f03cf",
+      "image": "sha256:1d1393564c5c1cdaee5c5b7c65bac1a043fe35adaf4c26a9a079d6b70036adaa",
       "platform": "linux/arm64",
       "user": "btcml",
       "working_dir": "/app",
